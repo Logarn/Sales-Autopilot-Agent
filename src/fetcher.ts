@@ -1,13 +1,12 @@
 import {
   APIFY_API_TOKEN,
   APIFY_REQUEST_TIMEOUT_MS,
-  FEED_DELAY_MS,
   FETCH_RETRY_ATTEMPTS,
   SEARCH_QUERIES,
 } from "./config";
 import { logger } from "./logger";
 import { FeedJobResult, JobPosting } from "./types";
-import { sleep, truncateText } from "./utils";
+import { truncateText } from "./utils";
 
 interface ApifyJob {
   uid: string;
@@ -42,6 +41,38 @@ interface ApifyJob {
 
 const APIFY_ENDPOINT_BASE =
   "https://api.apify.com/v2/acts/upwork-vibe~upwork-job-scraper/run-sync-get-dataset-items";
+
+const APIFY_INCLUDE_KEYWORDS = [
+  "Klaviyo Shopify email marketing",
+  "Klaviyo marketing",
+  "Email Marketing",
+  "SMS Marketing",
+  "Retention Marketing",
+  "Shopify Email Marketing",
+  "Klaviyo Email Marketing",
+  "Klaviyo email flows",
+  "Shopify Plus Klaviyo",
+  "ecommerce email marketing",
+  "Klaviyo campaign management",
+  "Klaviyo segmentation",
+];
+
+const APIFY_EXCLUDE_KEYWORDS = [
+  "GHL",
+  "GoHighLevel",
+  "Go High Level",
+  "Mailchimp",
+  "Brevo",
+  "Airtable",
+  "Salesforce",
+  "HubSpot",
+  "WordPress",
+  "Wix",
+  "Squarespace",
+  "full-time",
+  "W2",
+  "on-site",
+];
 
 function formatBudget(budget: ApifyJob["budget"] | null | undefined): string {
   if (!budget) {
@@ -87,8 +118,15 @@ function mapApifyJobToInternal(job: ApifyJob, sourceQuery: string): JobPosting |
 }
 
 async function fetchApifyForQuery(query: string, attempt = 1): Promise<ApifyJob[]> {
+  void query;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), APIFY_REQUEST_TIMEOUT_MS);
+
+  const now = new Date();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const toDate = now.toISOString().slice(0, 10);
+  const fromDate = yesterday.toISOString().slice(0, 10);
 
   try {
     const response = await fetch(`${APIFY_ENDPOINT_BASE}?token=${APIFY_API_TOKEN}`, {
@@ -97,9 +135,26 @@ async function fetchApifyForQuery(query: string, attempt = 1): Promise<ApifyJob[
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        searchQuery: query,
-        maxResults: 50,
-        sortBy: "recency",
+        "includeKeywords.keywords": APIFY_INCLUDE_KEYWORDS,
+        "includeKeywords.matchDescription": true,
+        "includeKeywords.matchSkills": true,
+        "includeKeywords.matchTitle": true,
+        "excludeKeywords.keywords": APIFY_EXCLUDE_KEYWORDS,
+        "excludeKeywords.matchDescription": true,
+        "excludeKeywords.matchSkills": true,
+        "excludeKeywords.matchTitle": true,
+        jobCategories: ["Digital Marketing"],
+        limit: 50,
+        fromDate,
+        toDate,
+        "client.paymentMethodVerified": true,
+        "client.totalSpent.min": "100",
+        "client.includeWithNoFeedback": true,
+        "budget.allowUnspecifiedBudget": true,
+        "vendor.type": ["UNSPECIFIED"],
+        "vendor.includeWithoutCountryPreference": true,
+        "vendor.excludeWithQuestions": false,
+        "vendor.includeFeatured": false,
       }),
       signal: controller.signal,
     });
@@ -118,10 +173,8 @@ async function fetchApifyForQuery(query: string, attempt = 1): Promise<ApifyJob[
       throw error;
     }
     const waitMs = 2 ** (attempt - 1) * 1000;
-    logger.warn(
-      `Apify fetch attempt ${attempt} failed for "${query}". Retrying in ${waitMs}ms`
-    );
-    await sleep(waitMs);
+    logger.warn(`Apify fetch attempt ${attempt} failed. Retrying in ${waitMs}ms`);
+    await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
     return fetchApifyForQuery(query, attempt + 1);
   } finally {
     clearTimeout(timeoutId);
@@ -132,24 +185,18 @@ export async function fetchAllFeeds(): Promise<FeedJobResult> {
   const failedFeeds: string[] = [];
   const jobs: JobPosting[] = [];
 
-  for (let index = 0; index < SEARCH_QUERIES.length; index += 1) {
-    const sourceQuery = SEARCH_QUERIES[index]!;
-    try {
-      const apifyJobs = await fetchApifyForQuery(sourceQuery);
-      for (const apifyJob of apifyJobs) {
-        const mapped = mapApifyJobToInternal(apifyJob, sourceQuery);
-        if (mapped) {
-          jobs.push(mapped);
-        }
+  const sourceQuery = "apify-multi-keyword";
+  try {
+    const apifyJobs = await fetchApifyForQuery(sourceQuery);
+    for (const apifyJob of apifyJobs) {
+      const mapped = mapApifyJobToInternal(apifyJob, sourceQuery);
+      if (mapped) {
+        jobs.push(mapped);
       }
-    } catch (error) {
-      logger.error(`Failed Apify fetch for query "${sourceQuery}": ${String(error)}`);
-      failedFeeds.push(sourceQuery);
     }
-
-    if (index < SEARCH_QUERIES.length - 1) {
-      await sleep(FEED_DELAY_MS);
-    }
+  } catch (error) {
+    logger.error(`Failed Apify fetch: ${String(error)}`);
+    failedFeeds.push(...SEARCH_QUERIES);
   }
 
   return { jobs, failedFeeds };
@@ -159,7 +206,7 @@ if (require.main === module) {
   (async () => {
     const result = await fetchAllFeeds();
     logger.info(
-      `Fetched ${result.jobs.length} jobs across ${SEARCH_QUERIES.length} queries. Failed queries: ${result.failedFeeds.length}`
+      `Fetched ${result.jobs.length} jobs via single Apify run. Failed query count: ${result.failedFeeds.length}`
     );
     const preview = result.jobs.slice(0, 5).map((job) => ({
       id: job.id,
