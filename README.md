@@ -7,7 +7,7 @@ and posts rich Slack notifications for high-priority opportunities.
 
 ## Features
 
-- Polls multiple Upwork search queries via Apify every 15 minutes (configurable with cron)
+- Polls multiple Upwork search queries via Apify every hour (configurable with cron)
 - Query configuration via `.env` (`SEARCH_QUERIES`) or JSON (`config/queries.json`)
 - Weighted keyword scoring with negative-keyword filtering
 - Match levels:
@@ -99,7 +99,7 @@ See `.env.example` for full list. Core settings:
 ```env
 SLACK_CHANNEL_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
 APIFY_API_TOKEN=your_apify_token_here
-CRON_SCHEDULE=*/15 * * * *
+CRON_SCHEDULE=0 * * * *
 DAILY_SUMMARY_CRON=0 8 * * *
 TIMEZONE=Africa/Nairobi
 MIN_SCORE_TO_NOTIFY=4
