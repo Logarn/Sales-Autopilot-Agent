@@ -12,11 +12,3 @@ export const DEFAULT_SEARCH_QUERIES = [
   "email marketing Shopify retention",
   "SMS marketing ecommerce Shopify",
 ];
-
-export function buildUpworkFeedUrl(query: string): string {
-  return `https://www.upwork.com/ab/feed/jobs/rss?q=${encodeURIComponent(query)}&sort=recency`;
-}
-
-export function buildFeedUrls(queries: string[]): string[] {
-  return queries.map((query) => buildUpworkFeedUrl(query));
-}

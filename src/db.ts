@@ -50,8 +50,17 @@ CREATE TABLE IF NOT EXISTS seen_jobs (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   url TEXT NOT NULL,
+  description TEXT,
   score INTEGER DEFAULT 0,
   match_level TEXT,
+  budget TEXT,
+  client_country TEXT,
+  client_rating REAL,
+  client_spend REAL,
+  client_hire_rate REAL,
+  skills TEXT,
+  experience_level TEXT,
+  connects_cost INTEGER,
   posted_at TEXT,
   seen_at TEXT DEFAULT (datetime('now')),
   notified BOOLEAN DEFAULT 0
@@ -68,13 +77,48 @@ CREATE TABLE IF NOT EXISTS slack_queue (
 );
 `);
 
+function ensureSeenJobsColumn(name: string, definition: string): void {
+  const columns = db.prepare<[], { name: string }>("PRAGMA table_info(seen_jobs)").all();
+  const exists = columns.some((column) => column.name === name);
+  if (!exists) {
+    db.exec(`ALTER TABLE seen_jobs ADD COLUMN ${name} ${definition}`);
+  }
+}
+
+ensureSeenJobsColumn("description", "TEXT");
+ensureSeenJobsColumn("budget", "TEXT");
+ensureSeenJobsColumn("client_country", "TEXT");
+ensureSeenJobsColumn("client_rating", "REAL");
+ensureSeenJobsColumn("client_spend", "REAL");
+ensureSeenJobsColumn("client_hire_rate", "REAL");
+ensureSeenJobsColumn("skills", "TEXT");
+ensureSeenJobsColumn("experience_level", "TEXT");
+ensureSeenJobsColumn("connects_cost", "INTEGER");
+
 const countStmt = db.prepare<[], CountRow>("SELECT COUNT(*) as count FROM seen_jobs");
 const isSeenStmt = db.prepare<[string], SeenRow>(
   "SELECT 1 as found FROM seen_jobs WHERE id = ? LIMIT 1"
 );
 const insertSeenStmt = db.prepare(
-  `INSERT OR IGNORE INTO seen_jobs (id, title, url, score, match_level, posted_at, notified)
-   VALUES (?, ?, ?, ?, ?, ?, ?)`
+  `INSERT OR IGNORE INTO seen_jobs (
+    id,
+    title,
+    url,
+    description,
+    score,
+    match_level,
+    budget,
+    client_country,
+    client_rating,
+    client_spend,
+    client_hire_rate,
+    skills,
+    experience_level,
+    connects_cost,
+    posted_at,
+    notified
+  )
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 );
 const cleanupStmt = db.prepare("DELETE FROM seen_jobs WHERE seen_at < datetime('now', '-30 days')");
 const queueInsertStmt = db.prepare("INSERT INTO slack_queue (payload, attempts) VALUES (?, 0)");
@@ -103,8 +147,17 @@ export function markJobSeen(job: ScoredJob, notified: boolean): void {
     job.id,
     job.title,
     job.url,
+    job.description,
     job.score,
     job.matchLevel,
+    job.budget,
+    job.clientCountry,
+    job.clientRating,
+    job.clientSpend,
+    job.clientHireRate,
+    JSON.stringify(job.skills),
+    job.experienceLevel,
+    job.connectsCost,
     job.postedAt,
     notified ? 1 : 0
   );

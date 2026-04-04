@@ -1,12 +1,13 @@
 # Upwork Notifier (Klaviyo + Shopify Retention Jobs)
 
-Node.js + TypeScript background worker that monitors multiple Upwork RSS feeds for
+Node.js + TypeScript background worker that monitors Upwork jobs via the Apify
+Upwork Job Scraper API for
 Klaviyo/Shopify retention marketing jobs, scores relevance, deduplicates via SQLite,
 and posts rich Slack notifications for high-priority opportunities.
 
 ## Features
 
-- Polls multiple Upwork RSS feeds every 30 minutes (configurable with cron)
+- Polls multiple Upwork search queries via Apify every 30 minutes (configurable with cron)
 - Query configuration via `.env` (`SEARCH_QUERIES`) or JSON (`config/queries.json`)
 - Weighted keyword scoring with negative-keyword filtering
 - Match levels:
@@ -14,7 +15,7 @@ and posts rich Slack notifications for high-priority opportunities.
   - `medium` (>= `MIN_SCORE_TO_NOTIFY`) -> Slack notify
   - `low` (>= 2) -> tracked/logged only
   - `skip` (< 2 or negative keyword hit) -> ignored
-- SQLite deduplication using `sha256(url + title)`
+- SQLite deduplication using Apify `uid`
 - First-run seeding: stores existing jobs without blasting Slack
 - Slack queue/retry on failures
 - Startup health checks (Slack + feed reachability + DB stats)
@@ -48,6 +49,7 @@ upwork-notifier/
 
 - Node.js 18+
 - Slack Incoming Webhook URL
+- Apify API token
 
 ## Setup
 
@@ -96,6 +98,7 @@ See `.env.example` for full list. Core settings:
 
 ```env
 SLACK_CHANNEL_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+APIFY_API_TOKEN=your_apify_token_here
 CRON_SCHEDULE=*/30 * * * *
 DAILY_SUMMARY_CRON=0 8 * * *
 TIMEZONE=Africa/Nairobi

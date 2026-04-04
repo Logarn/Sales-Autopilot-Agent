@@ -1,5 +1,6 @@
 import cron from "node-cron";
 import {
+  validateRequiredConfig,
   CRON_SCHEDULE,
   DAILY_SUMMARY_CRON,
   SEARCH_QUERIES,
@@ -168,6 +169,7 @@ function setupGracefulShutdown(): void {
 }
 
 async function main(): Promise<void> {
+  validateRequiredConfig();
   setupGracefulShutdown();
 
   await startupHealthCheck();

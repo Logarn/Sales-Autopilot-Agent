@@ -1,162 +1,153 @@
-import Parser from "rss-parser";
-import { load } from "cheerio";
 import {
+  APIFY_API_TOKEN,
+  APIFY_REQUEST_TIMEOUT_MS,
   FEED_DELAY_MS,
   FETCH_RETRY_ATTEMPTS,
   SEARCH_QUERIES,
 } from "./config";
-import { buildFeedUrls } from "./feeds";
 import { logger } from "./logger";
 import { FeedJobResult, JobPosting } from "./types";
-import { hashJobId, sleep, truncateText } from "./utils";
+import { sleep, truncateText } from "./utils";
 
-type RssItem = {
-  title?: string;
-  link?: string;
-  contentSnippet?: string;
-  content?: string;
-  pubDate?: string;
-};
-
-const parser: Parser<Record<string, never>, RssItem> = new Parser({
-  timeout: 20_000,
-});
-
-function parseDescriptionFields(htmlDescription: string): {
-  textDescription: string;
-  budget: string;
-  category: string;
-  duration: string;
+interface ApifyJob {
+  uid: string;
+  title: string;
+  description: string;
+  publishedAt: string;
   skills: string[];
-  clientLocation: string;
-  clientRating: string;
-  clientSpend: string;
-  clientHireRate: string;
-} {
-  const $ = load(htmlDescription ?? "");
-  const textDescription = $.text().replace(/\s+/g, " ").trim();
-  const lowerText = textDescription.toLowerCase();
-
-  function extractValue(prefixes: string[]): string {
-    for (const prefix of prefixes) {
-      const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const regex = new RegExp(`${escapedPrefix}\\s*:\\s*([^|\\n]+)`, "i");
-      const match = textDescription.match(regex);
-      if (match?.[1]) {
-        return match[1].trim();
-      }
-    }
-    return "Not specified";
-  }
-
-  const budget = extractValue(["Budget", "Hourly Range", "Fixed Price"]);
-  const category = extractValue(["Category"]);
-  const duration = extractValue(["Project Length", "Duration", "Time Requirement"]);
-  const clientLocation = extractValue(["Country", "Client Location", "Location"]);
-  const clientRating = extractValue(["Rating", "Client rating"]);
-  const clientSpend = extractValue(["Spent", "Total Spent"]);
-  const clientHireRate = extractValue(["Hire Rate", "Hires"]);
-
-  const skills: string[] = [];
-  const skillsMatch = textDescription.match(/Skills?\s*:\s*([^\n|]+)/i);
-  if (skillsMatch?.[1]) {
-    const parsedSkills = skillsMatch[1]
-      .split(/[,•]/)
-      .map((skill) => skill.trim())
-      .filter(Boolean);
-    skills.push(...parsedSkills);
-  }
-
-  if (skills.length === 0) {
-    const fallbackSkillCandidates = ["klaviyo", "shopify", "email", "sms", "retention"];
-    for (const candidate of fallbackSkillCandidates) {
-      if (lowerText.includes(candidate)) {
-        skills.push(candidate);
-      }
-    }
-  }
-
-  return {
-    textDescription: truncateText(textDescription, 2_500),
-    budget,
-    category,
-    duration,
-    skills,
-    clientLocation,
-    clientRating,
-    clientSpend,
-    clientHireRate,
+  externalLink: string;
+  applicationCost: number;
+  category: string;
+  budget: {
+    fixedBudget: number;
+    hourlyRate: {
+      min: number | null;
+      max: number | null;
+    };
+  };
+  client: {
+    countryCode: string;
+    stats: {
+      totalSpent: number;
+      totalHires: number;
+      hireRate: number;
+      feedbackRate: number;
+      feedbackCount: number;
+    };
+  };
+  vendor: {
+    experienceLevel: string;
   };
 }
 
-async function fetchFeedWithRetry(url: string, attempt = 1): Promise<RssItem[]> {
-  try {
-    const feed = await parser.parseURL(url);
-    return feed.items ?? [];
-  } catch (error) {
-    if (attempt >= FETCH_RETRY_ATTEMPTS) {
-      throw error;
-    }
-    const waitMs = 2 ** (attempt - 1) * 1_000;
-    logger.warn(`Feed fetch attempt ${attempt} failed. Retrying in ${waitMs}ms for ${url}`);
-    await sleep(waitMs);
-    return fetchFeedWithRetry(url, attempt + 1);
+const APIFY_ENDPOINT_BASE =
+  "https://api.apify.com/v2/acts/upwork-vibe~upwork-job-scraper/run-sync-get-dataset-items";
+
+function formatBudget(budget: ApifyJob["budget"] | null | undefined): string {
+  if (!budget) {
+    return "Not specified";
   }
+  if (budget.fixedBudget > 0) {
+    return `Fixed: $${budget.fixedBudget.toLocaleString()}`;
+  }
+  if (budget.hourlyRate.min !== null && budget.hourlyRate.max !== null) {
+    return `Hourly: $${budget.hourlyRate.min} - $${budget.hourlyRate.max}`;
+  }
+  return "Not specified";
 }
 
-function mapRssItemToJob(item: RssItem, sourceQuery: string): JobPosting | null {
-  const title = item.title?.trim();
-  const url = item.link?.trim();
-  if (!title || !url) {
+function mapApifyJobToInternal(job: ApifyJob, sourceQuery: string): JobPosting | null {
+  if (!job.uid || !job.title || !job.externalLink) {
     return null;
   }
-  const htmlDescription = item.content ?? item.contentSnippet ?? "";
-  const parsed = parseDescriptionFields(htmlDescription);
-  const postedAtRaw = item.pubDate ?? new Date().toISOString();
-  const postedAt = Number.isNaN(new Date(postedAtRaw).getTime())
+  const publishedAt = job.publishedAt ?? new Date().toISOString();
+  const normalizedPostedAt = Number.isNaN(new Date(publishedAt).getTime())
     ? new Date().toISOString()
-    : new Date(postedAtRaw).toISOString();
+    : new Date(publishedAt).toISOString();
 
   return {
-    id: hashJobId(url, title),
-    title,
-    url,
-    description: parsed.textDescription || "Not specified.",
-    postedAt,
-    budget: parsed.budget,
-    clientLocation: parsed.clientLocation,
-    clientRating: parsed.clientRating,
-    clientSpend: parsed.clientSpend,
-    clientHireRate: parsed.clientHireRate,
-    category: parsed.category,
-    duration: parsed.duration,
-    skills: parsed.skills,
+    id: job.uid,
+    title: job.title.trim(),
+    url: job.externalLink.trim(),
+    description: truncateText((job.description ?? "Not specified").trim(), 2500),
+    postedAt: normalizedPostedAt,
+    skills: Array.isArray(job.skills) ? job.skills : [],
+    budget: formatBudget(job.budget),
+    clientCountry: job.client?.countryCode ?? "Not specified",
+    clientRating: job.client?.stats?.feedbackRate ?? 0,
+    clientSpend: job.client?.stats?.totalSpent ?? 0,
+    clientHireRate: job.client?.stats?.hireRate ?? 0,
+    clientTotalHires: job.client?.stats?.totalHires ?? 0,
+    clientFeedbackCount: job.client?.stats?.feedbackCount ?? 0,
+    category: job.category ?? "Not specified",
+    experienceLevel: job.vendor?.experienceLevel ?? "Not specified",
+    connectsCost: job.applicationCost ?? 0,
     sourceQuery,
   };
 }
 
+async function fetchApifyForQuery(query: string, attempt = 1): Promise<ApifyJob[]> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), APIFY_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${APIFY_ENDPOINT_BASE}?token=${APIFY_API_TOKEN}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        searchQuery: query,
+        maxResults: 50,
+        sortBy: "recency",
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Apify request failed: ${response.status} ${response.statusText}`);
+    }
+
+    const payload = (await response.json()) as unknown;
+    if (!Array.isArray(payload)) {
+      throw new Error("Apify response payload is not an array.");
+    }
+    return payload as ApifyJob[];
+  } catch (error) {
+    if (attempt >= FETCH_RETRY_ATTEMPTS) {
+      throw error;
+    }
+    const waitMs = 2 ** (attempt - 1) * 1000;
+    logger.warn(
+      `Apify fetch attempt ${attempt} failed for "${query}". Retrying in ${waitMs}ms`
+    );
+    await sleep(waitMs);
+    return fetchApifyForQuery(query, attempt + 1);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export async function fetchAllFeeds(): Promise<FeedJobResult> {
-  const feedUrls = buildFeedUrls(SEARCH_QUERIES);
   const failedFeeds: string[] = [];
   const jobs: JobPosting[] = [];
 
-  for (let index = 0; index < feedUrls.length; index += 1) {
-    const feedUrl = feedUrls[index]!;
+  for (let index = 0; index < SEARCH_QUERIES.length; index += 1) {
     const sourceQuery = SEARCH_QUERIES[index]!;
     try {
-      const items = await fetchFeedWithRetry(feedUrl);
-      for (const item of items) {
-        const job = mapRssItemToJob(item, sourceQuery);
-        if (job) {
-          jobs.push(job);
+      const apifyJobs = await fetchApifyForQuery(sourceQuery);
+      for (const apifyJob of apifyJobs) {
+        const mapped = mapApifyJobToInternal(apifyJob, sourceQuery);
+        if (mapped) {
+          jobs.push(mapped);
         }
       }
     } catch (error) {
-      logger.error(`Failed to fetch feed for query "${sourceQuery}": ${String(error)}`);
+      logger.error(`Failed Apify fetch for query "${sourceQuery}": ${String(error)}`);
       failedFeeds.push(sourceQuery);
     }
 
-    if (index < feedUrls.length - 1) {
+    if (index < SEARCH_QUERIES.length - 1) {
       await sleep(FEED_DELAY_MS);
     }
   }
@@ -168,13 +159,15 @@ if (require.main === module) {
   (async () => {
     const result = await fetchAllFeeds();
     logger.info(
-      `Fetched ${result.jobs.length} jobs across ${SEARCH_QUERIES.length} feeds. Failed feeds: ${result.failedFeeds.length}`
+      `Fetched ${result.jobs.length} jobs across ${SEARCH_QUERIES.length} queries. Failed queries: ${result.failedFeeds.length}`
     );
     const preview = result.jobs.slice(0, 5).map((job) => ({
+      id: job.id,
       title: job.title,
       url: job.url,
       postedAt: job.postedAt,
       budget: job.budget,
+      clientCountry: job.clientCountry,
     }));
     console.log(preview);
   })().catch((error) => {

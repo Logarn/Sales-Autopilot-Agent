@@ -45,6 +45,7 @@ function parseQueriesFromEnvOrFile(): string[] {
 
 export const APP_NAME = "Upwork Notifier";
 export const SLACK_CHANNEL_WEBHOOK_URL = process.env.SLACK_CHANNEL_WEBHOOK_URL ?? "";
+export const APIFY_API_TOKEN = process.env.APIFY_API_TOKEN ?? "";
 export const QUICK_BID_TEMPLATE_URL = process.env.QUICK_BID_TEMPLATE_URL ?? "";
 export const CRON_SCHEDULE = process.env.CRON_SCHEDULE ?? "*/30 * * * *";
 export const DAILY_SUMMARY_CRON = process.env.DAILY_SUMMARY_CRON ?? "0 8 * * *";
@@ -56,8 +57,18 @@ export const MIN_SCORE_HIGH = parseInteger(process.env.MIN_SCORE_HIGH, 8);
 export const MAX_DESCRIPTION_LENGTH = parseInteger(process.env.MAX_DESCRIPTION_LENGTH, 300);
 export const ENABLE_LOW_MATCH_DIGEST = parseBoolean(process.env.ENABLE_LOW_MATCH_DIGEST, false);
 export const FETCH_RETRY_ATTEMPTS = parseInteger(process.env.FETCH_RETRY_ATTEMPTS, 3);
-export const FEED_DELAY_MS = parseInteger(process.env.FEED_DELAY_MS, 2000);
+export const FEED_DELAY_MS = parseInteger(process.env.FEED_DELAY_MS, 10000);
+export const APIFY_REQUEST_TIMEOUT_MS = parseInteger(
+  process.env.APIFY_REQUEST_TIMEOUT_MS,
+  120000
+);
 export const SLACK_DELAY_MS = parseInteger(process.env.SLACK_DELAY_MS, 2000);
 export const SLACK_RETRY_ATTEMPTS = parseInteger(process.env.SLACK_RETRY_ATTEMPTS, 3);
 export const SEARCH_QUERIES = parseQueriesFromEnvOrFile();
 export { parseBoolean, parseInteger };
+
+export function validateRequiredConfig(): void {
+  if (!APIFY_API_TOKEN.trim()) {
+    throw new Error("APIFY_API_TOKEN is required. Set it in your environment.");
+  }
+}

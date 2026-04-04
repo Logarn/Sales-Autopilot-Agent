@@ -40,6 +40,33 @@ function levelBadge(job: ScoredJob): string {
   return "🔹 LOW MATCH";
 }
 
+function formatCompactUsd(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "$0";
+  }
+  if (value >= 1_000_000) {
+    return `$${(value / 1_000_000).toFixed(1)}M`;
+  }
+  if (value >= 1_000) {
+    return `$${(value / 1_000).toFixed(1)}K`;
+  }
+  return `$${Math.round(value)}`;
+}
+
+function normalizeLevel(level: string): string {
+  const value = (level ?? "").toUpperCase();
+  if (value === "EXPERT") {
+    return "Expert";
+  }
+  if (value === "INTERMEDIATE") {
+    return "Intermediate";
+  }
+  if (value === "ENTRY") {
+    return "Entry";
+  }
+  return level || "Not specified";
+}
+
 function buildJobBlocks(job: ScoredJob): IncomingWebhookSendArguments["blocks"] {
   const description = truncateText(job.description, MAX_DESCRIPTION_LENGTH);
   const headline = `${levelBadge(job)}  •  Score: ${job.score}`;
@@ -53,9 +80,10 @@ function buildJobBlocks(job: ScoredJob): IncomingWebhookSendArguments["blocks"] 
   }> = [
     {
       type: "button",
-      text: { type: "plain_text", text: "🔗 View Job on Upwork" },
+      text: { type: "plain_text", text: "🔗 View & Bid on Upwork" },
       url: job.url,
       action_id: `view_job_${job.id.slice(0, 10)}`,
+      ...(job.matchLevel === "high" ? { style: "primary" as const } : {}),
     },
   ];
 
@@ -73,7 +101,7 @@ function buildJobBlocks(job: ScoredJob): IncomingWebhookSendArguments["blocks"] 
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*${headline}*\n\n*📋 ${job.title}*`,
+        text: `*${headline}*\n\n*📋 ${job.title}*\n*🔗 ${job.url}*`,
       },
     },
     {
@@ -81,13 +109,15 @@ function buildJobBlocks(job: ScoredJob): IncomingWebhookSendArguments["blocks"] 
       fields: [
         { type: "mrkdwn", text: `*💰 Budget:*\n${job.budget || "Not specified"}` },
         { type: "mrkdwn", text: `*🕐 Posted:*\n${posted}` },
-        { type: "mrkdwn", text: `*🌍 Client Location:*\n${job.clientLocation || "Not specified"}` },
+        { type: "mrkdwn", text: `*🌍 Client:*\n${job.clientCountry || "Not specified"}` },
         {
           type: "mrkdwn",
-          text: `*⭐ Client Rating:*\n${job.clientRating || "Not specified"} (${job.clientHireRate || "Not specified"} hire rate)`,
+          text: `*⭐ Rating:*\n${job.clientRating.toFixed(1)}/5 (${job.clientFeedbackCount} review${job.clientFeedbackCount === 1 ? "" : "s"})`,
         },
-        { type: "mrkdwn", text: `*📊 Client Spend:*\n${job.clientSpend || "Not specified"}` },
-        { type: "mrkdwn", text: `*🏷️ Category / Duration:*\n${job.category || "Not specified"} / ${job.duration || "Not specified"}` },
+        { type: "mrkdwn", text: `*💵 Total Spent:*\n${formatCompactUsd(job.clientSpend)}` },
+        { type: "mrkdwn", text: `*📊 Hire Rate:*\n${job.clientHireRate}% (${job.clientTotalHires} hires)` },
+        { type: "mrkdwn", text: `*🎯 Level:*\n${normalizeLevel(job.experienceLevel)}` },
+        { type: "mrkdwn", text: `*🎫 Connects:*\n${job.connectsCost || 0}` },
       ],
     },
     {
@@ -101,7 +131,7 @@ function buildJobBlocks(job: ScoredJob): IncomingWebhookSendArguments["blocks"] 
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*🏷️ Matched Keywords:*\n${job.matchedKeywords.length ? job.matchedKeywords.join(", ") : "None"}`,
+        text: `*🏷️ Skills:*\n${job.skills.length ? job.skills.join(", ") : "Not specified"}\n\n*🔑 Matched Keywords:*\n${job.matchedKeywords.length ? job.matchedKeywords.join(", ") : "None"}`,
       },
     },
     {
@@ -231,7 +261,7 @@ export async function sendStartupMessage(feedCount: number): Promise<void> {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `🟢 *Upwork Notifier started.* Monitoring *${feedCount} feeds* every 30 minutes.`,
+          text: `🟢 *Upwork Notifier started.* Monitoring *${feedCount} queries* every 30 minutes.`,
         },
       },
     ],

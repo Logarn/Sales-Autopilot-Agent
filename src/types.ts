@@ -7,12 +7,15 @@ export interface JobPosting {
   description: string;
   postedAt: string;
   budget: string;
-  clientLocation: string;
-  clientRating: string;
-  clientSpend: string;
-  clientHireRate: string;
+  clientCountry: string;
+  clientRating: number;
+  clientSpend: number;
+  clientHireRate: number;
+  clientTotalHires: number;
+  clientFeedbackCount: number;
   category: string;
-  duration: string;
+  experienceLevel: string;
+  connectsCost: number;
   skills: string[];
   sourceQuery: string;
 }
