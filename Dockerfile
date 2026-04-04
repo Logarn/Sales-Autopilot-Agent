@@ -7,6 +7,5 @@ RUN npm ci --omit=dev
 COPY dist/ ./dist/
 COPY .env* ./
 RUN mkdir -p ./data
-VOLUME ["/app/data"]
 
 CMD ["node", "dist/index.js"]
