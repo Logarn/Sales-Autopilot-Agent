@@ -5,7 +5,7 @@ import {
   QUICK_BID_TEMPLATE_URL,
   SLACK_DELAY_MS,
   SLACK_RETRY_ATTEMPTS,
-  SLACK_WEBHOOK_URL,
+  SLACK_CHANNEL_WEBHOOK_URL,
   TIMEZONE,
 } from "./config";
 import {
@@ -19,13 +19,13 @@ import { DailySummary, ScoredJob } from "./types";
 import { sleep, timeAgo, truncateText, formatInTimezone } from "./utils";
 
 let webhook: IncomingWebhook | null = null;
-if (SLACK_WEBHOOK_URL) {
-  webhook = new IncomingWebhook(SLACK_WEBHOOK_URL);
+if (SLACK_CHANNEL_WEBHOOK_URL) {
+  webhook = new IncomingWebhook(SLACK_CHANNEL_WEBHOOK_URL);
 }
 
 function ensureWebhook(): IncomingWebhook {
   if (!webhook) {
-    throw new Error("SLACK_WEBHOOK_URL is not configured.");
+    throw new Error("SLACK_CHANNEL_WEBHOOK_URL is not configured.");
   }
   return webhook;
 }

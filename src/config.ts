@@ -44,7 +44,7 @@ function parseQueriesFromEnvOrFile(): string[] {
 }
 
 export const APP_NAME = "Upwork Notifier";
-export const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL ?? "";
+export const SLACK_CHANNEL_WEBHOOK_URL = process.env.SLACK_CHANNEL_WEBHOOK_URL ?? "";
 export const QUICK_BID_TEMPLATE_URL = process.env.QUICK_BID_TEMPLATE_URL ?? "";
 export const CRON_SCHEDULE = process.env.CRON_SCHEDULE ?? "*/30 * * * *";
 export const DAILY_SUMMARY_CRON = process.env.DAILY_SUMMARY_CRON ?? "0 8 * * *";
