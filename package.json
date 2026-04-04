@@ -13,7 +13,8 @@
     "start": "node dist/index.js",
     "test:fetch": "tsx src/fetcher.ts",
     "test:slack": "tsx src/slack.ts",
-    "test:run-once": "tsx src/index.ts --run-once"
+    "test:run-once": "tsx src/index.ts --run-once",
+    "test:slack-flag": "tsx src/index.ts --test-slack"
   },
   "keywords": [
     "upwork",

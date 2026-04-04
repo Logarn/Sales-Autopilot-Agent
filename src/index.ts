@@ -168,10 +168,54 @@ function setupGracefulShutdown(): void {
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 }
 
+function buildTestSlackJob(): ScoredJob {
+  return {
+    id: "test-slack-high-match",
+    title: "TEST: Klaviyo Email Flow Expert for Shopify Store",
+    url: "https://www.upwork.com/jobs/~test123456789",
+    description:
+      "Test notification payload for validating Slack formatting. This mock listing simulates a strong Klaviyo + Shopify retention role with lifecycle campaign ownership.",
+    postedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    budget: "Hourly: $35 - $70",
+    clientCountry: "US",
+    clientRating: 4.9,
+    clientSpend: 42500,
+    clientHireRate: 92,
+    clientTotalHires: 17,
+    clientFeedbackCount: 34,
+    category: "Digital Marketing",
+    experienceLevel: "EXPERT",
+    connectsCost: 16,
+    skills: ["Klaviyo", "Email Marketing", "SMS Marketing", "Shopify", "Segmentation"],
+    sourceQuery: "manual-test",
+    score: 12,
+    matchLevel: "high",
+    matchedKeywords: ["klaviyo", "shopify", "email marketing", "email flows"],
+    negativeKeywords: [],
+  };
+}
+
+async function runTestSlackNotification(): Promise<void> {
+  const testJob = buildTestSlackJob();
+  const notifiedIds = await sendJobNotifications([testJob]);
+  if (notifiedIds.has(testJob.id)) {
+    logger.info("Test Slack notification sent successfully.");
+  } else {
+    logger.warn("Test Slack notification was not confirmed as sent.");
+  }
+}
+
 async function main(): Promise<void> {
-  validateRequiredConfig();
   setupGracefulShutdown();
 
+  const testSlack = process.argv.includes("--test-slack");
+  if (testSlack) {
+    await runTestSlackNotification();
+    closeDb();
+    return;
+  }
+
+  validateRequiredConfig();
   await startupHealthCheck();
 
   const runOnce = process.argv.includes("--run-once");
