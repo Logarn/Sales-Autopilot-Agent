@@ -2,7 +2,6 @@ import cron from "node-cron";
 import {
   CRON_SCHEDULE,
   DAILY_SUMMARY_CRON,
-  ENABLE_LOW_MATCH_DIGEST,
   SEARCH_QUERIES,
   TIMEZONE,
 } from "./config";
@@ -193,12 +192,8 @@ async function main(): Promise<void> {
     DAILY_SUMMARY_CRON,
     async () => {
       const summary = getDailySummary(new Date());
-      if (ENABLE_LOW_MATCH_DIGEST || summary.high > 0 || summary.medium > 0) {
-        await sendDailySummary(summary);
-        logger.info("Daily summary sent.");
-      } else {
-        logger.info("Daily summary skipped (low-match digest disabled and no high/medium jobs).");
-      }
+      await sendDailySummary(summary);
+      logger.info("Daily summary sent.");
     },
     { timezone: TIMEZONE }
   );
