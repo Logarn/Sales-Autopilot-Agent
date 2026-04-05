@@ -261,7 +261,7 @@ export async function sendStartupMessage(feedCount: number): Promise<void> {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `🟢 *Upwork Notifier started.* Monitoring *${feedCount} queries* every hour.`,
+          text: `🟢 *Upwork Notifier started.* Monitoring *${feedCount} queries* every 5 minutes.`,
         },
       },
     ],

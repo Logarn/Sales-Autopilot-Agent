@@ -7,7 +7,7 @@ and posts rich Slack notifications for high-priority opportunities.
 
 ## Features
 
-- Polls multiple Upwork search queries via Apify every hour (configurable with cron)
+- Polls multiple Upwork search queries via Apify every 5 minutes (configurable with cron)
 - Query configuration via `.env` (`SEARCH_QUERIES`) or JSON (`config/queries.json`)
 - Weighted keyword scoring with negative-keyword filtering
 - Match levels:
