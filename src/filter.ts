@@ -14,6 +14,17 @@ const HIGH_VALUE_KEYWORDS = [
   "post-purchase",
   "welcome series",
   "browse abandonment",
+  "shopify plus email",
+  "welcome series klaviyo",
+  "abandoned cart email",
+  "post-purchase flow",
+  "win-back campaign",
+  "klaviyo specialist",
+  "klaviyo for shopify",
+  "klaviyo shopify email specialist",
+  "klaviyo email specialist",
+  "klaviyo email flows",
+  "klaviyo flows",
 ];
 
 const MEDIUM_VALUE_KEYWORDS = [
@@ -28,6 +39,18 @@ const MEDIUM_VALUE_KEYWORDS = [
   "campaign management",
   "marketing automation",
   "customer journey",
+  "postscript",
+  "attentive",
+  "omnisend",
+  "mailchimp marketing",
+  "mailchimp email marketing",
+  "shopify marketing",
+  "shopify retention marketing",
+  "shopify email marketing",
+  "email automation shopify",
+  "dtc email marketing",
+  "ecommerce retention",
+  "klaviyo marketing",
 ];
 
 const LOW_VALUE_KEYWORDS = [
