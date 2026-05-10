@@ -21,6 +21,7 @@
     "app:notes": "tsx src/applications.ts --notes",
     "app:apply": "tsx src/applications.ts --record-submission",
     "app:analytics": "tsx src/applications.ts --analytics",
+    "app:capture": "tsx src/capture.ts",
     "app:report": "tsx src/applications.ts"
   },
   "keywords": [
