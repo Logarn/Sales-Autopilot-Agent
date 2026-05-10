@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 3
-**Review Counter:** 3
+**Review Counter:** 4
 **Iteration:** 1
 **Size:** L
 
@@ -33,6 +33,8 @@
 - [x] Preserve proposal version/audit trail
 - [x] Re-render/send Slack preview if configured
 - [x] Build passes
+- [ ] R004: apply LLM revision to proposal_text when provider is available
+- [ ] R004: avoid advertising revised Slack preview when only fallback request is stored
 
 ---
 
@@ -74,6 +76,7 @@
 ## Discoveries
 | Discovery | Disposition | Location |
 |-----------|-------------|----------|
+| R004 suggestion: include pending revision instruction in fallback output when no revised text is available | Considered during Step 2 revision fix | taskplane-tasks/TP-015-slack-conversation-layer/.reviews/R004-code-step2.md |
 
 ## Execution Log
 | Timestamp | Action | Outcome |
@@ -87,3 +90,4 @@
 | 2026-05-10 21:58 | Review R001 | plan Step 1: APPROVE |
 | 2026-05-10 22:00 | Review R002 | code Step 1: APPROVE |
 | 2026-05-10 22:01 | Review R003 | plan Step 2: APPROVE |
+| 2026-05-10 22:04 | Review R004 | code Step 2: REVISE |
