@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 3
-**Review Counter:** 6
+**Review Counter:** 7
 **Iteration:** 2
 **Size:** L
 
@@ -43,6 +43,8 @@
 **Status:** 🟨 In Progress
 - [ ] Approve/reject update DB
 - [ ] Optional browser apply action enqueue
+- [ ] R007: Handle mark_applied and mark_replied commands as status updates
+- [ ] R007: Handle standalone enqueue_browser_apply command without auto-submitting
 - [ ] Slack inbound config/docs placeholders
 - [ ] Build passes
 
@@ -96,3 +98,4 @@
 | 2026-05-10 22:04 | Review R004 | code Step 2: REVISE |
 | 2026-05-10 22:06 | Review R005 | code Step 2: REVISE |
 | 2026-05-10 22:08 | Review R006 | code Step 2: APPROVE |
+| 2026-05-10 22:09 | Review R007 | plan Step 3: REVISE |
