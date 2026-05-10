@@ -122,15 +122,19 @@ export function dedupeJobsBySimilarity(jobs: JobPosting[]): DedupeResult<JobPost
   const kept: JobPosting[] = [];
   let exactDuplicates = 0;
   let nearDuplicates = 0;
-  const byId = new Set<string>();
+  const byId = new Map<string, JobPosting>();
 
   for (const job of jobs) {
-    if (byId.has(job.id)) {
+    const existing = byId.get(job.id);
+    if (existing) {
       exactDuplicates += 1;
+      byId.set(job.id, chooseStrongerJob(existing, job));
       continue;
     }
-    byId.add(job.id);
+    byId.set(job.id, job);
+  }
 
+  for (const job of byId.values()) {
     const duplicateIndex = kept.findIndex((candidate) => areNearDuplicateJobs(candidate, job));
     if (duplicateIndex === -1) {
       kept.push(job);

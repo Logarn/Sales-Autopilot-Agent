@@ -35,7 +35,7 @@
 - [x] Keep strongest/latest duplicate candidate deterministically
 - [x] Log dedupe counts by source
 - [x] Run targeted build/typecheck: `npm run build`
-- [ ] Revision R004: exact-ID duplicates retain strongest/latest candidate before near-duplicate matching
+- [x] Revision R004: exact-ID duplicates retain strongest/latest candidate before near-duplicate matching
 
 ---
 
