@@ -1,10 +1,10 @@
 # TP-004: Semantic Dedupe — Status
 
-**Current Step:** Step 2: Integrate dedupe into fetch pipeline
+**Current Step:** Step 3: Persist fingerprints for seen jobs
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 4
+**Review Counter:** 5
 **Iteration:** 1
 **Size:** M
 
@@ -29,7 +29,7 @@
 ---
 
 ### Step 2: Integrate dedupe into fetch pipeline
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 
 - [x] Dedupe by exact ID first and near-duplicate similarity second
 - [x] Keep strongest/latest duplicate candidate deterministically
@@ -40,7 +40,7 @@
 ---
 
 ### Step 3: Persist fingerprints for seen jobs
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 
 - [ ] Add nullable `fingerprint` column to `seen_jobs`
 - [ ] Store fingerprint when marking jobs seen
@@ -113,3 +113,4 @@
 | 2026-05-10 16:31 | Review R002 | code Step 1: APPROVE |
 | 2026-05-10 16:32 | Review R003 | plan Step 2: APPROVE |
 | 2026-05-10 16:33 | Review R004 | code Step 2: REVISE |
+| 2026-05-10 16:35 | Review R005 | code Step 2: APPROVE |
