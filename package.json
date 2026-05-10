@@ -27,6 +27,7 @@
     "test:slack-flag": "tsx src/index.ts --test-slack",
     "add:manual-job": "tsx src/manual.ts",
     "capture:job": "tsx src/manual.ts",
+    "normalize:capture": "tsx src/normalizeCli.ts",
     "app:status": "tsx src/applications.ts --set-status",
     "app:note": "tsx src/applications.ts --add-note",
     "app:notes": "tsx src/applications.ts --notes",

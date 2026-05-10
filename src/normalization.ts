@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { parseJobDetailCapture } from "./jobCapture";
+import { OpenAiCompatibleProvider } from "./llm/provider";
 import {
   JobPosting,
   NormalizedClientPacket,
@@ -14,6 +15,18 @@ import {
 
 const MISSING = "Not specified";
 const SAFE_UPWORK_JOB_URL = /^https:\/\/(?:www\.)?upwork\.com\/jobs\/[^\s?#]*~[A-Za-z0-9_-]{8,}(?:[/?#][^\s]*)?$/i;
+
+export interface NormalizeOpportunityOptions {
+  url?: string;
+  capturedAt?: Date;
+  useLlm?: boolean;
+  provider?: OpenAiCompatibleProvider;
+}
+
+export interface NormalizeOpportunityResult extends NormalizedOpportunityRepair {
+  usedLlm: boolean;
+  fallbackReason?: string;
+}
 
 function sanitizeString(value: unknown, fallback = ""): string {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
@@ -246,4 +259,55 @@ export function normalizedPacketToJobPosting(packet: NormalizedOpportunityPacket
     skills: packet.requirements.skills,
     sourceQuery: packet.job.sourceQuery,
   };
+}
+
+function buildNormalizationMessages(rawText: string, fallback: NormalizedOpportunityPacket) {
+  return [
+    {
+      role: "system" as const,
+      content:
+        "You normalize Upwork capture text into JSON only. Preserve facts, use null/empty arrays for unknowns, never invent direct links, connects, client metrics, or proof. Return fields matching the provided packet shape.",
+    },
+    {
+      role: "user" as const,
+      content: JSON.stringify({
+        fallbackPacket: fallback,
+        rawCaptureText: rawText,
+        instructions: [
+          "Improve title, description, requirements, applicationQuestions, risks, proofHints, and proposalInstructions from raw text.",
+          "Do not change deterministic job URL, id, or connects values.",
+          "Return a JSON object shaped like NormalizedOpportunityPacket.",
+        ],
+      }),
+    },
+  ];
+}
+
+export async function normalizeOpportunity(rawText: string, options: NormalizeOpportunityOptions = {}): Promise<NormalizeOpportunityResult> {
+  const fallback = buildDeterministicOpportunityPacket(rawText, { url: options.url, capturedAt: options.capturedAt });
+  const provider = options.provider ?? new OpenAiCompatibleProvider();
+
+  if (options.useLlm === false || !provider.isAvailable()) {
+    const repaired = repairNormalizedOpportunityPacket(fallback, fallback);
+    return { ...repaired, usedLlm: false, fallbackReason: options.useLlm === false ? "LLM disabled by caller" : "LLM provider unavailable" };
+  }
+
+  const result = await provider.completeJson<Partial<NormalizedOpportunityPacket>>({
+    messages: buildNormalizationMessages(rawText, fallback),
+    temperature: 0.1,
+    maxTokens: 2200,
+  });
+
+  if (!result.ok || !result.data) {
+    const repaired = repairNormalizedOpportunityPacket(fallback, fallback);
+    return { ...repaired, usedLlm: false, fallbackReason: result.skippedReason ?? result.error ?? "LLM normalization failed" };
+  }
+
+  const repaired = repairNormalizedOpportunityPacket({ ...result.data, source: "llm" }, fallback);
+  if (!repaired.valid) {
+    const deterministic = repairNormalizedOpportunityPacket(fallback, fallback);
+    return { ...deterministic, usedLlm: false, fallbackReason: `LLM packet failed repair: ${repaired.errors.join("; ")}` };
+  }
+
+  return { ...repaired, usedLlm: true };
 }
