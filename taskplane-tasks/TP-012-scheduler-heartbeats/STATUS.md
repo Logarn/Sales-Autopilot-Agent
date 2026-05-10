@@ -55,9 +55,9 @@
 
 ### Step 5: Testing & Verification
 **Status:** 🟨 In Progress
-- [ ] Full tests or env limitation note
-- [ ] Build passes
-- [ ] Health command tested
+- [x] Full tests or env limitation note
+- [x] Build passes
+- [x] Health command tested
 
 ---
 
@@ -85,6 +85,7 @@
 ## Discoveries
 | Discovery | Disposition | Location |
 |-----------|-------------|----------|
+| `npm test` is not configured in package.json; full automated test suite unavailable, so verification used build plus targeted command checks. | Documented test limitation for Step 5. | package.json |
 | Plan reviewer suggested shared TypeScript heartbeat types for scheduler and health reporting. | Advisory; applied via src/heartbeat.ts exports. | Step 1 plan review |
 | Plan reviewer suggested scheduler jobs record heartbeats so health reporting can consume real data. | Advisory; included in Step 2 implementation. | Step 2 plan review |
 | Code reviewer suggested scheduler mode validate required config before entering loop. | Advisory; applied while fixing lifecycle. | Step 2 code review |
