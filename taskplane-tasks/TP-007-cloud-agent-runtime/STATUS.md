@@ -1,7 +1,7 @@
 # TP-007: Cloud Agent Runtime — Status
 
 **Current Step:** Step 5: Documentation & Delivery
-**Status:** 🟡 In Progress
+**Status:** ✅ Complete
 **Last Updated:** 2026-05-10
 **Review Level:** 1
 **Review Counter:** 4
@@ -48,9 +48,9 @@
 ---
 
 ### Step 5: Documentation & Delivery
-**Status:** 🟨 In Progress
-- [ ] Docs updated
-- [ ] Discoveries logged
+**Status:** ✅ Complete
+- [x] Docs updated
+- [x] Discoveries logged
 
 ---
 
@@ -65,6 +65,7 @@
 |-----------|-------------|----------|
 | Docker CLI is not installed in the worker environment, so Compose syntax could not be validated with `docker compose config`. | Used `npm run build` for compatibility verification; Compose changes are conservative volume additions. | docker-compose.yml |
 | No `npm test` script exists in package.json. | Use `npm run build` plus command/config smoke checks for verification. | package.json |
+| Deployment/runbook documentation was added and README now links the VM/cloud runtime modes. | Delivery documentation complete. | README.md, docs/DEPLOYMENT.md |
 
 ## Execution Log
 
