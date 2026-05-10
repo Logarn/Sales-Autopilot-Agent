@@ -239,16 +239,19 @@ The browser queue stores requested browser actions in SQLite and processes them 
 
 ```bash
 npm run browser:enqueue -- --job-id job-123 --action open_job --url https://www.upwork.com/jobs/~0123
-npm run browser:enqueue -- --job-id job-123 --action open_apply_page --url https://www.upwork.com/ab/proposals/job/job-123/apply/
-npm run browser:enqueue -- --job-id job-123 --action prepare_application_review --url https://www.upwork.com/jobs/~0123 --notes "Review before applying"
+npm run browser:enqueue -- --job-id job-123 --action open_apply_page --url https://www.upwork.com/ab/proposals/job/~0123/apply/
+npm run browser:enqueue -- --apply-preview --job-id <approved-job-id>
+npm run browser:enqueue -- --apply-prepare --job-id <approved-job-id> --notes "Review before applying"
 npm run browser:list -- --status pending
 npm run browser:update -- --id 1 --status paused --error "Login required"
 BROWSER_WORKER_ENABLED=true npm run browser:worker
 ```
 
+Apply preparation is available only for application records already marked `approved`. The preview command prints the operator-facing fill plan (direct Upwork apply URL, profile/rate, approved cover letter, allowed attachments/highlights, Connects plan, validation issues, and `stop_before_submit: true`) without opening a browser. The enqueue command fails closed on validation errors and queues `prepare_application_review`; the worker revalidates before navigation.
+
 Safety defaults are conservative: `BROWSER_SEARCH_ENABLED=false`, `BROWSER_WORKER_ENABLED=false`, and `BROWSER_DRY_RUN=true`. Dry-run mode records what would happen but does not launch a browser. Live browser search opens only validated Upwork search/job URLs and uses a persistent VM-local user data directory (`BROWSER_USER_DATA_DIR`) so it does not take over a local desktop session.
 
-The browser search runner and worker must pause for human intervention on login, 2FA, CAPTCHA, Cloudflare, or any other security challenge. They must not bypass security controls, store Upwork passwords, fill proposal fields, or submit proposals. Optional artifacts/captures are minimized diagnostics and bounded text, not full authenticated page archives.
+The browser search runner and worker must pause for human intervention on login, 2FA, CAPTCHA, Cloudflare, or any other security challenge. Apply preparation may conservatively fill visible fields in live mode after approval, but it must never click final submit. Optional artifacts/captures are minimized diagnostics and bounded text, not full proposal text, attachment file contents, screenshots, or full authenticated page archives.
 
 ## Agent Skills Registry
 
@@ -290,6 +293,8 @@ The list command prints sorted skill names, titles, and markdown paths. The read
 - `npm run portfolio:upsert -- --id <id> --name <name> --description <text> --result <text>` - add/update portfolio metadata without code changes
 - `npm run browser:search` - run browser-search dry-run/live polling according to `BROWSER_SEARCH_*` and `BROWSER_DRY_RUN`
 - `npm run browser:enqueue -- --job-id <id> --action open_job --url <upwork-url>` - add a safe browser action to the SQLite queue
+- `npm run browser:enqueue -- --apply-preview --job-id <approved-job-id>` - print the approved apply fill plan without opening a browser
+- `npm run browser:enqueue -- --apply-prepare --job-id <approved-job-id>` - validate and queue safe browser apply preparation; final submit remains disabled
 - `npm run browser:list -- [--status pending] [--limit 25]` - list queued browser actions
 - `npm run browser:update -- --id <action-id> --status paused --error "Login required"` - manually update a queued browser action
 - `npm run browser:worker` - process pending browser actions only when `BROWSER_WORKER_ENABLED=true`; dry-run remains default

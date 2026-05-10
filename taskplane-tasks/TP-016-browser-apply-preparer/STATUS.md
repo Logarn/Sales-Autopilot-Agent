@@ -1,6 +1,6 @@
 # TP-016: Browser Apply Preparer — Status
 
-**Current Step:** Step 3: CLI/testing path
+**Current Step:** Step 4: Documentation
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 3
@@ -48,8 +48,8 @@
 ---
 
 ### Step 4: Documentation
-**Status:** ⬜ Not Started
-- [ ] README/deployment updated
+**Status:** 🟨 In Progress
+- [x] README/deployment updated
 
 ---
 
