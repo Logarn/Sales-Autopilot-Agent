@@ -17,13 +17,20 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   return ["1", "true", "yes", "on"].includes(value.toLowerCase());
 }
 
+function parseDelimitedList(value: string | undefined): string[] {
+  if (!value || value.trim().length === 0) {
+    return [];
+  }
+  return value
+    .split("|")
+    .map((q) => q.trim())
+    .filter(Boolean);
+}
+
 function parseQueriesFromEnvOrFile(): string[] {
-  const envQueries = process.env.SEARCH_QUERIES;
-  if (envQueries && envQueries.trim().length > 0) {
-    return envQueries
-      .split("|")
-      .map((q) => q.trim())
-      .filter(Boolean);
+  const envQueries = parseDelimitedList(process.env.SEARCH_QUERIES);
+  if (envQueries.length > 0) {
+    return envQueries;
   }
 
   const configPath =
@@ -41,6 +48,20 @@ function parseQueriesFromEnvOrFile(): string[] {
   }
 
   return DEFAULT_SEARCH_QUERIES;
+}
+
+function parseBrowserSearchInputs(): string[] {
+  const explicitQueries = parseDelimitedList(process.env.BROWSER_SEARCH_QUERIES);
+  if (explicitQueries.length > 0) {
+    return explicitQueries;
+  }
+
+  const explicitUrls = parseDelimitedList(process.env.BROWSER_SEARCH_URLS);
+  if (explicitUrls.length > 0) {
+    return explicitUrls;
+  }
+
+  return SEARCH_QUERIES;
 }
 
 export const APP_NAME = "Upwork Revenue Assistant";
@@ -78,6 +99,19 @@ export const BROWSER_USER_DATA_DIR = process.env.BROWSER_USER_DATA_DIR ?? "./dat
 export const BROWSER_DRY_RUN = parseBoolean(process.env.BROWSER_DRY_RUN, true);
 export const BROWSER_ARTIFACT_DIR = process.env.BROWSER_ARTIFACT_DIR ?? "";
 export const BROWSER_ACTION_LIMIT = parseInteger(process.env.BROWSER_ACTION_LIMIT, 5);
+export const BROWSER_SEARCH_ENABLED = parseBoolean(process.env.BROWSER_SEARCH_ENABLED, false);
+export const BROWSER_SEARCH_INTERVAL_MS = Math.min(
+  Math.max(parseInteger(process.env.BROWSER_SEARCH_INTERVAL_MS, 5 * 60 * 1000), 5 * 60 * 1000),
+  10 * 60 * 1000
+);
+export const BROWSER_SEARCH_MAX_JOBS_PER_QUERY = Math.max(
+  1,
+  parseInteger(process.env.BROWSER_SEARCH_MAX_JOBS_PER_QUERY, 10)
+);
+export const BROWSER_SEARCH_FRESHNESS_WINDOW_MINUTES = Math.max(
+  1,
+  parseInteger(process.env.BROWSER_SEARCH_FRESHNESS_WINDOW_MINUTES, 60)
+);
 export const FETCH_RETRY_ATTEMPTS = parseInteger(process.env.FETCH_RETRY_ATTEMPTS, 3);
 export const FEED_DELAY_MS = parseInteger(process.env.FEED_DELAY_MS, 10000);
 export const APIFY_REQUEST_TIMEOUT_MS = parseInteger(
@@ -87,6 +121,7 @@ export const APIFY_REQUEST_TIMEOUT_MS = parseInteger(
 export const SLACK_DELAY_MS = parseInteger(process.env.SLACK_DELAY_MS, 2000);
 export const SLACK_RETRY_ATTEMPTS = parseInteger(process.env.SLACK_RETRY_ATTEMPTS, 3);
 export const SEARCH_QUERIES = parseQueriesFromEnvOrFile();
+export const BROWSER_SEARCH_INPUTS = parseBrowserSearchInputs();
 export { parseBoolean, parseInteger };
 
 export function validateRequiredConfig(): void {
