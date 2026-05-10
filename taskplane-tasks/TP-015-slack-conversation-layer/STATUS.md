@@ -1,6 +1,6 @@
 # TP-015: Slack Conversation Layer — Status
 
-**Current Step:** Step 4: Documentation
+**Current Step:** Step 5: Testing & Verification
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 3
@@ -59,7 +59,7 @@
 ---
 
 ### Step 5: Testing & Verification
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Full tests or env limitation note
 - [ ] Build passes
 - [ ] Local CLI commands tested
