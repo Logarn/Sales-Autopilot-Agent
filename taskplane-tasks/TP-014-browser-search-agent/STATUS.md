@@ -33,6 +33,9 @@
 
 ### Step 2: Browser search runner
 **Status:** 🟨 In Progress
+
+**Plan:** Extend `src/browserSearch.ts` from the safe model into an optional runner that uses dynamic Playwright loading only when enabled and not dry-run, opens only validated Upwork search/job URLs in a persistent context, detects login/2FA/CAPTCHA/security pages and returns a paused summary instead of bypassing, extracts a conservative bounded set of job links/detail text, and hands captured pages to existing deterministic normalization/job-capture outputs without requiring credentials. Dry-run/no-browser paths will return summaries from configured queries without importing Playwright. Verify with focused dry-run execution and `npm run build`.
+
 - [ ] Open configured Upwork searches when enabled
 - [ ] Detect login/security states and pause safely
 - [ ] Capture links/details and hand off downstream
