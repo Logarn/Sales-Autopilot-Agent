@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { parseJobDetailCapture } from "./jobCapture";
 import {
   JobPosting,
@@ -46,6 +48,10 @@ export function hasSafeDirectJobLink(url: string): boolean {
   return SAFE_UPWORK_JOB_URL.test(url.trim());
 }
 
+function hashRawText(rawText: string): string {
+  return createHash("sha256").update(rawText).digest("hex");
+}
+
 export function buildDeterministicOpportunityPacket(rawText: string, options: { url?: string; capturedAt?: Date; source?: NormalizationSource } = {}): NormalizedOpportunityPacket {
   const capture = parseJobDetailCapture(rawText, { url: options.url, capturedAt: options.capturedAt });
   const source = options.source ?? "deterministic";
@@ -59,7 +65,7 @@ export function buildDeterministicOpportunityPacket(rawText: string, options: { 
     schemaVersion: "1.0",
     source,
     normalizedAt: (options.capturedAt ?? new Date()).toISOString(),
-    rawTextHash: `${rawText.length}:${rawText.slice(0, 80)}`,
+    rawTextHash: hashRawText(rawText),
     job: {
       id: deterministicJob.id,
       title: capture.title,
@@ -184,7 +190,7 @@ export function repairNormalizedOpportunityPacket(
     schemaVersion: "1.0",
     source: input.source === "llm" ? "llm" : fallback.source,
     normalizedAt: sanitizeString(input.normalizedAt, new Date().toISOString()),
-    rawTextHash: sanitizeString(input.rawTextHash, fallback.rawTextHash),
+    rawTextHash: fallback.rawTextHash,
     job,
     client: normalizeClient(input.client, fallback.client),
     requirements: normalizeRequirements(input.requirements, fallback.requirements),

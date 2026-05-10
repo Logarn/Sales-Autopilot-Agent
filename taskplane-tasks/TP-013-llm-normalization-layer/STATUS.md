@@ -22,7 +22,7 @@
 - [x] Define normalized packet types/schema for core job, client, requirements, questions, skills, connects, risks, proof hints, and proposal instructions
 - [x] Add validation/repair helpers that merge LLM/deterministic data while rejecting unsafe direct links and preserving guarded fallback fields
 - [x] Build passes
-- [ ] Replace rawTextHash snippet metadata with a non-reversible digest and prevent LLM-provided raw text from being preserved
+- [x] Replace rawTextHash snippet metadata with a non-reversible digest and prevent LLM-provided raw text from being preserved
 
 ---
 
