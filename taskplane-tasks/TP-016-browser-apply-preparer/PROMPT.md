@@ -14,8 +14,8 @@ Implement the safe browser apply preparer: after human approval, the browser wor
 
 ## Dependencies
 
-- **Task:** TP-006 (Browser queue foundation)
-- **Task:** TP-015 (Slack conversation approval/handoff should exist; if missing, implement CLI-approved browser action path)
+- **External:** Browser queue foundation is already integrated in `main` from prior completed task TP-006.
+- **Task:** TP-015 (Slack conversation approval/handoff must exist before browser apply preparation)
 
 ## Context to Read First
 

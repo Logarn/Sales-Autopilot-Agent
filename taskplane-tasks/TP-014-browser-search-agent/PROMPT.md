@@ -24,8 +24,7 @@ Build the browser search agent foundation so the VM/cloud browser session can be
 
 ## Dependencies
 
-- **Task:** TP-012 (Scheduler/heartbeats should exist for recurring loop; if missing, implement search command and document scheduler integration)
-- **Task:** TP-013 (LLM normalization should exist; if missing, feed existing capture/parser pipeline)
+- **External:** Scheduler/heartbeats and LLM normalization are already integrated in `main` from prior completed tasks TP-012 and TP-013.
 
 ## Context to Read First
 

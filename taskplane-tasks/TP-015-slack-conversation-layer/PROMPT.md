@@ -14,8 +14,7 @@ Add the foundation for Slack as the command center: approve, reject, revise, reg
 
 ## Dependencies
 
-- **Task:** TP-009 (Slack V0 proposal packet should exist)
-- **Task:** TP-013 (LLM normalization/revision may exist; if missing, implement deterministic/store-only revision command hooks)
+- **External:** Slack V0 proposal packets and LLM normalization are already integrated in `main` from prior completed tasks TP-009 and TP-013.
 
 ## Context to Read First
 
