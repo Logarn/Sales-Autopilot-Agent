@@ -25,7 +25,7 @@
 - [x] Create `src/scoring.ts` with component scores, reasons, and risks
 - [x] Incorporate profile preferences and Connects rules safely
 - [x] Run targeted build/typecheck: `npm run build`
-- [ ] Fix draft fit-score scaling when structured scorer uses 0-100 scores
+- [x] Fix draft fit-score scaling when structured scorer uses 0-100 scores
 
 ---
 

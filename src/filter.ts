@@ -2,14 +2,6 @@ import { scoreJobStructured, getKeywordConfig as getStructuredKeywordConfig } fr
 import { JobPosting, ScoredJob } from "./types";
 
 export function scoreJob(job: JobPosting): ScoredJob {
-  const fields = [
-    job.title,
-    job.description,
-    job.skills.join(" "),
-    job.category,
-    job.sourceQuery,
-  ];
-  const combinedText = fields.join(" ");
   const scoreResult = scoreJobStructured(job);
 
   return {

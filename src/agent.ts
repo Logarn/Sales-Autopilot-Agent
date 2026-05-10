@@ -148,7 +148,8 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   const proofPoints = selectProofPoints(profile, job);
   const portfolioItems = selectPortfolioItems(job);
   const fitReasons = [
-    ...job.matchedKeywords.slice(0, 6).map((keyword) => `Matches ${keyword}`),
+    ...job.scoreBreakdown.reasons.slice(0, 6),
+    ...job.matchedKeywords.slice(0, 4).map((keyword) => `Matches ${keyword}`),
     ...(job.clientSpend > 0 ? [`Client has ${job.clientSpend.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })} Upwork spend`] : []),
     ...(job.clientHireRate > 0 ? [`Client hire rate is ${job.clientHireRate}%`] : []),
   ].slice(0, 8);
@@ -172,7 +173,7 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   return {
     jobId: job.id,
     status: "draft",
-    fitScore: Math.min(100, Math.max(0, job.score * 10)),
+    fitScore: Math.min(100, Math.max(0, job.scoreBreakdown.fitScore.score)),
     fitReasons,
     redFlags,
     suggestedBid: suggestBid(job, profile),
