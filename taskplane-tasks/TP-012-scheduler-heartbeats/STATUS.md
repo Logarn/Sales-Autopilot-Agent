@@ -1,10 +1,10 @@
 # TP-012: Scheduler and Heartbeats — Status
 
-**Current Step:** Step 3: Health checks and Slack alerts
+**Current Step:** Step 4: Docs/config
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 9
+**Review Counter:** 10
 **Iteration:** 1
 **Size:** M
 
@@ -38,7 +38,7 @@
 ---
 
 ### Step 3: Health checks and Slack alerts
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 - [x] Add health command/report
 - [x] Add Slack stale-worker alert helper plus auth-required/browser-required findings
 - [x] Avoid alert spam
@@ -79,6 +79,8 @@
 | R006 | Code | 2 | REVISE | .reviews/R006-code-step2.md |
 | R007 | Code | 2 | APPROVE | n/a |
 | R008 | Plan | 3 | REVISE | .reviews/R008-plan-step3.md |
+| R009 | Plan | 3 | APPROVE | .reviews/R009-plan-step3.md |
+| R010 | Code | 3 | UNAVAILABLE | n/a |
 
 ## Discoveries
 | Discovery | Disposition | Location |
