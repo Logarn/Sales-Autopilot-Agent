@@ -56,6 +56,7 @@ export const PROFILE_CONFIG_PATH = process.env.PROFILE_CONFIG_PATH ?? "./profile
 export const PORTFOLIO_CONFIG_PATH = process.env.PORTFOLIO_CONFIG_PATH ?? "./profile/portfolio.json";
 export const MANUAL_JOBS_CONFIG_PATH = process.env.MANUAL_JOBS_CONFIG_PATH ?? "./config/manual-jobs.json";
 export const CONNECTS_RULES_CONFIG_PATH = process.env.CONNECTS_RULES_CONFIG_PATH ?? "./profile/connects-rules.json";
+export const PROFILE_KNOWLEDGE_DIR = process.env.PROFILE_KNOWLEDGE_DIR ?? "./profile/knowledge";
 export const MIN_SCORE_TO_NOTIFY = parseInteger(process.env.MIN_SCORE_TO_NOTIFY, 4);
 export const MIN_SCORE_HIGH = parseInteger(process.env.MIN_SCORE_HIGH, 8);
 export const MAX_DESCRIPTION_LENGTH = parseInteger(process.env.MAX_DESCRIPTION_LENGTH, 300);

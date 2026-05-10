@@ -102,6 +102,42 @@ export interface PortfolioLibrary {
   items: PortfolioItem[];
 }
 
+export type KnowledgeArtifactType = "voice" | "proof" | "portfolio" | "video" | "bid_rules" | "general";
+
+export interface KnowledgeArtifactMetadata {
+  title?: string;
+  type?: KnowledgeArtifactType;
+  tags?: string[];
+  source?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface KnowledgeArtifact {
+  id: string;
+  type: KnowledgeArtifactType;
+  title: string;
+  tags: string[];
+  sourcePath: string;
+  format: "markdown" | "json";
+  content: string;
+  summary: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface KnowledgeLoadWarning {
+  filePath: string;
+  message: string;
+}
+
+export interface ProfileKnowledge {
+  artifacts: KnowledgeArtifact[];
+  byType: Record<KnowledgeArtifactType, KnowledgeArtifact[]>;
+  contextSections: string[];
+  warnings: KnowledgeLoadWarning[];
+}
+
 export interface ConnectsRules {
   maxRequiredPerJob: number;
   idealBoostMin: number;
