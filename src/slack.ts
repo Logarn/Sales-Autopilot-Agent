@@ -71,6 +71,20 @@ function buildJobBlocks(job: ScoredJob): IncomingWebhookSendArguments["blocks"] 
   const description = truncateText(job.description, MAX_DESCRIPTION_LENGTH);
   const headline = `${levelBadge(job)}  •  Score: ${job.score}`;
   const posted = `${timeAgo(job.postedAt)} (${formatInTimezone(job.postedAt, TIMEZONE)})`;
+  const proposalQualityText = job.applicationDraft?.proposalQuality
+    ? `*🧪 Proposal Quality:* ${job.applicationDraft.proposalQuality.score}/100 (${job.applicationDraft.proposalQuality.wordCount} words)\n*Top issues:*\n${
+        job.applicationDraft.proposalQuality.issues.length
+          ? job.applicationDraft.proposalQuality.issues
+              .slice(0, 3)
+              .map((issue) => `• ${issue.message}${issue.evidence ? ` (${issue.evidence})` : ""}`)
+              .join("\n")
+          : "• None detected."
+      }\n\n*Positive signals:*\n${
+        job.applicationDraft.proposalQuality.positiveSignals.length
+          ? job.applicationDraft.proposalQuality.positiveSignals.slice(0, 3).map((signal) => `• ${signal}`).join("\n")
+          : "• No strong positive signals captured."
+      }`
+    : "";
 
   const actionElements: Array<{
     type: "button";
@@ -119,6 +133,17 @@ function buildJobBlocks(job: ScoredJob): IncomingWebhookSendArguments["blocks"] 
             text: `*📎 Suggested Proof:*\n${job.applicationDraft.selectedPortfolioItems.length ? job.applicationDraft.selectedPortfolioItems.map((item) => `• ${item.name}`).join("\n") : "• No attachment recommended."}`,
           },
         },
+        ...(proposalQualityText
+          ? [
+              {
+                type: "section" as const,
+                text: {
+                  type: "mrkdwn" as const,
+                  text: proposalQualityText,
+                },
+              },
+            ]
+          : []),
         {
           type: "section",
           text: {

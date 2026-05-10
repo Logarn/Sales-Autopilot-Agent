@@ -134,7 +134,7 @@ export interface ApplicationDraft {
   suggestedBoostConnects: number;
   connectsWarnings: string[];
   selectedPortfolioItems: PortfolioItem[];
-  proposalQuality?: ProposalQualityResult;
+  proposalQuality: ProposalQualityResult;
   proposalText: string;
   generatedAt: string;
 }
