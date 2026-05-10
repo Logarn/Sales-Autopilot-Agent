@@ -1,6 +1,6 @@
 # TP-012: Scheduler and Heartbeats — Status
 
-**Current Step:** Step 4: Docs/config
+**Current Step:** Step 5: Testing & Verification
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
@@ -47,7 +47,7 @@
 ---
 
 ### Step 4: Docs/config
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 - [x] Env example updated
 - [x] README/deployment updated
 
