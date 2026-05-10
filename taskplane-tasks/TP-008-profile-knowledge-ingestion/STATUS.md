@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 9
+**Review Counter:** 10
 **Iteration:** 1
 **Size:** M
 
@@ -48,6 +48,7 @@
 - [x] Empty knowledge directory is safe
 - [x] Build passes
 - [x] Prevent voice, bid-rule, and internal general knowledge from leaking as meta instructions in client proposal text
+- [ ] Apply plain-text voice note preferences and newer voice additions with bounded precedence
 
 ---
 
@@ -114,3 +115,4 @@
 | 2026-05-10 19:16 | Review R007 | code Step 2: APPROVE |
 | 2026-05-10 19:17 | Review R008 | plan Step 3: APPROVE |
 | 2026-05-10 19:21 | Review R009 | code Step 3: REVISE |
+| 2026-05-10 19:23 | Review R010 | code Step 3: REVISE |
