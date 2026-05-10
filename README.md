@@ -145,7 +145,7 @@ npm run capture:job -- --file captures/job-detail.txt --url https://www.upwork.c
 npm run test:run-once
 ```
 
-The command parses title, description, budget/type, duration, experience level, skills, activity, Connects, and client details when visible. It creates or updates `config/manual-jobs.json` using the stable Upwork job ID or URL, then prints a short summary and the next pipeline command. Missing fields are kept conservative (`Not specified`, `0`, or empty arrays) so the normal scoring/proposal pipeline can still run while making weak captures obvious.
+The command parses title, description, budget/type, duration, experience level, skills, activity, Connects, and client details when visible. The `--url` flag is optional only when the pasted text already includes the Upwork job URL; otherwise provide it so the system keeps a direct application link. It creates or updates `config/manual-jobs.json` using the stable Upwork job ID or URL, then prints a short summary and the next pipeline command. Missing fields are kept conservative (`Not specified`, `0`, or empty arrays) so the normal scoring/proposal pipeline can still run while making weak captures obvious.
 
 Sample pasted text lives at `captures/job-detail-sample.txt`.
 

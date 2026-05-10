@@ -1,11 +1,11 @@
 # TP-005: Job Detail Capture Parser — Status
 
-**Current Step:** Step 4: Testing & Verification
-**Status:** 🟡 In Progress
+**Current Step:** Step 5: Documentation & Delivery
+**Status:** ✅ Complete
 **Last Updated:** 2026-05-10
 **Review Level:** 2
 **Review Counter:** 11
-**Iteration:** 1
+**Iteration:** 2
 **Size:** M
 
 ---
@@ -56,9 +56,9 @@ Plan: add a pure `src/jobCapture.ts` module exporting typed parsed job-detail ou
 ---
 
 ### Step 5: Documentation & Delivery
-**Status:** ⬜ Not Started
-- [ ] Docs updated
-- [ ] Discoveries logged
+**Status:** ✅ Complete
+- [x] Docs updated
+- [x] Discoveries logged
 
 ---
 
@@ -71,6 +71,7 @@ Plan: add a pure `src/jobCapture.ts` module exporting typed parsed job-detail ou
 
 | Discovery | Disposition | Location |
 |-----------|-------------|----------|
+| Future browser/agent workflow should remain Slack-first with human approval before reflecting proposals in Upwork; no auto-submit/CAPTCHA/2FA bypass. | Logged for TP-006/next browser-agent tasks; TP-005 scope unchanged. | Steering 2026-05-10 17:47 |
 
 ## Execution Log
 
@@ -80,6 +81,8 @@ Plan: add a pure `src/jobCapture.ts` module exporting typed parsed job-detail ou
 | 2026-05-10 17:31 | Task started | Runtime V2 lane-runner execution |
 | 2026-05-10 17:31 | Step 0 started | Preflight |
 | 2026-05-10 20:45 | Full test script attempted | `npm run test:run-once` failed because `APIFY_API_TOKEN` is not configured in this environment. |
+| 2026-05-10 17:47 | ⚠️ Steering | Operator product direction for upcoming browser/agent work: target workflow is Slack-first conversational approval/editing. Agent searches Upwork in VM/cloud browser, scores jobs, drafts proposals, po |
+| 2026-05-10 17:47 | Worker iter 1 | done in 917s, tools: 135 |
 
 ## Blockers
 
