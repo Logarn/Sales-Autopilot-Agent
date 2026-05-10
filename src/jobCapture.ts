@@ -186,7 +186,7 @@ function deriveConnects(text: string): number | null {
 }
 
 function deriveClient(text: string): ClientCapture {
-  const rating = parseNumber(firstMatch(text, [/(\d(?:\.\d+)?)\s*(?:of\s*5|stars?)/i]));
+  const rating = parseNumber(firstMatch(text, [/(\d(?:\.\d+)?)\s*(?:out of\s*5|of\s*5|stars?)/i]));
   return {
     location: deriveLocation(text),
     rating,

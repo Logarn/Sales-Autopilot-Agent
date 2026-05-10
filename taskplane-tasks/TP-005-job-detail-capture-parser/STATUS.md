@@ -43,7 +43,7 @@ Plan: add a pure `src/jobCapture.ts` module exporting typed parsed job-detail ou
 **Status:** 🟨 In Progress
 - [x] Add sample capture text
 - [x] Update README workflow
-- [ ] Fix sample-visible client rating extraction for `out of 5` wording
+- [x] Fix sample-visible client rating extraction for `out of 5` wording
 
 ---
 
