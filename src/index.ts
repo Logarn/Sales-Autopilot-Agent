@@ -171,7 +171,7 @@ function setupGracefulShutdown(): void {
 }
 
 function buildTestSlackJob(): ScoredJob {
-  return {
+  return scoreJob({
     id: "test-slack-high-match",
     title: "TEST: Klaviyo Email Flow Expert for Shopify Store",
     url: "https://www.upwork.com/jobs/~test123456789",
@@ -190,11 +190,7 @@ function buildTestSlackJob(): ScoredJob {
     connectsCost: 16,
     skills: ["Klaviyo", "Email Marketing", "SMS Marketing", "Shopify", "Segmentation"],
     sourceQuery: "manual-test",
-    score: 12,
-    matchLevel: "high",
-    matchedKeywords: ["klaviyo", "shopify", "email marketing", "email flows"],
-    negativeKeywords: [],
-  };
+  });
 }
 
 async function runTestSlackNotification(): Promise<void> {

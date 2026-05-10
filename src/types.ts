@@ -20,11 +20,29 @@ export interface JobPosting {
   sourceQuery: string;
 }
 
+export interface ScoreComponent {
+  score: number;
+  reasons: string[];
+  risks: string[];
+}
+
+export interface ScoreBreakdown {
+  fitScore: ScoreComponent;
+  clientQualityScore: ScoreComponent;
+  opportunityScore: ScoreComponent;
+  redFlagScore: ScoreComponent;
+  connectsRiskScore: ScoreComponent;
+  finalScore: number;
+  reasons: string[];
+  risks: string[];
+}
+
 export interface ScoredJob extends JobPosting {
   score: number;
   matchLevel: MatchLevel;
   matchedKeywords: string[];
   negativeKeywords: string[];
+  scoreBreakdown: ScoreBreakdown;
   applicationDraft?: ApplicationDraft;
 }
 
