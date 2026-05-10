@@ -1,6 +1,6 @@
 # TP-008: Profile Knowledge Ingestion — Status
 
-**Current Step:** Step 0: Preflight
+**Current Step:** Step 1: Knowledge file schema and loader
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
@@ -11,14 +11,14 @@
 ---
 
 ### Step 0: Preflight
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 - [x] Required files and paths exist
 - [x] Dependencies satisfied
 
 ---
 
 ### Step 1: Knowledge file schema and loader
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Add profile/knowledge support
 - [ ] Create safe loader
 - [ ] Add types
