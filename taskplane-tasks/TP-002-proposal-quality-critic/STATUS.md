@@ -50,9 +50,9 @@
 ### Step 4: Testing & Verification
 **Status:** 🟨 In Progress
 
-- [ ] FULL test suite passing or absence of test script documented
-- [ ] All failures fixed
-- [ ] Build passes
+- [x] FULL test suite passing or absence of test script documented (`npm test` missing script)
+- [x] All failures fixed
+- [x] Build passes
 
 ---
 
