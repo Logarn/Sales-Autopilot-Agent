@@ -46,6 +46,9 @@
 
 ### Step 3: Queue/scheduler integration
 **Status:** 🟨 In Progress
+
+**Plan:** Add an npm/CLI browser-search command around `runBrowserSearch`, wire an optional scheduler job gated by browser-search enablement so existing pipeline/RSS/Apify runs remain independent, and record structured heartbeat metadata from each search summary (queries/jobs/errors/paused reason). Verify build plus a dry-run CLI invocation without credentials.
+
 - [ ] Add search command/scheduler hook
 - [ ] Write heartbeat metadata
 - [ ] Keep RSS/Apify fallback behavior
