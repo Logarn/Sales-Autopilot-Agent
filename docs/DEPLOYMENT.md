@@ -104,7 +104,9 @@ If `sqlite3` is not installed, stop the worker and copy `data/jobs.db` plus any 
 
 ## Browser session storage model
 
-Browser search and the browser queue are safe by default and do not require local desktop control. Search dry-run prints/writes heartbeat metadata without launching a browser; queue dry-run records what it would do without opening pages. Live browser search uses validated Upwork search URLs/queries, captures bounded job-detail text, normalizes it deterministically, and queues downstream browser review actions.
+Browser search and the browser queue are safe by default and do not require local desktop control. Search dry-run prints/writes heartbeat metadata without launching a browser; queue dry-run records minimized diagnostics without opening pages. Live browser search uses validated Upwork search URLs/queries, captures bounded job-detail text, normalizes it deterministically, and queues downstream browser review actions.
+
+Apply preparation is queued with `npm run browser:enqueue -- --apply-prepare --job-id <approved-job-id>` after a human-approved application exists. Operators can preview the exact fill plan first with `npm run browser:enqueue -- --apply-preview --job-id <approved-job-id>`. The worker revalidates the approved status, direct Upwork link, proposal text, Connects caps, and allowed attachments before navigation; dry-run mode does not require Upwork credentials.
 
 If live browser inspection is enabled, it should use the VM-local `BROWSER_USER_DATA_DIR` so cookies/session state stay on the server. Do not sync a personal laptop browser profile into the VM. Treat browser profile directories as sensitive secrets and include them in encrypted backups only when necessary.
 
@@ -115,9 +117,9 @@ If live browser inspection is enabled, it should use the VM-local `BROWSER_USER_
 - Browser search/worker runs must pause on security challenges and wait for a human.
 - Do not store plaintext Upwork credentials in `.env`, config files, logs, captures, or diagnostics.
 - Do not add or deploy a web UI for this control plane; use Slack packets, the local Slack conversation CLI, application reports, and documented VM commands.
-- Do not fill proposal fields or submit proposals automatically as part of this runtime setup.
+- Do not submit proposals automatically as part of this runtime setup; apply preparation must stop before final submit every time.
 - Keep Slack/webhook/API tokens in `.env` or the cloud secret manager, never in git.
-- Minimize captures and browser artifacts; avoid full authenticated page archives unless explicitly approved.
+- Minimize captures and browser artifacts; apply-preparation artifacts must omit full proposal text, attachment file contents, screenshots, and full authenticated page archives unless explicitly approved.
 - Upwork automation may violate platform expectations or Terms of Service. Operate in human-in-the-loop mode and review platform rules before enabling browser features.
 
 ## Operational runbook
@@ -156,4 +158,4 @@ npm run health
 # restart process manager or docker compose up --build -d
 ```
 
-Before enabling any live browser processing, verify that `npm run browser:search:prod` and dry-run queue processing work, and that a human can intervene on the VM session.
+Before enabling any live browser processing, verify that `npm run browser:search:prod`, `npm run browser:enqueue -- --apply-preview --job-id <approved-job-id>`, and dry-run queue processing work, and that a human can intervene on the VM session.

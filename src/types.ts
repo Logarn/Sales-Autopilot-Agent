@@ -368,10 +368,59 @@ export type BrowserActionType = "open_job" | "open_apply_page" | "prepare_applic
 
 export type BrowserActionStatus = "pending" | "in_progress" | "completed" | "failed" | "paused" | "cancelled";
 
+export type BrowserApplyValidationSeverity = "warning" | "error";
+
+export interface BrowserApplyValidationIssue {
+  severity: BrowserApplyValidationSeverity;
+  code: string;
+  message: string;
+}
+
+export interface BrowserApplyAttachmentInstruction {
+  id: string;
+  name: string;
+  filePath: string;
+  sensitivity: PortfolioItem["sensitivity"];
+}
+
+export interface BrowserApplySkippedAttachment {
+  id: string;
+  name: string;
+  reason: string;
+}
+
+export interface BrowserApplyConnectsPlan {
+  required: number;
+  boost: number;
+  total: number;
+  approvalRequired: boolean;
+  notes: string[];
+}
+
+export interface BrowserApplyFillPlan {
+  schemaVersion: "1.0";
+  jobId: string;
+  sourceUrl: string;
+  applyUrl: string;
+  status: ApplicationStatus;
+  profile: string;
+  rate: string;
+  coverLetter: string;
+  attachments: BrowserApplyAttachmentInstruction[];
+  skippedAttachments: BrowserApplySkippedAttachment[];
+  highlights: string[];
+  connects: BrowserApplyConnectsPlan;
+  stopBeforeSubmit: true;
+  dryRunSafe: true;
+  validationIssues: BrowserApplyValidationIssue[];
+  createdAt: string;
+}
+
 export interface BrowserActionPayload {
   url?: string;
   notes?: string;
   applicationId?: string;
+  applyPlan?: BrowserApplyFillPlan;
   [key: string]: unknown;
 }
 

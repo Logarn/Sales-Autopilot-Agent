@@ -92,6 +92,12 @@ interface SlackPreviewJobRow {
   generated_at: string | null;
 }
 
+export interface ApplicationJobLink {
+  jobId: string;
+  url: string | null;
+  title: string | null;
+}
+
 export interface ApplicationSummaryRow {
   status: ApplicationStatus;
   count: number;
@@ -573,6 +579,13 @@ const upsertApplicationStmt = db.prepare(
 const getApplicationStatusStmt = db.prepare<[string], { status: ApplicationStatus }>(
   "SELECT status FROM applications WHERE job_id = ? LIMIT 1"
 );
+const getApplicationJobLinkStmt = db.prepare<[string], ApplicationJobLink>(
+  `SELECT a.job_id as jobId, s.url, s.title
+   FROM applications a
+   LEFT JOIN seen_jobs s ON s.id = a.job_id
+   WHERE a.job_id = ?
+   LIMIT 1`
+);
 const getApplicationDraftStmt = db.prepare<[string], ApplicationDraftRow>(
   `SELECT job_id, status, fit_score, fit_reasons, red_flags, suggested_bid, suggested_connects,
           suggested_boost_connects, connects_warnings, selected_portfolio_items, proposal_text,
@@ -785,6 +798,10 @@ export function getApplicationDraft(jobId: string): ApplicationDraft | null {
 
 export function getApplicationStatus(jobId: string): ApplicationStatus | null {
   return getApplicationStatusStmt.get(jobId)?.status ?? null;
+}
+
+export function getApplicationJobLink(jobId: string): ApplicationJobLink | null {
+  return getApplicationJobLinkStmt.get(jobId) ?? null;
 }
 
 export function recordApplicationRevisionRequest(jobId: string, instruction: string): ApplicationRevisionResult | null {

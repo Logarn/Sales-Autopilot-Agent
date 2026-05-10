@@ -8,6 +8,7 @@ import {
   BROWSER_USER_DATA_DIR,
   BROWSER_WORKER_ENABLED,
 } from "./config";
+import { buildBrowserApplyPlan } from "./browserApply";
 import {
   closeDb,
   incrementBrowserActionAttempts,
@@ -15,7 +16,7 @@ import {
   updateBrowserActionStatus,
 } from "./db";
 import { logger } from "./logger";
-import { BrowserAction } from "./types";
+import { BrowserAction, BrowserApplyFillPlan, BrowserApplyValidationIssue } from "./types";
 
 type DetectedBrowserState =
   | "dry_run"
@@ -42,11 +43,36 @@ interface PageSnapshot {
   textExcerpt: string;
 }
 
+interface PlaywrightLocatorLike {
+  count(): Promise<number>;
+  first(): PlaywrightLocatorLike;
+  textContent(options?: { timeout?: number }): Promise<string | null>;
+  fill(value: string, options?: { timeout?: number }): Promise<unknown>;
+  setInputFiles(files: string[], options?: { timeout?: number }): Promise<unknown>;
+  check(options?: { timeout?: number }): Promise<unknown>;
+}
+
 interface PlaywrightPageLike {
   goto(url: string, options?: { waitUntil?: string; timeout?: number }): Promise<unknown>;
   url(): string;
   title(): Promise<string>;
-  locator(selector: string): { first(): { textContent(options?: { timeout?: number }): Promise<string | null> } };
+  locator(selector: string): PlaywrightLocatorLike;
+}
+
+interface ApplyPreparationDiagnostics {
+  actionId: number;
+  jobId: string;
+  actionType: string;
+  url: string | null;
+  state: DetectedBrowserState | "validation_failed" | "prepared";
+  stopBeforeSubmit: boolean;
+  validationIssues: Array<Pick<BrowserApplyValidationIssue, "severity" | "code">>;
+  coverLetterLength: number;
+  attachmentCount: number;
+  highlightCount: number;
+  attemptedFields: string[];
+  skippedFields: string[];
+  manualFields: string[];
 }
 
 interface PlaywrightContextLike {
@@ -74,6 +100,10 @@ function loadOptions(): BrowserWorkerOptions {
 function getActionUrl(action: BrowserAction): string | null {
   const payloadUrl = typeof action.payload.url === "string" ? action.payload.url : null;
   if (payloadUrl) return payloadUrl;
+  if (action.actionType === "prepare_application_review") {
+    const plan = action.payload.applyPlan as BrowserApplyFillPlan | undefined;
+    return typeof plan?.applyUrl === "string" ? plan.applyUrl : null;
+  }
   if (action.actionType === "open_job") return `https://www.upwork.com/jobs/${action.jobId}`;
   if (action.actionType === "open_apply_page") return `https://www.upwork.com/ab/proposals/job/${action.jobId}/apply/`;
   return null;
@@ -115,6 +145,42 @@ function saveTextArtifact(options: BrowserWorkerOptions, action: BrowserAction, 
   fs.writeFileSync(path.join(options.artifactDir, artifactSafeName(action, name)), content);
 }
 
+function minimizedIssues(issues: BrowserApplyValidationIssue[]): Array<Pick<BrowserApplyValidationIssue, "severity" | "code">> {
+  return issues.map(({ severity, code }) => ({ severity, code }));
+}
+
+function buildApplyDiagnostics(
+  action: BrowserAction,
+  plan: BrowserApplyFillPlan | null,
+  issues: BrowserApplyValidationIssue[],
+  state: ApplyPreparationDiagnostics["state"],
+  fields: Partial<Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields">> = {}
+): ApplyPreparationDiagnostics {
+  return {
+    actionId: action.id,
+    jobId: action.jobId,
+    actionType: action.actionType,
+    url: plan?.applyUrl ?? null,
+    state,
+    stopBeforeSubmit: plan?.stopBeforeSubmit ?? true,
+    validationIssues: minimizedIssues(issues),
+    coverLetterLength: plan?.coverLetter.length ?? 0,
+    attachmentCount: plan?.attachments.length ?? 0,
+    highlightCount: plan?.highlights.length ?? 0,
+    attemptedFields: fields.attemptedFields ?? [],
+    skippedFields: fields.skippedFields ?? [],
+    manualFields: fields.manualFields ?? [],
+  };
+}
+
+function saveApplyDiagnostics(
+  options: BrowserWorkerOptions,
+  action: BrowserAction,
+  diagnostics: ApplyPreparationDiagnostics
+): void {
+  saveTextArtifact(options, action, "apply-diagnostics.json", JSON.stringify(diagnostics, null, 2));
+}
+
 function boundedExcerpt(value: string, maxLength = 2000): string {
   return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
@@ -128,15 +194,109 @@ async function loadChromium(): Promise<PlaywrightChromiumLike | null> {
   }
 }
 
+async function tryFillFirst(page: PlaywrightPageLike, selectors: string[], value: string): Promise<boolean> {
+  if (!value.trim()) return false;
+  for (const selector of selectors) {
+    const locator = page.locator(selector).first();
+    try {
+      if ((await locator.count()) > 0) {
+        await locator.fill(value, { timeout: 1500 });
+        return true;
+      }
+    } catch {
+      // Try the next conservative selector.
+    }
+  }
+  return false;
+}
+
+async function trySetFiles(page: PlaywrightPageLike, selectors: string[], files: string[]): Promise<boolean> {
+  if (files.length === 0) return false;
+  for (const selector of selectors) {
+    const locator = page.locator(selector).first();
+    try {
+      if ((await locator.count()) > 0) {
+        await locator.setInputFiles(files, { timeout: 1500 });
+        return true;
+      }
+    } catch {
+      // Try the next conservative selector.
+    }
+  }
+  return false;
+}
+
+async function tryCheckHighlight(page: PlaywrightPageLike, highlight: string): Promise<boolean> {
+  const escaped = highlight.replace(/["\\]/g, "\\$&");
+  const selectors = [`label:has-text("${escaped}") input[type='checkbox']`, `text="${escaped}"`];
+  for (const selector of selectors) {
+    const locator = page.locator(selector).first();
+    try {
+      if ((await locator.count()) > 0) {
+        await locator.check({ timeout: 1500 });
+        return true;
+      }
+    } catch {
+      // Try the next conservative selector.
+    }
+  }
+  return false;
+}
+
+async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillPlan): Promise<Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields">> {
+  const attemptedFields: string[] = [];
+  const skippedFields: string[] = [];
+  const manualFields: string[] = [];
+
+  if (await tryFillFirst(page, ["textarea[name*='cover']", "textarea[aria-label*='Cover']", "textarea"], plan.coverLetter)) {
+    attemptedFields.push("coverLetter");
+  } else {
+    skippedFields.push("coverLetter");
+  }
+
+  if (await tryFillFirst(page, ["input[name*='rate']", "input[aria-label*='rate' i]", "input[placeholder*='$']"], plan.rate)) {
+    attemptedFields.push("rate");
+  } else {
+    skippedFields.push("rate");
+  }
+
+  if (await tryFillFirst(page, ["input[name*='boost']", "input[aria-label*='boost' i]", "input[name*='connect']"], String(plan.connects.boost))) {
+    attemptedFields.push("connectsBoost");
+  } else {
+    skippedFields.push("connectsBoost");
+  }
+
+  const attachmentFiles = plan.attachments.map((attachment) => path.resolve(process.cwd(), attachment.filePath));
+  if (await trySetFiles(page, ["input[type='file']"], attachmentFiles)) {
+    attemptedFields.push("attachments");
+  } else if (attachmentFiles.length > 0) {
+    manualFields.push("attachments");
+  }
+
+  let checkedHighlights = 0;
+  for (const highlight of plan.highlights) {
+    if (await tryCheckHighlight(page, highlight)) checkedHighlights += 1;
+  }
+  if (checkedHighlights > 0) {
+    attemptedFields.push("highlights");
+  } else if (plan.highlights.length > 0) {
+    manualFields.push("highlights");
+  }
+
+  manualFields.push("finalSubmit");
+  return { attemptedFields, skippedFields, manualFields };
+}
+
 async function inspectWithBrowser(
   action: BrowserAction,
   options: BrowserWorkerOptions,
-  url: string
-): Promise<DetectedBrowserState> {
+  url: string,
+  plan?: BrowserApplyFillPlan
+): Promise<{ state: DetectedBrowserState; fields: Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields"> }> {
   const chromium = await loadChromium();
   if (!chromium) {
-    saveTextArtifact(options, action, "browser-unavailable.json", JSON.stringify({ action, url }, null, 2));
-    return "browser_unavailable";
+    saveTextArtifact(options, action, "browser-unavailable.json", JSON.stringify({ actionId: action.id, jobId: action.jobId, actionType: action.actionType, url }, null, 2));
+    return { state: "browser_unavailable", fields: { attemptedFields: [], skippedFields: [], manualFields: [] } };
   }
 
   let context: PlaywrightContextLike | null = null;
@@ -151,13 +311,17 @@ async function inspectWithBrowser(
       textExcerpt: boundedExcerpt(bodyText),
     };
     const state = detectState(snapshot, action);
+    const fields =
+      plan && state === "apply_page_loaded"
+        ? await fillApplyFields(page, plan)
+        : { attemptedFields: [], skippedFields: [], manualFields: [] };
     saveTextArtifact(
       options,
       action,
       "snapshot.json",
-      JSON.stringify({ state, ...snapshot, artifactPolicy: "minimized-no-html-no-screenshot" }, null, 2)
+      JSON.stringify({ state, url: snapshot.url, title: snapshot.title, textLength: bodyText.length, artifactPolicy: "minimized-no-html-no-screenshot" }, null, 2)
     );
-    return state;
+    return { state, fields };
   } finally {
     await context?.close();
   }
@@ -171,9 +335,25 @@ function terminalStatusForState(state: DetectedBrowserState): "completed" | "pau
 }
 
 async function processAction(action: BrowserAction, options: BrowserWorkerOptions): Promise<void> {
-  const url = getActionUrl(action);
   updateBrowserActionStatus(action.id, "in_progress");
   incrementBrowserActionAttempts(action.id);
+
+  const applyPlanResult = action.actionType === "prepare_application_review" ? buildBrowserApplyPlan(action.jobId) : null;
+  const stalePayloadErrors =
+    action.actionType === "prepare_application_review"
+      ? ((action.payload.applyPlan as BrowserApplyFillPlan | undefined)?.validationIssues ?? []).filter(
+          (validationIssue) => validationIssue.severity === "error"
+        )
+      : [];
+  const plan = applyPlanResult?.plan ?? null;
+  const url = plan?.applyUrl ?? getActionUrl(action);
+
+  if (action.actionType === "prepare_application_review" && (!applyPlanResult?.valid || stalePayloadErrors.length > 0)) {
+    const issues = [...(applyPlanResult?.issues ?? []), ...stalePayloadErrors];
+    saveApplyDiagnostics(options, action, buildApplyDiagnostics(action, plan, issues, "validation_failed"));
+    updateBrowserActionStatus(action.id, "paused", `Apply preparation validation failed: ${issues.map((item) => item.code).join(", ")}`);
+    return;
+  }
 
   if (!url) {
     updateBrowserActionStatus(action.id, "paused", "No URL available for browser action.");
@@ -183,14 +363,21 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
   if (options.dryRun) {
     const state: DetectedBrowserState = "dry_run";
     logger.info(`[dry-run] Would process browser action #${action.id} ${action.actionType}: ${url}`);
-    saveTextArtifact(options, action, "dry-run.json", JSON.stringify({ action, url, state }, null, 2));
+    if (action.actionType === "prepare_application_review") {
+      saveApplyDiagnostics(options, action, buildApplyDiagnostics(action, plan, applyPlanResult?.issues ?? [], state));
+    } else {
+      saveTextArtifact(options, action, "dry-run.json", JSON.stringify({ actionId: action.id, jobId: action.jobId, actionType: action.actionType, url, state }, null, 2));
+    }
     updateBrowserActionStatus(action.id, "paused", "Dry run: browser action not opened. Set BROWSER_DRY_RUN=false to inspect pages.");
     return;
   }
 
   try {
-    const state = await inspectWithBrowser(action, options, url);
-    updateBrowserActionStatus(action.id, terminalStatusForState(state), `Detected state: ${state}`);
+    const { state, fields } = await inspectWithBrowser(action, options, url, plan ?? undefined);
+    if (action.actionType === "prepare_application_review") {
+      saveApplyDiagnostics(options, action, buildApplyDiagnostics(action, plan, applyPlanResult?.issues ?? [], state, fields));
+    }
+    updateBrowserActionStatus(action.id, terminalStatusForState(state), `Detected state: ${state}; stop-before-submit enforced.`);
     logger.info(`Browser action #${action.id} detected state: ${state}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
