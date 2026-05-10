@@ -1,6 +1,6 @@
 # TP-008: Profile Knowledge Ingestion — Status
 
-**Current Step:** Step 4: Documentation and sample knowledge
+**Current Step:** Step 5: Testing & Verification
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
@@ -60,7 +60,7 @@
 ---
 
 ### Step 5: Testing & Verification
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Full tests or env limitation note
 - [ ] Build passes
 - [ ] Sample knowledge loads
