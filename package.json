@@ -39,7 +39,9 @@
     "browser:list": "tsx src/browserQueue.ts --list",
     "browser:update": "tsx src/browserQueue.ts --update",
     "browser:worker": "tsx src/browserWorker.ts",
-    "browser:worker:prod": "node dist/browserWorker.js"
+    "browser:worker:prod": "node dist/browserWorker.js",
+    "skills:list": "tsx src/skills.ts list",
+    "skills:read": "tsx src/skills.ts read"
   },
   "keywords": [
     "upwork",
