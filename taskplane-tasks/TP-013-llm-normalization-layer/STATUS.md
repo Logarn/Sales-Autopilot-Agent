@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 11
+**Review Counter:** 12
 **Iteration:** 1
 **Size:** L
 
@@ -47,7 +47,7 @@
 ---
 
 ### Step 4: Docs and examples
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 - [x] README updated
 - [x] .env.example updated
 - [x] Example command added
@@ -97,3 +97,4 @@
 | 2026-05-10 21:11 | Review R009 | plan Step 3: APPROVE |
 | 2026-05-10 21:13 | Review R010 | code Step 3: APPROVE |
 | 2026-05-10 21:14 | Review R011 | plan Step 4: APPROVE |
+| 2026-05-10 21:16 | Review R012 | code Step 4: APPROVE |
