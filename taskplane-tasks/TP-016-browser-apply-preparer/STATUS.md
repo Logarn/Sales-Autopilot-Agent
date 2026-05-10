@@ -1,6 +1,6 @@
 # TP-016: Browser Apply Preparer — Status
 
-**Current Step:** Step 2: Browser apply worker path
+**Current Step:** Step 3: CLI/testing path
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 3
@@ -40,7 +40,7 @@
 ---
 
 ### Step 3: CLI/testing path
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Add enqueue/preview command
 - [ ] Add dry-run fill output
 - [ ] Build passes
