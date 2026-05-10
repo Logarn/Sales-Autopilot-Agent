@@ -66,6 +66,11 @@ function parseBrowserSearchInputs(): string[] {
 
 export const APP_NAME = "Upwork Revenue Assistant";
 export const SLACK_CHANNEL_WEBHOOK_URL = process.env.SLACK_CHANNEL_WEBHOOK_URL ?? "";
+export const SLACK_INBOUND_MODE = process.env.SLACK_INBOUND_MODE ?? "local_cli";
+export const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET ?? "";
+export const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN ?? "";
+export const SLACK_APP_TOKEN = process.env.SLACK_APP_TOKEN ?? "";
+export const SLACK_POLL_CHANNEL_ID = process.env.SLACK_POLL_CHANNEL_ID ?? "";
 export const APIFY_API_TOKEN = process.env.APIFY_API_TOKEN ?? "";
 export const QUICK_BID_TEMPLATE_URL = process.env.QUICK_BID_TEMPLATE_URL ?? "";
 export const CRON_SCHEDULE = process.env.CRON_SCHEDULE ?? "*/5 * * * *";

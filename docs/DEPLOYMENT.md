@@ -55,6 +55,8 @@ docker compose down
 Core variables are documented in `.env.example`. Required values for normal operation:
 
 - `SLACK_CHANNEL_WEBHOOK_URL` — Slack incoming webhook for approval packets and alerts.
+- `SLACK_INBOUND_MODE=local_cli` — Slack conversation placeholder mode. Local CLI handling needs no extra credentials; future `events`, `socket_mode`, or `polling` modes require the matching Slack app/bot setup.
+- `SLACK_SIGNING_SECRET`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_POLL_CHANNEL_ID` — optional inbound Slack placeholders; leave empty unless an inbound mode is explicitly deployed.
 - `APIFY_API_TOKEN` — token for Apify-backed Upwork search scraping.
 - `DB_PATH` — SQLite path, default `./data/jobs.db`.
 - `SEARCH_QUERIES` or `QUERIES_CONFIG_PATH` — job search source configuration.

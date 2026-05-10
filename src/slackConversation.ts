@@ -1,5 +1,13 @@
 import { APP_NAME, SLACK_CHANNEL_WEBHOOK_URL } from "./config";
-import { applyApplicationRevision, closeDb, getApplicationDraft, getScoredJobForSlackPreview, recordApplicationRevisionRequest } from "./db";
+import {
+  applyApplicationRevision,
+  closeDb,
+  enqueueBrowserAction,
+  getApplicationDraft,
+  getScoredJobForSlackPreview,
+  recordApplicationRevisionRequest,
+  updateApplicationStatus,
+} from "./db";
 import { OpenAiCompatibleProvider } from "./llm/provider";
 import { logger } from "./logger";
 import { buildJobBlocks, sendSlackPreviewMessage } from "./slack";
@@ -79,6 +87,7 @@ export interface SlackConversationHandleResult {
   message: string;
   intent: SlackConversationIntent;
   slackPreviewSent?: boolean;
+  browserActionId?: number;
 }
 
 interface RevisedProposalPayload {
@@ -126,10 +135,80 @@ async function maybeSendRevisionPreview(jobId: string): Promise<boolean> {
   return true;
 }
 
+function shouldEnqueueBrowserApply(intent: SlackConversationIntent): boolean {
+  if (intent.type === "enqueue_browser_apply") return true;
+  return intent.type === "approve" && /\b(queue|enqueue|browser|apply queue|send to apply queue)\b/i.test(intent.rawText);
+}
+
+function enqueueBrowserApply(intent: SlackConversationIntent): number | null {
+  if (!intent.jobId) return null;
+  const job = getScoredJobForSlackPreview(intent.jobId);
+  return enqueueBrowserAction({
+    jobId: intent.jobId,
+    actionType: "prepare_application_review",
+    payload: {
+      url: job?.url,
+      applicationId: intent.jobId,
+      notes: intent.instruction ?? `Slack command: ${intent.type}. Open the draft for human review; do not auto-submit.`,
+    },
+  });
+}
+
+function handleStatusIntent(intent: SlackConversationIntent): SlackConversationHandleResult | null {
+  if (!intent.jobId) {
+    return { ok: false, message: `Missing job/application ID for ${intent.type} command.`, intent };
+  }
+
+  if (intent.type === "approve") {
+    const updated = updateApplicationStatus(intent.jobId, "approved", "Approved from Slack conversation command.");
+    if (!updated) return { ok: false, message: `No stored application draft found for job_id=${intent.jobId}.`, intent };
+    const browserActionId = shouldEnqueueBrowserApply(intent) ? enqueueBrowserApply(intent) ?? undefined : undefined;
+    return {
+      ok: true,
+      message: `Application ${intent.jobId} approved.${browserActionId ? ` Browser review action #${browserActionId} queued.` : ""}`,
+      intent,
+      browserActionId,
+    };
+  }
+
+  if (intent.type === "reject") {
+    const note = intent.instruction ? `Rejected from Slack conversation command: ${intent.instruction}` : "Rejected from Slack conversation command.";
+    const updated = updateApplicationStatus(intent.jobId, "rejected", note);
+    return updated
+      ? { ok: true, message: `Application ${intent.jobId} rejected.`, intent }
+      : { ok: false, message: `No stored application draft found for job_id=${intent.jobId}.`, intent };
+  }
+
+  if (intent.type === "mark_applied" || intent.type === "mark_replied") {
+    const status = intent.type === "mark_applied" ? "applied" : "replied";
+    const updated = updateApplicationStatus(intent.jobId, status, `Marked ${status} from Slack conversation command.`);
+    return updated
+      ? { ok: true, message: `Application ${intent.jobId} marked ${status}.`, intent }
+      : { ok: false, message: `No stored application draft found for job_id=${intent.jobId}.`, intent };
+  }
+
+  if (intent.type === "enqueue_browser_apply") {
+    const draft = getApplicationDraft(intent.jobId);
+    if (!draft) return { ok: false, message: `No stored application draft found for job_id=${intent.jobId}.`, intent };
+    const browserActionId = enqueueBrowserApply(intent);
+    return {
+      ok: true,
+      message: `Browser review action #${browserActionId} queued for ${intent.jobId}. Human review required before applying.`,
+      intent,
+      browserActionId: browserActionId ?? undefined,
+    };
+  }
+
+  return null;
+}
+
 export async function handleSlackConversationCommand(text: string): Promise<SlackConversationHandleResult> {
   const intent = parseSlackConversationIntent(text);
+  const statusResult = handleStatusIntent(intent);
+  if (statusResult) return statusResult;
+
   if (intent.type !== "revise" && intent.type !== "regenerate") {
-    return { ok: false, message: `Intent ${intent.type} is parsed but not handled by the revision flow yet.`, intent };
+    return { ok: false, message: `Intent ${intent.type} is parsed but not handled yet.`, intent };
   }
   if (!intent.jobId) {
     return { ok: false, message: "Missing job/application ID for revision command.", intent };
@@ -178,7 +257,7 @@ export async function handleSlackConversationCommand(text: string): Promise<Slac
 }
 
 function usage(): string {
-  return `Usage:\n  npm run slack:conversation -- parse --job-id <id> --text "approve"\n  npm run slack:conversation -- parse "revise job abc123 mention Shopify proof"\n  npm run slack:conversation -- handle --job-id <id> --text "revise opening to mention Shopify proof"\n\nLocal parsing works without Slack credentials. handle stores revision requests in the local DB; Slack preview resend only runs when SLACK_CHANNEL_WEBHOOK_URL is configured.`;
+  return `Usage:\n  npm run slack:conversation -- parse --job-id <id> --text "approve"\n  npm run slack:conversation -- parse "revise job abc123 mention Shopify proof"\n  npm run slack:conversation -- handle --job-id <id> --text "revise opening to mention Shopify proof"\n  npm run slack:conversation -- handle --job-id <id> --text "approve and queue browser apply"\n  npm run slack:conversation -- handle --job-id <id> --text "mark applied"\n\nLocal parsing works without Slack credentials. handle updates local DB state, stores revision requests, and can queue browser review actions. Slack preview resend only runs when SLACK_CHANNEL_WEBHOOK_URL is configured.`;
 }
 
 export async function runSlackConversationCli(args = process.argv.slice(2)): Promise<boolean> {

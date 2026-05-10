@@ -147,7 +147,15 @@ npm run slack:preview -- --job-id <stored-job-id>
 
 The preview sends the same proposal packet structure used by normal notifications: match score units, reasons/risks, Connects plan, selected proof, proposal quality, and a draft proposal that can be copied manually into Upwork. When a structured draft is available, Slack also shows compact proposal sections: opening, diagnosis, proof, direct answers to client application requests, rate/retainer answer, CTA, suggested attachments/highlights, and browser-fill notes. Browser-fill notes are a human handoff only: approved cover-letter text, profile notes, rate, attachments/highlights, and Connects plan for manual review before filling Upwork. If the webhook is not configured, the command exits non-zero with a clear message and does not print the secret. Preview sends also do not enter the production Slack retry queue.
 
-Webhook V0 is one-way. Buttons can open URLs such as Upwork or an optional `QUICK_BID_TEMPLATE_URL`, but incoming webhooks cannot receive Approve/Revise/Reject callbacks, Slack chat replies, or edits. Later interactive review workflows require a Slack app/socket mode or a separate polling approach; no Slack OAuth or socket-mode token is required for this V0 preview path.
+Webhook V0 is one-way. Buttons can open URLs such as Upwork or an optional `QUICK_BID_TEMPLATE_URL`, but incoming webhooks cannot receive Approve/Revise/Reject callbacks, Slack chat replies, or edits. Local conversation handling is available with no Slack credentials:
+
+```bash
+npm run slack:conversation -- parse "approve job abc123"
+npm run slack:conversation -- handle --job-id <stored-job-id> --text "approve and queue browser apply"
+npm run slack:conversation -- handle --job-id <stored-job-id> --text "revise opening to mention Shopify proof"
+```
+
+Inbound Slack placeholders are intentionally credential-optional: `SLACK_INBOUND_MODE=local_cli` by default, with future `events`, `socket_mode`, or `polling` options needing `SLACK_SIGNING_SECRET`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, or `SLACK_POLL_CHANNEL_ID` depending on the chosen Slack app pattern. Until one of those patterns is implemented and deployed, use the local CLI/testing path for approve/reject/revise/mark/queue commands. No Slack OAuth or socket-mode token is required for the V0 preview path.
 
 ## Job Detail Capture Workflow
 
