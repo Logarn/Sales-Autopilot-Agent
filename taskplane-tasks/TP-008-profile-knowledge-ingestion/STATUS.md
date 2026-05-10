@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 5
+**Review Counter:** 6
 **Iteration:** 1
 **Size:** M
 
@@ -37,6 +37,7 @@
 - [x] Add portfolio/video ingestion workflow
 - [x] Print summaries
 - [x] Build passes
+- [ ] Ensure knowledge append filenames are unique and do not overwrite same-day same-title notes
 
 ---
 
@@ -104,3 +105,4 @@
 | 2026-05-10 19:08 | Review R003 | code Step 1: REVISE |
 | 2026-05-10 19:10 | Review R004 | code Step 1: APPROVE |
 | 2026-05-10 19:11 | Review R005 | plan Step 2: APPROVE |
+| 2026-05-10 19:14 | Review R006 | code Step 2: REVISE |
