@@ -14,6 +14,7 @@ import {
   DailySummary,
   JobPosting,
   MatchLevel,
+  PortfolioItem,
   ScoredJob,
 } from "./types";
 
@@ -60,6 +61,35 @@ interface DailyRow {
   score: number;
   match_level: MatchLevel;
   seen_at: string;
+}
+
+interface SlackPreviewJobRow {
+  id: string;
+  title: string;
+  url: string;
+  description: string | null;
+  score: number | null;
+  match_level: MatchLevel | null;
+  budget: string | null;
+  client_country: string | null;
+  client_rating: number | null;
+  client_spend: number | null;
+  client_hire_rate: number | null;
+  skills: string | null;
+  experience_level: string | null;
+  connects_cost: number | null;
+  posted_at: string | null;
+  status: ApplicationStatus | null;
+  fit_score: number | null;
+  fit_reasons: string | null;
+  red_flags: string | null;
+  suggested_bid: string | null;
+  suggested_connects: number | null;
+  suggested_boost_connects: number | null;
+  connects_warnings: string | null;
+  selected_portfolio_items: string | null;
+  proposal_text: string | null;
+  generated_at: string | null;
 }
 
 export interface ApplicationSummaryRow {
@@ -394,6 +424,17 @@ const applicationListStmt = db.prepare<[number], ApplicationListRow>(
 const applicationNotesStmt = db.prepare<[string], ApplicationNoteRow>(
   "SELECT id, job_id, note, created_at FROM application_events WHERE job_id = ? AND event_type = 'note' ORDER BY id DESC"
 );
+const slackPreviewJobStmt = db.prepare<[string], SlackPreviewJobRow>(
+  `SELECT s.id, s.title, s.url, s.description, s.score, s.match_level, s.budget, s.client_country,
+          s.client_rating, s.client_spend, s.client_hire_rate, s.skills, s.experience_level,
+          s.connects_cost, s.posted_at, a.status, a.fit_score, a.fit_reasons, a.red_flags,
+          a.suggested_bid, a.suggested_connects, a.suggested_boost_connects, a.connects_warnings,
+          a.selected_portfolio_items, a.proposal_text, a.generated_at
+   FROM seen_jobs s
+   LEFT JOIN applications a ON a.job_id = s.id
+   WHERE s.id = ?
+   LIMIT 1`
+);
 const recordApplicationSubmissionStmt = db.prepare(
   `UPDATE applications
    SET status = 'applied',
@@ -566,6 +607,91 @@ function parseJsonStringArray(value: string | null | undefined): string[] {
   } catch {
     return [];
   }
+}
+
+function parseJsonArray<T>(value: string | null | undefined): T[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function getScoredJobForSlackPreview(jobId: string): ScoredJob | null {
+  const row = slackPreviewJobStmt.get(jobId);
+  if (!row) {
+    return null;
+  }
+
+  const fitReasons = parseJsonStringArray(row.fit_reasons);
+  const redFlags = parseJsonStringArray(row.red_flags);
+  const connectsWarnings = parseJsonStringArray(row.connects_warnings);
+  const applicationDraft: ApplicationDraft | undefined = row.proposal_text
+    ? {
+        jobId: row.id,
+        status: row.status ?? "draft",
+        fitScore: row.fit_score ?? row.score ?? 0,
+        fitReasons,
+        redFlags,
+        suggestedBid: row.suggested_bid ?? "Not specified",
+        suggestedConnects: row.suggested_connects ?? row.connects_cost ?? 0,
+        suggestedBoostConnects: row.suggested_boost_connects ?? 0,
+        connectsWarnings,
+        selectedPortfolioItems: parseJsonArray<PortfolioItem>(row.selected_portfolio_items),
+        proposalQuality: {
+          score: 0,
+          issues: [
+            {
+              category: "voice",
+              severity: "info",
+              message: "Proposal quality was not persisted with this stored draft.",
+              suggestion: "Regenerate the draft before final approval if quality scoring is required.",
+            },
+          ],
+          positiveSignals: [],
+          wordCount: row.proposal_text.trim().split(/\s+/).filter(Boolean).length,
+        },
+        proposalText: row.proposal_text,
+        generatedAt: row.generated_at ?? new Date().toISOString(),
+      }
+    : undefined;
+
+  return {
+    id: row.id,
+    title: row.title,
+    url: row.url,
+    description: row.description ?? "",
+    postedAt: row.posted_at ?? new Date().toISOString(),
+    budget: row.budget ?? "",
+    clientCountry: row.client_country ?? "",
+    clientRating: row.client_rating ?? 0,
+    clientSpend: row.client_spend ?? 0,
+    clientHireRate: row.client_hire_rate ?? 0,
+    clientTotalHires: 0,
+    clientFeedbackCount: 0,
+    category: "stored",
+    experienceLevel: row.experience_level ?? "",
+    connectsCost: row.connects_cost ?? 0,
+    skills: parseJsonStringArray(row.skills),
+    sourceQuery: "stored-preview",
+    score: row.score ?? row.fit_score ?? 0,
+    matchLevel: row.match_level ?? "medium",
+    matchedKeywords: [],
+    negativeKeywords: [],
+    scoreBreakdown: {
+      fitScore: { score: row.fit_score ?? row.score ?? 0, reasons: fitReasons, risks: redFlags },
+      clientQualityScore: { score: 0, reasons: [], risks: [] },
+      opportunityScore: { score: 0, reasons: [], risks: [] },
+      redFlagScore: { score: redFlags.length ? 50 : 100, reasons: [], risks: redFlags },
+      connectsRiskScore: { score: 0, reasons: [], risks: connectsWarnings },
+      finalScore: row.score ?? row.fit_score ?? 0,
+      reasons: fitReasons,
+      risks: redFlags,
+    },
+    applicationDraft,
+  };
 }
 
 function topCounts(values: string[]): Array<{ name: string; count: number }> {
