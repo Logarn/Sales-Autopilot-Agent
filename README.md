@@ -202,7 +202,31 @@ Sample artifacts live in `profile/knowledge/voice/`, `profile/knowledge/portfoli
 
 ## Browser Queue Safety Model
 
-The browser queue is a cloud/VM-safe foundation for future human-in-the-loop browser assistance. It stores requested browser actions in SQLite and processes them only when the worker is explicitly enabled:
+The browser queue is a cloud/VM-safe foundation for future human-in-the-loop browser assistance. Browser search can poll configured Upwork search pages from a persistent VM browser session, capture bounded job-detail text, normalize it deterministically, and queue downstream browser review actions. Both browser search and queued browser actions are disabled/dry-run by default.
+
+Run a no-credentials search dry run:
+
+```bash
+npm run browser:search
+BROWSER_SEARCH_ENABLED=true npm run browser:search
+```
+
+Enable live browser search only on a prepared VM session with an authenticated browser profile and human monitoring:
+
+```env
+BROWSER_SEARCH_ENABLED=true
+BROWSER_DRY_RUN=false
+BROWSER_SEARCH_QUERIES=Klaviyo Shopify email marketing|Klaviyo retention marketing
+# or validated Upwork search URLs only:
+BROWSER_SEARCH_URLS=https://www.upwork.com/nx/search/jobs/?q=Klaviyo&sort=recency
+BROWSER_SEARCH_INTERVAL_MS=300000
+BROWSER_SEARCH_MAX_JOBS_PER_QUERY=10
+BROWSER_SEARCH_FRESHNESS_WINDOW_MINUTES=60
+```
+
+The autonomous scheduler includes browser search only when `BROWSER_SEARCH_ENABLED=true`; RSS/Apify pipeline polling remains independent fallback behavior and does not depend on browser search success. Search heartbeat metadata records dry-run state, query count, jobs found/captured/queued, paused reason, and errors.
+
+The browser queue stores requested browser actions in SQLite and processes them only when the worker is explicitly enabled:
 
 ```bash
 npm run browser:enqueue -- --job-id job-123 --action open_job --url https://www.upwork.com/jobs/~0123
@@ -213,9 +237,9 @@ npm run browser:update -- --id 1 --status paused --error "Login required"
 BROWSER_WORKER_ENABLED=true npm run browser:worker
 ```
 
-Safety defaults are conservative: `BROWSER_WORKER_ENABLED=false` and `BROWSER_DRY_RUN=true`. Dry-run mode records that an action would be opened but does not launch a browser. If live browser inspection is enabled later, the worker uses a persistent VM-local user data directory (`BROWSER_USER_DATA_DIR`) so it does not take over a local desktop session.
+Safety defaults are conservative: `BROWSER_SEARCH_ENABLED=false`, `BROWSER_WORKER_ENABLED=false`, and `BROWSER_DRY_RUN=true`. Dry-run mode records what would happen but does not launch a browser. Live browser search opens only validated Upwork search/job URLs and uses a persistent VM-local user data directory (`BROWSER_USER_DATA_DIR`) so it does not take over a local desktop session.
 
-The worker must pause for human intervention on login, 2FA, CAPTCHA, Cloudflare, or any other security challenge. It must not bypass security controls, store Upwork passwords, fill proposal fields, or submit proposals. Optional artifacts are minimized diagnostics only (state, URL, title, bounded text excerpt), not full authenticated page archives.
+The browser search runner and worker must pause for human intervention on login, 2FA, CAPTCHA, Cloudflare, or any other security challenge. They must not bypass security controls, store Upwork passwords, fill proposal fields, or submit proposals. Optional artifacts/captures are minimized diagnostics and bounded text, not full authenticated page archives.
 
 ## Agent Skills Registry
 
@@ -234,7 +258,7 @@ The list command prints sorted skill names, titles, and markdown paths. The read
 - `npm run dev` - watch mode during development
 - `npm run build` - compile TS -> `dist/`
 - `npm start` - run compiled worker
-- `npm run scheduler` - run autonomous scheduler mode with pipeline, optional browser queue, health checks, and heartbeats
+- `npm run scheduler` - run autonomous scheduler mode with pipeline, optional browser search/queue, health checks, and heartbeats
 - `npm run health` - print heartbeat/finding health report; add `-- --alert` to send conservative Slack alerts
 - `npm run test:fetch` - fetch configured feeds once, print sample jobs
 - `npm run test:slack` - send Slack webhook test message
@@ -253,6 +277,7 @@ The list command prints sorted skill names, titles, and markdown paths. The read
 - `npm run knowledge:add -- --type voice --text "Prefer concise CTAs" [--title <title>] [--tags "cta"]` - append a local profile knowledge note
 - `npm run knowledge:video -- --file profile/video-intro-transcript.md --title "Intro video"` - ingest an additional video/transcript note
 - `npm run portfolio:upsert -- --id <id> --name <name> --description <text> --result <text>` - add/update portfolio metadata without code changes
+- `npm run browser:search` - run browser-search dry-run/live polling according to `BROWSER_SEARCH_*` and `BROWSER_DRY_RUN`
 - `npm run browser:enqueue -- --job-id <id> --action open_job --url <upwork-url>` - add a safe browser action to the SQLite queue
 - `npm run browser:list -- [--status pending] [--limit 25]` - list queued browser actions
 - `npm run browser:update -- --id <action-id> --status paused --error "Login required"` - manually update a queued browser action
@@ -280,6 +305,11 @@ LLM_PROVIDER=openai-compatible
 LLM_API_KEY=
 LLM_MODEL=gpt-4o-mini
 LLM_BASE_URL=https://api.openai.com/v1
+BROWSER_DRY_RUN=true
+BROWSER_SEARCH_ENABLED=false
+BROWSER_SEARCH_INTERVAL_MS=300000
+BROWSER_SEARCH_MAX_JOBS_PER_QUERY=10
+BROWSER_SEARCH_FRESHNESS_WINDOW_MINUTES=60
 ```
 
 ### Feed Query Configuration
@@ -310,6 +340,7 @@ Common production commands after `npm run build`:
 - `npm run health` - heartbeat health report, stale-worker detection, and browser/auth-required findings
 - `npm run report` - application summary report
 - `npm run analytics` - outcome and Connects analytics
+- `npm run browser:search:prod` - run browser-search polling on a VM/cloud host; dry-run/no-browser safe by default
 - `npm run browser:worker:prod` - process queued browser actions on a VM/cloud host; still disabled unless `BROWSER_WORKER_ENABLED=true`
 
 ## Docker
