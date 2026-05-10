@@ -1,10 +1,10 @@
 # TP-007: Cloud Agent Runtime — Status
 
-**Current Step:** Step 4: Testing & Verification
+**Current Step:** Step 5: Documentation & Delivery
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 1
-**Review Counter:** 3
+**Review Counter:** 4
 **Iteration:** 1
 **Size:** M
 
@@ -40,15 +40,15 @@
 ---
 
 ### Step 4: Testing & Verification
-**Status:** 🟨 In Progress
-- [ ] Full tests or no-test-script note
-- [ ] Build passes
-- [ ] README links deployment doc
+**Status:** ✅ Complete
+- [x] Full tests or no-test-script note
+- [x] Build passes
+- [x] README links deployment doc
 
 ---
 
 ### Step 5: Documentation & Delivery
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Docs updated
 - [ ] Discoveries logged
 
@@ -64,6 +64,7 @@
 | Discovery | Disposition | Location |
 |-----------|-------------|----------|
 | Docker CLI is not installed in the worker environment, so Compose syntax could not be validated with `docker compose config`. | Used `npm run build` for compatibility verification; Compose changes are conservative volume additions. | docker-compose.yml |
+| No `npm test` script exists in package.json. | Use `npm run build` plus command/config smoke checks for verification. | package.json |
 
 ## Execution Log
 
@@ -79,3 +80,4 @@
 | 2026-05-10 18:06 | Review R001 | plan Step 1: APPROVE |
 | 2026-05-10 18:08 | Review R002 | plan Step 2: APPROVE |
 | 2026-05-10 18:09 | Review R003 | plan Step 3: APPROVE |
+| 2026-05-10 18:11 | Review R004 | plan Step 4: APPROVE |
