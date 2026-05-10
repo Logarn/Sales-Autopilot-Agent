@@ -1,10 +1,10 @@
 # TP-004: Semantic Dedupe — Status
 
-**Current Step:** Step 1: Add fingerprinting utilities
+**Current Step:** Step 2: Integrate dedupe into fetch pipeline
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 1
+**Review Counter:** 2
 **Iteration:** 1
 **Size:** M
 
@@ -19,7 +19,7 @@
 ---
 
 ### Step 1: Add fingerprinting utilities
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 
 - [x] Create `src/dedupe.ts` with normalization, fingerprinting, and similarity scoring
 - [x] Fingerprint considers stable job fields and ignores noise
@@ -29,7 +29,7 @@
 ---
 
 ### Step 2: Integrate dedupe into fetch pipeline
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 
 - [ ] Dedupe by exact ID first and near-duplicate similarity second
 - [ ] Keep strongest/latest duplicate candidate deterministically
@@ -108,3 +108,4 @@
 
 *Reserved for execution notes*
 | 2026-05-10 16:29 | Review R001 | plan Step 1: APPROVE |
+| 2026-05-10 16:31 | Review R002 | code Step 1: APPROVE |
