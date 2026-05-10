@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 3
-**Review Counter:** 2
+**Review Counter:** 3
 **Iteration:** 1
 **Size:** L
 
@@ -26,6 +26,8 @@
 - [x] Add search config
 - [x] Add types/helpers
 - [x] Build passes
+- [ ] Restrict browser search URL inputs to Upwork job search pages and harden job URL safety checks
+- [ ] Add executable checks for browser search URL/query normalization safety
 
 ---
 
@@ -74,6 +76,7 @@
 |---|------|------|---------|------|
 | R001 | Plan | Step 1 | REVISE | .reviews/R001-plan-step1.md |
 | R002 | Plan | Step 1 | APPROVE | .reviews/R002-plan-step1.md |
+| R003 | Code | Step 1 | REVISE | .reviews/R003-code-step1.md |
 
 ## Discoveries
 | Discovery | Disposition | Location |
@@ -91,3 +94,4 @@
 *None*
 | 2026-05-10 21:38 | Review R001 | plan Step 1: REVISE |
 | 2026-05-10 21:39 | Review R002 | plan Step 1: APPROVE |
+| 2026-05-10 21:41 | Review R003 | code Step 1: REVISE |
