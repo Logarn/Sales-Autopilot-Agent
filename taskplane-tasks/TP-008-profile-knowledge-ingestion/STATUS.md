@@ -37,7 +37,7 @@
 - [x] Add portfolio/video ingestion workflow
 - [x] Print summaries
 - [x] Build passes
-- [ ] Ensure knowledge append filenames are unique and do not overwrite same-day same-title notes
+- [x] Ensure knowledge append filenames are unique and do not overwrite same-day same-title notes
 
 ---
 
@@ -88,6 +88,7 @@
 | Step 1 plan review requested explicit schema, safe-loader, and truncation verification criteria | Added as Step 1 checklist items | taskplane-tasks/TP-008-profile-knowledge-ingestion/.reviews/R001-plan-step1.md |
 | Operator proposed future optional LLM normalization layer before Slack packet output | Out of scope for TP-008; future architecture note: LLM-normalized structured packet -> deterministic guardrails/critic -> Slack webhook, with deterministic fallback and no secrets sent | Steering message 2026-05-10 |
 | Operator wants RSS/Apify fallback replaced by cloud/VM browser search agent polling Upwork every 5-10 minutes with authenticated saved searches, LLM-normalized packets, Slack approval/edit, and guarded browser apply prep/submit | Out of scope for TP-008; logged for future architecture tasks | Steering message 2026-05-10 |
+| Operator proposed SKILL.md-style natural-language capability docs plus cron/scheduler, heartbeat/health monitor, and queue loop for true autonomy | Out of scope for TP-008; relevant future knowledge/agent architecture discovery | Steering message 2026-05-10 |
 
 ## Execution Log
 

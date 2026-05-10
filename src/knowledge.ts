@@ -66,8 +66,14 @@ function writeKnowledgeNote(type: KnowledgeArtifactType, title: string, content:
   const dir = path.resolve(process.cwd(), PROFILE_KNOWLEDGE_DIR, type);
   fs.mkdirSync(dir, { recursive: true });
   const timestamp = new Date().toISOString();
-  const filename = `${timestamp.slice(0, 10)}-${slugify(title)}.md`;
-  const filePath = path.join(dir, filename);
+  const timestampSlug = timestamp.replace(/[:.]/g, "-");
+  const baseFilename = `${timestampSlug}-${slugify(title)}`;
+  let filePath = path.join(dir, `${baseFilename}.md`);
+  let counter = 2;
+  while (fs.existsSync(filePath)) {
+    filePath = path.join(dir, `${baseFilename}-${counter}.md`);
+    counter += 1;
+  }
   const frontMatter = [
     "---",
     `type: ${type}`,
