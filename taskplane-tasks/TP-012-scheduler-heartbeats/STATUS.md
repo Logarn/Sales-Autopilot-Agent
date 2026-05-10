@@ -27,7 +27,7 @@
 ---
 
 ### Step 2: Scheduler loop
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Add scheduler module
 - [ ] Include pipeline/browser/health jobs
 - [ ] Add npm script
