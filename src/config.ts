@@ -3,7 +3,7 @@ import * as path from "node:path";
 import dotenv from "dotenv";
 import { DEFAULT_SEARCH_QUERIES } from "./feeds";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 function parseInteger(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
