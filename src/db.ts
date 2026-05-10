@@ -3,7 +3,19 @@ import * as path from "node:path";
 import Database from "better-sqlite3";
 import { DB_PATH, TIMEZONE } from "./config";
 import { areNearDuplicateJobs, buildJobFingerprint } from "./dedupe";
-import { ApplicationDraft, ApplicationStatus, DailySummary, JobPosting, MatchLevel, ScoredJob } from "./types";
+import {
+  ApplicationDraft,
+  ApplicationStatus,
+  BrowserAction,
+  BrowserActionInput,
+  BrowserActionPayload,
+  BrowserActionStatus,
+  BrowserActionType,
+  DailySummary,
+  JobPosting,
+  MatchLevel,
+  ScoredJob,
+} from "./types";
 
 interface SeenStats {
   total: number;
@@ -116,6 +128,18 @@ export interface SlackQueueItem {
   attempts: number;
 }
 
+interface BrowserActionRow {
+  id: number;
+  job_id: string;
+  action_type: BrowserActionType;
+  status: BrowserActionStatus;
+  payload: string;
+  attempts: number;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 const dbDirectory = path.dirname(DB_PATH);
 if (!fs.existsSync(dbDirectory)) {
   fs.mkdirSync(dbDirectory, { recursive: true });
@@ -190,6 +214,22 @@ CREATE TABLE IF NOT EXISTS application_events (
 
 CREATE INDEX IF NOT EXISTS idx_application_events_job_id ON application_events(job_id);
 CREATE INDEX IF NOT EXISTS idx_application_events_type ON application_events(event_type);
+
+CREATE TABLE IF NOT EXISTS browser_actions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id TEXT NOT NULL,
+  action_type TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  payload TEXT NOT NULL DEFAULT '{}',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_browser_actions_status ON browser_actions(status);
+CREATE INDEX IF NOT EXISTS idx_browser_actions_job_id ON browser_actions(job_id);
+CREATE INDEX IF NOT EXISTS idx_browser_actions_created_at ON browser_actions(created_at);
 `);
 
 function ensureSeenJobsColumn(name: string, definition: string): void {
@@ -276,6 +316,27 @@ const queueSelectStmt = db.prepare<[], SlackQueueItem>(
 const queueDeleteStmt = db.prepare("DELETE FROM slack_queue WHERE id = ?");
 const queueAttemptStmt = db.prepare(
   "UPDATE slack_queue SET attempts = attempts + 1 WHERE id = ?"
+);
+const insertBrowserActionStmt = db.prepare(
+  `INSERT INTO browser_actions (job_id, action_type, status, payload, attempts, last_error, updated_at)
+   VALUES (?, ?, 'pending', ?, 0, NULL, datetime('now'))`
+);
+const listBrowserActionsStmt = db.prepare<[BrowserActionStatus | null, BrowserActionStatus | null, number], BrowserActionRow>(
+  `SELECT id, job_id, action_type, status, payload, attempts, last_error, created_at, updated_at
+   FROM browser_actions
+   WHERE (? IS NULL OR status = ?)
+   ORDER BY created_at ASC, id ASC
+   LIMIT ?`
+);
+const updateBrowserActionStatusStmt = db.prepare(
+  `UPDATE browser_actions
+   SET status = ?, last_error = ?, updated_at = datetime('now')
+   WHERE id = ?`
+);
+const incrementBrowserActionAttemptStmt = db.prepare(
+  `UPDATE browser_actions
+   SET attempts = attempts + 1, last_error = ?, updated_at = datetime('now')
+   WHERE id = ?`
 );
 const upsertApplicationStmt = db.prepare(
   `INSERT INTO applications (
@@ -586,6 +647,54 @@ export function recordApplicationSubmission(input: ApplicationSubmissionInput): 
     input.note ??
       `Applied: required=${input.requiredConnects}, boost=${input.boostConnects}, total=${totalConnects}, rank=${input.boostRank ?? "n/a"}`
   );
+  return result.changes > 0;
+}
+
+function parseBrowserActionPayload(value: string): BrowserActionPayload {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as BrowserActionPayload)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function rowToBrowserAction(row: BrowserActionRow): BrowserAction {
+  return {
+    id: row.id,
+    jobId: row.job_id,
+    actionType: row.action_type,
+    status: row.status,
+    payload: parseBrowserActionPayload(row.payload),
+    attempts: row.attempts,
+    lastError: row.last_error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function enqueueBrowserAction(input: BrowserActionInput): number {
+  const result = insertBrowserActionStmt.run(
+    input.jobId,
+    input.actionType,
+    JSON.stringify(input.payload ?? {})
+  );
+  return Number(result.lastInsertRowid);
+}
+
+export function listBrowserActions(status: BrowserActionStatus | null = null, limit = 25): BrowserAction[] {
+  return listBrowserActionsStmt.all(status, status, limit).map(rowToBrowserAction);
+}
+
+export function updateBrowserActionStatus(id: number, status: BrowserActionStatus, lastError?: string): boolean {
+  const result = updateBrowserActionStatusStmt.run(status, lastError ?? null, id);
+  return result.changes > 0;
+}
+
+export function incrementBrowserActionAttempts(id: number, lastError?: string): boolean {
+  const result = incrementBrowserActionAttemptStmt.run(lastError ?? null, id);
   return result.changes > 0;
 }
 

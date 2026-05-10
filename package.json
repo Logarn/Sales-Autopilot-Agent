@@ -23,7 +23,10 @@
     "app:apply": "tsx src/applications.ts --record-submission",
     "app:analytics": "tsx src/applications.ts --analytics",
     "app:capture": "tsx src/capture.ts",
-    "app:report": "tsx src/applications.ts"
+    "app:report": "tsx src/applications.ts",
+    "browser:enqueue": "tsx src/browserQueue.ts --enqueue",
+    "browser:list": "tsx src/browserQueue.ts --list",
+    "browser:update": "tsx src/browserQueue.ts --update"
   },
   "keywords": [
     "upwork",
