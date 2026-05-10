@@ -63,7 +63,7 @@
 - [x] Full tests or env limitation note
 - [x] Build passes
 - [x] Local CLI commands tested
-- [ ] R014: Record full-test limitation plus build/local CLI verification evidence
+- [x] R014: Record full-test limitation plus build/local CLI verification evidence
 
 ---
 
@@ -83,6 +83,7 @@
 |-----------|-------------|----------|
 | R004 suggestion: include pending revision instruction in fallback output when no revised text is available | Considered during Step 2 revision fix | taskplane-tasks/TP-015-slack-conversation-layer/.reviews/R004-code-step2.md |
 | R005 suggestion: include current proposal version in CLI responses | Considered while fixing pending-version semantics | taskplane-tasks/TP-015-slack-conversation-layer/.reviews/R005-code-step2.md |
+| No npm test script is configured | Step 5 full-test limitation recorded after `npm test` failed with missing script | package.json |
 
 ## Execution Log
 | Timestamp | Action | Outcome |
@@ -91,6 +92,9 @@
 | 2026-05-10 21:57 | Task started | Runtime V2 lane-runner execution |
 | 2026-05-10 21:57 | Step 0 started | Preflight |
 | 2026-05-10 22:07 | Worker iter 1 | done in 587s, tools: 92 |
+| 2026-05-10 22:21 | Step 5 full-test check | `npm test` attempted; failed because package.json has no `test` script |
+| 2026-05-10 22:22 | Step 5 build check | `npm run build` passed |
+| 2026-05-10 22:22 | Step 5 local CLI checks | `npm run slack:conversation -- parse` verified approve, reject, revise, regenerate, mark_applied, mark_replied, enqueue_browser_apply, and unknown without Slack credentials |
 
 ## Blockers
 *None*
