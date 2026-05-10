@@ -1,6 +1,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
+  BROWSER_ACTION_LIMIT,
+  BROWSER_ARTIFACT_DIR,
+  BROWSER_DRY_RUN,
+  BROWSER_HEADLESS,
+  BROWSER_USER_DATA_DIR,
+  BROWSER_WORKER_ENABLED,
+} from "./config";
+import {
   closeDb,
   incrementBrowserActionAttempts,
   listBrowserActions,
@@ -53,23 +61,13 @@ interface PlaywrightChromiumLike {
   ): Promise<PlaywrightContextLike>;
 }
 
-function parseBoolean(value: string | undefined, fallback: boolean): boolean {
-  if (value === undefined) return fallback;
-  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
-}
-
-function parsePositiveInteger(value: string | undefined, fallback: number): number {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
 function loadOptions(): BrowserWorkerOptions {
   return {
-    dryRun: parseBoolean(process.env.BROWSER_DRY_RUN, true),
-    headless: parseBoolean(process.env.BROWSER_HEADLESS, true),
-    userDataDir: process.env.BROWSER_USER_DATA_DIR ?? path.resolve(process.cwd(), "data/browser-profile"),
-    artifactDir: process.env.BROWSER_ARTIFACT_DIR ?? null,
-    limit: parsePositiveInteger(process.env.BROWSER_ACTION_LIMIT, 5),
+    dryRun: BROWSER_DRY_RUN,
+    headless: BROWSER_HEADLESS,
+    userDataDir: path.resolve(process.cwd(), BROWSER_USER_DATA_DIR),
+    artifactDir: BROWSER_ARTIFACT_DIR ? path.resolve(process.cwd(), BROWSER_ARTIFACT_DIR) : null,
+    limit: BROWSER_ACTION_LIMIT,
   };
 }
 
@@ -202,6 +200,11 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
 }
 
 export async function runBrowserWorker(options = loadOptions()): Promise<void> {
+  if (!BROWSER_WORKER_ENABLED) {
+    logger.info("Browser worker is disabled. Set BROWSER_WORKER_ENABLED=true to process queued browser actions.");
+    return;
+  }
+
   const pending = listBrowserActions("pending", options.limit);
   if (pending.length === 0) {
     logger.info("No pending browser actions.");

@@ -149,6 +149,20 @@ The command parses title, description, budget/type, duration, experience level, 
 
 Sample pasted text lives at `captures/job-detail-sample.txt`.
 
+## Browser Queue Safety Model
+
+The browser queue is a cloud/VM-safe foundation for future human-in-the-loop browser assistance. It stores requested browser actions in SQLite and processes them only when the worker is explicitly enabled:
+
+```bash
+npm run browser:enqueue -- --job-id job-123 --action open_job --url https://www.upwork.com/jobs/~0123
+npm run browser:list -- --status pending
+BROWSER_WORKER_ENABLED=true npm run browser:worker
+```
+
+Safety defaults are conservative: `BROWSER_WORKER_ENABLED=false` and `BROWSER_DRY_RUN=true`. Dry-run mode records that an action would be opened but does not launch a browser. If live browser inspection is enabled later, the worker uses a persistent VM-local user data directory (`BROWSER_USER_DATA_DIR`) so it does not take over a local desktop session.
+
+The worker must pause for human intervention on login, 2FA, CAPTCHA, Cloudflare, or any other security challenge. It must not bypass security controls, store Upwork passwords, fill proposal fields, or submit proposals. Optional artifacts are minimized diagnostics only (state, URL, title, bounded text excerpt), not full authenticated page archives.
+
 ## npm Scripts
 
 - `npm run dev` - watch mode during development
