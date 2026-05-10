@@ -1,6 +1,6 @@
 # VM / Cloud Deployment Runbook
 
-This project can run as a background Upwork opportunity agent on a VM or cloud host. It polls configured sources, scores and deduplicates jobs, sends Slack review packets, tracks outcomes in SQLite, and can process a safe browser-action queue. It is not an auto-apply bot.
+This project can run as a background Upwork opportunity agent on a VM or cloud host. It polls configured sources, scores and deduplicates jobs, sends Slack review packets, tracks outcomes in SQLite, and can process a safe browser-action queue. It is Slack-first/local-CLI controlled, has no web UI, and is not an auto-apply bot.
 
 ## Runtime modes
 
@@ -23,6 +23,7 @@ Operational commands:
 | Outcome analytics | `npm run analytics` |
 | Browser search runner | `npm run browser:search:prod` |
 | Browser queue worker | `npm run browser:worker:prod` |
+| Local Slack conversation parser/handler | `npm run slack:conversation -- parse "approve job <id>"` / `npm run slack:conversation -- handle --job-id <id> --text "approve and queue browser apply"` |
 | Development worker | `npm run worker:dev` |
 
 For Docker Compose:
@@ -113,6 +114,7 @@ If live browser inspection is enabled, it should use the VM-local `BROWSER_USER_
 - Browser search/worker code must not bypass CAPTCHA, 2FA, Cloudflare, login challenges, or other security controls.
 - Browser search/worker runs must pause on security challenges and wait for a human.
 - Do not store plaintext Upwork credentials in `.env`, config files, logs, captures, or diagnostics.
+- Do not add or deploy a web UI for this control plane; use Slack packets, the local Slack conversation CLI, application reports, and documented VM commands.
 - Do not fill proposal fields or submit proposals automatically as part of this runtime setup.
 - Keep Slack/webhook/API tokens in `.env` or the cloud secret manager, never in git.
 - Minimize captures and browser artifacts; avoid full authenticated page archives unless explicitly approved.

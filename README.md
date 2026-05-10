@@ -2,7 +2,7 @@
 
 Node.js + TypeScript background worker that monitors Upwork jobs, scores fit, generates human-in-the-loop proposal packets, selects relevant proof, deduplicates via SQLite, and posts rich Slack notifications for high-priority opportunities.
 
-The product direction is an Upwork revenue assistant, not an auto-apply bot: find better jobs, write better proposals, protect Connects, and keep the human in control.
+The product direction is a Slack-first Upwork revenue assistant, not an auto-apply bot or web UI: find better jobs, write better proposals, protect Connects, and keep the human in control from Slack/local CLI handoffs.
 
 ## Features
 
@@ -18,6 +18,7 @@ The product direction is an Upwork revenue assistant, not an auto-apply bot: fin
 - SQLite deduplication using exact source IDs plus conservative semantic fingerprints
 - First-run seeding: stores existing jobs without blasting Slack
 - Slack queue/retry on failures
+- Slack conversation CLI foundation for approve, reject, revise/regenerate, mark applied/replied, and browser-review queue handoffs
 - Proposal packet generation using local profile and portfolio metadata
 - Suggested proof/attachment selection with guardrails
 - Deterministic Proposal Quality Critic that scores draft quality before Slack review
@@ -272,6 +273,8 @@ The list command prints sorted skill names, titles, and markdown paths. The read
 - `npm run test:slack` - send Slack webhook test message
 - `npm run slack:preview -- --sample` - send a synthetic Slack V0 proposal packet preview
 - `npm run slack:preview -- --job-id <id>` - send a preview from stored job/application data
+- `npm run slack:conversation -- parse "approve job <id>"` - parse a local Slack-style command without credentials
+- `npm run slack:conversation -- handle --job-id <id> --text "approve and queue browser apply"` - update local application state and optionally queue browser review; it never submits automatically
 - `npm run test:run-once` - run full pipeline one time and exit
 - `npm run add:manual-job -- --url <url> --title <title>` - add a manual job to the ingestion queue
 - `npm run capture:job -- --file captures/job-detail.txt [--url <url>]` - parse pasted Upwork job-detail text and create/update the manual job queue
