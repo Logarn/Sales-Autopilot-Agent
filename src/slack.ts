@@ -131,8 +131,21 @@ function buildProposalPacketBlocks(job: ScoredJob): IncomingWebhookSendArguments
     ];
   }
 
-  const proofItems = draft.selectedPortfolioItems.map((item) => `${item.name} — ${item.result}`);
-  const proposalPreview = slackText(draft.proposalText, PROPOSAL_DRAFT_PREVIEW_LENGTH).replace(/\n/g, "\n> ");
+  const structured = draft.structuredProposal;
+  const proofItems = structured?.suggestedAttachments?.length
+    ? structured.suggestedAttachments.map((item, index) => {
+        const highlight = structured.suggestedHighlights[index];
+        return highlight ? `${item} — ${highlight}` : item;
+      })
+    : draft.selectedPortfolioItems.map((item) => `${item.name} — ${item.result}`);
+  const clientAnswers = structured?.clientRequestAnswers ?? [];
+  const proposalPreview = slackText(structured?.browserFillNotes.approvedText ?? draft.proposalText, PROPOSAL_DRAFT_PREVIEW_LENGTH).replace(/\n/g, "\n> ");
+  const structuredSectionText = structured
+    ? slackText(
+        `*🧩 Proposal Structure:*\n*Opening:* ${structured.opening}\n*Diagnosis:* ${structured.diagnosis}\n*Proof:* ${structured.proof}\n*Client asks:*\n${bulletList(clientAnswers, "No explicit application questions detected.", 4)}\n*Rate/retainer:* ${structured.rateRetainerAnswer}\n*CTA:* ${structured.cta}`,
+      )
+    : null;
+  const browserNotes = structured?.browserFillNotes;
 
   return [
     {
@@ -161,6 +174,17 @@ function buildProposalPacketBlocks(job: ScoredJob): IncomingWebhookSendArguments
         ),
       },
     },
+    ...(structuredSectionText
+      ? [
+          {
+            type: "section" as const,
+            text: {
+              type: "mrkdwn" as const,
+              text: structuredSectionText,
+            },
+          },
+        ]
+      : []),
     {
       type: "section",
       text: {
@@ -168,6 +192,19 @@ function buildProposalPacketBlocks(job: ScoredJob): IncomingWebhookSendArguments
         text: slackText(`*📎 Proof to Use:*\n${bulletList(proofItems, "No attachment recommended.", 4)}`),
       },
     },
+    ...(browserNotes
+      ? [
+          {
+            type: "section" as const,
+            text: {
+              type: "mrkdwn" as const,
+              text: slackText(
+                `*🖥️ Browser Fill Notes:*\n*Profile:* ${browserNotes.profileNotes.join(" • ") || "Use default profile."}\n*Rate:* ${browserNotes.rate}\n*Attachments:* ${browserNotes.attachments.join(", ") || "None"}\n*Highlights:* ${browserNotes.highlights.join("; ") || "None"}\n*Connects:* ${browserNotes.connectsPlan}`,
+              ),
+            },
+          },
+        ]
+      : []),
     {
       type: "section",
       text: {
