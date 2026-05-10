@@ -1,5 +1,6 @@
-import { APP_NAME, LLM_API_KEY, LLM_NORMALIZATION_ENABLED, SLACK_CHANNEL_WEBHOOK_URL } from "./config";
-import { closeDb, getScoredJobForSlackPreview, recordApplicationRevisionRequest } from "./db";
+import { APP_NAME, SLACK_CHANNEL_WEBHOOK_URL } from "./config";
+import { applyApplicationRevision, closeDb, getApplicationDraft, getScoredJobForSlackPreview, recordApplicationRevisionRequest } from "./db";
+import { OpenAiCompatibleProvider } from "./llm/provider";
 import { logger } from "./logger";
 import { buildJobBlocks, sendSlackPreviewMessage } from "./slack";
 import { SlackConversationIntent, SlackConversationIntentType } from "./types";
@@ -80,6 +81,40 @@ export interface SlackConversationHandleResult {
   slackPreviewSent?: boolean;
 }
 
+interface RevisedProposalPayload {
+  proposalText: string;
+}
+
+async function reviseProposalWithLlm(jobId: string, instruction: string): Promise<{ ok: true; proposalText: string } | { ok: false; reason: string }> {
+  const draft = getApplicationDraft(jobId);
+  if (!draft) return { ok: false, reason: "No stored application draft found." };
+
+  const provider = new OpenAiCompatibleProvider();
+  if (!provider.isAvailable()) return { ok: false, reason: "LLM provider is disabled or missing credentials." };
+
+  const response = await provider.completeJson<RevisedProposalPayload>({
+    temperature: 0.2,
+    maxTokens: 1200,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You revise Upwork proposal drafts. Preserve truthful claims, human-in-control wording, concise tone, and all facts from the original draft unless the instruction explicitly changes wording. Return JSON only with proposalText.",
+      },
+      {
+        role: "user",
+        content: JSON.stringify({ jobId, instruction, currentProposalText: draft.proposalText }),
+      },
+    ],
+  });
+
+  const proposalText = response.data?.proposalText?.trim();
+  if (!response.ok || !proposalText) {
+    return { ok: false, reason: response.error ?? response.skippedReason ?? "LLM did not return proposalText." };
+  }
+  return { ok: true, proposalText };
+}
+
 async function maybeSendRevisionPreview(jobId: string): Promise<boolean> {
   if (!SLACK_CHANNEL_WEBHOOK_URL.trim()) return false;
   const job = getScoredJobForSlackPreview(jobId);
@@ -104,29 +139,41 @@ export async function handleSlackConversationCommand(text: string): Promise<Slac
     return { ok: false, message: "Missing revision instruction.", intent };
   }
 
-  const llmAvailable = LLM_NORMALIZATION_ENABLED && Boolean(LLM_API_KEY.trim());
+  const llmRevision = await reviseProposalWithLlm(intent.jobId, instruction);
+  if (llmRevision.ok) {
+    const applied = applyApplicationRevision(intent.jobId, instruction, llmRevision.proposalText);
+    if (!applied) {
+      return { ok: false, message: `No stored application draft found for job_id=${intent.jobId}.`, intent };
+    }
+
+    let slackPreviewSent = false;
+    try {
+      slackPreviewSent = await maybeSendRevisionPreview(intent.jobId);
+    } catch (error) {
+      logger.warn(`Revision applied but Slack preview send failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    return {
+      ok: true,
+      message: `Revision applied for ${intent.jobId} as proposal v${applied.proposalVersion}. Slack preview ${slackPreviewSent ? "sent" : "not sent"}.`,
+      intent,
+      slackPreviewSent,
+    };
+  }
+
   const result = recordApplicationRevisionRequest(
     intent.jobId,
-    llmAvailable
-      ? `${instruction} (LLM rewrite hook available; deterministic local path stored request for audit.)`
-      : `${instruction} (stored for manual/LLM revision; no local LLM rewrite configured.)`
+    `${instruction} (pending; ${llmRevision.reason})`
   );
   if (!result) {
     return { ok: false, message: `No stored application draft found for job_id=${intent.jobId}.`, intent };
   }
 
-  let slackPreviewSent = false;
-  try {
-    slackPreviewSent = await maybeSendRevisionPreview(intent.jobId);
-  } catch (error) {
-    logger.warn(`Revision saved but Slack preview send failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-
   return {
     ok: true,
-    message: `Revision request stored for ${intent.jobId} as proposal v${result.proposalVersion}. Slack preview ${slackPreviewSent ? "sent" : "not sent"}.`,
+    message: `Revision request stored for ${intent.jobId} as pending proposal guidance. No revised Slack preview was sent because the proposal text was not changed. Instruction: ${instruction}`,
     intent,
-    slackPreviewSent,
+    slackPreviewSent: false,
   };
 }
 

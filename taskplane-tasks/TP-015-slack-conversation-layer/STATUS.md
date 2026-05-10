@@ -33,8 +33,8 @@
 - [x] Preserve proposal version/audit trail
 - [x] Re-render/send Slack preview if configured
 - [x] Build passes
-- [ ] R004: apply LLM revision to proposal_text when provider is available
-- [ ] R004: avoid advertising revised Slack preview when only fallback request is stored
+- [x] R004: apply LLM revision to proposal_text when provider is available
+- [x] R004: avoid advertising revised Slack preview when only fallback request is stored
 
 ---
 

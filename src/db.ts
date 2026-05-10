@@ -586,6 +586,11 @@ const updateApplicationRevisionStmt = db.prepare<[string, number, string]>(
    SET revision_requests = ?, proposal_version = ?, status = 'draft', updated_at = datetime('now')
    WHERE job_id = ?`
 );
+const applyApplicationRevisionStmt = db.prepare<[string, string, string, number, string]>(
+  `UPDATE applications
+   SET proposal_text = ?, revision_requests = ?, generated_at = ?, proposal_version = ?, status = 'draft', updated_at = datetime('now')
+   WHERE job_id = ?`
+);
 const updateApplicationStatusStmt = db.prepare<[ApplicationStatus, string | null, string | null, string]>(
   `UPDATE applications
    SET status = ?, reviewed_at = COALESCE(?, reviewed_at), submitted_at = COALESCE(?, submitted_at), updated_at = datetime('now')
@@ -806,6 +811,45 @@ export function recordApplicationRevisionRequest(jobId: string, instruction: str
     proposalText: row.proposal_text,
     revisionRequests: nextRequests,
     applied: false,
+  };
+}
+
+export function applyApplicationRevision(
+  jobId: string,
+  instruction: string,
+  revisedProposalText: string
+): ApplicationRevisionResult | null {
+  const row = getApplicationDraftStmt.get(jobId);
+  if (!row) return null;
+
+  const nextVersion = (row.proposal_version ?? 1) + 1;
+  const generatedAt = new Date().toISOString();
+  const existingRequests = parseJsonStringArray(row.revision_requests);
+  const revisionEntry = `${generatedAt} applied v${nextVersion}: ${instruction}`;
+  const nextRequests = [...existingRequests, revisionEntry];
+  const result = applyApplicationRevisionStmt.run(
+    revisedProposalText,
+    JSON.stringify(nextRequests),
+    generatedAt,
+    nextVersion,
+    jobId
+  );
+  if (result.changes === 0) return null;
+
+  insertApplicationEventStmt.run(
+    jobId,
+    "revision_applied",
+    row.status,
+    "draft",
+    `v${nextVersion}: ${instruction}`
+  );
+
+  return {
+    jobId,
+    proposalVersion: nextVersion,
+    proposalText: revisedProposalText,
+    revisionRequests: nextRequests,
+    applied: true,
   };
 }
 
