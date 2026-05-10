@@ -1,6 +1,6 @@
 # TP-010: Slack-Ready Proposal Structure — Status
 
-**Current Step:** Step 3: Slack/browser readiness
+**Current Step:** Step 4: Documentation
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
@@ -54,8 +54,8 @@ Plan:
 ---
 
 ### Step 4: Documentation
-**Status:** ⬜ Not Started
-- [ ] README updated
+**Status:** 🟨 In Progress
+- [x] README updated
 
 ---
 

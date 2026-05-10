@@ -144,7 +144,7 @@ npm run slack:preview -- --sample
 npm run slack:preview -- --job-id <stored-job-id>
 ```
 
-The preview sends the same proposal packet structure used by normal notifications: match score units, reasons/risks, Connects plan, selected proof, proposal quality, and a draft proposal that can be copied manually into Upwork. If the webhook is not configured, the command exits non-zero with a clear message and does not print the secret. Preview sends also do not enter the production Slack retry queue.
+The preview sends the same proposal packet structure used by normal notifications: match score units, reasons/risks, Connects plan, selected proof, proposal quality, and a draft proposal that can be copied manually into Upwork. When a structured draft is available, Slack also shows compact proposal sections: opening, diagnosis, proof, direct answers to client application requests, rate/retainer answer, CTA, suggested attachments/highlights, and browser-fill notes. Browser-fill notes are a human handoff only: approved cover-letter text, profile notes, rate, attachments/highlights, and Connects plan for manual review before filling Upwork. If the webhook is not configured, the command exits non-zero with a clear message and does not print the secret. Preview sends also do not enter the production Slack retry queue.
 
 Webhook V0 is one-way. Buttons can open URLs such as Upwork or an optional `QUICK_BID_TEMPLATE_URL`, but incoming webhooks cannot receive Approve/Revise/Reject callbacks, Slack chat replies, or edits. Later interactive review workflows require a Slack app/socket mode or a separate polling approach; no Slack OAuth or socket-mode token is required for this V0 preview path.
 
