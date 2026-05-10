@@ -54,7 +54,7 @@
 ---
 
 ### Step 5: Testing & Verification
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Full tests or env limitation note
 - [ ] Build passes
 - [ ] Health command tested
