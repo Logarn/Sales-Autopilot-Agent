@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 1
-**Review Counter:** 1
+**Review Counter:** 2
 **Iteration:** 1
 **Size:** M
 
@@ -28,7 +28,7 @@
 
 ### Step 2: Add registry/loader
 **Status:** ⬜ Not Started
-- [ ] Add `src/skills.ts`
+- [ ] Add `src/skills.ts` with executable CLI plus reusable helpers for deterministic sorted discovery, safe skill-name validation, raw markdown reads, clear not-found/missing-directory errors, and path-traversal protection
 - [ ] Add npm script
 - [ ] Build passes
 
@@ -73,3 +73,4 @@
 ## Blockers
 *None*
 | 2026-05-10 20:35 | Review R001 | plan Step 1: APPROVE |
+| 2026-05-10 20:36 | Review R002 | plan Step 2: REVISE |
