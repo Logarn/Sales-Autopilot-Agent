@@ -26,8 +26,8 @@
 - [x] Add search config
 - [x] Add types/helpers
 - [x] Build passes
-- [ ] Restrict browser search URL inputs to Upwork job search pages and harden job URL safety checks
-- [ ] Add executable checks for browser search URL/query normalization safety
+- [x] Restrict browser search URL inputs to Upwork job search pages and harden job URL safety checks
+- [x] Add executable checks for browser search URL/query normalization safety
 
 ---
 

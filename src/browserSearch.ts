@@ -9,7 +9,8 @@ import {
 import { BrowserSearchConfig, BrowserSearchQuery } from "./types";
 
 const UPWORK_SEARCH_URL = "https://www.upwork.com/nx/search/jobs/";
-const UPWORK_JOB_URL_PATTERN = /https:\/\/(?:www\.)?upwork\.com\/jobs\/[^\s"'<>]*~([A-Za-z0-9_-]{8,})[^\s"'<>]*/i;
+const UPWORK_HOSTS = new Set(["upwork.com", "www.upwork.com"]);
+const UPWORK_JOB_ID_PATTERN = /~([A-Za-z0-9_-]{8,})/;
 
 function slugify(value: string): string {
   const slug = value
@@ -21,18 +22,29 @@ function slugify(value: string): string {
   return slug || "query";
 }
 
-export function normalizeUpworkSearchInput(input: string): BrowserSearchQuery {
+function parseUrl(value: string): URL | null {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+export function isSafeUpworkSearchUrl(url: string): boolean {
+  const parsed = parseUrl(url.trim());
+  return parsed != null && parsed.protocol === "https:" && UPWORK_HOSTS.has(parsed.hostname) && parsed.pathname === "/nx/search/jobs/";
+}
+
+export function normalizeUpworkSearchInput(input: string): BrowserSearchQuery | null {
   const trimmed = input.trim();
   const isUrl = /^https?:\/\//i.test(trimmed);
-  const url = isUrl ? trimmed : `${UPWORK_SEARCH_URL}?q=${encodeURIComponent(trimmed)}&sort=recency`;
-  let query = trimmed;
-  if (isUrl) {
-    try {
-      query = new URL(trimmed).searchParams.get("q")?.trim() || trimmed;
-    } catch {
-      query = trimmed;
-    }
+  if (isUrl && !isSafeUpworkSearchUrl(trimmed)) {
+    return null;
   }
+
+  const url = isUrl ? trimmed : `${UPWORK_SEARCH_URL}?q=${encodeURIComponent(trimmed)}&sort=recency`;
+  const parsed = isUrl ? parseUrl(trimmed) : null;
+  const query = parsed?.searchParams.get("q")?.trim() || trimmed;
 
   return {
     id: slugify(query),
@@ -48,6 +60,7 @@ export function buildBrowserSearchQueries(inputs: string[]): BrowserSearchQuery[
   for (const input of inputs) {
     if (!input.trim()) continue;
     const query = normalizeUpworkSearchInput(input);
+    if (!query) continue;
     const key = query.url.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -68,11 +81,15 @@ export function getBrowserSearchConfig(): BrowserSearchConfig {
 }
 
 export function extractUpworkJobId(url: string): string | null {
-  return url.match(UPWORK_JOB_URL_PATTERN)?.[1] ?? null;
+  const parsed = parseUrl(url.trim());
+  if (!parsed || parsed.protocol !== "https:" || !UPWORK_HOSTS.has(parsed.hostname) || !parsed.pathname.startsWith("/jobs/")) {
+    return null;
+  }
+  return parsed.pathname.match(UPWORK_JOB_ID_PATTERN)?.[1] ?? null;
 }
 
 export function isSafeUpworkJobUrl(url: string): boolean {
-  return UPWORK_JOB_URL_PATTERN.test(url.trim());
+  return extractUpworkJobId(url) != null;
 }
 
 export function shouldSkipBrowserSearch(config: BrowserSearchConfig): string | null {
