@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 8
+**Review Counter:** 9
 **Iteration:** 1
 **Size:** M
 
@@ -47,6 +47,7 @@
 - [x] Support voice preference additions/overrides
 - [x] Empty knowledge directory is safe
 - [x] Build passes
+- [ ] Prevent voice, bid-rule, and internal general knowledge from leaking as meta instructions in client proposal text
 
 ---
 
@@ -112,3 +113,4 @@
 | 2026-05-10 19:14 | Review R006 | code Step 2: REVISE |
 | 2026-05-10 19:16 | Review R007 | code Step 2: APPROVE |
 | 2026-05-10 19:17 | Review R008 | plan Step 3: APPROVE |
+| 2026-05-10 19:21 | Review R009 | code Step 3: REVISE |
