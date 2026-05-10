@@ -1,10 +1,10 @@
 # TP-010: Slack-Ready Proposal Structure — Status
 
-**Current Step:** Step 2: Generate better V0 proposals
+**Current Step:** Step 3: Slack/browser readiness
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 5
+**Review Counter:** 6
 **Iteration:** 1
 **Size:** M
 
@@ -38,7 +38,14 @@
 ---
 
 ### Step 3: Slack/browser readiness
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
+
+Plan:
+- Render compact Slack fields from `structuredProposal` when present, with fallback to the existing `proposalText` preview so stored drafts remain readable.
+- Surface browser-fill notes with approved text, profile notes, rate, attachments/highlights, and Connects plan from the structured draft.
+- Keep critic input wired to final `proposalText`; Slack formatting/browser notes must not replace the quality-check text.
+- Run `npm run build` after changes.
+
 - [ ] Slack shows structured sections compactly
 - [ ] Browser-fill notes added
 - [ ] Critic evaluates final text
@@ -92,3 +99,4 @@
 | 2026-05-10 19:58 | Review R002 | code Step 1: APPROVE |
 | 2026-05-10 20:02 | Review R004 | code Step 2: REVISE |
 | 2026-05-10 20:04 | Review R005 | code Step 2: APPROVE |
+| 2026-05-10 20:04 | Review R006 | plan Step 3: REVISE |
