@@ -340,6 +340,13 @@ export interface BrowserSearchRunSummary {
   errors: string[];
 }
 
+export interface BrowserSearchRunResult {
+  summary: BrowserSearchRunSummary;
+  links: BrowserSearchResultLink[];
+  capturedPages: BrowserCapturedJobPage[];
+  normalizedPackets: NormalizedOpportunityPacket[];
+}
+
 export interface DedupeResult<TJob extends JobPosting> {
   jobs: TJob[];
   exactDuplicates: number;
