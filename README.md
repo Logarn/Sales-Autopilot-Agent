@@ -23,6 +23,7 @@ The product direction is an Upwork revenue assistant, not an auto-apply bot: fin
 - Deterministic Proposal Quality Critic that scores draft quality before Slack review
 - Application draft storage in SQLite
 - Startup health checks (Slack + feed reachability + DB stats)
+- Autonomous scheduler mode with SQLite worker heartbeats and stale-worker health alerts
 - Daily summary digest at 8:00 AM Africa/Nairobi (configurable)
 - Graceful shutdown on `SIGINT` / `SIGTERM`
 
@@ -204,11 +205,25 @@ Safety defaults are conservative: `BROWSER_WORKER_ENABLED=false` and `BROWSER_DR
 
 The worker must pause for human intervention on login, 2FA, CAPTCHA, Cloudflare, or any other security challenge. It must not bypass security controls, store Upwork passwords, fill proposal fields, or submit proposals. Optional artifacts are minimized diagnostics only (state, URL, title, bounded text excerpt), not full authenticated page archives.
 
+## Agent Skills Registry
+
+Natural-language operating playbooks live under `skills/<skill-name>/SKILL.md`. They let operators and future agents load targeted context for a specific workflow instead of reading the whole repository.
+
+```bash
+npm run skills:list
+npm run skills:read -- upwork-search
+npm run skills:read -- proposal-writing
+```
+
+The list command prints sorted skill names, titles, and markdown paths. The read command prints the raw `SKILL.md` for one validated skill name. Skill docs preserve the core safety model: this assistant finds, drafts, queues, and tracks opportunities, but human approval is required before any Upwork application and browser automation must pause on login, 2FA, CAPTCHA, or other security challenges.
+
 ## npm Scripts
 
 - `npm run dev` - watch mode during development
 - `npm run build` - compile TS -> `dist/`
 - `npm start` - run compiled worker
+- `npm run scheduler` - run autonomous scheduler mode with pipeline, optional browser queue, health checks, and heartbeats
+- `npm run health` - print heartbeat/finding health report; add `-- --alert` to send conservative Slack alerts
 - `npm run test:fetch` - fetch configured feeds once, print sample jobs
 - `npm run test:slack` - send Slack webhook test message
 - `npm run slack:preview -- --sample` - send a synthetic Slack V0 proposal packet preview
@@ -240,6 +255,9 @@ SLACK_CHANNEL_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
 APIFY_API_TOKEN=your_apify_token_here
 CRON_SCHEDULE=0 * * * *
 DAILY_SUMMARY_CRON=0 8 * * *
+SCHEDULER_INTERVAL_MS=300000
+HEARTBEAT_STALE_AFTER_MS=900000
+HEALTH_ALERT_COOLDOWN_MS=3600000
 TIMEZONE=Africa/Nairobi
 MIN_SCORE_TO_NOTIFY=4
 MIN_SCORE_HIGH=8
@@ -268,9 +286,10 @@ See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the full VM/cloud runbook, en
 
 Common production commands after `npm run build`:
 
-- `npm run worker` / `npm start` - continuous background agent
+- `npm run scheduler` - autonomous agent loop every 5-10 minutes with heartbeat-backed health checks
+- `npm run worker` / `npm start` - cron-based continuous background agent
 - `npm run run:once` - one-shot poll/process/notify run
-- `npm run health` - config, Slack, source, and DB health check without starting the scheduler
+- `npm run health` - heartbeat health report, stale-worker detection, and browser/auth-required findings
 - `npm run report` - application summary report
 - `npm run analytics` - outcome and Connects analytics
 - `npm run browser:worker:prod` - process queued browser actions on a VM/cloud host; still disabled unless `BROWSER_WORKER_ENABLED=true`

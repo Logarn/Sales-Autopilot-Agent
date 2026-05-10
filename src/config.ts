@@ -49,6 +49,12 @@ export const APIFY_API_TOKEN = process.env.APIFY_API_TOKEN ?? "";
 export const QUICK_BID_TEMPLATE_URL = process.env.QUICK_BID_TEMPLATE_URL ?? "";
 export const CRON_SCHEDULE = process.env.CRON_SCHEDULE ?? "*/5 * * * *";
 export const DAILY_SUMMARY_CRON = process.env.DAILY_SUMMARY_CRON ?? "0 8 * * *";
+export const SCHEDULER_INTERVAL_MS = Math.min(
+  Math.max(parseInteger(process.env.SCHEDULER_INTERVAL_MS, 5 * 60 * 1000), 5 * 60 * 1000),
+  10 * 60 * 1000
+);
+export const HEARTBEAT_STALE_AFTER_MS = parseInteger(process.env.HEARTBEAT_STALE_AFTER_MS, 15 * 60 * 1000);
+export const HEALTH_ALERT_COOLDOWN_MS = parseInteger(process.env.HEALTH_ALERT_COOLDOWN_MS, 60 * 60 * 1000);
 export const TIMEZONE = process.env.TIMEZONE ?? "Africa/Nairobi";
 export const LOG_LEVEL = process.env.LOG_LEVEL ?? "info";
 export const DB_PATH = process.env.DB_PATH ?? "./data/jobs.db";

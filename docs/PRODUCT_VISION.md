@@ -2,7 +2,7 @@
 
 Build a server-side Upwork opportunity engine, not an auto-apply bot.
 
-The product should reliably find high-fit jobs, write human proposals in Steve's voice, choose the right proof, protect Connects, and send a clean approval queue to Slack.
+The product should reliably find high-fit jobs, write human proposals in Steve's voice, choose the right proof, protect Connects, and send a clean approval queue to Slack. Future agents should use the on-demand skills registry to load only the playbook needed for a workflow, keeping context focused while preserving safety guardrails.
 
 ## Operating principle
 

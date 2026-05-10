@@ -502,6 +502,22 @@ export async function sendFeedFailureAlert(): Promise<void> {
   });
 }
 
+export async function sendHealthAlert(message: string, severity: "warning" | "critical" = "warning"): Promise<boolean> {
+  const icon = severity === "critical" ? "🚨" : "⚠️";
+  return sendSlackMessage({
+    text: `${icon} ${APP_NAME} health alert`,
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `${icon} *${APP_NAME} health alert*\n${message}`,
+        },
+      },
+    ],
+  });
+}
+
 export async function sendDailySummary(summary: DailySummary): Promise<void> {
   const now = new Date();
   const dayLabel = new Intl.DateTimeFormat("en-KE", {
