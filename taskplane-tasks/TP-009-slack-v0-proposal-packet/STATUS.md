@@ -1,6 +1,6 @@
 # TP-009: Slack V0 Proposal Packet — Status
 
-**Current Step:** Step 3: Documentation
+**Current Step:** Step 4: Testing & Verification
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
@@ -48,7 +48,7 @@
 ---
 
 ### Step 4: Testing & Verification
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Full tests or env limitation note
 - [ ] Build passes
 - [ ] Preview command behavior verified
