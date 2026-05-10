@@ -14,7 +14,7 @@ Add the foundation for Slack as the command center: approve, reject, revise, reg
 
 ## Dependencies
 
-- **External:** Slack V0 proposal packets and LLM normalization are already integrated in `main` from prior completed tasks TP-009 and TP-013.
+- **External:** Slack V0 proposal packets and LLM normalization are already integrated in `main`.
 
 ## Context to Read First
 

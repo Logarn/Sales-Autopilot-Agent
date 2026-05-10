@@ -14,7 +14,7 @@ Implement the safe browser apply preparer: after human approval, the browser wor
 
 ## Dependencies
 
-- **External:** Browser queue foundation is already integrated in `main` from prior completed task TP-006.
+- **External:** Browser queue foundation is already integrated in `main`.
 - **Task:** TP-015 (Slack conversation approval/handoff must exist before browser apply preparation)
 
 ## Context to Read First

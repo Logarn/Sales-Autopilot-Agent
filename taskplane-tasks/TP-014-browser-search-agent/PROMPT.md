@@ -24,7 +24,7 @@ Build the browser search agent foundation so the VM/cloud browser session can be
 
 ## Dependencies
 
-- **External:** Scheduler/heartbeats and LLM normalization are already integrated in `main` from prior completed tasks TP-012 and TP-013.
+- **External:** Scheduler/heartbeats and LLM normalization are already integrated in `main`.
 
 ## Context to Read First
 
