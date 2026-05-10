@@ -1,7 +1,7 @@
 # TP-009: Slack V0 Proposal Packet — Status
 
 **Current Step:** Step 5: Documentation & Delivery
-**Status:** 🟡 In Progress
+**Status:** ✅ Complete
 **Last Updated:** 2026-05-10
 **Review Level:** 2
 **Review Counter:** 12
@@ -56,9 +56,9 @@
 ---
 
 ### Step 5: Documentation & Delivery
-**Status:** 🟨 In Progress
-- [ ] Docs updated
-- [ ] Discoveries logged
+**Status:** ✅ Complete
+- [x] Docs updated
+- [x] Discoveries logged
 
 ---
 
@@ -83,6 +83,8 @@
 
 | Discovery | Disposition | Location |
 |-----------|-------------|----------|
+| No project test files or npm test script are present, so verification used `npm run build` plus targeted Slack preview CLI checks. | Logged for delivery; no code change needed. | Step 4 execution log |
+| Persisted application drafts do not currently store proposal quality details; Slack preview reconstructs a safe placeholder quality note for stored drafts. | Handled in `getScoredJobForSlackPreview`; future schema can persist full quality results. | src/db.ts |
 
 ## Execution Log
 
