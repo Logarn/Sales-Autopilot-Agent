@@ -1,10 +1,10 @@
 # TP-011: Agent Skills Registry — Status
 
-**Current Step:** Step 0: Preflight
+**Current Step:** Step 1: Create skill docs
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 1
-**Review Counter:** 0
+**Review Counter:** 1
 **Iteration:** 1
 **Size:** M
 
@@ -18,11 +18,11 @@
 ---
 
 ### Step 1: Create skill docs
-**Status:** ⬜ Not Started
-- [ ] Create all SKILL.md files as detailed natural-language operating playbooks
-- [ ] Include purpose, use/not-use conditions, inputs, outputs, procedure, examples, guardrails, failure modes, recovery, related files, and next-skill handoffs
-- [ ] Include realistic Upwork/Steve examples in each skill
-- [ ] Preserve human approval and platform safety rules
+**Status:** ✅ Complete
+- [x] Create all SKILL.md files as detailed natural-language operating playbooks
+- [x] Include purpose, use/not-use conditions, inputs, outputs, procedure, examples, guardrails, failure modes, recovery, related files, and next-skill handoffs
+- [x] Include realistic Upwork/Steve examples in each skill
+- [x] Preserve human approval and platform safety rules
 
 ---
 
@@ -72,3 +72,4 @@
 
 ## Blockers
 *None*
+| 2026-05-10 20:35 | Review R001 | plan Step 1: APPROVE |
