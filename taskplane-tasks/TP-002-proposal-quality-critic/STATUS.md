@@ -1,6 +1,6 @@
 # TP-002: Proposal Quality Critic — Status
 
-**Current Step:** Step 1: Add proposal critic types and module
+**Current Step:** Step 2: Integrate critic into proposal drafts and Slack
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
@@ -30,7 +30,7 @@
 ---
 
 ### Step 2: Integrate critic into proposal drafts and Slack
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 
 - [ ] Attach critic output to every application draft
 - [ ] Display Proposal Quality score and top issues/signals in Slack packets
