@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 3
+**Review Counter:** 4
 **Iteration:** 1
 **Size:** M
 
@@ -18,7 +18,7 @@
 ---
 
 ### Step 1: Parser module and types
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 
 Plan: add a pure `src/jobCapture.ts` module exporting typed parsed job-detail output plus a `parseJobDetailCapture(text, options?)` API. The parser will normalize pasted browser text by lines, derive a stable Upwork job ID from `~...` URLs or explicit IDs when present, accept an optional URL for Step 2 CLI integration, and return both capture-specific fields and a `manualJob` shape aligned with `config/manual-jobs.json`. Extraction will use conservative regex/section fallbacks for title, description, posted time, location, budget/hourly/fixed type, duration, experience level, skills, activity metrics, Connects, and client spend/rating/location; missing numeric fields become `null` in parsed metadata and safe manual-job defaults. Validate by adding the module, checking representative beauty-brand-style text mentally/sample-compatible, then running `npm run build`.
 
@@ -85,3 +85,4 @@ Plan: add a pure `src/jobCapture.ts` module exporting typed parsed job-detail ou
 | 2026-05-10 17:33 | Review R001 | plan Step 1: REVISE |
 | 2026-05-10 17:33 | Review R002 | plan Step 1: APPROVE |
 | 2026-05-10 17:36 | Review R003 | code Step 1: REVISE |
+| 2026-05-10 17:37 | Review R004 | code Step 1: APPROVE |
