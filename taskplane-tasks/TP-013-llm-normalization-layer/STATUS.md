@@ -1,6 +1,6 @@
 # TP-013: LLM Normalization Layer — Status
 
-**Current Step:** Step 1: Normalized schema
+**Current Step:** Step 2: Optional OpenAI-compatible provider
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
@@ -29,7 +29,7 @@
 ---
 
 ### Step 2: Optional OpenAI-compatible provider
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Add LLM config
 - [ ] Implement safe provider wrapper
 - [ ] Support no-key fallback
