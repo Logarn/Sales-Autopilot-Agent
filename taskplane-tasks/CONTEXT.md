@@ -2,7 +2,7 @@
 
 **Last Updated:** 2026-05-10
 **Status:** Active
-**Next Task ID:** TP-002
+**Next Task ID:** TP-005
 
 ---
 
@@ -28,3 +28,9 @@ parallel batch execution or `/orch <path/to/PROMPT.md>` for a single task.
 ## Technical Debt / Future Work
 
 _Items discovered during task execution are logged here by agents._
+
+## Staged Tasks
+
+- `TP-002` — Proposal Quality Critic
+- `TP-003` — Advanced Scoring Model
+- `TP-004` — Semantic Dedupe
