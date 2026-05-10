@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 4
+**Review Counter:** 5
 **Iteration:** 1
 **Size:** M
 
@@ -28,10 +28,10 @@
 
 ### Step 2: Scheduler loop
 **Status:** 🟨 In Progress
-- [ ] Add scheduler module with configurable 5–10 minute cadence, non-overlapping jobs, and graceful stop semantics
-- [ ] Include pipeline/browser/health jobs with browser-worker gating and heartbeat recording
-- [ ] Add npm script
-- [ ] Build passes
+- [x] Add scheduler module with configurable 5–10 minute cadence, non-overlapping jobs, and graceful stop semantics
+- [x] Include pipeline/browser/health jobs with browser-worker gating and heartbeat recording
+- [x] Add npm script
+- [x] Build passes
 
 ---
 
@@ -93,3 +93,4 @@
 | 2026-05-10 20:43 | Review R002 | plan Step 1: APPROVE |
 | 2026-05-10 20:45 | Review R003 | code Step 1: APPROVE |
 | 2026-05-10 20:46 | Review R004 | plan Step 2: REVISE |
+| 2026-05-10 20:47 | Review R005 | plan Step 2: APPROVE |

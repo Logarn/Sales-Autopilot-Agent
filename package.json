@@ -13,6 +13,8 @@
     "start": "npm run worker",
     "worker": "node dist/index.js",
     "worker:dev": "tsx src/index.ts",
+    "scheduler": "node dist/scheduler.js",
+    "scheduler:dev": "tsx src/scheduler.ts",
     "run:once": "node dist/index.js --run-once",
     "health": "node dist/index.js --health-check",
     "report": "node dist/applications.js",

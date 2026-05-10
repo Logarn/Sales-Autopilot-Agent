@@ -45,7 +45,7 @@ function emptyStats(): RunStats {
   };
 }
 
-async function runPipeline(reason: string): Promise<RunStats> {
+export async function runPipeline(reason: string): Promise<RunStats> {
   if (shuttingDown) {
     logger.warn("Skipping run because shutdown is in progress.");
     return emptyStats();
@@ -133,7 +133,7 @@ async function runPipeline(reason: string): Promise<RunStats> {
   return stats;
 }
 
-async function startupHealthCheck(options: { sendSlackStartup?: boolean } = {}): Promise<void> {
+export async function startupHealthCheck(options: { sendSlackStartup?: boolean } = {}): Promise<void> {
   const sendSlackStartup = options.sendSlackStartup ?? true;
   logger.info("Running startup health checks...");
   const slackOk = await testSlackWebhook();
@@ -258,8 +258,10 @@ async function main(): Promise<void> {
   await runPipeline("startup-immediate");
 }
 
-main().catch((error) => {
-  logger.error(`Fatal error: ${String(error)}`);
-  closeDb();
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    logger.error(`Fatal error: ${String(error)}`);
+    closeDb();
+    process.exitCode = 1;
+  });
+}
