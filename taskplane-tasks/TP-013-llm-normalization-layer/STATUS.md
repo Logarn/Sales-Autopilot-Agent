@@ -1,6 +1,6 @@
 # TP-013: LLM Normalization Layer — Status
 
-**Current Step:** Step 0: Preflight
+**Current Step:** Step 1: Normalized schema
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
@@ -11,16 +11,16 @@
 ---
 
 ### Step 0: Preflight
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 - [x] Required files and paths exist
 - [x] Dependencies satisfied or documented
 
 ---
 
 ### Step 1: Normalized schema
-**Status:** ⬜ Not Started
-- [ ] Define normalized packet types/schema
-- [ ] Add validation/repair helpers
+**Status:** 🟨 In Progress
+- [ ] Define normalized packet types/schema for core job, client, requirements, questions, skills, connects, risks, proof hints, and proposal instructions
+- [ ] Add validation/repair helpers that merge LLM/deterministic data while rejecting unsafe direct links and preserving guarded fallback fields
 - [ ] Build passes
 
 ---
