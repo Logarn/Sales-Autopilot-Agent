@@ -1,6 +1,6 @@
 # TP-010: Slack-Ready Proposal Structure — Status
 
-**Current Step:** Step 4: Documentation
+**Current Step:** Step 5: Testing & Verification
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
@@ -54,16 +54,16 @@ Plan:
 ---
 
 ### Step 4: Documentation
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 - [x] README updated
 
 ---
 
 ### Step 5: Testing & Verification
-**Status:** ⬜ Not Started
-- [ ] Full tests or env limitation note
-- [ ] Build passes
-- [ ] Beauty/Klaviyo job validated if available
+**Status:** 🟨 In Progress
+- [x] Full tests or env limitation note
+- [x] Build passes
+- [x] Beauty/Klaviyo job validated if available
 
 ---
 
@@ -83,6 +83,8 @@ Plan:
 
 | Discovery | Disposition | Location |
 |-----------|-------------|----------|
+| No conventional test suite is configured; package scripts provide build and runtime smoke commands only. `npm run test:health` is blocked without APIFY_API_TOKEN. | Logged for verification context | package.json / Step 5 |
+| Beauty/Klaviyo manual job fixture exists and structured draft generation returned client request answers, beauty/DTC proof, rate answer, and final proposal text. | Validated manually | config/manual-jobs.json |
 
 ## Execution Log
 
@@ -94,7 +96,7 @@ Plan:
 
 ## Blockers
 
-*None*
+- 2026-05-10: Full runtime health/test command `npm run test:health` cannot complete in this environment because `APIFY_API_TOKEN` is not configured (`APIFY_API_TOKEN is required`). Build/typecheck remains available and was run.
 | 2026-05-10 19:57 | Review R001 | plan Step 1: APPROVE |
 | 2026-05-10 19:58 | Review R002 | code Step 1: APPROVE |
 | 2026-05-10 20:02 | Review R004 | code Step 2: REVISE |
