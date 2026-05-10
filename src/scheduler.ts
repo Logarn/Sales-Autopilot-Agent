@@ -1,6 +1,7 @@
-import { BROWSER_WORKER_ENABLED, HEARTBEAT_STALE_AFTER_MS, SCHEDULER_INTERVAL_MS, validateRequiredConfig } from "./config";
+import { BROWSER_WORKER_ENABLED, SCHEDULER_INTERVAL_MS, validateRequiredConfig } from "./config";
 import { closeDb } from "./db";
-import { readStaleHeartbeats, writeHeartbeat } from "./heartbeat";
+import { runHealthCheck } from "./health";
+import { writeHeartbeat } from "./heartbeat";
 import { logger } from "./logger";
 import { runBrowserWorker } from "./browserWorker";
 import { runPipeline, startupHealthCheck } from "./index";
@@ -55,8 +56,8 @@ function buildJobs(): SchedulerJob[] {
     {
       name: "health-check",
       run: async () => {
-        const stale = readStaleHeartbeats(HEARTBEAT_STALE_AFTER_MS);
-        logger.info(`Health check complete. stale_workers=${stale.length}`);
+        const report = await runHealthCheck({ alert: true });
+        logger.info(`Health check complete. status=${report.status} findings=${report.findings.length}`);
       },
     },
   ];

@@ -310,6 +310,11 @@ CREATE TABLE IF NOT EXISTS worker_heartbeats (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS health_alerts (
+  alert_key TEXT PRIMARY KEY,
+  last_sent_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_updated_at ON worker_heartbeats(updated_at);
 CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_status ON worker_heartbeats(status);
 `);
@@ -462,6 +467,13 @@ const staleHeartbeatsStmt = db.prepare<[string], HeartbeatRow>(
    FROM worker_heartbeats
    WHERE datetime(updated_at) < datetime(?)
    ORDER BY updated_at ASC`
+);
+const getHealthAlertStmt = db.prepare<[string], { last_sent_at: string }>(
+  "SELECT last_sent_at FROM health_alerts WHERE alert_key = ?"
+);
+const upsertHealthAlertStmt = db.prepare(
+  `INSERT INTO health_alerts (alert_key, last_sent_at) VALUES (?, ?)
+   ON CONFLICT(alert_key) DO UPDATE SET last_sent_at = excluded.last_sent_at`
 );
 
 function formatHeartbeatTimestamp(date: Date): string {
@@ -993,6 +1005,14 @@ export function listStaleHeartbeats(thresholdMs: number, now = new Date()): Hear
     ...rowToHeartbeat(row),
     status: "stale",
   }));
+}
+
+export function getHealthAlertLastSent(alertKey: string): string | null {
+  return getHealthAlertStmt.get(alertKey)?.last_sent_at ?? null;
+}
+
+export function recordHealthAlertSent(alertKey: string, sentAt = new Date()): void {
+  upsertHealthAlertStmt.run(alertKey, formatHeartbeatTimestamp(sentAt));
 }
 
 export function cleanupOldSeenJobs(): number {

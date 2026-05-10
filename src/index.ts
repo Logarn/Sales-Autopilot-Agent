@@ -20,6 +20,7 @@ import { buildApplicationDraft } from "./agent";
 import { fetchAllFeeds } from "./fetcher";
 import { scoreJob, shouldNotify } from "./filter";
 import { logger } from "./logger";
+import { runHealthCheck, printHealthReport } from "./health";
 import {
   flushSlackQueue,
   sendDailySummary,
@@ -221,7 +222,8 @@ async function main(): Promise<void> {
 
   const healthCheck = process.argv.includes("--health-check");
   if (healthCheck) {
-    await startupHealthCheck({ sendSlackStartup: false });
+    const report = await runHealthCheck({ alert: process.argv.includes("--alert") });
+    printHealthReport(report);
     closeDb();
     return;
   }

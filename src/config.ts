@@ -54,6 +54,7 @@ export const SCHEDULER_INTERVAL_MS = Math.min(
   10 * 60 * 1000
 );
 export const HEARTBEAT_STALE_AFTER_MS = parseInteger(process.env.HEARTBEAT_STALE_AFTER_MS, 15 * 60 * 1000);
+export const HEALTH_ALERT_COOLDOWN_MS = parseInteger(process.env.HEALTH_ALERT_COOLDOWN_MS, 60 * 60 * 1000);
 export const TIMEZONE = process.env.TIMEZONE ?? "Africa/Nairobi";
 export const LOG_LEVEL = process.env.LOG_LEVEL ?? "info";
 export const DB_PATH = process.env.DB_PATH ?? "./data/jobs.db";
