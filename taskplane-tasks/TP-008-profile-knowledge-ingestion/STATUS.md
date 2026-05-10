@@ -1,6 +1,6 @@
 # TP-008: Profile Knowledge Ingestion — Status
 
-**Current Step:** Step 2: CLI for adding knowledge
+**Current Step:** Step 3: Proposal integration
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
@@ -42,7 +42,7 @@
 ---
 
 ### Step 3: Proposal integration
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Use relevant knowledge in proposal generation
 - [ ] Support voice preference additions/overrides
 - [ ] Empty knowledge directory is safe
