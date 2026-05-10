@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 5
+**Review Counter:** 6
 **Iteration:** 2
 **Size:** M
 
@@ -35,6 +35,7 @@
 - [x] Add synthetic sample packet mode
 - [x] Clear no-webhook failure behavior
 - [x] Build passes
+- [ ] Add non-queueing preview send path and verify failed preview sends do not persist slack_queue rows
 
 ---
 
@@ -69,6 +70,7 @@
 | R003 | code | 1 | REVISE | .reviews/R003-code-step1.md |
 | R004 | code | 1 | APPROVE | .reviews/R004-code-step1.md |
 | R005 | plan | 2 | APPROVE | .reviews/R005-plan-step2.md |
+| R006 | code | 2 | REVISE | .reviews/R006-code-step2.md |
 
 ## Discoveries
 
@@ -90,6 +92,7 @@
 | 2026-05-10 19:41 | Review R004 | code Step 1: APPROVE |
 | 2026-05-10 19:43 | Review R005 | plan Step 2: APPROVE |
 | 2026-05-10 20:00 | Step 2 validation | npm run build and no-webhook preview failure check passed |
+| 2026-05-10 19:47 | Review R006 | code Step 2: REVISE |
 
 ## Blockers
 
