@@ -1,10 +1,10 @@
 # TP-012: Scheduler and Heartbeats — Status
 
-**Current Step:** Step 1: Heartbeat schema and helpers
+**Current Step:** Step 2: Scheduler loop
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 2
+**Review Counter:** 3
 **Iteration:** 1
 **Size:** M
 
@@ -18,7 +18,7 @@
 ---
 
 ### Step 1: Heartbeat schema and helpers
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 - [x] Add heartbeat table with required fields and idempotent creation
 - [x] Add helper functions for upsert/read/list/stale detection with stable timestamps and JSON metadata defaults
 - [x] Validate helper behavior or document why only build validation is possible
@@ -70,6 +70,8 @@
 | # | Type | Step | Verdict | File |
 |---|------|------|---------|------|
 | R001 | Plan | 1 | REVISE | .reviews/R001-plan-step1.md |
+| R002 | Plan | 1 | APPROVE | .reviews/R002-plan-step1.md |
+| R003 | Code | 1 | APPROVE | n/a |
 
 ## Discoveries
 | Discovery | Disposition | Location |
@@ -87,3 +89,4 @@
 *None*
 | 2026-05-10 20:42 | Review R001 | plan Step 1: REVISE |
 | 2026-05-10 20:43 | Review R002 | plan Step 1: APPROVE |
+| 2026-05-10 20:45 | Review R003 | code Step 1: APPROVE |
