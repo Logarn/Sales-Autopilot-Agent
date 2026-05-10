@@ -135,6 +135,20 @@ Examples of flagged issues:
 
 Slack packets show the Proposal Quality score plus the top issues and positive signals above the proposal draft.
 
+## Job Detail Capture Workflow
+
+Use job detail capture when you have a promising Upwork job open in a browser but do not want to automate login or scraping. Copy the visible job-detail page text, save it under `captures/`, then import it into the manual job queue:
+
+```bash
+pbpaste > captures/job-detail.txt
+npm run capture:job -- --file captures/job-detail.txt --url https://www.upwork.com/jobs/Beauty-Brand-Klaviyo-Email-Marketing_~022053519741553119886/
+npm run test:run-once
+```
+
+The command parses title, description, budget/type, duration, experience level, skills, activity, Connects, and client details when visible. It creates or updates `config/manual-jobs.json` using the stable Upwork job ID or URL, then prints a short summary and the next pipeline command. Missing fields are kept conservative (`Not specified`, `0`, or empty arrays) so the normal scoring/proposal pipeline can still run while making weak captures obvious.
+
+Sample pasted text lives at `captures/job-detail-sample.txt`.
+
 ## npm Scripts
 
 - `npm run dev` - watch mode during development
@@ -144,6 +158,7 @@ Slack packets show the Proposal Quality score plus the top issues and positive s
 - `npm run test:slack` - send Slack webhook test message
 - `npm run test:run-once` - run full pipeline one time and exit
 - `npm run add:manual-job -- --url <url> --title <title>` - add a manual job to the ingestion queue
+- `npm run capture:job -- --file captures/job-detail.txt [--url <url>]` - parse pasted Upwork job-detail text and create/update the manual job queue
 - `npm run app:report` - print application outcome summary and recent tracked opportunities
 - `npm run app:status -- --job-id <id> --status applied --note "Applied manually"` - update an application status
 - `npm run app:note -- --job-id <id> --note "Client replied"` - add an application note

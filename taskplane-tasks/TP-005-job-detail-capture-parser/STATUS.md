@@ -1,10 +1,10 @@
 # TP-005: Job Detail Capture Parser — Status
 
-**Current Step:** Step 2: CLI integration
+**Current Step:** Step 3: Documentation and sample
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 6
+**Review Counter:** 7
 **Iteration:** 1
 **Size:** M
 
@@ -40,9 +40,9 @@ Plan: add a pure `src/jobCapture.ts` module exporting typed parsed job-detail ou
 ---
 
 ### Step 3: Documentation and sample
-**Status:** ⬜ Not Started
-- [ ] Add sample capture text
-- [ ] Update README workflow
+**Status:** 🟨 In Progress
+- [x] Add sample capture text
+- [x] Update README workflow
 
 ---
 
@@ -88,3 +88,4 @@ Plan: add a pure `src/jobCapture.ts` module exporting typed parsed job-detail ou
 | 2026-05-10 17:37 | Review R004 | code Step 1: APPROVE |
 | 2026-05-10 17:38 | Review R005 | plan Step 2: APPROVE |
 | 2026-05-10 17:41 | Review R006 | code Step 2: APPROVE |
+| 2026-05-10 17:42 | Review R007 | plan Step 3: APPROVE |
