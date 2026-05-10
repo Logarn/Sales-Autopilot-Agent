@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 1
+**Review Counter:** 2
 **Iteration:** 1
 **Size:** M
 
@@ -25,6 +25,7 @@
 - [x] Create `src/scoring.ts` with component scores, reasons, and risks
 - [x] Incorporate profile preferences and Connects rules safely
 - [x] Run targeted build/typecheck: `npm run build`
+- [ ] Fix draft fit-score scaling when structured scorer uses 0-100 scores
 
 ---
 
@@ -98,3 +99,4 @@
 
 *Reserved for execution notes*
 | 2026-05-10 16:15 | Review R001 | plan Step 1: APPROVE |
+| 2026-05-10 16:19 | Review R002 | code Step 1: REVISE |
