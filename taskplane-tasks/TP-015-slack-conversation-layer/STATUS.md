@@ -69,8 +69,8 @@
 
 ### Step 6: Documentation & Delivery
 **Status:** 🟨 In Progress
-- [ ] Docs updated
-- [ ] Discoveries logged
+- [x] Docs updated
+- [x] Discoveries logged
 
 ---
 
