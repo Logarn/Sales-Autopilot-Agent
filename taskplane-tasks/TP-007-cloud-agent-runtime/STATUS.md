@@ -1,10 +1,10 @@
 # TP-007: Cloud Agent Runtime — Status
 
-**Current Step:** Step 2: Deployment documentation
+**Current Step:** Step 3: Docker/compose review
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 1
-**Review Counter:** 1
+**Review Counter:** 2
 **Iteration:** 1
 **Size:** M
 
@@ -26,14 +26,14 @@
 ---
 
 ### Step 2: Deployment documentation
-**Status:** 🟨 In Progress
-- [ ] Create `docs/DEPLOYMENT.md`
-- [ ] Include safety, secrets, persistence, and operational guidance
+**Status:** ✅ Complete
+- [x] Create `docs/DEPLOYMENT.md`
+- [x] Include safety, secrets, persistence, and operational guidance
 
 ---
 
 ### Step 3: Docker/compose review
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Update volumes/config only if needed
 - [ ] Keep build compatibility
 
@@ -76,3 +76,4 @@
 
 *None*
 | 2026-05-10 18:06 | Review R001 | plan Step 1: APPROVE |
+| 2026-05-10 18:08 | Review R002 | plan Step 2: APPROVE |
