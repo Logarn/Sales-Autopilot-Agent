@@ -1,10 +1,10 @@
 # TP-004: Semantic Dedupe — Status
 
-**Current Step:** Step 3: Persist fingerprints for seen jobs
+**Current Step:** Step 4: Documentation
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 6
+**Review Counter:** 7
 **Iteration:** 1
 **Size:** M
 
@@ -40,7 +40,7 @@
 ---
 
 ### Step 3: Persist fingerprints for seen jobs
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 
 - [x] Add nullable `fingerprint` column to `seen_jobs`
 - [x] Store fingerprint when marking jobs seen
@@ -50,7 +50,7 @@
 ---
 
 ### Step 4: Documentation
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 
 - [ ] Update README with dedupe behavior
 - [ ] Document conservative deterministic strategy
@@ -115,3 +115,4 @@
 | 2026-05-10 16:33 | Review R004 | code Step 2: REVISE |
 | 2026-05-10 16:35 | Review R005 | code Step 2: APPROVE |
 | 2026-05-10 16:36 | Review R006 | plan Step 3: APPROVE |
+| 2026-05-10 16:37 | Review R007 | code Step 3: APPROVE |
