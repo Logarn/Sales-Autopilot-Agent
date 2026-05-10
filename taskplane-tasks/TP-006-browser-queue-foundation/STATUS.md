@@ -31,7 +31,7 @@
 - [x] Configure VM-safe persistent browser context if Playwright used
 - [x] Detect login/2FA/CAPTCHA/page-loaded states
 - [x] Save optional diagnostic artifacts safely without credentials
-- [ ] Redact/minimize live browser diagnostic artifacts and avoid full HTML/screenshots by default
+- [x] Redact/minimize live browser diagnostic artifacts and avoid full HTML/screenshots by default
 - [x] Provide safe no-credentials/no-browser fallback behavior
 - [x] No proposal fill/submit behavior
 - [x] Build passes

@@ -31,16 +31,14 @@ interface BrowserWorkerOptions {
 interface PageSnapshot {
   url: string;
   title: string;
-  text: string;
-  html?: string;
+  textExcerpt: string;
 }
 
 interface PlaywrightPageLike {
   goto(url: string, options?: { waitUntil?: string; timeout?: number }): Promise<unknown>;
+  url(): string;
   title(): Promise<string>;
   locator(selector: string): { first(): { textContent(options?: { timeout?: number }): Promise<string | null> } };
-  content(): Promise<string>;
-  screenshot(options: { path: string; fullPage?: boolean }): Promise<unknown>;
 }
 
 interface PlaywrightContextLike {
@@ -85,7 +83,7 @@ function getActionUrl(action: BrowserAction): string | null {
 
 function detectState(snapshot: PageSnapshot, action: BrowserAction): DetectedBrowserState {
   if (!snapshot.url) return "no_url";
-  const haystack = `${snapshot.url}\n${snapshot.title}\n${snapshot.text}`.toLowerCase();
+  const haystack = `${snapshot.url}\n${snapshot.title}\n${snapshot.textExcerpt}`.toLowerCase();
   if (haystack.includes("two-factor") || haystack.includes("two factor") || haystack.includes("verification code")) {
     return "two_factor_required";
   }
@@ -119,17 +117,8 @@ function saveTextArtifact(options: BrowserWorkerOptions, action: BrowserAction, 
   fs.writeFileSync(path.join(options.artifactDir, artifactSafeName(action, name)), content);
 }
 
-async function trySaveScreenshot(
-  options: BrowserWorkerOptions,
-  action: BrowserAction,
-  page: PlaywrightPageLike
-): Promise<void> {
-  if (!options.artifactDir) return;
-  fs.mkdirSync(options.artifactDir, { recursive: true });
-  await page.screenshot({
-    path: path.join(options.artifactDir, artifactSafeName(action, "screenshot.png")),
-    fullPage: true,
-  });
+function boundedExcerpt(value: string, maxLength = 2000): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
 async function loadChromium(): Promise<PlaywrightChromiumLike | null> {
@@ -157,15 +146,19 @@ async function inspectWithBrowser(
     context = await chromium.launchPersistentContext(options.userDataDir, { headless: options.headless });
     const page = await context.newPage();
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+    const bodyText = (await page.locator("body").first().textContent({ timeout: 5000 })) ?? "";
     const snapshot: PageSnapshot = {
-      url,
+      url: page.url(),
       title: await page.title(),
-      text: (await page.locator("body").first().textContent({ timeout: 5000 })) ?? "",
-      html: await page.content(),
+      textExcerpt: boundedExcerpt(bodyText),
     };
     const state = detectState(snapshot, action);
-    saveTextArtifact(options, action, "snapshot.json", JSON.stringify({ state, ...snapshot }, null, 2));
-    await trySaveScreenshot(options, action, page);
+    saveTextArtifact(
+      options,
+      action,
+      "snapshot.json",
+      JSON.stringify({ state, ...snapshot, artifactPolicy: "minimized-no-html-no-screenshot" }, null, 2)
+    );
     return state;
   } finally {
     await context?.close();
