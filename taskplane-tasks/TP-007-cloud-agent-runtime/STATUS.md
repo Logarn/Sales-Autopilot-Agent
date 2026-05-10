@@ -1,56 +1,56 @@
 # TP-007: Cloud Agent Runtime — Status
 
-**Current Step:** Not Started
-**Status:** 🔵 Ready for Execution
+**Current Step:** Step 5: Documentation & Delivery
+**Status:** ✅ Complete
 **Last Updated:** 2026-05-10
 **Review Level:** 1
-**Review Counter:** 0
-**Iteration:** 0
+**Review Counter:** 4
+**Iteration:** 1
 **Size:** M
 
 ---
 
 ### Step 0: Preflight
-**Status:** ⬜ Not Started
-- [ ] Required files and paths exist
-- [ ] Dependencies satisfied or documented
+**Status:** ✅ Complete
+- [x] Required files and paths exist
+- [x] Dependencies satisfied or documented
 
 ---
 
 ### Step 1: Runtime commands and modes
-**Status:** ⬜ Not Started
-- [ ] Review/add runtime package scripts
-- [ ] Ensure VM/cloud suitability
-- [ ] Build passes
+**Status:** ✅ Complete
+- [x] Review/add runtime package scripts
+- [x] Ensure VM/cloud suitability
+- [x] Build passes
 
 ---
 
 ### Step 2: Deployment documentation
-**Status:** ⬜ Not Started
-- [ ] Create `docs/DEPLOYMENT.md`
-- [ ] Include safety, secrets, persistence, and operational guidance
+**Status:** ✅ Complete
+- [x] Create `docs/DEPLOYMENT.md`
+- [x] Include safety, secrets, persistence, and operational guidance
 
 ---
 
 ### Step 3: Docker/compose review
-**Status:** ⬜ Not Started
-- [ ] Update volumes/config only if needed
-- [ ] Keep build compatibility
+**Status:** ✅ Complete
+- [x] Update volumes/config only if needed
+- [x] Keep build compatibility
 
 ---
 
 ### Step 4: Testing & Verification
-**Status:** ⬜ Not Started
-- [ ] Full tests or no-test-script note
-- [ ] Build passes
-- [ ] README links deployment doc
+**Status:** ✅ Complete
+- [x] Full tests or no-test-script note
+- [x] Build passes
+- [x] README links deployment doc
 
 ---
 
 ### Step 5: Documentation & Delivery
-**Status:** ⬜ Not Started
-- [ ] Docs updated
-- [ ] Discoveries logged
+**Status:** ✅ Complete
+- [x] Docs updated
+- [x] Discoveries logged
 
 ---
 
@@ -63,13 +63,24 @@
 
 | Discovery | Disposition | Location |
 |-----------|-------------|----------|
+| Docker CLI is not installed in the worker environment, so Compose syntax could not be validated with `docker compose config`. | Used `npm run build` for compatibility verification; Compose changes are conservative volume additions. | docker-compose.yml |
+| No `npm test` script exists in package.json. | Use `npm run build` plus command/config smoke checks for verification. | package.json |
+| Deployment/runbook documentation was added and README now links the VM/cloud runtime modes. | Delivery documentation complete. | README.md, docs/DEPLOYMENT.md |
 
 ## Execution Log
 
 | Timestamp | Action | Outcome |
 |-----------|--------|---------|
 | 2026-05-10 | Task staged | PROMPT.md and STATUS.md created |
+| 2026-05-10 18:04 | Task started | Runtime V2 lane-runner execution |
+| 2026-05-10 18:04 | Step 0 started | Preflight |
+| 2026-05-10 18:13 | Worker iter 1 | done in 487s, tools: 91 |
+| 2026-05-10 18:13 | Task complete | .DONE created |
 
 ## Blockers
 
 *None*
+| 2026-05-10 18:06 | Review R001 | plan Step 1: APPROVE |
+| 2026-05-10 18:08 | Review R002 | plan Step 2: APPROVE |
+| 2026-05-10 18:09 | Review R003 | plan Step 3: APPROVE |
+| 2026-05-10 18:11 | Review R004 | plan Step 4: APPROVE |

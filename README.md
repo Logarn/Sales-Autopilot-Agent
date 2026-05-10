@@ -218,6 +218,19 @@ Option B - JSON config file (default `./config/queries.json`):
 }
 ```
 
+## Cloud / VM Runtime
+
+See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the full VM/cloud runbook, environment guidance, persistent volume model, SQLite backup notes, browser-session safety model, and operational checklist.
+
+Common production commands after `npm run build`:
+
+- `npm run worker` / `npm start` - continuous background agent
+- `npm run run:once` - one-shot poll/process/notify run
+- `npm run health` - config, Slack, source, and DB health check without starting the scheduler
+- `npm run report` - application summary report
+- `npm run analytics` - outcome and Connects analytics
+- `npm run browser:worker:prod` - process queued browser actions on a VM/cloud host; still disabled unless `BROWSER_WORKER_ENABLED=true`
+
 ## Docker
 
 Build and run with compose:
@@ -226,4 +239,4 @@ Build and run with compose:
 docker compose up --build -d
 ```
 
-SQLite DB persists to `./data` via mounted volume.
+SQLite DB and browser artifacts persist to `./data`; Compose also mounts `./config`, `./profile`, and `./captures` for VM-safe runtime configuration and manual capture workflows.
