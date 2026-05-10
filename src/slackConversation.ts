@@ -1,4 +1,7 @@
-import { closeDb } from "./db";
+import { APP_NAME, LLM_API_KEY, LLM_NORMALIZATION_ENABLED, SLACK_CHANNEL_WEBHOOK_URL } from "./config";
+import { closeDb, getScoredJobForSlackPreview, recordApplicationRevisionRequest } from "./db";
+import { logger } from "./logger";
+import { buildJobBlocks, sendSlackPreviewMessage } from "./slack";
 import { SlackConversationIntent, SlackConversationIntentType } from "./types";
 
 const INTENT_ALIASES: Array<{ type: SlackConversationIntentType; patterns: RegExp[] }> = [
@@ -70,8 +73,65 @@ function readFlagValue(args: string[], name: string): string | null {
   return next && !next.startsWith("--") ? next : null;
 }
 
+export interface SlackConversationHandleResult {
+  ok: boolean;
+  message: string;
+  intent: SlackConversationIntent;
+  slackPreviewSent?: boolean;
+}
+
+async function maybeSendRevisionPreview(jobId: string): Promise<boolean> {
+  if (!SLACK_CHANNEL_WEBHOOK_URL.trim()) return false;
+  const job = getScoredJobForSlackPreview(jobId);
+  if (!job) return false;
+  await sendSlackPreviewMessage({
+    text: `${APP_NAME}: revised proposal packet ready for review — ${job.title}`,
+    blocks: buildJobBlocks(job),
+  });
+  return true;
+}
+
+export async function handleSlackConversationCommand(text: string): Promise<SlackConversationHandleResult> {
+  const intent = parseSlackConversationIntent(text);
+  if (intent.type !== "revise" && intent.type !== "regenerate") {
+    return { ok: false, message: `Intent ${intent.type} is parsed but not handled by the revision flow yet.`, intent };
+  }
+  if (!intent.jobId) {
+    return { ok: false, message: "Missing job/application ID for revision command.", intent };
+  }
+  const instruction = intent.instruction ?? (intent.type === "regenerate" ? "Regenerate proposal draft." : null);
+  if (!instruction) {
+    return { ok: false, message: "Missing revision instruction.", intent };
+  }
+
+  const llmAvailable = LLM_NORMALIZATION_ENABLED && Boolean(LLM_API_KEY.trim());
+  const result = recordApplicationRevisionRequest(
+    intent.jobId,
+    llmAvailable
+      ? `${instruction} (LLM rewrite hook available; deterministic local path stored request for audit.)`
+      : `${instruction} (stored for manual/LLM revision; no local LLM rewrite configured.)`
+  );
+  if (!result) {
+    return { ok: false, message: `No stored application draft found for job_id=${intent.jobId}.`, intent };
+  }
+
+  let slackPreviewSent = false;
+  try {
+    slackPreviewSent = await maybeSendRevisionPreview(intent.jobId);
+  } catch (error) {
+    logger.warn(`Revision saved but Slack preview send failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  return {
+    ok: true,
+    message: `Revision request stored for ${intent.jobId} as proposal v${result.proposalVersion}. Slack preview ${slackPreviewSent ? "sent" : "not sent"}.`,
+    intent,
+    slackPreviewSent,
+  };
+}
+
 function usage(): string {
-  return `Usage:\n  npm run slack:conversation -- parse --job-id <id> --text "approve"\n  npm run slack:conversation -- parse "revise job abc123 mention Shopify proof"\n\nLocal parser only: no Slack credentials required and no messages are sent.`;
+  return `Usage:\n  npm run slack:conversation -- parse --job-id <id> --text "approve"\n  npm run slack:conversation -- parse "revise job abc123 mention Shopify proof"\n  npm run slack:conversation -- handle --job-id <id> --text "revise opening to mention Shopify proof"\n\nLocal parsing works without Slack credentials. handle stores revision requests in the local DB; Slack preview resend only runs when SLACK_CHANNEL_WEBHOOK_URL is configured.`;
 }
 
 export async function runSlackConversationCli(args = process.argv.slice(2)): Promise<boolean> {
@@ -81,7 +141,7 @@ export async function runSlackConversationCli(args = process.argv.slice(2)): Pro
     return true;
   }
 
-  if (command !== "parse") {
+  if (command !== "parse" && command !== "handle") {
     console.error(usage());
     return false;
   }
@@ -99,8 +159,14 @@ export async function runSlackConversationCli(args = process.argv.slice(2)): Pro
     return false;
   }
 
-  console.log(JSON.stringify(parseSlackConversationIntent(text), null, 2));
-  return true;
+  if (command === "parse") {
+    console.log(JSON.stringify(parseSlackConversationIntent(text), null, 2));
+    return true;
+  }
+
+  const result = await handleSlackConversationCommand(text);
+  console.log(JSON.stringify(result, null, 2));
+  return result.ok;
 }
 
 if (require.main === module) {

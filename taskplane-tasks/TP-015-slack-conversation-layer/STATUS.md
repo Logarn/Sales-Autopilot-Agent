@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 3
-**Review Counter:** 2
+**Review Counter:** 3
 **Iteration:** 1
 **Size:** L
 
@@ -28,11 +28,11 @@
 
 ### Step 2: Draft revision/update flow
 **Status:** 🟨 In Progress
-- [ ] Add DB helpers for draft lookup, proposal versioning, and revision audit events
-- [ ] Apply revision instruction or store request
-- [ ] Preserve proposal version/audit trail
-- [ ] Re-render/send Slack preview if configured
-- [ ] Build passes
+- [x] Add DB helpers for draft lookup, proposal versioning, and revision audit events
+- [x] Apply revision instruction or store request
+- [x] Preserve proposal version/audit trail
+- [x] Re-render/send Slack preview if configured
+- [x] Build passes
 
 ---
 
@@ -86,3 +86,4 @@
 *None*
 | 2026-05-10 21:58 | Review R001 | plan Step 1: APPROVE |
 | 2026-05-10 22:00 | Review R002 | code Step 1: APPROVE |
+| 2026-05-10 22:01 | Review R003 | plan Step 2: APPROVE |

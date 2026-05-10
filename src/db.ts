@@ -194,6 +194,31 @@ export interface SlackQueueItem {
   attempts: number;
 }
 
+interface ApplicationDraftRow {
+  job_id: string;
+  status: ApplicationStatus;
+  fit_score: number;
+  fit_reasons: string | null;
+  red_flags: string | null;
+  suggested_bid: string | null;
+  suggested_connects: number | null;
+  suggested_boost_connects: number | null;
+  connects_warnings: string | null;
+  selected_portfolio_items: string | null;
+  proposal_text: string;
+  generated_at: string;
+  proposal_version: number | null;
+  revision_requests: string | null;
+}
+
+export interface ApplicationRevisionResult {
+  jobId: string;
+  proposalVersion: number;
+  proposalText: string;
+  revisionRequests: string[];
+  applied: boolean;
+}
+
 interface BrowserActionRow {
   id: number;
   job_id: string;
@@ -259,6 +284,8 @@ CREATE TABLE IF NOT EXISTS applications (
   selected_portfolio_items TEXT NOT NULL DEFAULT '[]',
   proposal_text TEXT NOT NULL,
   generated_at TEXT NOT NULL,
+  proposal_version INTEGER NOT NULL DEFAULT 1,
+  revision_requests TEXT NOT NULL DEFAULT '[]',
   reviewed_at TEXT,
   submitted_at TEXT,
   created_at TEXT DEFAULT (datetime('now')),
@@ -355,6 +382,8 @@ ensureApplicationsColumn("profile_used", "TEXT");
 ensureApplicationsColumn("attachments_used", "TEXT DEFAULT '[]'");
 ensureApplicationsColumn("profile_highlights_used", "TEXT DEFAULT '[]'");
 ensureApplicationsColumn("submitted_proposal_text", "TEXT");
+ensureApplicationsColumn("proposal_version", "INTEGER NOT NULL DEFAULT 1");
+ensureApplicationsColumn("revision_requests", "TEXT NOT NULL DEFAULT '[]'");
 ensureSeenJobsColumn("fingerprint", "TEXT");
 db.exec("CREATE INDEX IF NOT EXISTS idx_seen_jobs_fingerprint ON seen_jobs(fingerprint)");
 
@@ -544,6 +573,19 @@ const upsertApplicationStmt = db.prepare(
 const getApplicationStatusStmt = db.prepare<[string], { status: ApplicationStatus }>(
   "SELECT status FROM applications WHERE job_id = ? LIMIT 1"
 );
+const getApplicationDraftStmt = db.prepare<[string], ApplicationDraftRow>(
+  `SELECT job_id, status, fit_score, fit_reasons, red_flags, suggested_bid, suggested_connects,
+          suggested_boost_connects, connects_warnings, selected_portfolio_items, proposal_text,
+          generated_at, proposal_version, revision_requests
+   FROM applications
+   WHERE job_id = ?
+   LIMIT 1`
+);
+const updateApplicationRevisionStmt = db.prepare<[string, number, string]>(
+  `UPDATE applications
+   SET revision_requests = ?, proposal_version = ?, status = 'draft', updated_at = datetime('now')
+   WHERE job_id = ?`
+);
 const updateApplicationStatusStmt = db.prepare<[ApplicationStatus, string | null, string | null, string]>(
   `UPDATE applications
    SET status = ?, reviewed_at = COALESCE(?, reviewed_at), submitted_at = COALESCE(?, submitted_at), updated_at = datetime('now')
@@ -700,8 +742,71 @@ export function saveApplicationDraft(draft: ApplicationDraft): void {
   }
 }
 
+function rowToApplicationDraft(row: ApplicationDraftRow): ApplicationDraft {
+  const proposalText = row.proposal_text;
+  return {
+    jobId: row.job_id,
+    status: row.status,
+    fitScore: row.fit_score,
+    fitReasons: parseJsonStringArray(row.fit_reasons),
+    redFlags: parseJsonStringArray(row.red_flags),
+    suggestedBid: row.suggested_bid ?? "Not specified",
+    suggestedConnects: row.suggested_connects ?? 0,
+    suggestedBoostConnects: row.suggested_boost_connects ?? 0,
+    connectsWarnings: parseJsonStringArray(row.connects_warnings),
+    selectedPortfolioItems: parseJsonArray<PortfolioItem>(row.selected_portfolio_items),
+    proposalQuality: {
+      score: 0,
+      issues: [
+        {
+          category: "voice",
+          severity: "info",
+          message: "Proposal quality was not persisted with this stored draft.",
+          suggestion: "Regenerate the draft before final approval if quality scoring is required.",
+        },
+      ],
+      positiveSignals: [],
+      wordCount: proposalText.trim().split(/\s+/).filter(Boolean).length,
+    },
+    proposalText,
+    generatedAt: row.generated_at,
+  };
+}
+
+export function getApplicationDraft(jobId: string): ApplicationDraft | null {
+  const row = getApplicationDraftStmt.get(jobId);
+  return row ? rowToApplicationDraft(row) : null;
+}
+
 export function getApplicationStatus(jobId: string): ApplicationStatus | null {
   return getApplicationStatusStmt.get(jobId)?.status ?? null;
+}
+
+export function recordApplicationRevisionRequest(jobId: string, instruction: string): ApplicationRevisionResult | null {
+  const row = getApplicationDraftStmt.get(jobId);
+  if (!row) return null;
+
+  const existingRequests = parseJsonStringArray(row.revision_requests);
+  const nextRequests = [...existingRequests, `${new Date().toISOString()} ${instruction}`];
+  const nextVersion = (row.proposal_version ?? 1) + 1;
+  const result = updateApplicationRevisionStmt.run(JSON.stringify(nextRequests), nextVersion, jobId);
+  if (result.changes === 0) return null;
+
+  insertApplicationEventStmt.run(
+    jobId,
+    "revision_requested",
+    row.status,
+    "draft",
+    `v${nextVersion}: ${instruction}`
+  );
+
+  return {
+    jobId,
+    proposalVersion: nextVersion,
+    proposalText: row.proposal_text,
+    revisionRequests: nextRequests,
+    applied: false,
+  };
 }
 
 export function updateApplicationStatus(
