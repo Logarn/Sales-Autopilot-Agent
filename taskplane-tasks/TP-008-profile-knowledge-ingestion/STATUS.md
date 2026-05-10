@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 4
+**Review Counter:** 5
 **Iteration:** 1
 **Size:** M
 
@@ -33,10 +33,10 @@
 
 ### Step 2: CLI for adding knowledge
 **Status:** 🟨 In Progress
-- [ ] Add knowledge append command(s)
-- [ ] Add portfolio/video ingestion workflow
-- [ ] Print summaries
-- [ ] Build passes
+- [x] Add knowledge append command(s)
+- [x] Add portfolio/video ingestion workflow
+- [x] Print summaries
+- [x] Build passes
 
 ---
 
@@ -103,3 +103,4 @@
 | 2026-05-10 19:05 | Review R002 | plan Step 1: APPROVE |
 | 2026-05-10 19:08 | Review R003 | code Step 1: REVISE |
 | 2026-05-10 19:10 | Review R004 | code Step 1: APPROVE |
+| 2026-05-10 19:11 | Review R005 | plan Step 2: APPROVE |
