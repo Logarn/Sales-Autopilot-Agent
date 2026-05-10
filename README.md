@@ -135,6 +135,37 @@ Examples of flagged issues:
 
 Slack packets show the Proposal Quality score plus the top issues and positive signals above the proposal draft.
 
+## Job Detail Capture Workflow
+
+Use job detail capture when you have a promising Upwork job open in a browser but do not want to automate login or scraping. Copy the visible job-detail page text, save it under `captures/`, then import it into the manual job queue:
+
+```bash
+pbpaste > captures/job-detail.txt
+npm run capture:job -- --file captures/job-detail.txt --url https://www.upwork.com/jobs/Beauty-Brand-Klaviyo-Email-Marketing_~022053519741553119886/
+npm run test:run-once
+```
+
+The command parses title, description, budget/type, duration, experience level, skills, activity, Connects, and client details when visible. The `--url` flag is optional only when the pasted text already includes the Upwork job URL; otherwise provide it so the system keeps a direct application link. It creates or updates `config/manual-jobs.json` using the stable Upwork job ID or URL, then prints a short summary and the next pipeline command. Missing fields are kept conservative (`Not specified`, `0`, or empty arrays) so the normal scoring/proposal pipeline can still run while making weak captures obvious.
+
+Sample pasted text lives at `captures/job-detail-sample.txt`.
+
+## Browser Queue Safety Model
+
+The browser queue is a cloud/VM-safe foundation for future human-in-the-loop browser assistance. It stores requested browser actions in SQLite and processes them only when the worker is explicitly enabled:
+
+```bash
+npm run browser:enqueue -- --job-id job-123 --action open_job --url https://www.upwork.com/jobs/~0123
+npm run browser:enqueue -- --job-id job-123 --action open_apply_page --url https://www.upwork.com/ab/proposals/job/job-123/apply/
+npm run browser:enqueue -- --job-id job-123 --action prepare_application_review --url https://www.upwork.com/jobs/~0123 --notes "Review before applying"
+npm run browser:list -- --status pending
+npm run browser:update -- --id 1 --status paused --error "Login required"
+BROWSER_WORKER_ENABLED=true npm run browser:worker
+```
+
+Safety defaults are conservative: `BROWSER_WORKER_ENABLED=false` and `BROWSER_DRY_RUN=true`. Dry-run mode records that an action would be opened but does not launch a browser. If live browser inspection is enabled later, the worker uses a persistent VM-local user data directory (`BROWSER_USER_DATA_DIR`) so it does not take over a local desktop session.
+
+The worker must pause for human intervention on login, 2FA, CAPTCHA, Cloudflare, or any other security challenge. It must not bypass security controls, store Upwork passwords, fill proposal fields, or submit proposals. Optional artifacts are minimized diagnostics only (state, URL, title, bounded text excerpt), not full authenticated page archives.
+
 ## npm Scripts
 
 - `npm run dev` - watch mode during development
@@ -144,12 +175,17 @@ Slack packets show the Proposal Quality score plus the top issues and positive s
 - `npm run test:slack` - send Slack webhook test message
 - `npm run test:run-once` - run full pipeline one time and exit
 - `npm run add:manual-job -- --url <url> --title <title>` - add a manual job to the ingestion queue
+- `npm run capture:job -- --file captures/job-detail.txt [--url <url>]` - parse pasted Upwork job-detail text and create/update the manual job queue
 - `npm run app:report` - print application outcome summary and recent tracked opportunities
 - `npm run app:status -- --job-id <id> --status applied --note "Applied manually"` - update an application status
 - `npm run app:note -- --job-id <id> --note "Client replied"` - add an application note
 - `npm run app:apply -- --job-id <id> --required-connects 10 --boost-connects 35 --rank 1 --client-spend 393 --rate 35 --profile "Email Marketing" --attachments "Truly Beauty - Case Study.pdf,Portfolio.pdf"` - record actual submission details
 - `npm run app:analytics` - report reply/interview/hire rates, Connects efficiency, and top proof assets
 - `npm run app:capture -- --job-id <id> --file captures/apply-screen.txt --record` - parse pasted Upwork apply-screen text and record structured submission details
+- `npm run browser:enqueue -- --job-id <id> --action open_job --url <upwork-url>` - add a safe browser action to the SQLite queue
+- `npm run browser:list -- [--status pending] [--limit 25]` - list queued browser actions
+- `npm run browser:update -- --id <action-id> --status paused --error "Login required"` - manually update a queued browser action
+- `npm run browser:worker` - process pending browser actions only when `BROWSER_WORKER_ENABLED=true`; dry-run remains default
 
 ## Environment Variables
 

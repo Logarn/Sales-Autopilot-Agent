@@ -179,6 +179,35 @@ export interface RunStats {
   failedFeeds: number;
 }
 
+export type BrowserActionType = "open_job" | "open_apply_page" | "prepare_application_review";
+
+export type BrowserActionStatus = "pending" | "in_progress" | "completed" | "failed" | "paused" | "cancelled";
+
+export interface BrowserActionPayload {
+  url?: string;
+  notes?: string;
+  applicationId?: string;
+  [key: string]: unknown;
+}
+
+export interface BrowserAction {
+  id: number;
+  jobId: string;
+  actionType: BrowserActionType;
+  status: BrowserActionStatus;
+  payload: BrowserActionPayload;
+  attempts: number;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BrowserActionInput {
+  jobId: string;
+  actionType: BrowserActionType;
+  payload?: BrowserActionPayload;
+}
+
 export interface DailySummary {
   high: number;
   medium: number;

@@ -16,13 +16,18 @@
     "test:run-once": "tsx src/index.ts --run-once",
     "test:slack-flag": "tsx src/index.ts --test-slack",
     "add:manual-job": "tsx src/manual.ts",
+    "capture:job": "tsx src/manual.ts",
     "app:status": "tsx src/applications.ts --set-status",
     "app:note": "tsx src/applications.ts --add-note",
     "app:notes": "tsx src/applications.ts --notes",
     "app:apply": "tsx src/applications.ts --record-submission",
     "app:analytics": "tsx src/applications.ts --analytics",
     "app:capture": "tsx src/capture.ts",
-    "app:report": "tsx src/applications.ts"
+    "app:report": "tsx src/applications.ts",
+    "browser:enqueue": "tsx src/browserQueue.ts --enqueue",
+    "browser:list": "tsx src/browserQueue.ts --list",
+    "browser:update": "tsx src/browserQueue.ts --update",
+    "browser:worker": "tsx src/browserWorker.ts"
   },
   "keywords": [
     "upwork",
