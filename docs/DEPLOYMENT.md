@@ -15,9 +15,10 @@ Operational commands:
 
 | Purpose | Command |
 | --- | --- |
-| Continuous background worker | `npm run worker` or `npm start` |
+| Autonomous scheduler loop | `npm run scheduler` |
+| Continuous cron-based worker | `npm run worker` or `npm start` |
 | One-shot pipeline run | `npm run run:once` |
-| Health check only | `npm run health` |
+| Heartbeat health report | `npm run health` |
 | Application report | `npm run report` |
 | Outcome analytics | `npm run analytics` |
 | Browser queue worker | `npm run browser:worker:prod` |
@@ -46,7 +47,7 @@ docker compose down
    chmod 700 data profile
    ```
 
-5. Start with Docker Compose or run `npm run worker` under a process manager such as systemd, pm2, or the cloud provider's service supervisor.
+5. Start with Docker Compose or run `npm run scheduler` under a process manager such as systemd, pm2, or the cloud provider's service supervisor. Use `npm run worker` only if you prefer the older cron-based worker mode.
 
 ## Environment variables
 
@@ -59,7 +60,10 @@ Core variables are documented in `.env.example`. Required values for normal oper
 
 Important runtime controls:
 
-- `CRON_SCHEDULE`, `DAILY_SUMMARY_CRON`, `TIMEZONE` — polling and summary cadence.
+- `CRON_SCHEDULE`, `DAILY_SUMMARY_CRON`, `TIMEZONE` — cron-based worker polling and summary cadence.
+- `SCHEDULER_INTERVAL_MS` — autonomous scheduler cadence, normalized to the 5–10 minute range.
+- `HEARTBEAT_STALE_AFTER_MS` — age threshold for stale worker health findings.
+- `HEALTH_ALERT_COOLDOWN_MS` — per-finding Slack alert cooldown to avoid spam.
 - `PROFILE_CONFIG_PATH`, `PORTFOLIO_CONFIG_PATH`, `CONNECTS_RULES_CONFIG_PATH` — local profile/proof/risk inputs.
 - `MANUAL_JOBS_CONFIG_PATH` — manual queue JSON path.
 - `BROWSER_WORKER_ENABLED=false` by default. Set `true` only when intentionally processing queued browser actions.
@@ -117,10 +121,18 @@ npm run report
 npm run analytics
 ```
 
+Autonomous runtime:
+
+```bash
+npm run scheduler
+```
+
+Scheduler mode runs the pipeline, optional browser queue processing, and heartbeat health checks every 5–10 minutes. Health alerts use the existing Slack webhook and are conservative: stale workers and browser/auth-required findings are rate-limited by `HEALTH_ALERT_COOLDOWN_MS`.
+
 Incident checks:
 
 1. Inspect logs (`docker compose logs -f notifier` or supervisor logs).
-2. Run `npm run health` to validate config, Slack, source reachability, and DB stats.
+2. Run `npm run health` to inspect worker heartbeats, stale-worker status, and browser/auth-required findings.
 3. Confirm `data/jobs.db` exists and the disk is not full.
 4. Check Slack webhook and Apify token validity if feeds or notifications fail.
 5. Keep `BROWSER_WORKER_ENABLED=false` while diagnosing browser queue issues unless browser processing is the incident.

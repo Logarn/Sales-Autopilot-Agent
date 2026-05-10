@@ -48,8 +48,8 @@
 
 ### Step 4: Docs/config
 **Status:** 🟨 In Progress
-- [ ] Env example updated
-- [ ] README/deployment updated
+- [x] Env example updated
+- [x] README/deployment updated
 
 ---
 
