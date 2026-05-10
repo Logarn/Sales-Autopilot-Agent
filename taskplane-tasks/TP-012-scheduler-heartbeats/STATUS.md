@@ -32,8 +32,8 @@
 - [x] Include pipeline/browser/health jobs with browser-worker gating and heartbeat recording
 - [x] Add npm script
 - [x] Build passes
-- [ ] Keep scheduler process alive after initial tick while preserving shutdown cleanup
-- [ ] Perform lightweight scheduler lifecycle validation
+- [x] Keep scheduler process alive after initial tick while preserving shutdown cleanup
+- [x] Perform lightweight scheduler lifecycle validation
 
 ---
 

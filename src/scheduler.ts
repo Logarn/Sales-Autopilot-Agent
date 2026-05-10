@@ -1,4 +1,4 @@
-import { BROWSER_WORKER_ENABLED, HEARTBEAT_STALE_AFTER_MS, SCHEDULER_INTERVAL_MS } from "./config";
+import { BROWSER_WORKER_ENABLED, HEARTBEAT_STALE_AFTER_MS, SCHEDULER_INTERVAL_MS, validateRequiredConfig } from "./config";
 import { closeDb } from "./db";
 import { readStaleHeartbeats, writeHeartbeat } from "./heartbeat";
 import { logger } from "./logger";
@@ -81,7 +81,6 @@ function scheduleNext(jobs: SchedulerJob[]): void {
   timer = setTimeout(() => {
     tickPromise = tick(jobs).finally(() => scheduleNext(jobs));
   }, SCHEDULER_INTERVAL_MS);
-  timer.unref?.();
 }
 
 export async function startScheduler(): Promise<void> {
@@ -117,6 +116,7 @@ function setupShutdown(): void {
 
 if (require.main === module) {
   setupShutdown();
+  validateRequiredConfig();
   startScheduler().catch((error: unknown) => {
     logger.error(`Fatal scheduler error: ${error instanceof Error ? error.message : String(error)}`);
     closeDb();
