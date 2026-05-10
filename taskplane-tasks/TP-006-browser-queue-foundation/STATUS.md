@@ -1,10 +1,10 @@
 # TP-006: Browser Queue Foundation — Status
 
-**Current Step:** Step 2: Browser worker skeleton
+**Current Step:** Step 3: Safety/policy guardrails
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 5
+**Review Counter:** 6
 **Iteration:** 1
 **Size:** L
 
@@ -26,7 +26,7 @@
 ---
 
 ### Step 2: Browser worker skeleton
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 - [x] Process pending actions in safe/dry-run mode
 - [x] Configure VM-safe persistent browser context if Playwright used
 - [x] Detect login/2FA/CAPTCHA/page-loaded states
@@ -39,7 +39,7 @@
 ---
 
 ### Step 3: Safety/policy guardrails
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Add browser worker env config
 - [ ] Enforce dry-run default and explicit opt-in
 - [ ] Document pause-on-security-challenge rules
@@ -97,3 +97,4 @@
 | 2026-05-10 17:52 | Review R003 | plan Step 2: REVISE |
 | 2026-05-10 17:53 | Review R004 | plan Step 2: APPROVE |
 | 2026-05-10 17:55 | Review R005 | code Step 2: REVISE |
+| 2026-05-10 17:57 | Review R006 | code Step 2: APPROVE |
