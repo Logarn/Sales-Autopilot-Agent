@@ -47,7 +47,7 @@
 - [x] Support voice preference additions/overrides
 - [x] Empty knowledge directory is safe
 - [x] Build passes
-- [ ] Prevent voice, bid-rule, and internal general knowledge from leaking as meta instructions in client proposal text
+- [x] Prevent voice, bid-rule, and internal general knowledge from leaking as meta instructions in client proposal text
 
 ---
 

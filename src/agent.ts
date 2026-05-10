@@ -194,21 +194,26 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   const portfolioSentence = portfolioItems.length
     ? `The most relevant proof to include would be: ${portfolioItems.map((item) => item.name).join(", ")}.`
     : "I would keep attachments light unless you want a specific example.";
-  const portfolioKnowledgeSentence = knowledgeLine("Additional portfolio context", portfolioKnowledge);
-  const bidRuleSentence = knowledgeLine("Bid preference", bidRuleKnowledge);
-  const generalSentence = knowledgeLine("Useful profile context", generalKnowledge);
-  const voiceInstruction = voiceKnowledge.length
-    ? `\n\nVoice preference to apply quietly: ${voiceKnowledge.map((artifact) => artifact.summary).join(" ")}`
+  const portfolioKnowledgeSentence = portfolioKnowledge.length
+    ? `Additional relevant example: ${portfolioKnowledge.map((artifact) => artifact.summary).join(" ")}`
     : "";
+  const preferredPhrases = voiceKnowledge
+    .flatMap((artifact) => artifact.tags.filter((tag) => tag.startsWith("prefer:")))
+    .map((tag) => tag.slice(7).trim())
+    .filter(Boolean);
+  const closingLine = preferredPhrases[0] ?? "If useful, send me the store URL and a quick sense of what is working/not working in Klaviyo now. I can tell you where I would start.";
 
   const proposal = cleanProposal(
-    `${inferPainLine(job)}\n\nWhat I would look at first: where first-time buyers are dropping off, which flows are missing or stale, whether segmentation is doing any real work, and whether campaigns are driving repeat purchase or just adding noise. ${proofSentence}\n\nFor this kind of project, I would keep the work practical: find the leaks, rebuild the highest-impact lifecycle moments, tighten the messaging, and make retention a growth lever instead of another channel on the checklist. ${portfolioSentence} ${portfolioKnowledgeSentence}\n\n${generalSentence} ${bidRuleSentence}\n\nIf useful, send me the store URL and a quick sense of what is working/not working in Klaviyo now. I can tell you where I would start.${voiceInstruction}`,
+    `${inferPainLine(job)}\n\nWhat I would look at first: where first-time buyers are dropping off, which flows are missing or stale, whether segmentation is doing any real work, and whether campaigns are driving repeat purchase or just adding noise. ${proofSentence}\n\nFor this kind of project, I would keep the work practical: find the leaks, rebuild the highest-impact lifecycle moments, tighten the messaging, and make retention a growth lever instead of another channel on the checklist. ${portfolioSentence} ${portfolioKnowledgeSentence}\n\n${closingLine}`,
     [...(profile.voice?.bannedPhrases ?? []), ...voiceKnowledge.flatMap((artifact) => artifact.tags.filter((tag) => tag.startsWith("ban:"))).map((tag) => tag.slice(4))]
   );
 
   const truncatedProposal = truncateText(proposal, 1800);
   const proposalQuality = critiqueProposal(truncatedProposal, job, profile);
   const connects = evaluateConnects(job);
+  if (bidRuleKnowledge.length) {
+    connects.warnings.push(...bidRuleKnowledge.map((artifact) => `Profile bid rule: ${artifact.summary}`));
+  }
 
   return {
     jobId: job.id,
