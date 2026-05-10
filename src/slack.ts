@@ -67,6 +67,7 @@ function normalizeLevel(level: string): string {
   return level || "Not specified";
 }
 
+const SLACK_MESSAGE_BLOCK_LIMIT = 50;
 const SLACK_SECTION_TEXT_LIMIT = 3000;
 const SLACK_FIELD_TEXT_LIMIT = 2000;
 const PROPOSAL_DRAFT_PREVIEW_LENGTH = 2200;
@@ -339,6 +340,54 @@ export async function flushSlackQueue(): Promise<void> {
   }
 }
 
+export function buildBatchedJobNotificationPayloads(jobs: ScoredJob[]): Array<IncomingWebhookSendArguments & { jobIds: string[] }> {
+  const sorted = [...jobs].sort((a, b) => b.score - a.score).slice(0, 10);
+  const hasHigh = sorted.some((job) => job.matchLevel === "high");
+  const header = hasHigh ? "<!channel> 🔥 *High-priority Upwork matches found*" : "⚡ *New Upwork matches found*";
+  const payloads: Array<IncomingWebhookSendArguments & { jobIds: string[] }> = [];
+  let batchBlocks: NonNullable<IncomingWebhookSendArguments["blocks"]> = [];
+  let batchJobIds: string[] = [];
+
+  const startBatch = (part: number): NonNullable<IncomingWebhookSendArguments["blocks"]> => [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `${header}\n*${jobs.length} jobs found this cycle*${part > 1 ? ` — packet ${part}` : ""}`,
+      },
+    },
+    { type: "divider" },
+  ];
+
+  const flushBatch = () => {
+    if (batchJobIds.length === 0) {
+      return;
+    }
+    payloads.push({
+      text: `${APP_NAME}: ${jobs.length} new jobs`,
+      blocks: batchBlocks,
+      jobIds: batchJobIds,
+    });
+    batchBlocks = [];
+    batchJobIds = [];
+  };
+
+  for (const job of sorted) {
+    const jobBlocks = buildJobBlocks(job) ?? [];
+    if (batchBlocks.length === 0) {
+      batchBlocks = startBatch(payloads.length + 1);
+    }
+    if (batchJobIds.length > 0 && batchBlocks.length + jobBlocks.length > SLACK_MESSAGE_BLOCK_LIMIT) {
+      flushBatch();
+      batchBlocks = startBatch(payloads.length + 1);
+    }
+    batchBlocks.push(...jobBlocks.slice(0, Math.max(0, SLACK_MESSAGE_BLOCK_LIMIT - batchBlocks.length)));
+    batchJobIds.push(job.id);
+  }
+  flushBatch();
+  return payloads;
+}
+
 export async function sendJobNotifications(jobs: ScoredJob[]): Promise<Set<string>> {
   if (jobs.length === 0) {
     return new Set<string>();
@@ -348,30 +397,13 @@ export async function sendJobNotifications(jobs: ScoredJob[]): Promise<Set<strin
   const notifiedIds = new Set<string>();
 
   if (sorted.length > 3) {
-    const hasHigh = sorted.some((job) => job.matchLevel === "high");
-    const header = hasHigh
-      ? "<!channel> 🔥 *High-priority Upwork matches found*"
-      : "⚡ *New Upwork matches found*";
-    const blocks: IncomingWebhookSendArguments["blocks"] = [
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `${header}\n*${sorted.length} jobs found this cycle*`,
-        },
-      },
-      { type: "divider" },
-    ];
-    for (const job of sorted.slice(0, 10)) {
-      blocks.push(...(buildJobBlocks(job) ?? []));
-    }
-    const sent = await sendSlackMessage({
-      text: `${APP_NAME}: ${sorted.length} new jobs`,
-      blocks,
-    });
-    if (sent) {
-      for (const job of sorted) {
-        notifiedIds.add(job.id);
+    for (const payload of buildBatchedJobNotificationPayloads(sorted)) {
+      const { jobIds, ...slackPayload } = payload;
+      const sent = await sendSlackMessage(slackPayload);
+      if (sent) {
+        for (const jobId of jobIds) {
+          notifiedIds.add(jobId);
+        }
       }
     }
     return notifiedIds;

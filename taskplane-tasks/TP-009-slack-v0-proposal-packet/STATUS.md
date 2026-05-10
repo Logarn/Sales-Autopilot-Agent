@@ -25,7 +25,7 @@
 - [x] Document webhook one-way limitation
 - [x] Verify reordered packet rendering via lightweight sample/inspection path before build
 - [x] Build passes
-- [ ] Enforce Slack 50-block message budget for batched job notifications and verify batched payload inspection
+- [x] Enforce Slack 50-block message budget for batched job notifications and verify batched payload inspection
 
 ---
 
