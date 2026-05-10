@@ -1,10 +1,10 @@
 # TP-014: Browser Search Agent — Status
 
-**Current Step:** Step 2: Browser search runner
+**Current Step:** Step 3: Queue/scheduler integration
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 3
-**Review Counter:** 5
+**Review Counter:** 6
 **Iteration:** 1
 **Size:** L
 
@@ -32,7 +32,7 @@
 ---
 
 ### Step 2: Browser search runner
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 
 **Plan:** Extend `src/browserSearch.ts` from the safe model into an optional runner that uses dynamic Playwright loading only when enabled and not dry-run, opens only validated Upwork search/job URLs in a persistent context, detects login/2FA/CAPTCHA/security pages and returns a paused summary instead of bypassing, extracts a conservative bounded set of job links/detail text, and hands captured pages to existing deterministic normalization/job-capture outputs without requiring credentials. Dry-run/no-browser paths will return summaries from configured queries without importing Playwright. Verify with focused dry-run execution and `npm run build`.
 
@@ -45,7 +45,7 @@
 ---
 
 ### Step 3: Queue/scheduler integration
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Add search command/scheduler hook
 - [ ] Write heartbeat metadata
 - [ ] Keep RSS/Apify fallback behavior
@@ -82,6 +82,7 @@
 | R003 | Code | Step 1 | REVISE | .reviews/R003-code-step1.md |
 | R004 | Code | Step 1 | APPROVE | .reviews/R004-code-step1.md |
 | R005 | Plan | Step 2 | APPROVE | .reviews/R005-plan-step2.md |
+| R006 | Code | Step 2 | APPROVE | .reviews/R006-code-step2.md |
 
 ## Discoveries
 | Discovery | Disposition | Location |
@@ -102,3 +103,4 @@
 | 2026-05-10 21:41 | Review R003 | code Step 1: REVISE |
 | 2026-05-10 21:43 | Review R004 | code Step 1: APPROVE |
 | 2026-05-10 21:44 | Review R005 | plan Step 2: APPROVE |
+| 2026-05-10 21:47 | Review R006 | code Step 2: APPROVE |
