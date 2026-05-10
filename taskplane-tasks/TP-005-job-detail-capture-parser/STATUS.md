@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 2
+**Review Counter:** 3
 **Iteration:** 1
 **Size:** M
 
@@ -26,6 +26,7 @@ Plan: add a pure `src/jobCapture.ts` module exporting typed parsed job-detail ou
 - [x] Create parser for Upwork job detail pasted text
 - [x] Extract core job/client/activity fields with fallbacks
 - [x] Build passes
+- [ ] Fix code review parser issues for pasted URL extraction, slug job IDs, and `$10K+` client spend
 
 ---
 
@@ -83,3 +84,4 @@ Plan: add a pure `src/jobCapture.ts` module exporting typed parsed job-detail ou
 *None*
 | 2026-05-10 17:33 | Review R001 | plan Step 1: REVISE |
 | 2026-05-10 17:33 | Review R002 | plan Step 1: APPROVE |
+| 2026-05-10 17:36 | Review R003 | code Step 1: REVISE |
