@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 3
+**Review Counter:** 4
 **Iteration:** 1
 **Size:** M
 
@@ -32,6 +32,8 @@
 - [x] Use relevant proof earlier
 - [x] Keep final proposal concise and Steve-like
 - [x] Build passes
+- [ ] Make proof/example request answers client-facing with concrete examples
+- [ ] Align rate/budget instruction answers with suggested bid logic
 
 ---
 
@@ -88,3 +90,4 @@
 *None*
 | 2026-05-10 19:57 | Review R001 | plan Step 1: APPROVE |
 | 2026-05-10 19:58 | Review R002 | code Step 1: APPROVE |
+| 2026-05-10 20:02 | Review R004 | code Step 2: REVISE |
