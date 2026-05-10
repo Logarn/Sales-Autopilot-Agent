@@ -1,6 +1,6 @@
 # TP-009: Slack V0 Proposal Packet — Status
 
-**Current Step:** Step 1: Slack packet structure improvements
+**Current Step:** Step 2: Slack preview/test command
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
@@ -30,7 +30,7 @@
 ---
 
 ### Step 2: Slack preview/test command
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Add job-id preview command
 - [ ] Add synthetic sample packet mode
 - [ ] Clear no-webhook failure behavior
