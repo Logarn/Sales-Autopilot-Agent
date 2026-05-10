@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 5
+**Review Counter:** 6
 **Iteration:** 1
 **Size:** M
 
@@ -32,6 +32,8 @@
 - [x] Include pipeline/browser/health jobs with browser-worker gating and heartbeat recording
 - [x] Add npm script
 - [x] Build passes
+- [ ] Keep scheduler process alive after initial tick while preserving shutdown cleanup
+- [ ] Perform lightweight scheduler lifecycle validation
 
 ---
 
@@ -73,12 +75,15 @@
 | R002 | Plan | 1 | APPROVE | .reviews/R002-plan-step1.md |
 | R003 | Code | 1 | APPROVE | n/a |
 | R004 | Plan | 2 | REVISE | .reviews/R004-plan-step2.md |
+| R005 | Plan | 2 | APPROVE | .reviews/R005-plan-step2.md |
+| R006 | Code | 2 | REVISE | .reviews/R006-code-step2.md |
 
 ## Discoveries
 | Discovery | Disposition | Location |
 |-----------|-------------|----------|
 | Plan reviewer suggested shared TypeScript heartbeat types for scheduler and health reporting. | Advisory; applied via src/heartbeat.ts exports. | Step 1 plan review |
-| Plan reviewer suggested scheduler jobs record heartbeats so health reporting can consume real data. | Advisory; include in Step 2 implementation. | Step 2 plan review |
+| Plan reviewer suggested scheduler jobs record heartbeats so health reporting can consume real data. | Advisory; included in Step 2 implementation. | Step 2 plan review |
+| Code reviewer suggested scheduler mode validate required config before entering loop. | Advisory; apply while fixing lifecycle. | Step 2 code review |
 
 ## Execution Log
 | Timestamp | Action | Outcome |
@@ -94,3 +99,4 @@
 | 2026-05-10 20:45 | Review R003 | code Step 1: APPROVE |
 | 2026-05-10 20:46 | Review R004 | plan Step 2: REVISE |
 | 2026-05-10 20:47 | Review R005 | plan Step 2: APPROVE |
+| 2026-05-10 20:49 | Review R006 | code Step 2: REVISE |
