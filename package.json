@@ -22,6 +22,7 @@
     "test:fetch": "tsx src/fetcher.ts",
     "test:slack": "tsx src/slack.ts",
     "slack:preview": "tsx src/slackPreview.ts",
+    "slack:conversation": "tsx src/slackConversation.ts",
     "test:run-once": "tsx src/index.ts --run-once",
     "test:health": "tsx src/health.ts",
     "test:slack-flag": "tsx src/index.ts --test-slack",

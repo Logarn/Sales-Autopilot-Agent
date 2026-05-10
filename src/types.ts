@@ -387,6 +387,24 @@ export interface BrowserAction {
   updatedAt: string;
 }
 
+export type SlackConversationIntentType =
+  | "approve"
+  | "reject"
+  | "revise"
+  | "regenerate"
+  | "mark_applied"
+  | "mark_replied"
+  | "enqueue_browser_apply"
+  | "unknown";
+
+export interface SlackConversationIntent {
+  type: SlackConversationIntentType;
+  jobId: string | null;
+  instruction: string | null;
+  confidence: "high" | "medium" | "low";
+  rawText: string;
+}
+
 export interface BrowserActionInput {
   jobId: string;
   actionType: BrowserActionType;
