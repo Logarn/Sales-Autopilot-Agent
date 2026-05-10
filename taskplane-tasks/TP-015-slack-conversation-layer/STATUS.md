@@ -5,7 +5,7 @@
 **Last Updated:** 2026-05-10
 **Review Level:** 3
 **Review Counter:** 5
-**Iteration:** 1
+**Iteration:** 2
 **Size:** L
 
 ---
@@ -35,7 +35,7 @@
 - [x] Build passes
 - [x] R004: apply LLM revision to proposal_text when provider is available
 - [x] R004: avoid advertising revised Slack preview when only fallback request is stored
-- [ ] R005: keep proposal_version unchanged for pending fallback revision requests
+- [x] R005: keep proposal_version unchanged for pending fallback revision requests
 
 ---
 
@@ -86,6 +86,7 @@
 | 2026-05-10 | Task staged | PROMPT.md and STATUS.md created |
 | 2026-05-10 21:57 | Task started | Runtime V2 lane-runner execution |
 | 2026-05-10 21:57 | Step 0 started | Preflight |
+| 2026-05-10 22:07 | Worker iter 1 | done in 587s, tools: 92 |
 
 ## Blockers
 *None*

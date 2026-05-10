@@ -581,9 +581,9 @@ const getApplicationDraftStmt = db.prepare<[string], ApplicationDraftRow>(
    WHERE job_id = ?
    LIMIT 1`
 );
-const updateApplicationRevisionStmt = db.prepare<[string, number, string]>(
+const updateApplicationRevisionStmt = db.prepare<[string, string]>(
   `UPDATE applications
-   SET revision_requests = ?, proposal_version = ?, status = 'draft', updated_at = datetime('now')
+   SET revision_requests = ?, status = 'draft', updated_at = datetime('now')
    WHERE job_id = ?`
 );
 const applyApplicationRevisionStmt = db.prepare<[string, string, string, number, string]>(
@@ -792,9 +792,9 @@ export function recordApplicationRevisionRequest(jobId: string, instruction: str
   if (!row) return null;
 
   const existingRequests = parseJsonStringArray(row.revision_requests);
-  const nextRequests = [...existingRequests, `${new Date().toISOString()} ${instruction}`];
-  const nextVersion = (row.proposal_version ?? 1) + 1;
-  const result = updateApplicationRevisionStmt.run(JSON.stringify(nextRequests), nextVersion, jobId);
+  const currentVersion = row.proposal_version ?? 1;
+  const nextRequests = [...existingRequests, `${new Date().toISOString()} pending v${currentVersion}: ${instruction}`];
+  const result = updateApplicationRevisionStmt.run(JSON.stringify(nextRequests), jobId);
   if (result.changes === 0) return null;
 
   insertApplicationEventStmt.run(
@@ -802,12 +802,12 @@ export function recordApplicationRevisionRequest(jobId: string, instruction: str
     "revision_requested",
     row.status,
     "draft",
-    `v${nextVersion}: ${instruction}`
+    `pending v${currentVersion}: ${instruction}`
   );
 
   return {
     jobId,
-    proposalVersion: nextVersion,
+    proposalVersion: currentVersion,
     proposalText: row.proposal_text,
     revisionRequests: nextRequests,
     applied: false,
