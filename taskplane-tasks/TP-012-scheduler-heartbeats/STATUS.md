@@ -1,10 +1,10 @@
 # TP-012: Scheduler and Heartbeats — Status
 
-**Current Step:** Step 2: Scheduler loop
+**Current Step:** Step 3: Health checks and Slack alerts
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 6
+**Review Counter:** 7
 **Iteration:** 1
 **Size:** M
 
@@ -27,7 +27,7 @@
 ---
 
 ### Step 2: Scheduler loop
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 - [x] Add scheduler module with configurable 5–10 minute cadence, non-overlapping jobs, and graceful stop semantics
 - [x] Include pipeline/browser/health jobs with browser-worker gating and heartbeat recording
 - [x] Add npm script
@@ -77,6 +77,7 @@
 | R004 | Plan | 2 | REVISE | .reviews/R004-plan-step2.md |
 | R005 | Plan | 2 | APPROVE | .reviews/R005-plan-step2.md |
 | R006 | Code | 2 | REVISE | .reviews/R006-code-step2.md |
+| R007 | Code | 2 | APPROVE | n/a |
 
 ## Discoveries
 | Discovery | Disposition | Location |
@@ -100,3 +101,4 @@
 | 2026-05-10 20:46 | Review R004 | plan Step 2: REVISE |
 | 2026-05-10 20:47 | Review R005 | plan Step 2: APPROVE |
 | 2026-05-10 20:49 | Review R006 | code Step 2: REVISE |
+| 2026-05-10 20:51 | Review R007 | code Step 2: APPROVE |
