@@ -1,6 +1,6 @@
 # TP-013: LLM Normalization Layer — Status
 
-**Current Step:** Step 2: Optional OpenAI-compatible provider
+**Current Step:** Step 3: Normalization pipeline
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
@@ -38,7 +38,7 @@
 ---
 
 ### Step 3: Normalization pipeline
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Normalize via LLM when enabled, fallback otherwise
 - [ ] Feed downstream workflow
 - [ ] Add CLI command
