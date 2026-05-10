@@ -1,18 +1,8 @@
 import { SEARCH_QUERIES } from "./config";
+import { dedupeJobsBySimilarity } from "./dedupe";
 import { logger } from "./logger";
 import { getEnabledJobSources } from "./sources";
 import { FeedJobResult, JobPosting } from "./types";
-
-function dedupeById(jobs: JobPosting[]): JobPosting[] {
-  const seen = new Set<string>();
-  const deduped: JobPosting[] = [];
-  for (const job of jobs) {
-    if (seen.has(job.id)) continue;
-    seen.add(job.id);
-    deduped.push(job);
-  }
-  return deduped;
-}
 
 export async function fetchAllFeeds(): Promise<FeedJobResult> {
   const sources = getEnabledJobSources();
@@ -34,7 +24,23 @@ export async function fetchAllFeeds(): Promise<FeedJobResult> {
     failedFeeds.splice(0, failedFeeds.length, ...SEARCH_QUERIES);
   }
 
-  return { jobs: dedupeById(jobs), failedFeeds };
+  const deduped = dedupeJobsBySimilarity(jobs);
+  if (deduped.exactDuplicates > 0 || deduped.nearDuplicates > 0) {
+    logger.info(
+      `Dedupe collapsed ${deduped.exactDuplicates} exact and ${deduped.nearDuplicates} near-duplicate job(s) across sources.`
+    );
+    const bySource = new Map<string, number>();
+    for (const job of jobs) {
+      bySource.set(job.sourceQuery, (bySource.get(job.sourceQuery) ?? 0) + 1);
+    }
+    const sourceCounts = [...bySource.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([source, count]) => `${source}=${count}`)
+      .join(" ");
+    logger.info(`Dedupe input counts by source: ${sourceCounts}`);
+  }
+
+  return { jobs: deduped.jobs, failedFeeds };
 }
 
 if (require.main === module) {

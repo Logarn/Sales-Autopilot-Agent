@@ -2,7 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import Database from "better-sqlite3";
 import { DB_PATH, TIMEZONE } from "./config";
-import { ApplicationDraft, ApplicationStatus, DailySummary, MatchLevel, ScoredJob } from "./types";
+import { areNearDuplicateJobs, buildJobFingerprint } from "./dedupe";
+import { ApplicationDraft, ApplicationStatus, DailySummary, JobPosting, MatchLevel, ScoredJob } from "./types";
 
 interface SeenStats {
   total: number;
@@ -18,6 +19,23 @@ interface CountRow {
 
 interface SeenRow {
   found: number;
+}
+
+interface SeenFingerprintRow {
+  id: string;
+  title: string;
+  url: string;
+  description: string | null;
+  posted_at: string | null;
+  budget: string | null;
+  client_country: string | null;
+  client_rating: number | null;
+  client_spend: number | null;
+  client_hire_rate: number | null;
+  skills: string | null;
+  experience_level: string | null;
+  connects_cost: number | null;
+  fingerprint: string | null;
 }
 
 interface MatchCountRow {
@@ -85,6 +103,7 @@ CREATE TABLE IF NOT EXISTS seen_jobs (
   experience_level TEXT,
   connects_cost INTEGER,
   posted_at TEXT,
+  fingerprint TEXT,
   seen_at TEXT DEFAULT (datetime('now')),
   notified BOOLEAN DEFAULT 0
 );
@@ -153,6 +172,8 @@ ensureSeenJobsColumn("client_hire_rate", "REAL");
 ensureSeenJobsColumn("skills", "TEXT");
 ensureSeenJobsColumn("experience_level", "TEXT");
 ensureSeenJobsColumn("connects_cost", "INTEGER");
+ensureSeenJobsColumn("fingerprint", "TEXT");
+db.exec("CREATE INDEX IF NOT EXISTS idx_seen_jobs_fingerprint ON seen_jobs(fingerprint)");
 
 const countStmt = db.prepare<[], CountRow>("SELECT COUNT(*) as count FROM seen_jobs");
 const isSeenStmt = db.prepare<[string], SeenRow>(
@@ -175,9 +196,21 @@ const insertSeenStmt = db.prepare(
     experience_level,
     connects_cost,
     posted_at,
+    fingerprint,
     notified
   )
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+);
+const seenFingerprintStmt = db.prepare<[string], SeenRow>(
+  "SELECT 1 as found FROM seen_jobs WHERE fingerprint = ? LIMIT 1"
+);
+const recentSeenFingerprintsStmt = db.prepare<[], SeenFingerprintRow>(
+  `SELECT id, title, url, description, posted_at, budget, client_country, client_rating, client_spend,
+          client_hire_rate, skills, experience_level, connects_cost, fingerprint
+   FROM seen_jobs
+   WHERE fingerprint IS NOT NULL
+   ORDER BY seen_at DESC
+   LIMIT 500`
 );
 const cleanupStmt = db.prepare("DELETE FROM seen_jobs WHERE seen_at < datetime('now', '-30 days')");
 const queueInsertStmt = db.prepare("INSERT INTO slack_queue (payload, attempts) VALUES (?, 0)");
@@ -255,6 +288,52 @@ export function isJobSeen(id: string): boolean {
   return Boolean(isSeenStmt.get(id));
 }
 
+export function isJobFingerprintSeen(job: JobPosting): boolean {
+  const fingerprint = buildJobFingerprint(job);
+  if (seenFingerprintStmt.get(fingerprint)) {
+    return true;
+  }
+
+  return recentSeenFingerprintsStmt.all().some((row) => {
+    if (!row.fingerprint) return false;
+    return areNearDuplicateJobs(rowToJobPosting(row), job);
+  });
+}
+
+function rowToJobPosting(row: SeenFingerprintRow): JobPosting {
+  let skills: string[] = [];
+  if (row.skills) {
+    try {
+      const parsed = JSON.parse(row.skills);
+      if (Array.isArray(parsed)) {
+        skills = parsed.filter((skill): skill is string => typeof skill === "string");
+      }
+    } catch {
+      skills = [];
+    }
+  }
+
+  return {
+    id: row.id,
+    title: row.title,
+    url: row.url,
+    description: row.description ?? "",
+    postedAt: row.posted_at ?? "",
+    budget: row.budget ?? "",
+    clientCountry: row.client_country ?? "",
+    clientRating: row.client_rating ?? 0,
+    clientSpend: row.client_spend ?? 0,
+    clientHireRate: row.client_hire_rate ?? 0,
+    clientTotalHires: 0,
+    clientFeedbackCount: 0,
+    category: "",
+    experienceLevel: row.experience_level ?? "",
+    connectsCost: row.connects_cost ?? 0,
+    skills,
+    sourceQuery: "seen_jobs",
+  };
+}
+
 export function markJobSeen(job: ScoredJob, notified: boolean): void {
   insertSeenStmt.run(
     job.id,
@@ -272,6 +351,7 @@ export function markJobSeen(job: ScoredJob, notified: boolean): void {
     job.experienceLevel,
     job.connectsCost,
     job.postedAt,
+    buildJobFingerprint(job),
     notified ? 1 : 0
   );
   if (job.applicationDraft) {

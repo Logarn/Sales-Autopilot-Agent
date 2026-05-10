@@ -67,10 +67,38 @@ function normalizeLevel(level: string): string {
   return level || "Not specified";
 }
 
+function buildScoreSummary(job: ScoredJob): string {
+  const breakdown = job.scoreBreakdown;
+  const components = [
+    `Fit ${breakdown.fitScore.score}`,
+    `Client ${breakdown.clientQualityScore.score}`,
+    `Opp ${breakdown.opportunityScore.score}`,
+    `Red flags ${breakdown.redFlagScore.score}`,
+    `Connects ${breakdown.connectsRiskScore.score}`,
+  ].join(" • ");
+  const reasons = breakdown.reasons.slice(0, 3).map((reason) => `• ${reason}`).join("\n") || "• No strong reasons captured.";
+  const risks = breakdown.risks.slice(0, 3).map((risk) => `• ${risk}`).join("\n") || "• None detected.";
+  return `*📊 Score Breakdown:* ${components}\n*Why:*\n${reasons}\n*Risks:*\n${risks}`;
+}
+
 function buildJobBlocks(job: ScoredJob): IncomingWebhookSendArguments["blocks"] {
   const description = truncateText(job.description, MAX_DESCRIPTION_LENGTH);
-  const headline = `${levelBadge(job)}  •  Score: ${job.score}`;
+  const headline = `${levelBadge(job)}  •  Score: ${job.score}/100`;
   const posted = `${timeAgo(job.postedAt)} (${formatInTimezone(job.postedAt, TIMEZONE)})`;
+  const proposalQualityText = job.applicationDraft?.proposalQuality
+    ? `*🧪 Proposal Quality:* ${job.applicationDraft.proposalQuality.score}/100 (${job.applicationDraft.proposalQuality.wordCount} words)\n*Top issues:*\n${
+        job.applicationDraft.proposalQuality.issues.length
+          ? job.applicationDraft.proposalQuality.issues
+              .slice(0, 3)
+              .map((issue) => `• ${issue.message}${issue.evidence ? ` (${issue.evidence})` : ""}`)
+              .join("\n")
+          : "• None detected."
+      }\n\n*Positive signals:*\n${
+        job.applicationDraft.proposalQuality.positiveSignals.length
+          ? job.applicationDraft.proposalQuality.positiveSignals.slice(0, 3).map((signal) => `• ${signal}`).join("\n")
+          : "• No strong positive signals captured."
+      }`
+    : "";
 
   const actionElements: Array<{
     type: "button";
@@ -119,6 +147,17 @@ function buildJobBlocks(job: ScoredJob): IncomingWebhookSendArguments["blocks"] 
             text: `*📎 Suggested Proof:*\n${job.applicationDraft.selectedPortfolioItems.length ? job.applicationDraft.selectedPortfolioItems.map((item) => `• ${item.name}`).join("\n") : "• No attachment recommended."}`,
           },
         },
+        ...(proposalQualityText
+          ? [
+              {
+                type: "section" as const,
+                text: {
+                  type: "mrkdwn" as const,
+                  text: proposalQualityText,
+                },
+              },
+            ]
+          : []),
         {
           type: "section",
           text: {
@@ -152,6 +191,13 @@ function buildJobBlocks(job: ScoredJob): IncomingWebhookSendArguments["blocks"] 
         { type: "mrkdwn", text: `*🎯 Level:*\n${normalizeLevel(job.experienceLevel)}` },
         { type: "mrkdwn", text: `*🎫 Connects:*\n${job.connectsCost || 0}` },
       ],
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: buildScoreSummary(job),
+      },
     },
     {
       type: "section",
@@ -274,7 +320,7 @@ export async function sendJobNotifications(jobs: ScoredJob[]): Promise<Set<strin
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `${mention}${levelBadge(job)}  •  Score: ${job.score}`,
+            text: `${mention}${levelBadge(job)}  •  Score: ${job.score}/100`,
           },
         },
         ...(buildJobBlocks(job) ?? []),

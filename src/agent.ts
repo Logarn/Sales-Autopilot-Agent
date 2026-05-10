@@ -1,3 +1,4 @@
+import { critiqueProposal } from "./critic";
 import { loadConnectsRules, loadFreelancerProfile, loadPortfolioLibrary } from "./profile";
 import { ApplicationDraft, FreelancerProfile, JobPosting, PortfolioItem, ScoredJob } from "./types";
 import { truncateText } from "./utils";
@@ -56,8 +57,8 @@ function inferPainLine(job: JobPosting): string {
 
 function selectProofPoints(profile: FreelancerProfile, job: JobPosting): string[] {
   const text = jobText(job);
-  const directSkillMatches = profile.skills.filter((skill) => text.includes(skill.toLowerCase())).slice(0, 4);
-  const proof = profile.proofPoints.slice(0, 2);
+  const directSkillMatches = (profile.skills ?? []).filter((skill) => text.includes(skill.toLowerCase())).slice(0, 4);
+  const proof = (profile.proofPoints ?? []).slice(0, 2);
   return [...new Set([...directSkillMatches, ...proof])].slice(0, 5);
 }
 
@@ -96,7 +97,7 @@ function cleanProposal(text: string, bannedPhrases: string[]): string {
   for (const pattern of AI_SLUDGE_PATTERNS) {
     cleaned = cleaned.replace(pattern, "");
   }
-  for (const phrase of bannedPhrases) {
+  for (const phrase of bannedPhrases ?? []) {
     cleaned = cleaned.replace(new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "");
   }
   return cleaned.replace(/\n{3,}/g, "\n\n").replace(/ {2,}/g, " ").trim();
@@ -143,33 +144,36 @@ function evaluateConnects(job: ScoredJob): {
 export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   const profile = loadFreelancerProfile();
   const text = jobText(job);
-  const redFlags = [...new Set([...job.negativeKeywords, ...containsAny(text, RED_FLAG_TERMS)])];
+  const redFlags = [...new Set([...job.scoreBreakdown.risks, ...job.negativeKeywords, ...containsAny(text, RED_FLAG_TERMS)])];
   const proofPoints = selectProofPoints(profile, job);
   const portfolioItems = selectPortfolioItems(job);
   const fitReasons = [
-    ...job.matchedKeywords.slice(0, 6).map((keyword) => `Matches ${keyword}`),
+    ...job.scoreBreakdown.reasons.slice(0, 6),
+    ...job.matchedKeywords.slice(0, 4).map((keyword) => `Matches ${keyword}`),
     ...(job.clientSpend > 0 ? [`Client has ${job.clientSpend.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 })} Upwork spend`] : []),
     ...(job.clientHireRate > 0 ? [`Client hire rate is ${job.clientHireRate}%`] : []),
   ].slice(0, 8);
 
   const proofSentence = proofPoints.length
     ? `Relevant background: ${proofPoints.slice(0, 3).join("; ")}.`
-    : `My background is closest to ${profile.niche}.`;
+    : `My background is closest to ${profile.niche || "retention and lifecycle marketing"}.`;
   const portfolioSentence = portfolioItems.length
     ? `The most relevant proof to include would be: ${portfolioItems.map((item) => item.name).join(", ")}.`
     : "I would keep attachments light unless you want a specific example.";
 
   const proposal = cleanProposal(
     `${inferPainLine(job)}\n\nWhat I would look at first: where first-time buyers are dropping off, which flows are missing or stale, whether segmentation is doing any real work, and whether campaigns are driving repeat purchase or just adding noise. ${proofSentence}\n\nFor this kind of project, I would keep the work practical: find the leaks, rebuild the highest-impact lifecycle moments, tighten the messaging, and make retention a growth lever instead of another channel on the checklist. ${portfolioSentence}\n\nIf useful, send me the store URL and a quick sense of what is working/not working in Klaviyo now. I can tell you where I would start.`,
-    profile.voice.bannedPhrases
+    profile.voice?.bannedPhrases ?? []
   );
 
+  const truncatedProposal = truncateText(proposal, 1800);
+  const proposalQuality = critiqueProposal(truncatedProposal, job, profile);
   const connects = evaluateConnects(job);
 
   return {
     jobId: job.id,
     status: "draft",
-    fitScore: Math.min(100, Math.max(0, job.score * 10)),
+    fitScore: Math.min(100, Math.max(0, job.scoreBreakdown.fitScore.score)),
     fitReasons,
     redFlags,
     suggestedBid: suggestBid(job, profile),
@@ -177,7 +181,8 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
     suggestedBoostConnects: connects.suggestedBoostConnects,
     connectsWarnings: connects.warnings,
     selectedPortfolioItems: portfolioItems,
-    proposalText: truncateText(proposal, 1800),
+    proposalQuality,
+    proposalText: truncatedProposal,
     generatedAt: new Date().toISOString(),
   };
 }

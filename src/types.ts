@@ -20,11 +20,29 @@ export interface JobPosting {
   sourceQuery: string;
 }
 
+export interface ScoreComponent {
+  score: number;
+  reasons: string[];
+  risks: string[];
+}
+
+export interface ScoreBreakdown {
+  fitScore: ScoreComponent;
+  clientQualityScore: ScoreComponent;
+  opportunityScore: ScoreComponent;
+  redFlagScore: ScoreComponent;
+  connectsRiskScore: ScoreComponent;
+  finalScore: number;
+  reasons: string[];
+  risks: string[];
+}
+
 export interface ScoredJob extends JobPosting {
   score: number;
   matchLevel: MatchLevel;
   matchedKeywords: string[];
   negativeKeywords: string[];
+  scoreBreakdown: ScoreBreakdown;
   applicationDraft?: ApplicationDraft;
 }
 
@@ -97,6 +115,32 @@ export interface ConnectsRules {
   skipIfTopBidAbove: number;
 }
 
+export type ProposalQualitySeverity = "info" | "warning" | "critical";
+
+export type ProposalQualityCategory =
+  | "banned_phrase"
+  | "weak_opening"
+  | "generic_claim"
+  | "length"
+  | "cta"
+  | "proof_relevance"
+  | "voice";
+
+export interface ProposalQualityIssue {
+  category: ProposalQualityCategory;
+  severity: ProposalQualitySeverity;
+  message: string;
+  evidence?: string;
+  suggestion: string;
+}
+
+export interface ProposalQualityResult {
+  score: number;
+  issues: ProposalQualityIssue[];
+  positiveSignals: string[];
+  wordCount: number;
+}
+
 export interface ApplicationDraft {
   jobId: string;
   status: ApplicationStatus;
@@ -108,6 +152,7 @@ export interface ApplicationDraft {
   suggestedBoostConnects: number;
   connectsWarnings: string[];
   selectedPortfolioItems: PortfolioItem[];
+  proposalQuality: ProposalQualityResult;
   proposalText: string;
   generatedAt: string;
 }
@@ -115,6 +160,12 @@ export interface ApplicationDraft {
 export interface FeedJobResult {
   jobs: JobPosting[];
   failedFeeds: string[];
+}
+
+export interface DedupeResult<TJob extends JobPosting> {
+  jobs: TJob[];
+  exactDuplicates: number;
+  nearDuplicates: number;
 }
 
 export interface RunStats {
