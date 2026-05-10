@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 3
-**Review Counter:** 2
+**Review Counter:** 3
 **Iteration:** 1
 **Size:** L
 
@@ -23,6 +23,7 @@
 - [x] Validate approved status/link/proposal/connects/attachments
 - [x] Build passes
 - [x] Reviewer R001: provide reviewable Step 1 plan before implementation
+- [ ] Reviewer R003: extract real Upwork job id from stored URL and fail closed for invalid links
 
 ---
 
@@ -84,3 +85,4 @@
 *None*
 | 2026-05-10 22:25 | Review R001 | plan Step 1: REVISE |
 | 2026-05-10 22:26 | Review R002 | plan Step 1: APPROVE |
+| 2026-05-10 22:30 | Review R003 | code Step 1: REVISE |
