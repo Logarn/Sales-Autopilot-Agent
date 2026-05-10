@@ -14,13 +14,13 @@ import { buildJobBlocks, sendSlackPreviewMessage } from "./slack";
 import { SlackConversationIntent, SlackConversationIntentType } from "./types";
 
 const INTENT_ALIASES: Array<{ type: SlackConversationIntentType; patterns: RegExp[] }> = [
+  { type: "approve", patterns: [/\b(approve|approved|ok|okay|ship it|looks good|send to apply queue)\b/i] },
   { type: "enqueue_browser_apply", patterns: [/\b(queue|enqueue)\b.*\b(browser|apply|application)\b/i, /\bprepare\b.*\b(apply|application)\b/i] },
   { type: "mark_applied", patterns: [/\bmark\b.*\b(applied|submitted)\b/i, /\b(already|now)\s+(applied|submitted)\b/i] },
   { type: "mark_replied", patterns: [/\bmark\b.*\b(replied|response|responded)\b/i, /\b(client|they)\s+(replied|responded)\b/i] },
   { type: "regenerate", patterns: [/\b(regenerate|rewrite|start over|new draft)\b/i] },
   { type: "revise", patterns: [/\b(revise|revision|change|edit|adjust|update)\b/i] },
   { type: "reject", patterns: [/\b(reject|decline|skip|pass)\b/i] },
-  { type: "approve", patterns: [/\b(approve|approved|ok|okay|ship it|looks good|send to apply queue)\b/i] },
 ];
 
 function stripQuotes(value: string): string {

@@ -47,7 +47,7 @@
 - [x] R007: Handle standalone enqueue_browser_apply command without auto-submitting
 - [x] Slack inbound config/docs placeholders
 - [x] Build passes
-- [ ] R009: Ensure combined approve-and-queue commands approve status before browser handoff
+- [x] R009: Ensure combined approve-and-queue commands approve status before browser handoff
 
 ---
 
