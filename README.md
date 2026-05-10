@@ -135,6 +135,19 @@ Examples of flagged issues:
 
 Slack packets show the Proposal Quality score plus the top issues and positive signals above the proposal draft.
 
+## Slack V0 Proposal Packet Preview
+
+V0 uses the existing Slack Incoming Webhook only. Set `SLACK_CHANNEL_WEBHOOK_URL` and run a preview before VM deployment:
+
+```bash
+npm run slack:preview -- --sample
+npm run slack:preview -- --job-id <stored-job-id>
+```
+
+The preview sends the same proposal packet structure used by normal notifications: match score units, reasons/risks, Connects plan, selected proof, proposal quality, and a draft proposal that can be copied manually into Upwork. When a structured draft is available, Slack also shows compact proposal sections: opening, diagnosis, proof, direct answers to client application requests, rate/retainer answer, CTA, suggested attachments/highlights, and browser-fill notes. Browser-fill notes are a human handoff only: approved cover-letter text, profile notes, rate, attachments/highlights, and Connects plan for manual review before filling Upwork. If the webhook is not configured, the command exits non-zero with a clear message and does not print the secret. Preview sends also do not enter the production Slack retry queue.
+
+Webhook V0 is one-way. Buttons can open URLs such as Upwork or an optional `QUICK_BID_TEMPLATE_URL`, but incoming webhooks cannot receive Approve/Revise/Reject callbacks, Slack chat replies, or edits. Later interactive review workflows require a Slack app/socket mode or a separate polling approach; no Slack OAuth or socket-mode token is required for this V0 preview path.
+
 ## Job Detail Capture Workflow
 
 Use job detail capture when you have a promising Upwork job open in a browser but do not want to automate login or scraping. Copy the visible job-detail page text, save it under `captures/`, then import it into the manual job queue:
@@ -148,6 +161,31 @@ npm run test:run-once
 The command parses title, description, budget/type, duration, experience level, skills, activity, Connects, and client details when visible. The `--url` flag is optional only when the pasted text already includes the Upwork job URL; otherwise provide it so the system keeps a direct application link. It creates or updates `config/manual-jobs.json` using the stable Upwork job ID or URL, then prints a short summary and the next pipeline command. Missing fields are kept conservative (`Not specified`, `0`, or empty arrays) so the normal scoring/proposal pipeline can still run while making weak captures obvious.
 
 Sample pasted text lives at `captures/job-detail-sample.txt`.
+
+## Profile Knowledge Ingestion
+
+Steve can add profile knowledge without editing TypeScript. The loader reads markdown or JSON artifacts under `profile/knowledge/` grouped by type: `voice`, `proof`, `portfolio`, `video`, `bid_rules`, and `general`. Missing or empty knowledge directories are safe; malformed or unsupported files are skipped with warnings.
+
+Add a note from text or a file:
+
+```bash
+npm run knowledge:add -- --type voice --title "Short confident CTA" --text "Prefer a shorter CTA and a specific next step. Avoid phrase \"quick sense\"." --tags "cta"
+npm run knowledge:add -- --type proof --title "Klaviyo retention win" --file notes/proof.md --tags "Klaviyo,Shopify"
+```
+
+Add/update portfolio metadata without code changes:
+
+```bash
+npm run portfolio:upsert -- --id retention-audit --name "Retention audit sample" --description "Klaviyo audit proof" --result "Found lifecycle revenue leaks" --industries "DTC,ecommerce" --platforms "Klaviyo,Shopify" --job-types "audit,flow optimization" --file-path "profile/attachments/Portfolio.pdf"
+```
+
+Add another video transcript as knowledge:
+
+```bash
+npm run knowledge:video -- --file profile/video-intro-transcript.md --title "Intro video transcript" --tags "intro,credibility"
+```
+
+Sample artifacts live in `profile/knowledge/voice/`, `profile/knowledge/portfolio/`, and `profile/knowledge/video/`. Proposal generation uses relevant proof/portfolio notes as client-facing evidence, applies voice notes as quiet style preferences, and keeps bid-rule notes internal to recommendations/Connects warnings.
 
 ## Browser Queue Safety Model
 
@@ -173,6 +211,8 @@ The worker must pause for human intervention on login, 2FA, CAPTCHA, Cloudflare,
 - `npm start` - run compiled worker
 - `npm run test:fetch` - fetch configured feeds once, print sample jobs
 - `npm run test:slack` - send Slack webhook test message
+- `npm run slack:preview -- --sample` - send a synthetic Slack V0 proposal packet preview
+- `npm run slack:preview -- --job-id <id>` - send a preview from stored job/application data
 - `npm run test:run-once` - run full pipeline one time and exit
 - `npm run add:manual-job -- --url <url> --title <title>` - add a manual job to the ingestion queue
 - `npm run capture:job -- --file captures/job-detail.txt [--url <url>]` - parse pasted Upwork job-detail text and create/update the manual job queue
@@ -182,6 +222,9 @@ The worker must pause for human intervention on login, 2FA, CAPTCHA, Cloudflare,
 - `npm run app:apply -- --job-id <id> --required-connects 10 --boost-connects 35 --rank 1 --client-spend 393 --rate 35 --profile "Email Marketing" --attachments "Truly Beauty - Case Study.pdf,Portfolio.pdf"` - record actual submission details
 - `npm run app:analytics` - report reply/interview/hire rates, Connects efficiency, and top proof assets
 - `npm run app:capture -- --job-id <id> --file captures/apply-screen.txt --record` - parse pasted Upwork apply-screen text and record structured submission details
+- `npm run knowledge:add -- --type voice --text "Prefer concise CTAs" [--title <title>] [--tags "cta"]` - append a local profile knowledge note
+- `npm run knowledge:video -- --file profile/video-intro-transcript.md --title "Intro video"` - ingest an additional video/transcript note
+- `npm run portfolio:upsert -- --id <id> --name <name> --description <text> --result <text>` - add/update portfolio metadata without code changes
 - `npm run browser:enqueue -- --job-id <id> --action open_job --url <upwork-url>` - add a safe browser action to the SQLite queue
 - `npm run browser:list -- [--status pending] [--limit 25]` - list queued browser actions
 - `npm run browser:update -- --id <action-id> --status paused --error "Login required"` - manually update a queued browser action
@@ -192,6 +235,7 @@ The worker must pause for human intervention on login, 2FA, CAPTCHA, Cloudflare,
 See `.env.example` for full list. Core settings:
 
 ```env
+# Slack V0 uses only this incoming webhook URL; no Slack app/OAuth/socket-mode token is required.
 SLACK_CHANNEL_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
 APIFY_API_TOKEN=your_apify_token_here
 CRON_SCHEDULE=0 * * * *

@@ -102,6 +102,42 @@ export interface PortfolioLibrary {
   items: PortfolioItem[];
 }
 
+export type KnowledgeArtifactType = "voice" | "proof" | "portfolio" | "video" | "bid_rules" | "general";
+
+export interface KnowledgeArtifactMetadata {
+  title?: string;
+  type?: KnowledgeArtifactType;
+  tags?: string[];
+  source?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface KnowledgeArtifact {
+  id: string;
+  type: KnowledgeArtifactType;
+  title: string;
+  tags: string[];
+  sourcePath: string;
+  format: "markdown" | "json";
+  content: string;
+  summary: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface KnowledgeLoadWarning {
+  filePath: string;
+  message: string;
+}
+
+export interface ProfileKnowledge {
+  artifacts: KnowledgeArtifact[];
+  byType: Record<KnowledgeArtifactType, KnowledgeArtifact[]>;
+  contextSections: string[];
+  warnings: KnowledgeLoadWarning[];
+}
+
 export interface ConnectsRules {
   maxRequiredPerJob: number;
   idealBoostMin: number;
@@ -141,6 +177,27 @@ export interface ProposalQualityResult {
   wordCount: number;
 }
 
+export interface ProposalBrowserFillNotes {
+  approvedText: string;
+  profileNotes: string[];
+  rate: string;
+  attachments: string[];
+  highlights: string[];
+  connectsPlan: string;
+}
+
+export interface StructuredProposalDraft {
+  opening: string;
+  diagnosis: string;
+  proof: string;
+  clientRequestAnswers: string[];
+  rateRetainerAnswer: string;
+  cta: string;
+  suggestedAttachments: string[];
+  suggestedHighlights: string[];
+  browserFillNotes: ProposalBrowserFillNotes;
+}
+
 export interface ApplicationDraft {
   jobId: string;
   status: ApplicationStatus;
@@ -154,6 +211,7 @@ export interface ApplicationDraft {
   selectedPortfolioItems: PortfolioItem[];
   proposalQuality: ProposalQualityResult;
   proposalText: string;
+  structuredProposal?: StructuredProposalDraft;
   generatedAt: string;
 }
 
