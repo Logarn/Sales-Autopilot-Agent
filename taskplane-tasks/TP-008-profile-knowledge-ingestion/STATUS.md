@@ -26,8 +26,8 @@
 - [x] Add types for knowledge artifacts and profile enrichment
 - [x] Verify empty directory, valid markdown/json artifacts, malformed JSON handling, and truncation behavior
 - [x] Build passes
-- [ ] Fix safe traversal to warn/continue on unreadable knowledge directories
-- [ ] Restrict type inference to configured knowledge-directory-relative paths
+- [x] Fix safe traversal to warn/continue on unreadable knowledge directories
+- [x] Restrict type inference to configured knowledge-directory-relative paths
 
 ---
 

@@ -82,19 +82,19 @@ function stripFrontMatter(raw: string): { metadata: KnowledgeArtifactMetadata; b
   return { metadata, body };
 }
 
-function inferType(filePath: string, metadataType: unknown): KnowledgeArtifactType | null {
+function inferType(relativeKnowledgePath: string, metadataType: unknown): KnowledgeArtifactType | null {
   if (isKnowledgeType(metadataType)) {
     return metadataType;
   }
 
-  const parts = filePath.split(path.sep);
+  const parts = relativeKnowledgePath.split(path.sep);
   for (const part of parts) {
     if (isKnowledgeType(part)) {
       return part;
     }
   }
 
-  const baseName = path.basename(filePath).split(/[._-]/)[0];
+  const baseName = path.basename(relativeKnowledgePath).split(/[._-]/)[0];
   return isKnowledgeType(baseName) ? baseName : null;
 }
 
@@ -127,19 +127,39 @@ function parseJsonArtifact(raw: string): { metadata: KnowledgeArtifactMetadata; 
   return { metadata, content };
 }
 
-function collectFiles(rootDir: string): string[] {
+function collectFiles(rootDir: string, warnings: KnowledgeLoadWarning[]): string[] {
   if (!fs.existsSync(rootDir)) {
     return [];
   }
 
-  const stat = fs.statSync(rootDir);
-  if (!stat.isDirectory()) {
+  try {
+    const stat = fs.statSync(rootDir);
+    if (!stat.isDirectory()) {
+      warnings.push({ filePath: path.relative(process.cwd(), rootDir), message: "Knowledge path is not a directory" });
+      return [];
+    }
+  } catch (error) {
+    warnings.push({
+      filePath: path.relative(process.cwd(), rootDir),
+      message: error instanceof Error ? error.message : "Unable to inspect knowledge directory",
+    });
     return [];
   }
 
   const files: string[] = [];
   const visit = (dir: string) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (error) {
+      warnings.push({
+        filePath: path.relative(process.cwd(), dir),
+        message: error instanceof Error ? error.message : "Unable to read knowledge directory",
+      });
+      return;
+    }
+
+    for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         visit(fullPath);
@@ -163,9 +183,10 @@ export function loadProfileKnowledge(knowledgeDir = PROFILE_KNOWLEDGE_DIR): Prof
   const warnings: KnowledgeLoadWarning[] = [];
   const artifacts: KnowledgeArtifact[] = [];
 
-  for (const filePath of collectFiles(resolvedDir)) {
+  for (const filePath of collectFiles(resolvedDir, warnings)) {
     const ext = path.extname(filePath).toLowerCase();
     const relativePath = path.relative(process.cwd(), filePath);
+    const relativeKnowledgePath = path.relative(resolvedDir, filePath);
     if (!SUPPORTED_EXTENSIONS.has(ext)) {
       warnings.push({ filePath: relativePath, message: `Unsupported knowledge file extension: ${ext}` });
       continue;
@@ -176,7 +197,7 @@ export function loadProfileKnowledge(knowledgeDir = PROFILE_KNOWLEDGE_DIR): Prof
       const format = ext === ".json" ? "json" : "markdown";
       const parsed = format === "json" ? parseJsonArtifact(raw) : stripFrontMatter(raw);
       const content = "content" in parsed ? parsed.content : parsed.body;
-      const type = inferType(filePath, parsed.metadata.type);
+      const type = inferType(relativeKnowledgePath, parsed.metadata.type);
       if (!type) {
         warnings.push({ filePath: relativePath, message: "Unsupported or missing knowledge type" });
         continue;
