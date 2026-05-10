@@ -58,6 +58,9 @@
 
 ### Step 4: Documentation
 **Status:** 🟨 In Progress
+
+**Plan:** Update README and deployment documentation with the new browser-search command, environment variables/defaults, optional scheduler hook, dry-run/no-credentials behavior, and explicit safety model that pauses on login/CAPTCHA/2FA without bypassing challenges.
+
 - [ ] README/deployment updated
 
 ---
