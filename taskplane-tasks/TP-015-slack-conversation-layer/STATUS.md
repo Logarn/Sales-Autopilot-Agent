@@ -1,6 +1,6 @@
 # TP-015: Slack Conversation Layer — Status
 
-**Current Step:** Step 2: Draft revision/update flow
+**Current Step:** Step 3: Approval/browser queue handoff
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 3
@@ -40,7 +40,7 @@
 ---
 
 ### Step 3: Approval/browser queue handoff
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Approve/reject update DB
 - [ ] Optional browser apply action enqueue
 - [ ] Slack inbound config/docs placeholders
