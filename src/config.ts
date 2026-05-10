@@ -3,7 +3,7 @@ import * as path from "node:path";
 import dotenv from "dotenv";
 import { DEFAULT_SEARCH_QUERIES } from "./feeds";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 function parseInteger(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
@@ -67,6 +67,11 @@ export const MIN_SCORE_TO_NOTIFY = parseInteger(process.env.MIN_SCORE_TO_NOTIFY,
 export const MIN_SCORE_HIGH = parseInteger(process.env.MIN_SCORE_HIGH, 8);
 export const MAX_DESCRIPTION_LENGTH = parseInteger(process.env.MAX_DESCRIPTION_LENGTH, 300);
 export const ENABLE_LOW_MATCH_DIGEST = parseBoolean(process.env.ENABLE_LOW_MATCH_DIGEST, false);
+export const LLM_PROVIDER = process.env.LLM_PROVIDER ?? "openai-compatible";
+export const LLM_API_KEY = process.env.LLM_API_KEY ?? "";
+export const LLM_MODEL = process.env.LLM_MODEL ?? "gpt-4o-mini";
+export const LLM_BASE_URL = process.env.LLM_BASE_URL ?? "https://api.openai.com/v1";
+export const LLM_NORMALIZATION_ENABLED = parseBoolean(process.env.LLM_NORMALIZATION_ENABLED, false);
 export const BROWSER_WORKER_ENABLED = parseBoolean(process.env.BROWSER_WORKER_ENABLED, false);
 export const BROWSER_HEADLESS = parseBoolean(process.env.BROWSER_HEADLESS, true);
 export const BROWSER_USER_DATA_DIR = process.env.BROWSER_USER_DATA_DIR ?? "./data/browser-profile";

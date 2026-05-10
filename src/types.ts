@@ -20,6 +20,79 @@ export interface JobPosting {
   sourceQuery: string;
 }
 
+export type NormalizationSource = "deterministic" | "llm";
+
+export interface NormalizedJobPacket {
+  id: string;
+  title: string;
+  url: string;
+  description: string;
+  postedAt: string;
+  budget: string;
+  budgetType: string;
+  category: string;
+  experienceLevel: string;
+  duration: string;
+  sourceQuery: string;
+}
+
+export interface NormalizedClientPacket {
+  country: string;
+  rating: number | null;
+  spend: number | null;
+  hireRate: number | null;
+  totalHires: number | null;
+  feedbackCount: number | null;
+  jobsPosted: number | null;
+}
+
+export interface NormalizedRequirementsPacket {
+  skills: string[];
+  requiredSkills: string[];
+  preferredSkills: string[];
+  qualifications: string[];
+  deliverables: string[];
+  timeline: string;
+}
+
+export interface NormalizedConnectsPacket {
+  required: number | null;
+  deterministicRequired: number;
+  suggestedBoost: number;
+  notes: string[];
+}
+
+export interface NormalizedProposalInstructions {
+  tone: string;
+  mustAddress: string[];
+  avoid: string[];
+  attachments: string[];
+  notes: string[];
+}
+
+export interface NormalizedOpportunityPacket {
+  schemaVersion: "1.0";
+  source: NormalizationSource;
+  normalizedAt: string;
+  rawTextHash: string;
+  job: NormalizedJobPacket;
+  client: NormalizedClientPacket;
+  requirements: NormalizedRequirementsPacket;
+  applicationQuestions: string[];
+  connects: NormalizedConnectsPacket;
+  risks: string[];
+  proofHints: string[];
+  proposalInstructions: NormalizedProposalInstructions;
+  deterministicJob: JobPosting;
+}
+
+export interface NormalizedOpportunityRepair {
+  packet: NormalizedOpportunityPacket;
+  valid: boolean;
+  warnings: string[];
+  errors: string[];
+}
+
 export interface ScoreComponent {
   score: number;
   reasons: string[];

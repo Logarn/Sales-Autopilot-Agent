@@ -163,6 +163,18 @@ The command parses title, description, budget/type, duration, experience level, 
 
 Sample pasted text lives at `captures/job-detail-sample.txt`.
 
+## LLM Normalization Workflow
+
+LLM normalization is optional and safe-by-default. Raw browser/email/manual capture text is first parsed into a deterministic normalized opportunity packet. If `LLM_NORMALIZATION_ENABLED=true` and `LLM_API_KEY` is configured, an OpenAI-compatible chat provider can improve structured fields such as requirements, application questions, risks, proof hints, and proposal instructions. Deterministic guardrails remain authoritative: direct Upwork job links must contain a concrete job id, Connects values come from the deterministic parser, and provider errors or invalid JSON fall back to the local packet.
+
+Preview normalized JSON from a capture file without requiring an API key:
+
+```bash
+npm run normalize:capture -- captures/job-detail-sample.txt --url https://www.upwork.com/jobs/Beauty-Brand-Klaviyo-Email-Marketing_~022053519741553119886/
+```
+
+Add `--with-draft` to include the downstream score/proposal draft shape used by Slack review. The command prints JSON to stdout and does not log API keys or raw secrets. To enable a compatible provider, set the LLM environment variables in `.env`; leaving them unset keeps the deterministic fallback path.
+
 ## Profile Knowledge Ingestion
 
 Steve can add profile knowledge without editing TypeScript. The loader reads markdown or JSON artifacts under `profile/knowledge/` grouped by type: `voice`, `proof`, `portfolio`, `video`, `bid_rules`, and `general`. Missing or empty knowledge directories are safe; malformed or unsupported files are skipped with warnings.
@@ -231,6 +243,7 @@ The list command prints sorted skill names, titles, and markdown paths. The read
 - `npm run test:run-once` - run full pipeline one time and exit
 - `npm run add:manual-job -- --url <url> --title <title>` - add a manual job to the ingestion queue
 - `npm run capture:job -- --file captures/job-detail.txt [--url <url>]` - parse pasted Upwork job-detail text and create/update the manual job queue
+- `npm run normalize:capture -- captures/job-detail.txt [--url <url>] [--with-draft]` - print a normalized opportunity packet using optional LLM enrichment or deterministic fallback
 - `npm run app:report` - print application outcome summary and recent tracked opportunities
 - `npm run app:status -- --job-id <id> --status applied --note "Applied manually"` - update an application status
 - `npm run app:note -- --job-id <id> --note "Client replied"` - add an application note
@@ -262,6 +275,11 @@ TIMEZONE=Africa/Nairobi
 MIN_SCORE_TO_NOTIFY=4
 MIN_SCORE_HIGH=8
 DB_PATH=./data/jobs.db
+LLM_NORMALIZATION_ENABLED=false
+LLM_PROVIDER=openai-compatible
+LLM_API_KEY=
+LLM_MODEL=gpt-4o-mini
+LLM_BASE_URL=https://api.openai.com/v1
 ```
 
 ### Feed Query Configuration
