@@ -25,7 +25,7 @@
 - [x] Create `src/critic.ts` with deterministic quality checks
 - [x] Ensure critic returns score, issues, and positive signals
 - [x] Run targeted build/typecheck: `npm run build`
-- [ ] Fix placeholder banned phrase matching for phrases like `With over X years of experience`
+- [x] Fix placeholder banned phrase matching for phrases like `With over X years of experience`
 
 ---
 

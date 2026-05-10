@@ -88,6 +88,16 @@ function addIssue(issues: ProposalQualityIssue[], issue: ProposalQualityIssue): 
   issues.push(issue);
 }
 
+function bannedPhraseMatches(text: string, phrase: string): boolean {
+  const normalizedPhrase = normalize(phrase).trim();
+  if (!normalizedPhrase) return false;
+  if (!normalizedPhrase.includes("x")) return text.includes(normalizedPhrase);
+
+  const escapedParts = normalizedPhrase.split("x").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const pattern = escapedParts.join("[\\w'-]+(?:\\s+[\\w'-]+){0,3}").replace(/\\\s+/g, "\\s+");
+  return new RegExp(pattern, "i").test(text);
+}
+
 export function critiqueProposal(proposalText: string, job: JobPosting, profile?: Partial<FreelancerProfile>): ProposalQualityResult {
   const text = proposalText.trim();
   const lower = normalize(text);
@@ -98,7 +108,7 @@ export function critiqueProposal(proposalText: string, job: JobPosting, profile?
   const preferredPhrases = profile?.voice?.preferredPhrases ?? [];
 
   for (const phrase of bannedPhrases) {
-    if (lower.includes(normalize(phrase).replace("x", "")) || lower.includes(normalize(phrase))) {
+    if (bannedPhraseMatches(lower, phrase)) {
       addIssue(issues, {
         category: "banned_phrase",
         severity: "critical",
