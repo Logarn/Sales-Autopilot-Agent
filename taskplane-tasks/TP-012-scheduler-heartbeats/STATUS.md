@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 3
+**Review Counter:** 4
 **Iteration:** 1
 **Size:** M
 
@@ -28,8 +28,8 @@
 
 ### Step 2: Scheduler loop
 **Status:** 🟨 In Progress
-- [ ] Add scheduler module
-- [ ] Include pipeline/browser/health jobs
+- [ ] Add scheduler module with configurable 5–10 minute cadence, non-overlapping jobs, and graceful stop semantics
+- [ ] Include pipeline/browser/health jobs with browser-worker gating and heartbeat recording
 - [ ] Add npm script
 - [ ] Build passes
 
@@ -72,11 +72,13 @@
 | R001 | Plan | 1 | REVISE | .reviews/R001-plan-step1.md |
 | R002 | Plan | 1 | APPROVE | .reviews/R002-plan-step1.md |
 | R003 | Code | 1 | APPROVE | n/a |
+| R004 | Plan | 2 | REVISE | .reviews/R004-plan-step2.md |
 
 ## Discoveries
 | Discovery | Disposition | Location |
 |-----------|-------------|----------|
-| Plan reviewer suggested shared TypeScript heartbeat types for scheduler and health reporting. | Advisory; apply if it fits implementation. | Step 1 plan review |
+| Plan reviewer suggested shared TypeScript heartbeat types for scheduler and health reporting. | Advisory; applied via src/heartbeat.ts exports. | Step 1 plan review |
+| Plan reviewer suggested scheduler jobs record heartbeats so health reporting can consume real data. | Advisory; include in Step 2 implementation. | Step 2 plan review |
 
 ## Execution Log
 | Timestamp | Action | Outcome |
@@ -90,3 +92,4 @@
 | 2026-05-10 20:42 | Review R001 | plan Step 1: REVISE |
 | 2026-05-10 20:43 | Review R002 | plan Step 1: APPROVE |
 | 2026-05-10 20:45 | Review R003 | code Step 1: APPROVE |
+| 2026-05-10 20:46 | Review R004 | plan Step 2: REVISE |
