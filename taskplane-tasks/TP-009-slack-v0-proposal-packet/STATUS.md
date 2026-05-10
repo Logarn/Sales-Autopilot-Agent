@@ -35,7 +35,7 @@
 - [x] Add synthetic sample packet mode
 - [x] Clear no-webhook failure behavior
 - [x] Build passes
-- [ ] Add non-queueing preview send path and verify failed preview sends do not persist slack_queue rows
+- [x] Add non-queueing preview send path and verify failed preview sends do not persist slack_queue rows
 
 ---
 

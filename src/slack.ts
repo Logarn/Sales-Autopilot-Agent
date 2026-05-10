@@ -308,10 +308,14 @@ async function sendWithRetry(payload: IncomingWebhookSendArguments, attempts = 1
   }
 }
 
+export async function sendSlackPreviewMessage(payload: IncomingWebhookSendArguments): Promise<void> {
+  await sendWithRetry(payload);
+  await sleep(SLACK_DELAY_MS);
+}
+
 export async function sendSlackMessage(payload: IncomingWebhookSendArguments): Promise<boolean> {
   try {
-    await sendWithRetry(payload);
-    await sleep(SLACK_DELAY_MS);
+    await sendSlackPreviewMessage(payload);
     return true;
   } catch (error) {
     logger.error(`Slack send failed, queueing payload: ${String(error)}`);

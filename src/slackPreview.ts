@@ -1,7 +1,7 @@
 import { APP_NAME, SLACK_CHANNEL_WEBHOOK_URL } from "./config";
 import { getScoredJobForSlackPreview } from "./db";
 import { logger } from "./logger";
-import { buildJobBlocks, sendSlackMessage } from "./slack";
+import { buildJobBlocks, sendSlackPreviewMessage } from "./slack";
 import { ScoredJob } from "./types";
 
 function readFlagValue(args: string[], name: string): string | null {
@@ -113,14 +113,17 @@ export async function runSlackPreview(args = process.argv.slice(2)): Promise<boo
     return false;
   }
 
-  const sent = await sendSlackMessage({
-    text: `${APP_NAME}: Slack V0 proposal packet preview — ${job.title}`,
-    blocks: buildJobBlocks(job),
-  });
-  if (sent) {
+  try {
+    await sendSlackPreviewMessage({
+      text: `${APP_NAME}: Slack V0 proposal packet preview — ${job.title}`,
+      blocks: buildJobBlocks(job),
+    });
     logger.info(`Slack proposal packet preview sent for ${sampleMode ? "synthetic sample" : `job ${job.id}`}.`);
+    return true;
+  } catch (error) {
+    console.error(`Slack preview send failed and was not queued: ${String(error)}`);
+    return false;
   }
-  return sent;
 }
 
 if (require.main === module) {
