@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 5
+**Review Counter:** 6
 **Iteration:** 1
 **Size:** M
 
@@ -42,8 +42,8 @@
 ### Step 3: Documentation
 **Status:** ⬜ Not Started
 
-- [ ] Update README with scoring categories and thresholds
-- [ ] Document deterministic scoring and future outcome tuning
+- [x] Update README with scoring categories and thresholds
+- [x] Document deterministic scoring and future outcome tuning
 
 ---
 
@@ -103,3 +103,4 @@
 | 2026-05-10 16:20 | Review R003 | code Step 1: APPROVE |
 | 2026-05-10 16:21 | Review R004 | plan Step 2: APPROVE |
 | 2026-05-10 16:23 | Review R005 | code Step 2: APPROVE |
+| 2026-05-10 16:23 | Review R006 | plan Step 3: APPROVE |
