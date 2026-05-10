@@ -22,7 +22,7 @@
 - [ ] Add fill instruction model/service
 - [ ] Validate approved status/link/proposal/connects/attachments
 - [ ] Build passes
-- [ ] Reviewer R001: provide reviewable Step 1 plan before implementation
+- [x] Reviewer R001: provide reviewable Step 1 plan before implementation
 
 ---
 
