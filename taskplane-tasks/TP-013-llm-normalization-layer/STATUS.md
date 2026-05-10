@@ -1,6 +1,6 @@
 # TP-013: LLM Normalization Layer — Status
 
-**Current Step:** Step 3: Normalization pipeline
+**Current Step:** Step 4: Docs and examples
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
@@ -47,7 +47,7 @@
 ---
 
 ### Step 4: Docs and examples
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] README updated
 - [ ] .env.example updated
 - [ ] Example command added
