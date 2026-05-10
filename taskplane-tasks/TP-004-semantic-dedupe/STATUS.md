@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 7
+**Review Counter:** 8
 **Iteration:** 1
 **Size:** M
 
@@ -52,8 +52,8 @@
 ### Step 4: Documentation
 **Status:** 🟨 In Progress
 
-- [ ] Update README with dedupe behavior
-- [ ] Document conservative deterministic strategy
+- [x] Update README with dedupe behavior
+- [x] Document conservative deterministic strategy
 
 ---
 
@@ -116,3 +116,4 @@
 | 2026-05-10 16:35 | Review R005 | code Step 2: APPROVE |
 | 2026-05-10 16:36 | Review R006 | plan Step 3: APPROVE |
 | 2026-05-10 16:37 | Review R007 | code Step 3: APPROVE |
+| 2026-05-10 16:38 | Review R008 | plan Step 4: APPROVE |

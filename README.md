@@ -15,7 +15,7 @@ The product direction is an Upwork revenue assistant, not an auto-apply bot: fin
   - `medium` (final score >= 45) -> Slack notify
   - `low` (final score >= 30) -> tracked/logged only
   - `skip` (< 30, hard negative match, severe red flags, or severe Connects risk) -> ignored
-- SQLite deduplication using Apify `uid`
+- SQLite deduplication using exact source IDs plus conservative semantic fingerprints
 - First-run seeding: stores existing jobs without blasting Slack
 - Slack queue/retry on failures
 - Proposal packet generation using local profile and portfolio metadata
@@ -102,6 +102,15 @@ Score components:
 Slack packets show the final score plus component scores, the top reasons, and the top risks so the reviewer can see why a job was promoted or down-ranked. Application drafts reuse the same reasons and risks for their fit score and red-flag sections.
 
 Thresholds are intentionally conservative: `high` starts at 80, `medium` at 45, `low` at 30, and hard-negative/risk conditions force `skip`. These rules are deterministic today for predictable behavior and auditability. Future tuning should adjust weights and thresholds using tracked outcome data such as replies, interviews, hires, and Connects spent.
+
+## Deduplication
+
+The ingestion pipeline removes duplicates in two deterministic passes before scoring and notification:
+
+1. **Exact ID dedupe** collapses repeated source IDs and keeps the strongest/latest copy using stable tie-breakers.
+2. **Semantic dedupe** builds a normalized fingerprint from title, description, budget, client country, skills, and source query, ignoring volatile repost noise such as timestamps, URLs, and job-id text. Jobs with matching fingerprints or high conservative similarity are treated as practical repost duplicates.
+
+Fingerprints are stored with `seen_jobs`, so later runs can suppress likely reposts that arrive under a new source ID. The strategy is intentionally conservative: when similarity is uncertain, distinct jobs are kept rather than risk hiding a real opportunity.
 
 ## Proposal Quality Critic
 
