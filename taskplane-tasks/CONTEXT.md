@@ -2,7 +2,7 @@
 
 **Last Updated:** 2026-05-10
 **Status:** Active
-**Next Task ID:** TP-005
+**Next Task ID:** TP-008
 
 ---
 
@@ -34,3 +34,6 @@ _Items discovered during task execution are logged here by agents._
 - `TP-002` — Proposal Quality Critic
 - `TP-003` — Advanced Scoring Model
 - `TP-004` — Semantic Dedupe
+- `TP-005` — Job Detail Capture Parser
+- `TP-006` — Browser Queue Foundation
+- `TP-007` — Cloud Agent Runtime
