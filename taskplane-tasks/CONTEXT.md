@@ -2,7 +2,7 @@
 
 **Last Updated:** 2026-05-10
 **Status:** Active
-**Next Task ID:** TP-011
+**Next Task ID:** TP-017
 
 ---
 
@@ -40,3 +40,9 @@ _Items discovered during task execution are logged here by agents._
 - `TP-008` — Profile Knowledge Ingestion
 - `TP-009` — Slack V0 Proposal Packet
 - `TP-010` — Slack-Ready Proposal Structure
+- `TP-011` — Agent Skills Registry
+- `TP-012` — Scheduler and Heartbeats
+- `TP-013` — LLM Normalization Layer
+- `TP-014` — Browser Search Agent
+- `TP-015` — Slack Conversation Layer
+- `TP-016` — Browser Apply Preparer
