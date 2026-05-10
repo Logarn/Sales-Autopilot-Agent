@@ -152,6 +152,42 @@ export interface ApplicationSubmissionInput {
   note?: string;
 }
 
+export type HeartbeatStatus = "starting" | "running" | "success" | "error" | "stale";
+
+export interface HeartbeatRecord {
+  worker: string;
+  status: HeartbeatStatus;
+  lastRunAt: string;
+  lastSuccessAt: string | null;
+  runCount: number;
+  successCount: number;
+  errorCount: number;
+  lastError: string | null;
+  metadata: Record<string, unknown>;
+  updatedAt: string;
+}
+
+interface HeartbeatRow {
+  worker: string;
+  status: HeartbeatStatus;
+  last_run_at: string;
+  last_success_at: string | null;
+  run_count: number;
+  success_count: number;
+  error_count: number;
+  last_error: string | null;
+  metadata: string | null;
+  updated_at: string;
+}
+
+export interface HeartbeatWriteInput {
+  worker: string;
+  status: Exclude<HeartbeatStatus, "stale">;
+  error?: string | null;
+  metadata?: Record<string, unknown>;
+  at?: Date;
+}
+
 export interface SlackQueueItem {
   id: number;
   payload: string;
@@ -260,6 +296,22 @@ CREATE TABLE IF NOT EXISTS browser_actions (
 CREATE INDEX IF NOT EXISTS idx_browser_actions_status ON browser_actions(status);
 CREATE INDEX IF NOT EXISTS idx_browser_actions_job_id ON browser_actions(job_id);
 CREATE INDEX IF NOT EXISTS idx_browser_actions_created_at ON browser_actions(created_at);
+
+CREATE TABLE IF NOT EXISTS worker_heartbeats (
+  worker TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  last_run_at TEXT NOT NULL,
+  last_success_at TEXT,
+  run_count INTEGER NOT NULL DEFAULT 0,
+  success_count INTEGER NOT NULL DEFAULT 0,
+  error_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  metadata TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_updated_at ON worker_heartbeats(updated_at);
+CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_status ON worker_heartbeats(status);
 `);
 
 function ensureSeenJobsColumn(name: string, definition: string): void {
@@ -368,6 +420,85 @@ const incrementBrowserActionAttemptStmt = db.prepare(
    SET attempts = attempts + 1, last_error = ?, updated_at = datetime('now')
    WHERE id = ?`
 );
+const upsertHeartbeatStmt = db.prepare(
+  `INSERT INTO worker_heartbeats (
+    worker,
+    status,
+    last_run_at,
+    last_success_at,
+    run_count,
+    success_count,
+    error_count,
+    last_error,
+    metadata,
+    updated_at
+  ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+  ON CONFLICT(worker) DO UPDATE SET
+    status = excluded.status,
+    last_run_at = excluded.last_run_at,
+    last_success_at = COALESCE(excluded.last_success_at, worker_heartbeats.last_success_at),
+    run_count = worker_heartbeats.run_count + 1,
+    success_count = worker_heartbeats.success_count + excluded.success_count,
+    error_count = worker_heartbeats.error_count + excluded.error_count,
+    last_error = excluded.last_error,
+    metadata = excluded.metadata,
+    updated_at = excluded.updated_at`
+);
+const getHeartbeatStmt = db.prepare<[string], HeartbeatRow>(
+  `SELECT worker, status, last_run_at, last_success_at, run_count, success_count, error_count,
+          last_error, metadata, updated_at
+   FROM worker_heartbeats
+   WHERE worker = ?`
+);
+const listHeartbeatsStmt = db.prepare<[], HeartbeatRow>(
+  `SELECT worker, status, last_run_at, last_success_at, run_count, success_count, error_count,
+          last_error, metadata, updated_at
+   FROM worker_heartbeats
+   ORDER BY worker ASC`
+);
+const staleHeartbeatsStmt = db.prepare<[string], HeartbeatRow>(
+  `SELECT worker, status, last_run_at, last_success_at, run_count, success_count, error_count,
+          last_error, metadata, updated_at
+   FROM worker_heartbeats
+   WHERE datetime(updated_at) < datetime(?)
+   ORDER BY updated_at ASC`
+);
+
+function formatHeartbeatTimestamp(date: Date): string {
+  return date.toISOString();
+}
+
+function parseHeartbeatMetadata(value: string | null | undefined): Record<string, unknown> {
+  if (!value) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    return {};
+  }
+
+  return {};
+}
+
+function rowToHeartbeat(row: HeartbeatRow): HeartbeatRecord {
+  return {
+    worker: row.worker,
+    status: row.status,
+    lastRunAt: row.last_run_at,
+    lastSuccessAt: row.last_success_at,
+    runCount: row.run_count,
+    successCount: row.success_count,
+    errorCount: row.error_count,
+    lastError: row.last_error,
+    metadata: parseHeartbeatMetadata(row.metadata),
+    updatedAt: row.updated_at,
+  };
+}
 const upsertApplicationStmt = db.prepare(
   `INSERT INTO applications (
     job_id,
@@ -822,6 +953,46 @@ export function updateBrowserActionStatus(id: number, status: BrowserActionStatu
 export function incrementBrowserActionAttempts(id: number, lastError?: string): boolean {
   const result = incrementBrowserActionAttemptStmt.run(lastError ?? null, id);
   return result.changes > 0;
+}
+
+export function recordHeartbeat(input: HeartbeatWriteInput): HeartbeatRecord {
+  const timestamp = formatHeartbeatTimestamp(input.at ?? new Date());
+  const isSuccess = input.status === "success";
+  const isError = input.status === "error";
+  upsertHeartbeatStmt.run(
+    input.worker,
+    input.status,
+    timestamp,
+    isSuccess ? timestamp : null,
+    isSuccess ? 1 : 0,
+    isError ? 1 : 0,
+    input.error ?? null,
+    JSON.stringify(input.metadata ?? {}),
+    timestamp
+  );
+
+  const heartbeat = getHeartbeat(input.worker);
+  if (!heartbeat) {
+    throw new Error(`Failed to record heartbeat for ${input.worker}`);
+  }
+  return heartbeat;
+}
+
+export function getHeartbeat(worker: string): HeartbeatRecord | null {
+  const row = getHeartbeatStmt.get(worker);
+  return row ? rowToHeartbeat(row) : null;
+}
+
+export function listHeartbeats(): HeartbeatRecord[] {
+  return listHeartbeatsStmt.all().map(rowToHeartbeat);
+}
+
+export function listStaleHeartbeats(thresholdMs: number, now = new Date()): HeartbeatRecord[] {
+  const staleBefore = new Date(now.getTime() - thresholdMs);
+  return staleHeartbeatsStmt.all(formatHeartbeatTimestamp(staleBefore)).map((row) => ({
+    ...rowToHeartbeat(row),
+    status: "stale",
+  }));
 }
 
 export function cleanupOldSeenJobs(): number {
