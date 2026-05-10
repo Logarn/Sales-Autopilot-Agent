@@ -1,10 +1,10 @@
 # TP-005: Job Detail Capture Parser — Status
 
-**Current Step:** Step 3: Documentation and sample
+**Current Step:** Step 4: Testing & Verification
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 9
+**Review Counter:** 10
 **Iteration:** 1
 **Size:** M
 
@@ -48,10 +48,10 @@ Plan: add a pure `src/jobCapture.ts` module exporting typed parsed job-detail ou
 ---
 
 ### Step 4: Testing & Verification
-**Status:** ⬜ Not Started
-- [ ] Full tests or no-test-script note
-- [ ] Build passes
-- [ ] Sample capture tested
+**Status:** 🟨 In Progress
+- [x] Full tests or no-test-script note
+- [x] Build passes
+- [x] Sample capture tested
 
 ---
 
@@ -79,6 +79,7 @@ Plan: add a pure `src/jobCapture.ts` module exporting typed parsed job-detail ou
 | 2026-05-10 | Task staged | PROMPT.md and STATUS.md created |
 | 2026-05-10 17:31 | Task started | Runtime V2 lane-runner execution |
 | 2026-05-10 17:31 | Step 0 started | Preflight |
+| 2026-05-10 20:45 | Full test script attempted | `npm run test:run-once` failed because `APIFY_API_TOKEN` is not configured in this environment. |
 
 ## Blockers
 
@@ -92,3 +93,4 @@ Plan: add a pure `src/jobCapture.ts` module exporting typed parsed job-detail ou
 | 2026-05-10 17:42 | Review R007 | plan Step 3: APPROVE |
 | 2026-05-10 17:43 | Review R008 | code Step 3: REVISE |
 | 2026-05-10 17:44 | Review R009 | code Step 3: APPROVE |
+| 2026-05-10 17:45 | Review R010 | plan Step 4: APPROVE |
