@@ -18,8 +18,9 @@
 ---
 
 ### Step 1: Conversation intent model
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Add intent types
+- [ ] Add deterministic natural-language parser with job/application ID extraction
 - [ ] Add local parser/CLI testing path
 - [ ] Build passes
 
