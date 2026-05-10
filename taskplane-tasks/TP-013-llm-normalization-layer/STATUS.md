@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 7
+**Review Counter:** 8
 **Iteration:** 1
 **Size:** L
 
@@ -39,9 +39,9 @@
 
 ### Step 3: Normalization pipeline
 **Status:** 🟨 In Progress
-- [ ] Normalize via LLM when enabled, fallback otherwise
-- [ ] Feed downstream workflow
-- [ ] Add CLI command
+- [ ] Normalize via LLM when enabled, with disabled/no-key/provider-error/invalid-JSON/invalid-repair cases falling back to deterministic packets
+- [ ] Feed downstream workflow by converting repaired packets to existing JobPosting/score/proposal-compatible structures while preserving deterministic connects and direct-link guardrails
+- [ ] Add CLI command that reads a capture file, accepts optional URL metadata, and prints safe normalized JSON without logging secrets
 - [ ] Build passes
 
 ---
@@ -93,3 +93,4 @@
 | 2026-05-10 21:06 | Review R005 | code Step 1: APPROVE |
 | 2026-05-10 21:07 | Review R006 | plan Step 2: APPROVE |
 | 2026-05-10 21:09 | Review R007 | code Step 2: APPROVE |
+| 2026-05-10 21:10 | Review R008 | plan Step 3: REVISE |
