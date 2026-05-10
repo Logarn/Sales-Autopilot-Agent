@@ -177,6 +177,27 @@ export interface ProposalQualityResult {
   wordCount: number;
 }
 
+export interface ProposalBrowserFillNotes {
+  approvedText: string;
+  profileNotes: string[];
+  rate: string;
+  attachments: string[];
+  highlights: string[];
+  connectsPlan: string;
+}
+
+export interface StructuredProposalDraft {
+  opening: string;
+  diagnosis: string;
+  proof: string;
+  clientRequestAnswers: string[];
+  rateRetainerAnswer: string;
+  cta: string;
+  suggestedAttachments: string[];
+  suggestedHighlights: string[];
+  browserFillNotes: ProposalBrowserFillNotes;
+}
+
 export interface ApplicationDraft {
   jobId: string;
   status: ApplicationStatus;
@@ -190,6 +211,7 @@ export interface ApplicationDraft {
   selectedPortfolioItems: PortfolioItem[];
   proposalQuality: ProposalQualityResult;
   proposalText: string;
+  structuredProposal?: StructuredProposalDraft;
   generatedAt: string;
 }
 

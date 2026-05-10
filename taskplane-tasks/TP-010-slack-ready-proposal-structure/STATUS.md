@@ -1,28 +1,28 @@
 # TP-010: Slack-Ready Proposal Structure — Status
 
-**Current Step:** Step 0: Preflight
+**Current Step:** Step 1: Structured proposal draft types
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 0
+**Review Counter:** 1
 **Iteration:** 1
 **Size:** M
 
 ---
 
 ### Step 0: Preflight
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 - [x] Required files and paths exist
 - [x] Dependencies satisfied
 
 ---
 
 ### Step 1: Structured proposal draft types
-**Status:** ⬜ Not Started
-- [ ] Add structured proposal fields
-- [ ] Include section fields and browser-fill notes
-- [ ] Preserve compatibility
-- [ ] Build passes
+**Status:** 🟨 In Progress
+- [x] Add structured proposal fields
+- [x] Include section fields and browser-fill notes
+- [x] Preserve compatibility
+- [x] Build passes
 
 ---
 
@@ -86,3 +86,4 @@
 ## Blockers
 
 *None*
+| 2026-05-10 19:57 | Review R001 | plan Step 1: APPROVE |
