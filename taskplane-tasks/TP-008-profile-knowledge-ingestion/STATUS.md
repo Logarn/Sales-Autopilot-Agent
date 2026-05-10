@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 0
+**Review Counter:** 1
 **Iteration:** 1
 **Size:** M
 
@@ -19,9 +19,12 @@
 
 ### Step 1: Knowledge file schema and loader
 **Status:** 🟨 In Progress
-- [ ] Add profile/knowledge support
-- [ ] Create safe loader
-- [ ] Add types
+- [ ] Define stable knowledge artifact contract for markdown/json, recognized types, metadata/tags, and profile enrichment output
+- [ ] Implement profile/knowledge support with deterministic grouping for voice, proof, portfolio, video, bid_rules, and general artifacts
+- [ ] Create safe loader for missing/empty directories, malformed JSON, unsupported extensions/types, and unreadable files without breaking existing profile loading
+- [ ] Return concise/truncated usable context for proposal generation
+- [ ] Add types for knowledge artifacts and profile enrichment
+- [ ] Verify empty directory, valid markdown/json artifacts, malformed JSON handling, and truncation behavior
 - [ ] Build passes
 
 ---
@@ -70,11 +73,13 @@
 
 | # | Type | Step | Verdict | File |
 |---|------|------|---------|------|
+| R001 | Plan | Step 1 | REVISE | .reviews/R001-plan-step1.md |
 
 ## Discoveries
 
 | Discovery | Disposition | Location |
 |-----------|-------------|----------|
+| Step 1 plan review requested explicit schema, safe-loader, and truncation verification criteria | Added as Step 1 checklist items | taskplane-tasks/TP-008-profile-knowledge-ingestion/.reviews/R001-plan-step1.md |
 
 ## Execution Log
 
@@ -87,3 +92,4 @@
 ## Blockers
 
 *None*
+| 2026-05-10 19:04 | Review R001 | plan Step 1: REVISE |
