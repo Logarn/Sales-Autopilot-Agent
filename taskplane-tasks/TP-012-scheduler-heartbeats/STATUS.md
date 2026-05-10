@@ -38,7 +38,7 @@
 ---
 
 ### Step 3: Health checks and Slack alerts
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Add health command/report
 - [ ] Add Slack stale-worker alert helper
 - [ ] Avoid alert spam
