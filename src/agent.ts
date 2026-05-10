@@ -1,6 +1,7 @@
 import { critiqueProposal } from "./critic";
 import { loadConnectsRules, loadFreelancerProfile, loadPortfolioLibrary } from "./profile";
-import { ApplicationDraft, FreelancerProfile, JobPosting, PortfolioItem, ScoredJob } from "./types";
+import { loadProfileKnowledge } from "./profileKnowledge";
+import { ApplicationDraft, FreelancerProfile, JobPosting, KnowledgeArtifact, PortfolioItem, ScoredJob } from "./types";
 import { truncateText } from "./utils";
 
 const RED_FLAG_TERMS = [
@@ -55,11 +56,38 @@ function inferPainLine(job: JobPosting): string {
   return "If you are hiring for retention, the issue usually is not traffic. It is that customers buy once, then disappear 30, 60, or 90 days later.";
 }
 
-function selectProofPoints(profile: FreelancerProfile, job: JobPosting): string[] {
+function selectRelevantKnowledge(artifacts: KnowledgeArtifact[], job: JobPosting, limit: number): KnowledgeArtifact[] {
+  const text = jobText(job);
+  return artifacts
+    .map((artifact) => {
+      const haystack = [artifact.title, artifact.tags.join(" "), artifact.summary].join(" ").toLowerCase();
+      const tagMatches = artifact.tags.filter((tag) => text.includes(tag.toLowerCase())).length;
+      const skillMatches = job.skills.filter((skill) => haystack.includes(skill.toLowerCase())).length;
+      const titleMatch = artifact.title
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((word) => word.length > 3 && text.includes(word)).length;
+      return { artifact, score: tagMatches * 4 + skillMatches * 3 + titleMatch };
+    })
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score || a.artifact.sourcePath.localeCompare(b.artifact.sourcePath))
+    .slice(0, limit)
+    .map(({ artifact }) => artifact);
+}
+
+function selectProofPoints(profile: FreelancerProfile, job: JobPosting, knowledgeProof: KnowledgeArtifact[] = []): string[] {
   const text = jobText(job);
   const directSkillMatches = (profile.skills ?? []).filter((skill) => text.includes(skill.toLowerCase())).slice(0, 4);
   const proof = (profile.proofPoints ?? []).slice(0, 2);
-  return [...new Set([...directSkillMatches, ...proof])].slice(0, 5);
+  const knowledge = knowledgeProof.map((artifact) => artifact.summary).slice(0, 2);
+  return [...new Set([...knowledge, ...directSkillMatches, ...proof])].slice(0, 5);
+}
+
+function knowledgeLine(prefix: string, artifacts: KnowledgeArtifact[]): string {
+  if (!artifacts.length) {
+    return "";
+  }
+  return `${prefix}: ${artifacts.map((artifact) => artifact.summary).join(" ")}`;
 }
 
 export function selectPortfolioItems(job: JobPosting): PortfolioItem[] {
@@ -145,7 +173,13 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   const profile = loadFreelancerProfile();
   const text = jobText(job);
   const redFlags = [...new Set([...job.scoreBreakdown.risks, ...job.negativeKeywords, ...containsAny(text, RED_FLAG_TERMS)])];
-  const proofPoints = selectProofPoints(profile, job);
+  const knowledge = loadProfileKnowledge();
+  const voiceKnowledge = knowledge.byType.voice.slice(0, 2);
+  const proofKnowledge = selectRelevantKnowledge(knowledge.byType.proof, job, 2);
+  const portfolioKnowledge = selectRelevantKnowledge(knowledge.byType.portfolio, job, 2);
+  const bidRuleKnowledge = selectRelevantKnowledge(knowledge.byType.bid_rules, job, 2);
+  const generalKnowledge = selectRelevantKnowledge(knowledge.byType.general, job, 1);
+  const proofPoints = selectProofPoints(profile, job, proofKnowledge);
   const portfolioItems = selectPortfolioItems(job);
   const fitReasons = [
     ...job.scoreBreakdown.reasons.slice(0, 6),
@@ -160,10 +194,16 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   const portfolioSentence = portfolioItems.length
     ? `The most relevant proof to include would be: ${portfolioItems.map((item) => item.name).join(", ")}.`
     : "I would keep attachments light unless you want a specific example.";
+  const portfolioKnowledgeSentence = knowledgeLine("Additional portfolio context", portfolioKnowledge);
+  const bidRuleSentence = knowledgeLine("Bid preference", bidRuleKnowledge);
+  const generalSentence = knowledgeLine("Useful profile context", generalKnowledge);
+  const voiceInstruction = voiceKnowledge.length
+    ? `\n\nVoice preference to apply quietly: ${voiceKnowledge.map((artifact) => artifact.summary).join(" ")}`
+    : "";
 
   const proposal = cleanProposal(
-    `${inferPainLine(job)}\n\nWhat I would look at first: where first-time buyers are dropping off, which flows are missing or stale, whether segmentation is doing any real work, and whether campaigns are driving repeat purchase or just adding noise. ${proofSentence}\n\nFor this kind of project, I would keep the work practical: find the leaks, rebuild the highest-impact lifecycle moments, tighten the messaging, and make retention a growth lever instead of another channel on the checklist. ${portfolioSentence}\n\nIf useful, send me the store URL and a quick sense of what is working/not working in Klaviyo now. I can tell you where I would start.`,
-    profile.voice?.bannedPhrases ?? []
+    `${inferPainLine(job)}\n\nWhat I would look at first: where first-time buyers are dropping off, which flows are missing or stale, whether segmentation is doing any real work, and whether campaigns are driving repeat purchase or just adding noise. ${proofSentence}\n\nFor this kind of project, I would keep the work practical: find the leaks, rebuild the highest-impact lifecycle moments, tighten the messaging, and make retention a growth lever instead of another channel on the checklist. ${portfolioSentence} ${portfolioKnowledgeSentence}\n\n${generalSentence} ${bidRuleSentence}\n\nIf useful, send me the store URL and a quick sense of what is working/not working in Klaviyo now. I can tell you where I would start.${voiceInstruction}`,
+    [...(profile.voice?.bannedPhrases ?? []), ...voiceKnowledge.flatMap((artifact) => artifact.tags.filter((tag) => tag.startsWith("ban:"))).map((tag) => tag.slice(4))]
   );
 
   const truncatedProposal = truncateText(proposal, 1800);
