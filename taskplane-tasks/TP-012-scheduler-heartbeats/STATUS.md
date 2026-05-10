@@ -1,11 +1,11 @@
 # TP-012: Scheduler and Heartbeats — Status
 
-**Current Step:** Step 5: Testing & Verification
-**Status:** 🟡 In Progress
+**Current Step:** Step 6: Documentation & Delivery
+**Status:** ✅ Complete
 **Last Updated:** 2026-05-10
 **Review Level:** 2
 **Review Counter:** 10
-**Iteration:** 1
+**Iteration:** 2
 **Size:** M
 
 ---
@@ -54,7 +54,7 @@
 ---
 
 ### Step 5: Testing & Verification
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 - [x] Full tests or env limitation note
 - [x] Build passes
 - [x] Health command tested
@@ -62,9 +62,9 @@
 ---
 
 ### Step 6: Documentation & Delivery
-**Status:** ⬜ Not Started
-- [ ] Docs updated
-- [ ] Discoveries logged
+**Status:** ✅ Complete
+- [x] Docs updated
+- [x] Discoveries logged
 
 ---
 
@@ -90,6 +90,7 @@
 | Plan reviewer suggested scheduler jobs record heartbeats so health reporting can consume real data. | Advisory; included in Step 2 implementation. | Step 2 plan review |
 | Code reviewer suggested scheduler mode validate required config before entering loop. | Advisory; applied while fixing lifecycle. | Step 2 code review |
 | Plan reviewer suggested reusing heartbeat/status report data model for command and scheduled health-check job consistency. | Advisory; apply if it fits implementation. | Step 3 plan review |
+| Delivery review confirmed README, `.env.example`, and deployment docs include scheduler mode, heartbeat thresholds, health command, and conservative Slack alert behavior. | No additional docs needed beyond Step 4 updates. | Step 6 delivery review |
 
 ## Execution Log
 | Timestamp | Action | Outcome |
@@ -97,6 +98,9 @@
 | 2026-05-10 | Task staged | PROMPT.md and STATUS.md created |
 | 2026-05-10 20:41 | Task started | Runtime V2 lane-runner execution |
 | 2026-05-10 20:41 | Step 0 started | Preflight |
+| 2026-05-10 20:57 | Worker iter 1 | done in 954s, tools: 151 |
+| 2026-05-10 20:57 | Step 6 started | Documentation & Delivery |
+| 2026-05-10 | Step 6 completed | Delivery docs verified and discoveries logged |
 
 ## Blockers
 *None*
