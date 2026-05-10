@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 5
+**Review Counter:** 6
 **Iteration:** 1
 **Size:** M
 
@@ -42,10 +42,10 @@
 ### Step 3: Persist fingerprints for seen jobs
 **Status:** 🟨 In Progress
 
-- [ ] Add nullable `fingerprint` column to `seen_jobs`
-- [ ] Store fingerprint when marking jobs seen
-- [ ] Use stored fingerprints to suppress practical repost duplicates
-- [ ] Run targeted build/typecheck: `npm run build`
+- [x] Add nullable `fingerprint` column to `seen_jobs`
+- [x] Store fingerprint when marking jobs seen
+- [x] Use stored fingerprints to suppress practical repost duplicates
+- [x] Run targeted build/typecheck: `npm run build`
 
 ---
 
@@ -114,3 +114,4 @@
 | 2026-05-10 16:32 | Review R003 | plan Step 2: APPROVE |
 | 2026-05-10 16:33 | Review R004 | code Step 2: REVISE |
 | 2026-05-10 16:35 | Review R005 | code Step 2: APPROVE |
+| 2026-05-10 16:36 | Review R006 | plan Step 3: APPROVE |

@@ -12,6 +12,7 @@ import {
   getDailySummary,
   getDbStats,
   isFirstRun,
+  isJobFingerprintSeen,
   isJobSeen,
   markJobSeen,
 } from "./db";
@@ -71,7 +72,7 @@ async function runPipeline(reason: string): Promise<RunStats> {
 
   const dedupMap = new Map<string, ScoredJob>();
   for (const rawJob of feedResult.jobs) {
-    if (isJobSeen(rawJob.id)) {
+    if (isJobSeen(rawJob.id) || isJobFingerprintSeen(rawJob)) {
       continue;
     }
     if (!dedupMap.has(rawJob.id)) {
