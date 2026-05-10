@@ -1,6 +1,6 @@
 # TP-016: Browser Apply Preparer — Status
 
-**Current Step:** Step 1: Apply preparation plan model
+**Current Step:** Step 2: Browser apply worker path
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 3
@@ -28,7 +28,7 @@
 ---
 
 ### Step 2: Browser apply worker path
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Add apply/prepare action handler
 - [ ] Detect login/security states
 - [ ] Fill conservatively in enabled mode, never submit
