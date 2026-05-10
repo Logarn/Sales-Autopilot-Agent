@@ -2,7 +2,7 @@
 
 **Last Updated:** 2026-05-10
 **Status:** Active
-**Next Task ID:** TP-008
+**Next Task ID:** TP-011
 
 ---
 
@@ -37,3 +37,6 @@ _Items discovered during task execution are logged here by agents._
 - `TP-005` — Job Detail Capture Parser
 - `TP-006` — Browser Queue Foundation
 - `TP-007` — Cloud Agent Runtime
+- `TP-008` — Profile Knowledge Ingestion
+- `TP-009` — Slack V0 Proposal Packet
+- `TP-010` — Slack-Ready Proposal Structure
