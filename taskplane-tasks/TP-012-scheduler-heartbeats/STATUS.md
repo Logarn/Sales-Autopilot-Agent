@@ -47,7 +47,7 @@
 ---
 
 ### Step 4: Docs/config
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Env example updated
 - [ ] README/deployment updated
 
