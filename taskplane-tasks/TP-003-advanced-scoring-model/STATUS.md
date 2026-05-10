@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 3
+**Review Counter:** 4
 **Iteration:** 1
 **Size:** M
 
@@ -30,12 +30,12 @@
 ---
 
 ### Step 2: Wire structured scoring into existing pipeline
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 
-- [ ] Attach score breakdown in existing scoring flow
-- [ ] Use score breakdown reasons/risks in application drafts
-- [ ] Display structured score components in Slack packets
-- [ ] Run targeted build/typecheck: `npm run build`
+- [x] Attach score breakdown in existing scoring flow
+- [x] Use score breakdown reasons/risks in application drafts
+- [x] Display structured score components in Slack packets
+- [x] Run targeted build/typecheck: `npm run build`
 
 ---
 
@@ -101,3 +101,4 @@
 | 2026-05-10 16:15 | Review R001 | plan Step 1: APPROVE |
 | 2026-05-10 16:19 | Review R002 | code Step 1: REVISE |
 | 2026-05-10 16:20 | Review R003 | code Step 1: APPROVE |
+| 2026-05-10 16:21 | Review R004 | plan Step 2: APPROVE |

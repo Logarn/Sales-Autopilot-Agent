@@ -144,7 +144,7 @@ function evaluateConnects(job: ScoredJob): {
 export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   const profile = loadFreelancerProfile();
   const text = jobText(job);
-  const redFlags = [...new Set([...job.negativeKeywords, ...containsAny(text, RED_FLAG_TERMS)])];
+  const redFlags = [...new Set([...job.scoreBreakdown.risks, ...job.negativeKeywords, ...containsAny(text, RED_FLAG_TERMS)])];
   const proofPoints = selectProofPoints(profile, job);
   const portfolioItems = selectPortfolioItems(job);
   const fitReasons = [
