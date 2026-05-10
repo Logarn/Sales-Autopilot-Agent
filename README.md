@@ -149,6 +149,31 @@ The command parses title, description, budget/type, duration, experience level, 
 
 Sample pasted text lives at `captures/job-detail-sample.txt`.
 
+## Profile Knowledge Ingestion
+
+Steve can add profile knowledge without editing TypeScript. The loader reads markdown or JSON artifacts under `profile/knowledge/` grouped by type: `voice`, `proof`, `portfolio`, `video`, `bid_rules`, and `general`. Missing or empty knowledge directories are safe; malformed or unsupported files are skipped with warnings.
+
+Add a note from text or a file:
+
+```bash
+npm run knowledge:add -- --type voice --title "Short confident CTA" --text "Prefer a shorter CTA and a specific next step. Avoid phrase \"quick sense\"." --tags "cta"
+npm run knowledge:add -- --type proof --title "Klaviyo retention win" --file notes/proof.md --tags "Klaviyo,Shopify"
+```
+
+Add/update portfolio metadata without code changes:
+
+```bash
+npm run portfolio:upsert -- --id retention-audit --name "Retention audit sample" --description "Klaviyo audit proof" --result "Found lifecycle revenue leaks" --industries "DTC,ecommerce" --platforms "Klaviyo,Shopify" --job-types "audit,flow optimization" --file-path "profile/attachments/Portfolio.pdf"
+```
+
+Add another video transcript as knowledge:
+
+```bash
+npm run knowledge:video -- --file profile/video-intro-transcript.md --title "Intro video transcript" --tags "intro,credibility"
+```
+
+Sample artifacts live in `profile/knowledge/voice/`, `profile/knowledge/portfolio/`, and `profile/knowledge/video/`. Proposal generation uses relevant proof/portfolio notes as client-facing evidence, applies voice notes as quiet style preferences, and keeps bid-rule notes internal to recommendations/Connects warnings.
+
 ## Browser Queue Safety Model
 
 The browser queue is a cloud/VM-safe foundation for future human-in-the-loop browser assistance. It stores requested browser actions in SQLite and processes them only when the worker is explicitly enabled:
@@ -182,6 +207,9 @@ The worker must pause for human intervention on login, 2FA, CAPTCHA, Cloudflare,
 - `npm run app:apply -- --job-id <id> --required-connects 10 --boost-connects 35 --rank 1 --client-spend 393 --rate 35 --profile "Email Marketing" --attachments "Truly Beauty - Case Study.pdf,Portfolio.pdf"` - record actual submission details
 - `npm run app:analytics` - report reply/interview/hire rates, Connects efficiency, and top proof assets
 - `npm run app:capture -- --job-id <id> --file captures/apply-screen.txt --record` - parse pasted Upwork apply-screen text and record structured submission details
+- `npm run knowledge:add -- --type voice --text "Prefer concise CTAs" [--title <title>] [--tags "cta"]` - append a local profile knowledge note
+- `npm run knowledge:video -- --file profile/video-intro-transcript.md --title "Intro video"` - ingest an additional video/transcript note
+- `npm run portfolio:upsert -- --id <id> --name <name> --description <text> --result <text>` - add/update portfolio metadata without code changes
 - `npm run browser:enqueue -- --job-id <id> --action open_job --url <upwork-url>` - add a safe browser action to the SQLite queue
 - `npm run browser:list -- [--status pending] [--limit 25]` - list queued browser actions
 - `npm run browser:update -- --id <action-id> --status paused --error "Login required"` - manually update a queued browser action

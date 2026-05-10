@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 11
+**Review Counter:** 12
 **Iteration:** 1
 **Size:** M
 
@@ -54,8 +54,8 @@
 
 ### Step 4: Documentation and sample knowledge
 **Status:** 🟨 In Progress
-- [ ] Add sample knowledge/examples
-- [ ] Update README
+- [x] Add sample knowledge/examples
+- [x] Update README
 
 ---
 
@@ -121,3 +121,4 @@
 | 2026-05-10 19:21 | Review R009 | code Step 3: REVISE |
 | 2026-05-10 19:23 | Review R010 | code Step 3: REVISE |
 | 2026-05-10 19:25 | Review R011 | code Step 3: APPROVE |
+| 2026-05-10 19:27 | Review R012 | plan Step 4: APPROVE |
