@@ -22,7 +22,7 @@
 
 **Plan:** Extend `src/config.ts` using existing env parsing/default patterns with browser-search enablement, dry-run/no-browser behavior, interval minutes, max jobs per query, query list/URLs, and freshness window while keeping Playwright/credentials optional. Add exported query/result/captured-page shapes and URL/text helper boundaries in `src/types.ts`/new search module so later runner code can hand off conservative captures to existing capture/normalization paths. Verify with `npm run build`.
 
-- [ ] Add explicit Step 1 plan covering config fields, model boundaries, dry-run safety, and build verification
+- [x] Add explicit Step 1 plan covering config fields, model boundaries, dry-run safety, and build verification
 - [ ] Add search config
 - [ ] Add types/helpers
 - [ ] Build passes
