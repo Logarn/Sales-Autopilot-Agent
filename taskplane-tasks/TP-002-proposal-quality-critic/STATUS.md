@@ -42,8 +42,8 @@
 ### Step 3: Documentation and examples
 **Status:** 🟨 In Progress
 
-- [ ] Update README with critic behavior
-- [ ] Include examples of flagged proposal issues
+- [x] Update README with critic behavior
+- [x] Include examples of flagged proposal issues
 
 ---
 

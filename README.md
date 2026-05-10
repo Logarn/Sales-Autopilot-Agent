@@ -20,6 +20,7 @@ The product direction is an Upwork revenue assistant, not an auto-apply bot: fin
 - Slack queue/retry on failures
 - Proposal packet generation using local profile and portfolio metadata
 - Suggested proof/attachment selection with guardrails
+- Deterministic Proposal Quality Critic that scores draft quality before Slack review
 - Application draft storage in SQLite
 - Startup health checks (Slack + feed reachability + DB stats)
 - Daily summary digest at 8:00 AM Africa/Nairobi (configurable)
@@ -85,6 +86,29 @@ upwork-notifier/
    ```bash
    npm start
    ```
+
+## Proposal Quality Critic
+
+Every generated application draft is graded by a deterministic critic before it appears in Slack. The critic returns a 0-100 score, issue list, positive signals, and word count so the human reviewer can quickly spot drafts that sound generic or weak.
+
+The critic checks for:
+
+- banned AI-sounding phrases from `profile/profile.json`
+- weak generic openings instead of a pain-based first line
+- generic claims that are not tied to the job
+- proposal length outside Steve's preferred 120-190 word range
+- vague or missing CTA
+- proof that is not clearly relevant to the job post
+- Steve voice markers such as direct diagnostic phrasing
+
+Examples of flagged issues:
+
+- `Dear hiring manager, I am excited to apply...` -> banned phrase and weak opening
+- `With over 8 years of experience...` -> matches the profile's placeholder banned phrase `With over X years of experience`
+- `I can help you achieve your goals` -> generic claim without diagnostic proof
+- `Let me know if you want to chat` -> vague CTA compared with `send me the store URL and what is not working in Klaviyo now`
+
+Slack packets show the Proposal Quality score plus the top issues and positive signals above the proposal draft.
 
 ## npm Scripts
 
