@@ -1,10 +1,10 @@
 # TP-011: Agent Skills Registry — Status
 
-**Current Step:** Step 3: Documentation
+**Current Step:** Step 4: Testing & Verification
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 1
-**Review Counter:** 5
+**Review Counter:** 6
 **Iteration:** 1
 **Size:** M
 
@@ -42,10 +42,10 @@
 ---
 
 ### Step 4: Testing & Verification
-**Status:** ⬜ Not Started
-- [ ] Full tests or env limitation note
-- [ ] Skills list/read CLI smoke test passes
-- [ ] Build passes
+**Status:** ✅ Complete
+- [x] Full tests or env limitation note
+- [x] Skills list/read CLI smoke test passes
+- [x] Build passes
 
 ---
 
@@ -63,6 +63,7 @@
 ## Discoveries
 | Discovery | Disposition | Location |
 |-----------|-------------|----------|
+| No `npm test` script exists; full test suite unavailable, so Step 4 used `npm run skills:list`, `npm run skills:read -- upwork-search`, and `npm run build`. | Documented env/project limitation | `package.json` |
 
 ## Execution Log
 | Timestamp | Action | Outcome |
@@ -78,3 +79,4 @@
 | 2026-05-10 20:37 | Review R003 | plan Step 2: APPROVE |
 | 2026-05-10 20:38 | Review R004 | plan Step 3: APPROVE |
 | 2026-05-10 20:39 | Review R005 | plan Step 4: REVISE |
+| 2026-05-10 20:40 | Review R006 | plan Step 4: APPROVE |
