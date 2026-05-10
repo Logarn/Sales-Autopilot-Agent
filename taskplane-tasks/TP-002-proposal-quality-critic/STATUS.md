@@ -59,9 +59,9 @@
 ### Step 5: Documentation & Delivery
 **Status:** 🟨 In Progress
 
-- [ ] "Must Update" docs modified
-- [ ] "Check If Affected" docs reviewed
-- [ ] Discoveries logged
+- [x] "Must Update" docs modified
+- [x] "Check If Affected" docs reviewed
+- [x] Discoveries logged
 
 ---
 
@@ -76,6 +76,8 @@
 
 | Discovery | Disposition | Location |
 |-----------|-------------|----------|
+| `npm test` script is absent; verification used `npm run build` as the executable quality gate. | Documented for this task; no test script added because it is outside scope. | `package.json` |
+| `docs/PRODUCT_VISION.md` already describes the proposal quality engine direction; README update was sufficient. | Reviewed; no change required. | `docs/PRODUCT_VISION.md` |
 
 ---
 
