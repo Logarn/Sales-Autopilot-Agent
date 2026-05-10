@@ -204,6 +204,18 @@ Safety defaults are conservative: `BROWSER_WORKER_ENABLED=false` and `BROWSER_DR
 
 The worker must pause for human intervention on login, 2FA, CAPTCHA, Cloudflare, or any other security challenge. It must not bypass security controls, store Upwork passwords, fill proposal fields, or submit proposals. Optional artifacts are minimized diagnostics only (state, URL, title, bounded text excerpt), not full authenticated page archives.
 
+## Agent Skills Registry
+
+Natural-language operating playbooks live under `skills/<skill-name>/SKILL.md`. They let operators and future agents load targeted context for a specific workflow instead of reading the whole repository.
+
+```bash
+npm run skills:list
+npm run skills:read -- upwork-search
+npm run skills:read -- proposal-writing
+```
+
+The list command prints sorted skill names, titles, and markdown paths. The read command prints the raw `SKILL.md` for one validated skill name. Skill docs preserve the core safety model: this assistant finds, drafts, queues, and tracks opportunities, but human approval is required before any Upwork application and browser automation must pause on login, 2FA, CAPTCHA, or other security challenges.
+
 ## npm Scripts
 
 - `npm run dev` - watch mode during development
