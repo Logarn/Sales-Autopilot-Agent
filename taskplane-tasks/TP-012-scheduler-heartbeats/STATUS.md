@@ -18,7 +18,7 @@
 ---
 
 ### Step 1: Heartbeat schema and helpers
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Add heartbeat table
 - [ ] Add helper functions
 - [ ] Build passes
