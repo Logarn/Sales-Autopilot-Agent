@@ -41,6 +41,8 @@
     "browser:enqueue": "tsx src/browserQueue.ts --enqueue",
     "browser:list": "tsx src/browserQueue.ts --list",
     "browser:update": "tsx src/browserQueue.ts --update",
+    "browser:search": "tsx src/browserSearch.ts",
+    "browser:search:prod": "node dist/browserSearch.js",
     "browser:worker": "tsx src/browserWorker.ts",
     "browser:worker:prod": "node dist/browserWorker.js",
     "skills:list": "tsx src/skills.ts list",

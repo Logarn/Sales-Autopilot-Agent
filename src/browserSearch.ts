@@ -8,7 +8,8 @@ import {
   BROWSER_SEARCH_MAX_JOBS_PER_QUERY,
   BROWSER_USER_DATA_DIR,
 } from "./config";
-import { enqueueBrowserAction } from "./db";
+import { closeDb, enqueueBrowserAction } from "./db";
+import { writeHeartbeat } from "./heartbeat";
 import { logger } from "./logger";
 import { buildDeterministicOpportunityPacket } from "./normalization";
 import {
@@ -309,14 +310,35 @@ export async function runBrowserSearch(config = getBrowserSearchConfig()): Promi
   }
 }
 
+function heartbeatMetadata(summary: BrowserSearchRunSummary): Record<string, unknown> {
+  return {
+    source: "browser-search-cli",
+    dryRun: summary.dryRun,
+    queriesRun: summary.queriesRun,
+    jobsFound: summary.jobsFound,
+    jobsCaptured: summary.jobsCaptured,
+    jobsQueued: summary.jobsQueued,
+    pausedReason: summary.pausedReason ?? null,
+    errors: summary.errors,
+  };
+}
+
 export async function runBrowserSearchCli(): Promise<void> {
   const result = await runBrowserSearch();
+  writeHeartbeat({
+    worker: "browser-search",
+    status: result.summary.errors.length > 0 ? "error" : "success",
+    error: result.summary.errors[0],
+    metadata: heartbeatMetadata(result.summary),
+  });
   console.log(JSON.stringify(result.summary, null, 2));
 }
 
 if (require.main === module) {
-  runBrowserSearchCli().catch((error: unknown) => {
-    logger.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  });
+  runBrowserSearchCli()
+    .catch((error: unknown) => {
+      logger.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    })
+    .finally(() => closeDb());
 }

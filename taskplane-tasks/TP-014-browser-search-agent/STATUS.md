@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 3
-**Review Counter:** 6
+**Review Counter:** 7
 **Iteration:** 1
 **Size:** L
 
@@ -49,10 +49,10 @@
 
 **Plan:** Add an npm/CLI browser-search command around `runBrowserSearch`, wire an optional scheduler job gated by browser-search enablement so existing pipeline/RSS/Apify runs remain independent, and record structured heartbeat metadata from each search summary (queries/jobs/errors/paused reason). Verify build plus a dry-run CLI invocation without credentials.
 
-- [ ] Add search command/scheduler hook
-- [ ] Write heartbeat metadata
-- [ ] Keep RSS/Apify fallback behavior
-- [ ] Build passes
+- [x] Add search command/scheduler hook
+- [x] Write heartbeat metadata
+- [x] Keep RSS/Apify fallback behavior
+- [x] Build passes
 
 ---
 
@@ -86,6 +86,7 @@
 | R004 | Code | Step 1 | APPROVE | .reviews/R004-code-step1.md |
 | R005 | Plan | Step 2 | APPROVE | .reviews/R005-plan-step2.md |
 | R006 | Code | Step 2 | APPROVE | .reviews/R006-code-step2.md |
+| R007 | Plan | Step 3 | APPROVE | .reviews/R007-plan-step3.md |
 
 ## Discoveries
 | Discovery | Disposition | Location |
@@ -107,3 +108,4 @@
 | 2026-05-10 21:43 | Review R004 | code Step 1: APPROVE |
 | 2026-05-10 21:44 | Review R005 | plan Step 2: APPROVE |
 | 2026-05-10 21:47 | Review R006 | code Step 2: APPROVE |
+| 2026-05-10 21:48 | Review R007 | plan Step 3: APPROVE |
