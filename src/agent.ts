@@ -83,11 +83,37 @@ function selectProofPoints(profile: FreelancerProfile, job: JobPosting, knowledg
   return [...new Set([...knowledge, ...directSkillMatches, ...proof])].slice(0, 5);
 }
 
-function knowledgeLine(prefix: string, artifacts: KnowledgeArtifact[]): string {
-  if (!artifacts.length) {
-    return "";
+function selectVoiceKnowledge(artifacts: KnowledgeArtifact[], limit = 4): KnowledgeArtifact[] {
+  return [...artifacts]
+    .sort((a, b) => (b.createdAt ?? b.sourcePath).localeCompare(a.createdAt ?? a.sourcePath))
+    .slice(0, limit);
+}
+
+function voiceClosingLine(artifacts: KnowledgeArtifact[]): string | null {
+  const combined = artifacts.map((artifact) => artifact.summary).join(" ");
+  const preferredTag = artifacts
+    .flatMap((artifact) => artifact.tags.filter((tag) => tag.startsWith("prefer:")))
+    .map((tag) => tag.slice(7).trim())
+    .find(Boolean);
+  if (preferredTag) {
+    return preferredTag;
   }
-  return `${prefix}: ${artifacts.map((artifact) => artifact.summary).join(" ")}`;
+  if (/short(er)?\s+cta|concise\s+cta|confident.*next step|specific next step/i.test(combined)) {
+    return "Send me the store URL and I can point to the first retention fixes I would make.";
+  }
+  if (/audit|diagnos/i.test(combined)) {
+    return "Send me the store URL and I can give you a practical read on where I would start.";
+  }
+  return null;
+}
+
+function voiceBannedPhrases(artifacts: KnowledgeArtifact[]): string[] {
+  const tagged = artifacts.flatMap((artifact) => artifact.tags.filter((tag) => tag.startsWith("ban:")).map((tag) => tag.slice(4)));
+  const fromText = artifacts.flatMap((artifact) => {
+    const matches = [...artifact.summary.matchAll(/avoid (?:the )?(?:phrase|wording)?\s*["“]([^"”]+)["”]/gi)];
+    return matches.map((match) => match[1]).filter(Boolean);
+  });
+  return [...tagged, ...fromText];
 }
 
 export function selectPortfolioItems(job: JobPosting): PortfolioItem[] {
@@ -174,11 +200,10 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   const text = jobText(job);
   const redFlags = [...new Set([...job.scoreBreakdown.risks, ...job.negativeKeywords, ...containsAny(text, RED_FLAG_TERMS)])];
   const knowledge = loadProfileKnowledge();
-  const voiceKnowledge = knowledge.byType.voice.slice(0, 2);
+  const voiceKnowledge = selectVoiceKnowledge(knowledge.byType.voice);
   const proofKnowledge = selectRelevantKnowledge(knowledge.byType.proof, job, 2);
   const portfolioKnowledge = selectRelevantKnowledge(knowledge.byType.portfolio, job, 2);
   const bidRuleKnowledge = selectRelevantKnowledge(knowledge.byType.bid_rules, job, 2);
-  const generalKnowledge = selectRelevantKnowledge(knowledge.byType.general, job, 1);
   const proofPoints = selectProofPoints(profile, job, proofKnowledge);
   const portfolioItems = selectPortfolioItems(job);
   const fitReasons = [
@@ -197,15 +222,11 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   const portfolioKnowledgeSentence = portfolioKnowledge.length
     ? `Additional relevant example: ${portfolioKnowledge.map((artifact) => artifact.summary).join(" ")}`
     : "";
-  const preferredPhrases = voiceKnowledge
-    .flatMap((artifact) => artifact.tags.filter((tag) => tag.startsWith("prefer:")))
-    .map((tag) => tag.slice(7).trim())
-    .filter(Boolean);
-  const closingLine = preferredPhrases[0] ?? "If useful, send me the store URL and a quick sense of what is working/not working in Klaviyo now. I can tell you where I would start.";
+  const closingLine = voiceClosingLine(voiceKnowledge) ?? "If useful, send me the store URL and a quick sense of what is working/not working in Klaviyo now. I can tell you where I would start.";
 
   const proposal = cleanProposal(
     `${inferPainLine(job)}\n\nWhat I would look at first: where first-time buyers are dropping off, which flows are missing or stale, whether segmentation is doing any real work, and whether campaigns are driving repeat purchase or just adding noise. ${proofSentence}\n\nFor this kind of project, I would keep the work practical: find the leaks, rebuild the highest-impact lifecycle moments, tighten the messaging, and make retention a growth lever instead of another channel on the checklist. ${portfolioSentence} ${portfolioKnowledgeSentence}\n\n${closingLine}`,
-    [...(profile.voice?.bannedPhrases ?? []), ...voiceKnowledge.flatMap((artifact) => artifact.tags.filter((tag) => tag.startsWith("ban:"))).map((tag) => tag.slice(4))]
+    [...(profile.voice?.bannedPhrases ?? []), ...voiceBannedPhrases(voiceKnowledge)]
   );
 
   const truncatedProposal = truncateText(proposal, 1800);

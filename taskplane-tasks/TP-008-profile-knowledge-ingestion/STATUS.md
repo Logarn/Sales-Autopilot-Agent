@@ -48,7 +48,7 @@
 - [x] Empty knowledge directory is safe
 - [x] Build passes
 - [x] Prevent voice, bid-rule, and internal general knowledge from leaking as meta instructions in client proposal text
-- [ ] Apply plain-text voice note preferences and newer voice additions with bounded precedence
+- [x] Apply plain-text voice note preferences and newer voice additions with bounded precedence
 
 ---
 
