@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 3
+**Review Counter:** 4
 **Iteration:** 1
 **Size:** M
 
@@ -35,6 +35,7 @@
 - [x] Keep strongest/latest duplicate candidate deterministically
 - [x] Log dedupe counts by source
 - [x] Run targeted build/typecheck: `npm run build`
+- [ ] Revision R004: exact-ID duplicates retain strongest/latest candidate before near-duplicate matching
 
 ---
 
@@ -106,7 +107,9 @@
 
 ## Notes
 
-*Reserved for execution notes*
+- R004 suggestion: consider logging actual dedupe removals by source, not just input counts, for better observability.
+
 | 2026-05-10 16:29 | Review R001 | plan Step 1: APPROVE |
 | 2026-05-10 16:31 | Review R002 | code Step 1: APPROVE |
 | 2026-05-10 16:32 | Review R003 | plan Step 2: APPROVE |
+| 2026-05-10 16:33 | Review R004 | code Step 2: REVISE |
