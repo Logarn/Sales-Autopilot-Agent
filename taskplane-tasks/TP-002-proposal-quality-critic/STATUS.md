@@ -1,6 +1,6 @@
 # TP-002: Proposal Quality Critic — Status
 
-**Current Step:** Step 3: Documentation and examples
+**Current Step:** Step 4: Testing & Verification
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
@@ -40,7 +40,7 @@
 ---
 
 ### Step 3: Documentation and examples
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 
 - [x] Update README with critic behavior
 - [x] Include examples of flagged proposal issues
@@ -48,7 +48,7 @@
 ---
 
 ### Step 4: Testing & Verification
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 
 - [ ] FULL test suite passing or absence of test script documented
 - [ ] All failures fixed
