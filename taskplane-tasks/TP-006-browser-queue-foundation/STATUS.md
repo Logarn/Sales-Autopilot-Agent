@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 4
+**Review Counter:** 5
 **Iteration:** 1
 **Size:** L
 
@@ -31,6 +31,7 @@
 - [x] Configure VM-safe persistent browser context if Playwright used
 - [x] Detect login/2FA/CAPTCHA/page-loaded states
 - [x] Save optional diagnostic artifacts safely without credentials
+- [ ] Redact/minimize live browser diagnostic artifacts and avoid full HTML/screenshots by default
 - [x] Provide safe no-credentials/no-browser fallback behavior
 - [x] No proposal fill/submit behavior
 - [x] Build passes
@@ -78,6 +79,7 @@
 | Discovery | Disposition | Location |
 |-----------|-------------|----------|
 | Step 2 plan review suggested keeping broader env flag documentation/enforcement in Step 3. | Follow during Step 2 implementation. | taskplane-tasks/TP-006-browser-queue-foundation/.reviews/R003-plan-step2.md |
+| Step 2 code review flagged full HTML/screenshot artifacts as unsafe for authenticated pages. | Add minimized/redacted artifacts only by default. | taskplane-tasks/TP-006-browser-queue-foundation/.reviews/R005-code-step2.md |
 
 ## Execution Log
 
@@ -94,3 +96,4 @@
 | 2026-05-10 17:51 | Review R002 | code Step 1: APPROVE |
 | 2026-05-10 17:52 | Review R003 | plan Step 2: REVISE |
 | 2026-05-10 17:53 | Review R004 | plan Step 2: APPROVE |
+| 2026-05-10 17:55 | Review R005 | code Step 2: REVISE |
