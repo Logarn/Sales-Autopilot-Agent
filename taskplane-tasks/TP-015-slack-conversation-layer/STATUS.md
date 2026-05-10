@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 3
-**Review Counter:** 5
+**Review Counter:** 6
 **Iteration:** 2
 **Size:** L
 
@@ -27,7 +27,7 @@
 ---
 
 ### Step 2: Draft revision/update flow
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 - [x] Add DB helpers for draft lookup, proposal versioning, and revision audit events
 - [x] Apply revision instruction or store request
 - [x] Preserve proposal version/audit trail
@@ -95,3 +95,4 @@
 | 2026-05-10 22:01 | Review R003 | plan Step 2: APPROVE |
 | 2026-05-10 22:04 | Review R004 | code Step 2: REVISE |
 | 2026-05-10 22:06 | Review R005 | code Step 2: REVISE |
+| 2026-05-10 22:08 | Review R006 | code Step 2: APPROVE |
