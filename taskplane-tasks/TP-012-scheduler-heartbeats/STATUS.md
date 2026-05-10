@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 0
+**Review Counter:** 1
 **Iteration:** 1
 **Size:** M
 
@@ -19,8 +19,9 @@
 
 ### Step 1: Heartbeat schema and helpers
 **Status:** 🟨 In Progress
-- [ ] Add heartbeat table
-- [ ] Add helper functions
+- [ ] Add heartbeat table with required fields and idempotent creation
+- [ ] Add helper functions for upsert/read/list/stale detection with stable timestamps and JSON metadata defaults
+- [ ] Validate helper behavior or document why only build validation is possible
 - [ ] Build passes
 
 ---
@@ -68,10 +69,12 @@
 ## Reviews
 | # | Type | Step | Verdict | File |
 |---|------|------|---------|------|
+| R001 | Plan | 1 | REVISE | .reviews/R001-plan-step1.md |
 
 ## Discoveries
 | Discovery | Disposition | Location |
 |-----------|-------------|----------|
+| Plan reviewer suggested shared TypeScript heartbeat types for scheduler and health reporting. | Advisory; apply if it fits implementation. | Step 1 plan review |
 
 ## Execution Log
 | Timestamp | Action | Outcome |
@@ -82,3 +85,4 @@
 
 ## Blockers
 *None*
+| 2026-05-10 20:42 | Review R001 | plan Step 1: REVISE |
