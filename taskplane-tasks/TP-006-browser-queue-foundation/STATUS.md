@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 2
+**Review Counter:** 3
 **Iteration:** 1
 **Size:** L
 
@@ -30,6 +30,8 @@
 - [ ] Process pending actions in safe/dry-run mode
 - [ ] Configure VM-safe persistent browser context if Playwright used
 - [ ] Detect login/2FA/CAPTCHA/page-loaded states
+- [ ] Save optional diagnostic artifacts safely without credentials
+- [ ] Provide safe no-credentials/no-browser fallback behavior
 - [ ] No proposal fill/submit behavior
 - [ ] Build passes
 
@@ -75,6 +77,7 @@
 
 | Discovery | Disposition | Location |
 |-----------|-------------|----------|
+| Step 2 plan review suggested keeping broader env flag documentation/enforcement in Step 3. | Follow during Step 2 implementation. | taskplane-tasks/TP-006-browser-queue-foundation/.reviews/R003-plan-step2.md |
 
 ## Execution Log
 
@@ -89,3 +92,4 @@
 *None*
 | 2026-05-10 17:49 | Review R001 | plan Step 1: APPROVE |
 | 2026-05-10 17:51 | Review R002 | code Step 1: APPROVE |
+| 2026-05-10 17:52 | Review R003 | plan Step 2: REVISE |
