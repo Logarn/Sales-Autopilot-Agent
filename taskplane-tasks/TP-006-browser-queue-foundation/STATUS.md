@@ -1,10 +1,10 @@
 # TP-006: Browser Queue Foundation — Status
 
-**Current Step:** Step 1: Queue schema and CLI
+**Current Step:** Step 2: Browser worker skeleton
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 1
+**Review Counter:** 2
 **Iteration:** 1
 **Size:** L
 
@@ -18,7 +18,7 @@
 ---
 
 ### Step 1: Queue schema and CLI
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 - [x] Add browser_actions table
 - [x] Add enqueue/list/update commands
 - [x] Build passes
@@ -26,7 +26,7 @@
 ---
 
 ### Step 2: Browser worker skeleton
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Process pending actions in safe/dry-run mode
 - [ ] Configure VM-safe persistent browser context if Playwright used
 - [ ] Detect login/2FA/CAPTCHA/page-loaded states
@@ -88,3 +88,4 @@
 
 *None*
 | 2026-05-10 17:49 | Review R001 | plan Step 1: APPROVE |
+| 2026-05-10 17:51 | Review R002 | code Step 1: APPROVE |
