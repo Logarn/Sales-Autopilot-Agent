@@ -1,7 +1,15 @@
 import { critiqueProposal } from "./critic";
 import { loadConnectsRules, loadFreelancerProfile, loadPortfolioLibrary } from "./profile";
 import { loadProfileKnowledge } from "./profileKnowledge";
-import { ApplicationDraft, FreelancerProfile, JobPosting, KnowledgeArtifact, PortfolioItem, ScoredJob } from "./types";
+import {
+  ApplicationDraft,
+  FreelancerProfile,
+  JobPosting,
+  KnowledgeArtifact,
+  PortfolioItem,
+  ScoredJob,
+  StructuredProposalDraft,
+} from "./types";
 import { truncateText } from "./utils";
 
 const RED_FLAG_TERMS = [
@@ -37,6 +45,11 @@ function jobText(job: JobPosting): string {
 
 function containsAny(text: string, terms: string[]): string[] {
   return terms.filter((term) => text.includes(term.toLowerCase()));
+}
+
+function isBeautyDtcKlaviyoJob(job: JobPosting): boolean {
+  const text = jobText(job);
+  return /beauty|skincare|cosmetic|dtc|d2c|shopify|ecommerce|klaviyo/.test(text);
 }
 
 function inferPainLine(job: JobPosting): string {
@@ -78,9 +91,80 @@ function selectRelevantKnowledge(artifacts: KnowledgeArtifact[], job: JobPosting
 function selectProofPoints(profile: FreelancerProfile, job: JobPosting, knowledgeProof: KnowledgeArtifact[] = []): string[] {
   const text = jobText(job);
   const directSkillMatches = (profile.skills ?? []).filter((skill) => text.includes(skill.toLowerCase())).slice(0, 4);
-  const proof = (profile.proofPoints ?? []).slice(0, 2);
+  const allProof = profile.proofPoints ?? [];
+  const priorityProof = allProof.filter((point) => {
+    const lower = point.toLowerCase();
+    return isBeautyDtcKlaviyoJob(job) && /(truly beauty|beauty|dtc|klaviyo|retention|lifecycle|shopify)/.test(lower);
+  });
+  const proof = [...priorityProof, ...allProof].slice(0, 3);
   const knowledge = knowledgeProof.map((artifact) => artifact.summary).slice(0, 2);
-  return [...new Set([...knowledge, ...directSkillMatches, ...proof])].slice(0, 5);
+  return [...new Set([...knowledge, ...proof, ...directSkillMatches])].slice(0, 5);
+}
+
+function extractClientRequestAnswers(job: JobPosting, profile: FreelancerProfile): string[] {
+  const source = `${job.title}\n${job.description}`;
+  const answers: string[] = [];
+  const add = (answer: string) => {
+    if (!answers.includes(answer)) answers.push(answer);
+  };
+
+  if (/rate|hourly|budget|price|retainer/i.test(source)) {
+    add(`Rate: ${profile.hourlyRate > 0 ? `$${profile.hourlyRate}/hr` : "use the posted budget"}; for retainers, scope the first month around audit, priority fixes, and reporting before expanding.`);
+  }
+  if (/portfolio|example|case stud|sample|previous work|proof/i.test(source)) {
+    add("Proof: include the strongest relevant retention/Klaviyo examples rather than a broad portfolio dump.");
+  }
+  if (/availability|start|timeline|when can you/i.test(source)) {
+    add("Availability: ready to start with a short diagnostic pass, then prioritize the highest-impact lifecycle fixes first.");
+  }
+  if (/approach|plan|how would you|strategy|what would you/i.test(source)) {
+    add("Approach: audit the account, find the revenue leaks, fix the highest-impact flows/segments/campaign process, then measure repeat-purchase impact.");
+  }
+  if (/certif|klaviyo partner|partner/i.test(source)) {
+    add("Credentials: Klaviyo Silver Partner with DTC lifecycle and retention experience.");
+  }
+
+  return answers.slice(0, 4);
+}
+
+function buildStructuredProposalDraft(args: {
+  job: ScoredJob;
+  profile: FreelancerProfile;
+  opening: string;
+  diagnosis: string;
+  proof: string;
+  clientRequestAnswers: string[];
+  rateRetainerAnswer: string;
+  cta: string;
+  portfolioItems: PortfolioItem[];
+  proposalText: string;
+  suggestedConnects: number;
+  suggestedBoostConnects: number;
+}): StructuredProposalDraft {
+  const attachments = args.portfolioItems.map((item) => item.name);
+  const highlights = args.portfolioItems.map((item) => item.result).filter(Boolean).slice(0, 3);
+  const connectsPlan = args.suggestedBoostConnects > 0
+    ? `Use ${args.suggestedConnects} required Connects; consider ${args.suggestedBoostConnects} boost Connects only if the bid stays near the target rank.`
+    : `Use ${args.suggestedConnects} required Connects; no boost by default.`;
+
+  return {
+    opening: args.opening,
+    diagnosis: args.diagnosis,
+    proof: args.proof,
+    clientRequestAnswers: args.clientRequestAnswers,
+    rateRetainerAnswer: args.rateRetainerAnswer,
+    cta: args.cta,
+    suggestedAttachments: attachments,
+    suggestedHighlights: highlights,
+    browserFillNotes: {
+      approvedText: args.proposalText,
+      profileNotes: [args.profile.title, args.profile.location].filter(Boolean),
+      rate: args.rateRetainerAnswer,
+      attachments,
+      highlights,
+      connectsPlan,
+    },
+  };
 }
 
 function selectVoiceKnowledge(artifacts: KnowledgeArtifact[], limit = 4): KnowledgeArtifact[] {
@@ -213,19 +297,30 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
     ...(job.clientHireRate > 0 ? [`Client hire rate is ${job.clientHireRate}%`] : []),
   ].slice(0, 8);
 
+  const opening = inferPainLine(job);
+  const diagnosis = "What I would look at first: where first-time buyers are dropping off, which flows are missing or stale, whether segmentation is doing any real work, and whether campaigns are driving repeat purchase or just adding noise.";
   const proofSentence = proofPoints.length
-    ? `Relevant background: ${proofPoints.slice(0, 3).join("; ")}.`
+    ? `Relevant background: ${proofPoints.slice(0, job.matchLevel === "high" ? 3 : 2).join("; ")}.`
     : `My background is closest to ${profile.niche || "retention and lifecycle marketing"}.`;
+  const clientRequestAnswers = extractClientRequestAnswers(job, profile);
+  const clientAnswersSentence = clientRequestAnswers.length ? `To answer the application notes directly: ${clientRequestAnswers.join(" ")}` : "";
+  const rateRetainerAnswer = suggestBid(job, profile);
   const portfolioSentence = portfolioItems.length
     ? `The most relevant proof to include would be: ${portfolioItems.map((item) => item.name).join(", ")}.`
     : "I would keep attachments light unless you want a specific example.";
   const portfolioKnowledgeSentence = portfolioKnowledge.length
     ? `Additional relevant example: ${portfolioKnowledge.map((artifact) => artifact.summary).join(" ")}`
     : "";
+  const workPlan = "For this kind of project, I would keep the work practical: find the leaks, rebuild the highest-impact lifecycle moments, tighten the messaging, and make retention a growth lever instead of another channel on the checklist.";
   const closingLine = voiceClosingLine(voiceKnowledge) ?? "If useful, send me the store URL and a quick sense of what is working/not working in Klaviyo now. I can tell you where I would start.";
 
   const proposal = cleanProposal(
-    `${inferPainLine(job)}\n\nWhat I would look at first: where first-time buyers are dropping off, which flows are missing or stale, whether segmentation is doing any real work, and whether campaigns are driving repeat purchase or just adding noise. ${proofSentence}\n\nFor this kind of project, I would keep the work practical: find the leaks, rebuild the highest-impact lifecycle moments, tighten the messaging, and make retention a growth lever instead of another channel on the checklist. ${portfolioSentence} ${portfolioKnowledgeSentence}\n\n${closingLine}`,
+    [
+      opening,
+      `${diagnosis} ${proofSentence}`,
+      [clientAnswersSentence, workPlan, portfolioSentence, portfolioKnowledgeSentence].filter(Boolean).join(" "),
+      closingLine,
+    ].filter(Boolean).join("\n\n"),
     [...(profile.voice?.bannedPhrases ?? []), ...voiceBannedPhrases(voiceKnowledge)]
   );
 
@@ -242,13 +337,27 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
     fitScore: Math.min(100, Math.max(0, job.scoreBreakdown.fitScore.score)),
     fitReasons,
     redFlags,
-    suggestedBid: suggestBid(job, profile),
+    suggestedBid: rateRetainerAnswer,
     suggestedConnects: job.connectsCost,
     suggestedBoostConnects: connects.suggestedBoostConnects,
     connectsWarnings: connects.warnings,
     selectedPortfolioItems: portfolioItems,
     proposalQuality,
     proposalText: truncatedProposal,
+    structuredProposal: buildStructuredProposalDraft({
+      job,
+      profile,
+      opening,
+      diagnosis,
+      proof: proofSentence,
+      clientRequestAnswers,
+      rateRetainerAnswer,
+      cta: closingLine,
+      portfolioItems,
+      proposalText: truncatedProposal,
+      suggestedConnects: job.connectsCost,
+      suggestedBoostConnects: connects.suggestedBoostConnects,
+    }),
     generatedAt: new Date().toISOString(),
   };
 }

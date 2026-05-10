@@ -1,10 +1,10 @@
 # TP-010: Slack-Ready Proposal Structure — Status
 
-**Current Step:** Step 1: Structured proposal draft types
+**Current Step:** Step 2: Generate better V0 proposals
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 2
+**Review Counter:** 3
 **Iteration:** 1
 **Size:** M
 
@@ -27,11 +27,11 @@
 ---
 
 ### Step 2: Generate better V0 proposals
-**Status:** ⬜ Not Started
-- [ ] Answer explicit client instructions
-- [ ] Use relevant proof earlier
-- [ ] Keep final proposal concise and Steve-like
-- [ ] Build passes
+**Status:** 🟨 In Progress
+- [x] Answer explicit client instructions
+- [x] Use relevant proof earlier
+- [x] Keep final proposal concise and Steve-like
+- [x] Build passes
 
 ---
 
