@@ -1,10 +1,10 @@
 # TP-007: Cloud Agent Runtime — Status
 
-**Current Step:** Step 1: Runtime commands and modes
+**Current Step:** Step 2: Deployment documentation
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 1
-**Review Counter:** 0
+**Review Counter:** 1
 **Iteration:** 1
 **Size:** M
 
@@ -18,15 +18,15 @@
 ---
 
 ### Step 1: Runtime commands and modes
-**Status:** 🟨 In Progress
-- [ ] Review/add runtime package scripts
-- [ ] Ensure VM/cloud suitability
-- [ ] Build passes
+**Status:** ✅ Complete
+- [x] Review/add runtime package scripts
+- [x] Ensure VM/cloud suitability
+- [x] Build passes
 
 ---
 
 ### Step 2: Deployment documentation
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Create `docs/DEPLOYMENT.md`
 - [ ] Include safety, secrets, persistence, and operational guidance
 
@@ -75,3 +75,4 @@
 ## Blockers
 
 *None*
+| 2026-05-10 18:06 | Review R001 | plan Step 1: APPROVE |

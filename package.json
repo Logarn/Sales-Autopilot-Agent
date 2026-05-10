@@ -10,10 +10,17 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js",
+    "start": "npm run worker",
+    "worker": "node dist/index.js",
+    "worker:dev": "tsx src/index.ts",
+    "run:once": "node dist/index.js --run-once",
+    "health": "node dist/index.js --health-check",
+    "report": "node dist/applications.js",
+    "analytics": "node dist/applications.js --analytics",
     "test:fetch": "tsx src/fetcher.ts",
     "test:slack": "tsx src/slack.ts",
     "test:run-once": "tsx src/index.ts --run-once",
+    "test:health": "tsx src/index.ts --health-check",
     "test:slack-flag": "tsx src/index.ts --test-slack",
     "add:manual-job": "tsx src/manual.ts",
     "capture:job": "tsx src/manual.ts",
@@ -27,7 +34,8 @@
     "browser:enqueue": "tsx src/browserQueue.ts --enqueue",
     "browser:list": "tsx src/browserQueue.ts --list",
     "browser:update": "tsx src/browserQueue.ts --update",
-    "browser:worker": "tsx src/browserWorker.ts"
+    "browser:worker": "tsx src/browserWorker.ts",
+    "browser:worker:prod": "node dist/browserWorker.js"
   },
   "keywords": [
     "upwork",

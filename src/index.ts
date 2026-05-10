@@ -133,7 +133,8 @@ async function runPipeline(reason: string): Promise<RunStats> {
   return stats;
 }
 
-async function startupHealthCheck(): Promise<void> {
+async function startupHealthCheck(options: { sendSlackStartup?: boolean } = {}): Promise<void> {
+  const sendSlackStartup = options.sendSlackStartup ?? true;
   logger.info("Running startup health checks...");
   const slackOk = await testSlackWebhook();
   if (!slackOk) {
@@ -153,7 +154,9 @@ async function startupHealthCheck(): Promise<void> {
     `DB stats: total=${dbStats.total}, high=${dbStats.high}, medium=${dbStats.medium}, low=${dbStats.low}, skip=${dbStats.skip}`
   );
 
-  await sendStartupMessage(SEARCH_QUERIES.length);
+  if (sendSlackStartup) {
+    await sendStartupMessage(SEARCH_QUERIES.length);
+  }
 }
 
 function setupGracefulShutdown(): void {
@@ -215,6 +218,14 @@ async function main(): Promise<void> {
   }
 
   validateRequiredConfig();
+
+  const healthCheck = process.argv.includes("--health-check");
+  if (healthCheck) {
+    await startupHealthCheck({ sendSlackStartup: false });
+    closeDb();
+    return;
+  }
+
   await startupHealthCheck();
 
   const runOnce = process.argv.includes("--run-once");
