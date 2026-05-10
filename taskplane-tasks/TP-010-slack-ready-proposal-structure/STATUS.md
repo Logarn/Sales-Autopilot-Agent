@@ -32,8 +32,8 @@
 - [x] Use relevant proof earlier
 - [x] Keep final proposal concise and Steve-like
 - [x] Build passes
-- [ ] Make proof/example request answers client-facing with concrete examples
-- [ ] Align rate/budget instruction answers with suggested bid logic
+- [x] Make proof/example request answers client-facing with concrete examples
+- [x] Align rate/budget instruction answers with suggested bid logic
 
 ---
 

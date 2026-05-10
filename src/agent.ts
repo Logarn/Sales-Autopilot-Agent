@@ -101,7 +101,13 @@ function selectProofPoints(profile: FreelancerProfile, job: JobPosting, knowledg
   return [...new Set([...knowledge, ...proof, ...directSkillMatches])].slice(0, 5);
 }
 
-function extractClientRequestAnswers(job: JobPosting, profile: FreelancerProfile): string[] {
+function extractClientRequestAnswers(
+  job: ScoredJob,
+  profile: FreelancerProfile,
+  suggestedBid: string,
+  portfolioItems: PortfolioItem[],
+  proofPoints: string[]
+): string[] {
   const source = `${job.title}\n${job.description}`;
   const answers: string[] = [];
   const add = (answer: string) => {
@@ -109,16 +115,19 @@ function extractClientRequestAnswers(job: JobPosting, profile: FreelancerProfile
   };
 
   if (/rate|hourly|budget|price|retainer/i.test(source)) {
-    add(`Rate: ${profile.hourlyRate > 0 ? `$${profile.hourlyRate}/hr` : "use the posted budget"}; for retainers, scope the first month around audit, priority fixes, and reporting before expanding.`);
+    add(`Rate: ${suggestedBid}. If this becomes a retainer, I would scope the first month around audit, priority fixes, and reporting before expanding.`);
   }
   if (/portfolio|example|case stud|sample|previous work|proof/i.test(source)) {
-    add("Proof: include the strongest relevant retention/Klaviyo examples rather than a broad portfolio dump.");
+    const namedExamples = portfolioItems.map((item) => `${item.name}${item.result ? ` (${item.result})` : ""}`);
+    const fallbackExamples = proofPoints.filter((point) => /beauty|dtc|klaviyo|retention|lifecycle|shopify|revenue/i.test(point)).slice(0, 2);
+    const examples = [...namedExamples, ...fallbackExamples].slice(0, 2);
+    add(examples.length ? `Relevant examples: ${examples.join("; ")}.` : "Relevant proof: DTC lifecycle, Klaviyo, segmentation, and retention work tied to repeat purchase and revenue.");
   }
   if (/availability|start|timeline|when can you/i.test(source)) {
-    add("Availability: ready to start with a short diagnostic pass, then prioritize the highest-impact lifecycle fixes first.");
+    add("Availability: I can start with a short diagnostic pass, then prioritize the highest-impact lifecycle fixes first.");
   }
   if (/approach|plan|how would you|strategy|what would you/i.test(source)) {
-    add("Approach: audit the account, find the revenue leaks, fix the highest-impact flows/segments/campaign process, then measure repeat-purchase impact.");
+    add("Approach: I would audit the account, find the revenue leaks, fix the highest-impact flows/segments/campaign process, then measure repeat-purchase impact.");
   }
   if (/certif|klaviyo partner|partner/i.test(source)) {
     add("Credentials: Klaviyo Silver Partner with DTC lifecycle and retention experience.");
@@ -302,9 +311,9 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   const proofSentence = proofPoints.length
     ? `Relevant background: ${proofPoints.slice(0, job.matchLevel === "high" ? 3 : 2).join("; ")}.`
     : `My background is closest to ${profile.niche || "retention and lifecycle marketing"}.`;
-  const clientRequestAnswers = extractClientRequestAnswers(job, profile);
-  const clientAnswersSentence = clientRequestAnswers.length ? `To answer the application notes directly: ${clientRequestAnswers.join(" ")}` : "";
   const rateRetainerAnswer = suggestBid(job, profile);
+  const clientRequestAnswers = extractClientRequestAnswers(job, profile, rateRetainerAnswer, portfolioItems, proofPoints);
+  const clientAnswersSentence = clientRequestAnswers.length ? `To answer the application notes directly: ${clientRequestAnswers.join(" ")}` : "";
   const portfolioSentence = portfolioItems.length
     ? `The most relevant proof to include would be: ${portfolioItems.map((item) => item.name).join(", ")}.`
     : "I would keep attachments light unless you want a specific example.";
