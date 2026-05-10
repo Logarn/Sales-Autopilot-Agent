@@ -26,7 +26,8 @@
     "app:report": "tsx src/applications.ts",
     "browser:enqueue": "tsx src/browserQueue.ts --enqueue",
     "browser:list": "tsx src/browserQueue.ts --list",
-    "browser:update": "tsx src/browserQueue.ts --update"
+    "browser:update": "tsx src/browserQueue.ts --update",
+    "browser:worker": "tsx src/browserWorker.ts"
   },
   "keywords": [
     "upwork",
