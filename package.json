@@ -19,6 +19,8 @@
     "app:status": "tsx src/applications.ts --set-status",
     "app:note": "tsx src/applications.ts --add-note",
     "app:notes": "tsx src/applications.ts --notes",
+    "app:apply": "tsx src/applications.ts --record-submission",
+    "app:analytics": "tsx src/applications.ts --analytics",
     "app:report": "tsx src/applications.ts"
   },
   "keywords": [

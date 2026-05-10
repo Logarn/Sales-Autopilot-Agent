@@ -147,6 +147,8 @@ Slack packets show the Proposal Quality score plus the top issues and positive s
 - `npm run app:report` - print application outcome summary and recent tracked opportunities
 - `npm run app:status -- --job-id <id> --status applied --note "Applied manually"` - update an application status
 - `npm run app:note -- --job-id <id> --note "Client replied"` - add an application note
+- `npm run app:apply -- --job-id <id> --required-connects 10 --boost-connects 35 --rank 1 --client-spend 393 --rate 35 --profile "Email Marketing" --attachments "Truly Beauty - Case Study.pdf,Portfolio.pdf"` - record actual submission details
+- `npm run app:analytics` - report reply/interview/hire rates, Connects efficiency, and top proof assets
 
 ## Environment Variables
 

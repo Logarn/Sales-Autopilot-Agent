@@ -63,7 +63,30 @@ export interface ApplicationListRow {
   url: string | null;
   suggested_bid: string | null;
   suggested_connects: number;
+  actual_total_connects: number | null;
+  actual_boost_connects: number | null;
+  boost_rank: number | null;
+  actual_client_spend: number | null;
+  attachments_used: string | null;
+  profile_highlights_used: string | null;
   updated_at: string;
+}
+
+export interface ApplicationAnalytics {
+  total: number;
+  applied: number;
+  replied: number;
+  interviews: number;
+  hired: number;
+  lost: number;
+  totalConnectsSpent: number;
+  averageConnectsPerApplied: number;
+  connectsPerReply: number | null;
+  replyRate: number;
+  interviewRate: number;
+  hireRate: number;
+  topAttachments: Array<{ name: string; count: number }>;
+  topHighlights: Array<{ name: string; count: number }>;
 }
 
 export interface ApplicationNoteRow {
@@ -71,6 +94,20 @@ export interface ApplicationNoteRow {
   job_id: string;
   note: string;
   created_at: string;
+}
+
+export interface ApplicationSubmissionInput {
+  jobId: string;
+  requiredConnects: number;
+  boostConnects: number;
+  boostRank: number | null;
+  clientSpend: number | null;
+  rate: number | null;
+  profileUsed: string;
+  attachmentsUsed: string[];
+  profileHighlightsUsed: string[];
+  submittedProposalText?: string;
+  note?: string;
 }
 
 export interface SlackQueueItem {
@@ -172,6 +209,25 @@ ensureSeenJobsColumn("client_hire_rate", "REAL");
 ensureSeenJobsColumn("skills", "TEXT");
 ensureSeenJobsColumn("experience_level", "TEXT");
 ensureSeenJobsColumn("connects_cost", "INTEGER");
+
+function ensureApplicationsColumn(name: string, definition: string): void {
+  const columns = db.prepare<[], { name: string }>("PRAGMA table_info(applications)").all();
+  const exists = columns.some((column) => column.name === name);
+  if (!exists) {
+    db.exec(`ALTER TABLE applications ADD COLUMN ${name} ${definition}`);
+  }
+}
+
+ensureApplicationsColumn("actual_required_connects", "INTEGER");
+ensureApplicationsColumn("actual_boost_connects", "INTEGER");
+ensureApplicationsColumn("actual_total_connects", "INTEGER");
+ensureApplicationsColumn("boost_rank", "INTEGER");
+ensureApplicationsColumn("actual_client_spend", "REAL");
+ensureApplicationsColumn("actual_rate", "REAL");
+ensureApplicationsColumn("profile_used", "TEXT");
+ensureApplicationsColumn("attachments_used", "TEXT DEFAULT '[]'");
+ensureApplicationsColumn("profile_highlights_used", "TEXT DEFAULT '[]'");
+ensureApplicationsColumn("submitted_proposal_text", "TEXT");
 ensureSeenJobsColumn("fingerprint", "TEXT");
 db.exec("CREATE INDEX IF NOT EXISTS idx_seen_jobs_fingerprint ON seen_jobs(fingerprint)");
 
@@ -266,7 +322,9 @@ const applicationSummaryStmt = db.prepare<[], ApplicationSummaryRow>(
   "SELECT status, COUNT(*) as count FROM applications GROUP BY status ORDER BY count DESC"
 );
 const applicationListStmt = db.prepare<[number], ApplicationListRow>(
-  `SELECT a.job_id, a.status, a.fit_score, s.title, s.url, a.suggested_bid, a.suggested_connects, a.updated_at
+  `SELECT a.job_id, a.status, a.fit_score, s.title, s.url, a.suggested_bid, a.suggested_connects,
+          a.actual_total_connects, a.actual_boost_connects, a.boost_rank, a.actual_client_spend,
+          a.attachments_used, a.profile_highlights_used, a.updated_at
    FROM applications a
    LEFT JOIN seen_jobs s ON s.id = a.job_id
    ORDER BY a.updated_at DESC
@@ -274,6 +332,23 @@ const applicationListStmt = db.prepare<[number], ApplicationListRow>(
 );
 const applicationNotesStmt = db.prepare<[string], ApplicationNoteRow>(
   "SELECT id, job_id, note, created_at FROM application_events WHERE job_id = ? AND event_type = 'note' ORDER BY id DESC"
+);
+const recordApplicationSubmissionStmt = db.prepare(
+  `UPDATE applications
+   SET status = 'applied',
+       actual_required_connects = ?,
+       actual_boost_connects = ?,
+       actual_total_connects = ?,
+       boost_rank = ?,
+       actual_client_spend = ?,
+       actual_rate = ?,
+       profile_used = ?,
+       attachments_used = ?,
+       profile_highlights_used = ?,
+       submitted_proposal_text = COALESCE(?, submitted_proposal_text),
+       submitted_at = COALESCE(submitted_at, ?),
+       updated_at = datetime('now')
+   WHERE job_id = ?`
 );
 
 export function closeDb(): void {
@@ -420,6 +495,98 @@ export function listRecentApplications(limit = 20): ApplicationListRow[] {
 
 export function getApplicationNotes(jobId: string): ApplicationNoteRow[] {
   return applicationNotesStmt.all(jobId);
+}
+
+function parseJsonStringArray(value: string | null | undefined): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function topCounts(values: string[]): Array<{ name: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const value of values) {
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+    .slice(0, 10);
+}
+
+export function getApplicationAnalytics(): ApplicationAnalytics {
+  const rows = db
+    .prepare<[], ApplicationListRow>(
+      `SELECT a.job_id, a.status, a.fit_score, s.title, s.url, a.suggested_bid, a.suggested_connects,
+              a.actual_total_connects, a.actual_boost_connects, a.boost_rank, a.actual_client_spend,
+              a.attachments_used, a.profile_highlights_used, a.updated_at
+       FROM applications a
+       LEFT JOIN seen_jobs s ON s.id = a.job_id`
+    )
+    .all();
+  const total = rows.length;
+  const appliedStatuses: ApplicationStatus[] = ["applied", "submitted", "replied", "interview", "hired", "lost"];
+  const appliedRows = rows.filter((row) => appliedStatuses.includes(row.status));
+  const repliedRows = rows.filter((row) => ["replied", "interview", "hired"].includes(row.status));
+  const interviewRows = rows.filter((row) => ["interview", "hired"].includes(row.status));
+  const hiredRows = rows.filter((row) => row.status === "hired");
+  const lostRows = rows.filter((row) => row.status === "lost");
+  const totalConnectsSpent = appliedRows.reduce((sum, row) => sum + (row.actual_total_connects ?? 0), 0);
+  const attachments = appliedRows.flatMap((row) => parseJsonStringArray(row.attachments_used));
+  const highlights = appliedRows.flatMap((row) => parseJsonStringArray(row.profile_highlights_used));
+
+  return {
+    total,
+    applied: appliedRows.length,
+    replied: repliedRows.length,
+    interviews: interviewRows.length,
+    hired: hiredRows.length,
+    lost: lostRows.length,
+    totalConnectsSpent,
+    averageConnectsPerApplied: appliedRows.length ? totalConnectsSpent / appliedRows.length : 0,
+    connectsPerReply: repliedRows.length ? totalConnectsSpent / repliedRows.length : null,
+    replyRate: appliedRows.length ? repliedRows.length / appliedRows.length : 0,
+    interviewRate: appliedRows.length ? interviewRows.length / appliedRows.length : 0,
+    hireRate: appliedRows.length ? hiredRows.length / appliedRows.length : 0,
+    topAttachments: topCounts(attachments),
+    topHighlights: topCounts(highlights),
+  };
+}
+
+export function recordApplicationSubmission(input: ApplicationSubmissionInput): boolean {
+  const previousStatus = getApplicationStatus(input.jobId);
+  if (!previousStatus) {
+    return false;
+  }
+  const totalConnects = input.requiredConnects + input.boostConnects;
+  const submittedAt = new Date().toISOString();
+  const result = recordApplicationSubmissionStmt.run(
+    input.requiredConnects,
+    input.boostConnects,
+    totalConnects,
+    input.boostRank,
+    input.clientSpend,
+    input.rate,
+    input.profileUsed,
+    JSON.stringify(input.attachmentsUsed),
+    JSON.stringify(input.profileHighlightsUsed),
+    input.submittedProposalText ?? null,
+    submittedAt,
+    input.jobId
+  );
+  insertApplicationEventStmt.run(
+    input.jobId,
+    "submission_recorded",
+    previousStatus,
+    "applied",
+    input.note ??
+      `Applied: required=${input.requiredConnects}, boost=${input.boostConnects}, total=${totalConnects}, rank=${input.boostRank ?? "n/a"}`
+  );
+  return result.changes > 0;
 }
 
 export function cleanupOldSeenJobs(): number {
