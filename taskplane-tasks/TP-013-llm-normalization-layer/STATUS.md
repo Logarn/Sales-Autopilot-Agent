@@ -1,6 +1,6 @@
 # TP-013: LLM Normalization Layer — Status
 
-**Current Step:** Step 4: Docs and examples
+**Current Step:** Step 5: Testing & Verification
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
@@ -55,7 +55,7 @@
 ---
 
 ### Step 5: Testing & Verification
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Full tests or env limitation note
 - [ ] Build passes
 - [ ] Fallback CLI tested
