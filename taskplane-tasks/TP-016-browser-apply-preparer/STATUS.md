@@ -23,7 +23,7 @@
 - [x] Validate approved status/link/proposal/connects/attachments
 - [x] Build passes
 - [x] Reviewer R001: provide reviewable Step 1 plan before implementation
-- [ ] Reviewer R003: extract real Upwork job id from stored URL and fail closed for invalid links
+- [x] Reviewer R003: extract real Upwork job id from stored URL and fail closed for invalid links
 
 ---
 

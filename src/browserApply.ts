@@ -55,6 +55,7 @@ function parseUpworkUrl(rawUrl: string | null | undefined): URL | null {
   try {
     const url = new URL(rawUrl);
     const host = url.hostname.toLowerCase();
+    if (url.protocol !== "https:") return null;
     if (host !== "upwork.com" && !host.endsWith(".upwork.com")) return null;
     return url;
   } catch {
@@ -62,18 +63,26 @@ function parseUpworkUrl(rawUrl: string | null | undefined): URL | null {
   }
 }
 
-function deriveApplyUrl(jobId: string, rawUrl: string | null | undefined): { sourceUrl: string; applyUrl: string } | null {
+function extractUpworkJobId(url: URL): string | null {
+  const decodedPath = decodeURIComponent(url.pathname);
+  const applyMatch = decodedPath.match(/\/ab\/proposals\/job\/(~?[A-Za-z0-9_-]{8,})\/apply\/?/i);
+  if (applyMatch) return applyMatch[1].startsWith("~") ? applyMatch[1] : `~${applyMatch[1]}`;
+  const jobMatch = decodedPath.match(/\/jobs\/[^\s/]*~([A-Za-z0-9_-]{8,})/i);
+  return jobMatch ? `~${jobMatch[1]}` : null;
+}
+
+function deriveApplyUrl(rawUrl: string | null | undefined): { sourceUrl: string; applyUrl: string } | null {
   const parsed = parseUpworkUrl(rawUrl);
   if (!parsed) return null;
   const sourceUrl = parsed.toString();
+  const upworkJobId = extractUpworkJobId(parsed);
+  if (!upworkJobId) return null;
   if (parsed.pathname.includes("/apply")) {
     return { sourceUrl, applyUrl: sourceUrl };
   }
-  const normalizedJobId = jobId.replace(/^~+/, "");
-  const applyJobId = normalizedJobId ? `~${normalizedJobId}` : jobId;
   return {
     sourceUrl,
-    applyUrl: `https://www.upwork.com/ab/proposals/job/${encodeURIComponent(applyJobId)}/apply/`,
+    applyUrl: `https://www.upwork.com/ab/proposals/job/${encodeURIComponent(upworkJobId)}/apply/`,
   };
 }
 
@@ -176,7 +185,7 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
     issues.push(issue("error", "missing_proposal", "Approved application has no proposal text to fill."));
   }
 
-  const urlInfo = deriveApplyUrl(jobId, link?.url);
+  const urlInfo = deriveApplyUrl(link?.url);
   if (!urlInfo) {
     issues.push(issue("error", "invalid_upwork_link", "A direct Upwork job/apply URL is required before browser preparation."));
   }
