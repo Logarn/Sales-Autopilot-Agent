@@ -43,7 +43,7 @@ function parseQueriesFromEnvOrFile(): string[] {
   return DEFAULT_SEARCH_QUERIES;
 }
 
-export const APP_NAME = "Upwork Notifier";
+export const APP_NAME = "Upwork Revenue Assistant";
 export const SLACK_CHANNEL_WEBHOOK_URL = process.env.SLACK_CHANNEL_WEBHOOK_URL ?? "";
 export const APIFY_API_TOKEN = process.env.APIFY_API_TOKEN ?? "";
 export const QUICK_BID_TEMPLATE_URL = process.env.QUICK_BID_TEMPLATE_URL ?? "";
@@ -52,6 +52,10 @@ export const DAILY_SUMMARY_CRON = process.env.DAILY_SUMMARY_CRON ?? "0 8 * * *";
 export const TIMEZONE = process.env.TIMEZONE ?? "Africa/Nairobi";
 export const LOG_LEVEL = process.env.LOG_LEVEL ?? "info";
 export const DB_PATH = process.env.DB_PATH ?? "./data/jobs.db";
+export const PROFILE_CONFIG_PATH = process.env.PROFILE_CONFIG_PATH ?? "./profile/profile.json";
+export const PORTFOLIO_CONFIG_PATH = process.env.PORTFOLIO_CONFIG_PATH ?? "./profile/portfolio.json";
+export const MANUAL_JOBS_CONFIG_PATH = process.env.MANUAL_JOBS_CONFIG_PATH ?? "./config/manual-jobs.json";
+export const CONNECTS_RULES_CONFIG_PATH = process.env.CONNECTS_RULES_CONFIG_PATH ?? "./profile/connects-rules.json";
 export const MIN_SCORE_TO_NOTIFY = parseInteger(process.env.MIN_SCORE_TO_NOTIFY, 4);
 export const MIN_SCORE_HIGH = parseInteger(process.env.MIN_SCORE_HIGH, 8);
 export const MAX_DESCRIPTION_LENGTH = parseInteger(process.env.MAX_DESCRIPTION_LENGTH, 300);

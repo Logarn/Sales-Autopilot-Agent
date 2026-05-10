@@ -1,13 +1,13 @@
-# Upwork Notifier (Klaviyo + Shopify Retention Jobs)
+# Upwork Revenue Assistant
 
-Node.js + TypeScript background worker that monitors Upwork jobs via the Apify
-Upwork Job Scraper API for
-Klaviyo/Shopify retention marketing jobs, scores relevance, deduplicates via SQLite,
-and posts rich Slack notifications for high-priority opportunities.
+Node.js + TypeScript background worker that monitors Upwork jobs, scores fit, generates human-in-the-loop proposal packets, selects relevant proof, deduplicates via SQLite, and posts rich Slack notifications for high-priority opportunities.
+
+The product direction is an Upwork revenue assistant, not an auto-apply bot: find better jobs, write better proposals, protect Connects, and keep the human in control.
 
 ## Features
 
-- Polls multiple Upwork search queries via Apify every 5 minutes (configurable with cron)
+- Polls Upwork opportunities via pluggable sources every 5 minutes (configurable with cron)
+- Current sources: Apify search scraper + manual job ingestion
 - Query configuration via `.env` (`SEARCH_QUERIES`) or JSON (`config/queries.json`)
 - Weighted keyword scoring with negative-keyword filtering
 - Match levels:
@@ -18,6 +18,9 @@ and posts rich Slack notifications for high-priority opportunities.
 - SQLite deduplication using Apify `uid`
 - First-run seeding: stores existing jobs without blasting Slack
 - Slack queue/retry on failures
+- Proposal packet generation using local profile and portfolio metadata
+- Suggested proof/attachment selection with guardrails
+- Application draft storage in SQLite
 - Startup health checks (Slack + feed reachability + DB stats)
 - Daily summary digest at 8:00 AM Africa/Nairobi (configurable)
 - Graceful shutdown on `SIGINT` / `SIGTERM`
@@ -91,6 +94,10 @@ upwork-notifier/
 - `npm run test:fetch` - fetch configured feeds once, print sample jobs
 - `npm run test:slack` - send Slack webhook test message
 - `npm run test:run-once` - run full pipeline one time and exit
+- `npm run add:manual-job -- --url <url> --title <title>` - add a manual job to the ingestion queue
+- `npm run app:report` - print application outcome summary and recent tracked opportunities
+- `npm run app:status -- --job-id <id> --status applied --note "Applied manually"` - update an application status
+- `npm run app:note -- --job-id <id> --note "Client replied"` - add an application note
 
 ## Environment Variables
 

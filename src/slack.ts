@@ -96,6 +96,39 @@ function buildJobBlocks(job: ScoredJob): IncomingWebhookSendArguments["blocks"] 
     });
   }
 
+  const draftBlocks: IncomingWebhookSendArguments["blocks"] = job.applicationDraft
+    ? [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*🧠 Fit Score:* ${job.applicationDraft.fitScore}/100\n*✅ Why it fits:*\n${job.applicationDraft.fitReasons.length ? job.applicationDraft.fitReasons.map((reason) => `• ${reason}`).join("\n") : "• No strong fit reasons captured."}\n\n*⚠️ Red flags:*\n${job.applicationDraft.redFlags.length ? job.applicationDraft.redFlags.map((flag) => `• ${flag}`).join("\n") : "• None detected."}`,
+          },
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*🎫 Connects Guardrail:*\nRequired: ${job.applicationDraft.suggestedConnects} • Suggested boost: ${job.applicationDraft.suggestedBoostConnects}\n${job.applicationDraft.connectsWarnings.length ? job.applicationDraft.connectsWarnings.map((warning) => `• ${warning}`).join("\n") : "• Within default guardrails."}\n\n*💵 Suggested Bid:* ${job.applicationDraft.suggestedBid}`,
+          },
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*📎 Suggested Proof:*\n${job.applicationDraft.selectedPortfolioItems.length ? job.applicationDraft.selectedPortfolioItems.map((item) => `• ${item.name}`).join("\n") : "• No attachment recommended."}`,
+          },
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*✍️ Proposal Draft:*\n> ${job.applicationDraft.proposalText.replace(/\n/g, "\n> ")}`,
+          },
+        },
+      ]
+    : [];
+
   return [
     {
       type: "section",
@@ -134,6 +167,7 @@ function buildJobBlocks(job: ScoredJob): IncomingWebhookSendArguments["blocks"] 
         text: `*🏷️ Skills:*\n${job.skills.length ? job.skills.join(", ") : "Not specified"}\n\n*🔑 Matched Keywords:*\n${job.matchedKeywords.length ? job.matchedKeywords.join(", ") : "None"}`,
       },
     },
+    ...draftBlocks,
     {
       type: "actions",
       elements: actionElements,

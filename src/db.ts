@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import Database from "better-sqlite3";
 import { DB_PATH, TIMEZONE } from "./config";
-import { DailySummary, MatchLevel, ScoredJob } from "./types";
+import { ApplicationDraft, ApplicationStatus, DailySummary, MatchLevel, ScoredJob } from "./types";
 
 interface SeenStats {
   total: number;
@@ -30,6 +30,29 @@ interface DailyRow {
   score: number;
   match_level: MatchLevel;
   seen_at: string;
+}
+
+export interface ApplicationSummaryRow {
+  status: ApplicationStatus;
+  count: number;
+}
+
+export interface ApplicationListRow {
+  job_id: string;
+  status: ApplicationStatus;
+  fit_score: number;
+  title: string | null;
+  url: string | null;
+  suggested_bid: string | null;
+  suggested_connects: number;
+  updated_at: string;
+}
+
+export interface ApplicationNoteRow {
+  id: number;
+  job_id: string;
+  note: string;
+  created_at: string;
 }
 
 export interface SlackQueueItem {
@@ -75,6 +98,42 @@ CREATE TABLE IF NOT EXISTS slack_queue (
   attempts INTEGER DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS applications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'draft',
+  fit_score INTEGER NOT NULL DEFAULT 0,
+  fit_reasons TEXT NOT NULL DEFAULT '[]',
+  red_flags TEXT NOT NULL DEFAULT '[]',
+  suggested_bid TEXT,
+  suggested_connects INTEGER DEFAULT 0,
+  suggested_boost_connects INTEGER DEFAULT 0,
+  connects_warnings TEXT NOT NULL DEFAULT '[]',
+  selected_portfolio_items TEXT NOT NULL DEFAULT '[]',
+  proposal_text TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  reviewed_at TEXT,
+  submitted_at TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  FOREIGN KEY(job_id) REFERENCES seen_jobs(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);
+
+CREATE TABLE IF NOT EXISTS application_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  from_status TEXT,
+  to_status TEXT,
+  note TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_application_events_job_id ON application_events(job_id);
+CREATE INDEX IF NOT EXISTS idx_application_events_type ON application_events(event_type);
 `);
 
 function ensureSeenJobsColumn(name: string, definition: string): void {
@@ -129,6 +188,60 @@ const queueDeleteStmt = db.prepare("DELETE FROM slack_queue WHERE id = ?");
 const queueAttemptStmt = db.prepare(
   "UPDATE slack_queue SET attempts = attempts + 1 WHERE id = ?"
 );
+const upsertApplicationStmt = db.prepare(
+  `INSERT INTO applications (
+    job_id,
+    status,
+    fit_score,
+    fit_reasons,
+    red_flags,
+    suggested_bid,
+    suggested_connects,
+    suggested_boost_connects,
+    connects_warnings,
+    selected_portfolio_items,
+    proposal_text,
+    generated_at,
+    updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  ON CONFLICT(job_id) DO UPDATE SET
+    status = excluded.status,
+    fit_score = excluded.fit_score,
+    fit_reasons = excluded.fit_reasons,
+    red_flags = excluded.red_flags,
+    suggested_bid = excluded.suggested_bid,
+    suggested_connects = excluded.suggested_connects,
+    suggested_boost_connects = excluded.suggested_boost_connects,
+    connects_warnings = excluded.connects_warnings,
+    selected_portfolio_items = excluded.selected_portfolio_items,
+    proposal_text = excluded.proposal_text,
+    generated_at = excluded.generated_at,
+    updated_at = datetime('now')`
+);
+const getApplicationStatusStmt = db.prepare<[string], { status: ApplicationStatus }>(
+  "SELECT status FROM applications WHERE job_id = ? LIMIT 1"
+);
+const updateApplicationStatusStmt = db.prepare<[ApplicationStatus, string | null, string | null, string]>(
+  `UPDATE applications
+   SET status = ?, reviewed_at = COALESCE(?, reviewed_at), submitted_at = COALESCE(?, submitted_at), updated_at = datetime('now')
+   WHERE job_id = ?`
+);
+const insertApplicationEventStmt = db.prepare(
+  "INSERT INTO application_events (job_id, event_type, from_status, to_status, note) VALUES (?, ?, ?, ?, ?)"
+);
+const applicationSummaryStmt = db.prepare<[], ApplicationSummaryRow>(
+  "SELECT status, COUNT(*) as count FROM applications GROUP BY status ORDER BY count DESC"
+);
+const applicationListStmt = db.prepare<[number], ApplicationListRow>(
+  `SELECT a.job_id, a.status, a.fit_score, s.title, s.url, a.suggested_bid, a.suggested_connects, a.updated_at
+   FROM applications a
+   LEFT JOIN seen_jobs s ON s.id = a.job_id
+   ORDER BY a.updated_at DESC
+   LIMIT ?`
+);
+const applicationNotesStmt = db.prepare<[string], ApplicationNoteRow>(
+  "SELECT id, job_id, note, created_at FROM application_events WHERE job_id = ? AND event_type = 'note' ORDER BY id DESC"
+);
 
 export function closeDb(): void {
   db.close();
@@ -161,6 +274,72 @@ export function markJobSeen(job: ScoredJob, notified: boolean): void {
     job.postedAt,
     notified ? 1 : 0
   );
+  if (job.applicationDraft) {
+    saveApplicationDraft(job.applicationDraft);
+  }
+}
+
+export function saveApplicationDraft(draft: ApplicationDraft): void {
+  const previousStatus = getApplicationStatus(draft.jobId);
+  upsertApplicationStmt.run(
+    draft.jobId,
+    draft.status,
+    draft.fitScore,
+    JSON.stringify(draft.fitReasons),
+    JSON.stringify(draft.redFlags),
+    draft.suggestedBid,
+    draft.suggestedConnects,
+    draft.suggestedBoostConnects,
+    JSON.stringify(draft.connectsWarnings),
+    JSON.stringify(draft.selectedPortfolioItems),
+    draft.proposalText,
+    draft.generatedAt
+  );
+  if (!previousStatus) {
+    insertApplicationEventStmt.run(draft.jobId, "created", null, draft.status, "Application draft created.");
+  }
+}
+
+export function getApplicationStatus(jobId: string): ApplicationStatus | null {
+  return getApplicationStatusStmt.get(jobId)?.status ?? null;
+}
+
+export function updateApplicationStatus(
+  jobId: string,
+  status: ApplicationStatus,
+  note?: string
+): boolean {
+  const previousStatus = getApplicationStatus(jobId);
+  if (!previousStatus) {
+    return false;
+  }
+  const now = new Date().toISOString();
+  const reviewedAt = ["approved", "rejected", "lost"].includes(status) ? now : null;
+  const submittedAt = ["applied", "submitted"].includes(status) ? now : null;
+  const result = updateApplicationStatusStmt.run(status, reviewedAt, submittedAt, jobId);
+  insertApplicationEventStmt.run(jobId, "status_changed", previousStatus, status, note ?? null);
+  return result.changes > 0;
+}
+
+export function addApplicationNote(jobId: string, note: string): boolean {
+  const currentStatus = getApplicationStatus(jobId);
+  if (!currentStatus) {
+    return false;
+  }
+  insertApplicationEventStmt.run(jobId, "note", currentStatus, currentStatus, note);
+  return true;
+}
+
+export function getApplicationSummary(): ApplicationSummaryRow[] {
+  return applicationSummaryStmt.all();
+}
+
+export function listRecentApplications(limit = 20): ApplicationListRow[] {
+  return applicationListStmt.all(limit);
+}
+
+export function getApplicationNotes(jobId: string): ApplicationNoteRow[] {
+  return applicationNotesStmt.all(jobId);
 }
 
 export function cleanupOldSeenJobs(): number {

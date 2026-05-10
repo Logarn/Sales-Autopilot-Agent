@@ -25,6 +25,91 @@ export interface ScoredJob extends JobPosting {
   matchLevel: MatchLevel;
   matchedKeywords: string[];
   negativeKeywords: string[];
+  applicationDraft?: ApplicationDraft;
+}
+
+export type ApplicationStatus =
+  | "found"
+  | "draft"
+  | "sent_to_slack"
+  | "approved"
+  | "rejected"
+  | "applied"
+  | "replied"
+  | "interview"
+  | "hired"
+  | "lost"
+  | "submitted";
+
+export interface VoiceRules {
+  tone: string[];
+  openingStyle: string;
+  ctaStyle: string;
+  lengthPreference: string;
+  bannedPhrases: string[];
+  preferredPhrases: string[];
+}
+
+export interface FreelancerProfile {
+  name: string;
+  title: string;
+  niche: string;
+  hourlyRate: number;
+  location: string;
+  summary: string;
+  skills: string[];
+  preferredIndustries: string[];
+  avoidIndustries: string[];
+  preferredJobTypes: string[];
+  avoidJobTypes: string[];
+  proofPoints: string[];
+  voice: VoiceRules;
+}
+
+export interface PortfolioItem {
+  id: string;
+  name: string;
+  description: string;
+  industries: string[];
+  platforms: string[];
+  bestFitJobTypes: string[];
+  result: string;
+  sensitivity: "safe" | "approved_external" | "private";
+  allowedUsage: "always_include_when_relevant" | "include_only_when_relevant" | "never";
+  filePath: string;
+  neverUseWhen: string[];
+}
+
+export interface PortfolioLibrary {
+  items: PortfolioItem[];
+}
+
+export interface ConnectsRules {
+  maxRequiredPerJob: number;
+  idealBoostMin: number;
+  idealBoostMax: number;
+  maxBoost: number;
+  dailyCap: number;
+  weeklyCap: number;
+  neverBidMax: boolean;
+  requireApprovalAbove: number;
+  targetBoostRank: number;
+  skipIfTopBidAbove: number;
+}
+
+export interface ApplicationDraft {
+  jobId: string;
+  status: ApplicationStatus;
+  fitScore: number;
+  fitReasons: string[];
+  redFlags: string[];
+  suggestedBid: string;
+  suggestedConnects: number;
+  suggestedBoostConnects: number;
+  connectsWarnings: string[];
+  selectedPortfolioItems: PortfolioItem[];
+  proposalText: string;
+  generatedAt: string;
 }
 
 export interface FeedJobResult {
