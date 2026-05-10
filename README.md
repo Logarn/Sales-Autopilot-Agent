@@ -155,7 +155,10 @@ The browser queue is a cloud/VM-safe foundation for future human-in-the-loop bro
 
 ```bash
 npm run browser:enqueue -- --job-id job-123 --action open_job --url https://www.upwork.com/jobs/~0123
+npm run browser:enqueue -- --job-id job-123 --action open_apply_page --url https://www.upwork.com/ab/proposals/job/job-123/apply/
+npm run browser:enqueue -- --job-id job-123 --action prepare_application_review --url https://www.upwork.com/jobs/~0123 --notes "Review before applying"
 npm run browser:list -- --status pending
+npm run browser:update -- --id 1 --status paused --error "Login required"
 BROWSER_WORKER_ENABLED=true npm run browser:worker
 ```
 
@@ -179,6 +182,10 @@ The worker must pause for human intervention on login, 2FA, CAPTCHA, Cloudflare,
 - `npm run app:apply -- --job-id <id> --required-connects 10 --boost-connects 35 --rank 1 --client-spend 393 --rate 35 --profile "Email Marketing" --attachments "Truly Beauty - Case Study.pdf,Portfolio.pdf"` - record actual submission details
 - `npm run app:analytics` - report reply/interview/hire rates, Connects efficiency, and top proof assets
 - `npm run app:capture -- --job-id <id> --file captures/apply-screen.txt --record` - parse pasted Upwork apply-screen text and record structured submission details
+- `npm run browser:enqueue -- --job-id <id> --action open_job --url <upwork-url>` - add a safe browser action to the SQLite queue
+- `npm run browser:list -- [--status pending] [--limit 25]` - list queued browser actions
+- `npm run browser:update -- --id <action-id> --status paused --error "Login required"` - manually update a queued browser action
+- `npm run browser:worker` - process pending browser actions only when `BROWSER_WORKER_ENABLED=true`; dry-run remains default
 
 ## Environment Variables
 

@@ -18,6 +18,7 @@ Do not optimize for proposal volume. Optimize for high-fit, fast-response, high-
 6. Select relevant portfolio proof.
 7. Send an approval packet to Slack.
 8. Track the outcome.
+9. Queue optional browser-session actions for a VM/cloud worker that prepares pages for human review without submitting.
 
 ## Sources
 
@@ -27,7 +28,7 @@ RSS is only a fallback. The system should support:
 - Upwork RSS where useful
 - Upwork email alerts parsed from Gmail
 - Manual job URL ingestion
-- Future browser-session search capture
+- Future browser-session search capture through a queued, VM-safe browser worker
 
 ## Guardrails
 
@@ -39,6 +40,8 @@ RSS is only a fallback. The system should support:
 - No Loom/video-required jobs unless explicitly enabled.
 - No ambiguous or private attachments.
 - Store every draft and decision in an audit log.
+- Browser automation must be queued, dry-run by default, and paused on login, 2FA, CAPTCHA, or security challenges.
+- Browser workers may prepare/read pages for review but must not fill proposal fields, submit proposals, or bypass platform controls.
 
 ## Proposal quality bar
 
