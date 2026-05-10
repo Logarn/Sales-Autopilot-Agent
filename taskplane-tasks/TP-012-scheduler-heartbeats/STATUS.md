@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 7
+**Review Counter:** 8
 **Iteration:** 1
 **Size:** M
 
@@ -40,7 +40,7 @@
 ### Step 3: Health checks and Slack alerts
 **Status:** 🟨 In Progress
 - [ ] Add health command/report
-- [ ] Add Slack stale-worker alert helper
+- [ ] Add Slack stale-worker alert helper plus auth-required/browser-required findings
 - [ ] Avoid alert spam
 - [ ] Build passes
 
@@ -78,13 +78,15 @@
 | R005 | Plan | 2 | APPROVE | .reviews/R005-plan-step2.md |
 | R006 | Code | 2 | REVISE | .reviews/R006-code-step2.md |
 | R007 | Code | 2 | APPROVE | n/a |
+| R008 | Plan | 3 | REVISE | .reviews/R008-plan-step3.md |
 
 ## Discoveries
 | Discovery | Disposition | Location |
 |-----------|-------------|----------|
 | Plan reviewer suggested shared TypeScript heartbeat types for scheduler and health reporting. | Advisory; applied via src/heartbeat.ts exports. | Step 1 plan review |
 | Plan reviewer suggested scheduler jobs record heartbeats so health reporting can consume real data. | Advisory; included in Step 2 implementation. | Step 2 plan review |
-| Code reviewer suggested scheduler mode validate required config before entering loop. | Advisory; apply while fixing lifecycle. | Step 2 code review |
+| Code reviewer suggested scheduler mode validate required config before entering loop. | Advisory; applied while fixing lifecycle. | Step 2 code review |
+| Plan reviewer suggested reusing heartbeat/status report data model for command and scheduled health-check job consistency. | Advisory; apply if it fits implementation. | Step 3 plan review |
 
 ## Execution Log
 | Timestamp | Action | Outcome |
@@ -102,3 +104,4 @@
 | 2026-05-10 20:47 | Review R005 | plan Step 2: APPROVE |
 | 2026-05-10 20:49 | Review R006 | code Step 2: REVISE |
 | 2026-05-10 20:51 | Review R007 | code Step 2: APPROVE |
+| 2026-05-10 20:52 | Review R008 | plan Step 3: REVISE |
