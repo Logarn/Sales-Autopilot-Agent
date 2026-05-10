@@ -1,3 +1,4 @@
+import { buildBrowserApplyPlan } from "./browserApply";
 import {
   closeDb,
   enqueueBrowserAction,
@@ -35,11 +36,15 @@ function hasFlag(name: string): boolean {
 function usage(): void {
   console.log(`Usage:
   npm run browser:enqueue -- --job-id <id> --action <open_job|open_apply_page|prepare_application_review> [--url <url>] [--payload '{"key":"value"}'] [--notes <text>]
+  npm run browser:enqueue -- --apply-preview --job-id <id>
+  npm run browser:enqueue -- --apply-prepare --job-id <id> [--notes <text>]
   npm run browser:list -- [--status pending] [--limit 25]
   npm run browser:update -- --id <action-id> --status <pending|in_progress|completed|failed|paused|cancelled> [--error <text>]
 
 Examples:
   npm run browser:enqueue -- --job-id job-123 --action open_job --url https://www.upwork.com/jobs/~0123
+  npm run browser:enqueue -- --apply-preview --job-id manual:upwork-0123456789abcdef
+  npm run browser:enqueue -- --apply-prepare --job-id manual:upwork-0123456789abcdef
   npm run browser:list -- --status pending
   npm run browser:update -- --id 1 --status paused --error "Login required"`);
 }
@@ -72,7 +77,89 @@ function parsePayload(): BrowserActionPayload {
   return payload;
 }
 
+function printApplyPreview(jobId: string): boolean {
+  const result = buildBrowserApplyPlan(jobId);
+  console.log("\nBrowser Apply Preparation Preview");
+  console.log("=================================");
+  console.log(`job_id: ${jobId}`);
+  console.log(`valid: ${result.valid}`);
+  if (result.issues.length > 0) {
+    console.log("validation_issues:");
+    for (const issue of result.issues) console.log(`  - [${issue.severity}] ${issue.code}: ${issue.message}`);
+  }
+  if (!result.plan) return false;
+
+  const plan = result.plan;
+  console.log(`source_url: ${plan.sourceUrl}`);
+  console.log(`apply_url: ${plan.applyUrl}`);
+  console.log(`profile: ${plan.profile}`);
+  console.log(`rate: ${plan.rate}`);
+  console.log(`stop_before_submit: ${plan.stopBeforeSubmit}`);
+  console.log("connects:");
+  console.log(`  required: ${plan.connects.required}`);
+  console.log(`  boost: ${plan.connects.boost}`);
+  console.log(`  total: ${plan.connects.total}`);
+  console.log(`  approval_required: ${plan.connects.approvalRequired}`);
+  if (plan.connects.notes.length > 0) {
+    console.log("  notes:");
+    for (const note of plan.connects.notes) console.log(`    - ${note}`);
+  }
+  console.log("attachments:");
+  if (plan.attachments.length === 0) console.log("  - none");
+  for (const attachment of plan.attachments) console.log(`  - ${attachment.name} (${attachment.filePath})`);
+  if (plan.skippedAttachments.length > 0) {
+    console.log("skipped_attachments:");
+    for (const attachment of plan.skippedAttachments) console.log(`  - ${attachment.name}: ${attachment.reason}`);
+  }
+  console.log("highlights:");
+  if (plan.highlights.length === 0) console.log("  - none");
+  for (const highlight of plan.highlights) console.log(`  - ${highlight}`);
+  console.log("cover_letter:");
+  console.log(plan.coverLetter);
+  return result.valid;
+}
+
+function enqueueApplyPrepare(): void {
+  const jobId = argValue("--job-id");
+  if (!jobId) {
+    usage();
+    process.exitCode = 1;
+    return;
+  }
+  const result = buildBrowserApplyPlan(jobId);
+  if (!result.valid || !result.plan) {
+    printApplyPreview(jobId);
+    process.exitCode = 1;
+    return;
+  }
+  const id = enqueueBrowserAction({
+    jobId,
+    actionType: "prepare_application_review",
+    payload: {
+      url: result.plan.applyUrl,
+      notes: argValue("--notes"),
+      applyPlan: result.plan,
+    },
+  });
+  logger.info(`Queued browser apply preparation #${id} for job_id=${jobId}; final submit remains disabled.`);
+}
+
 function enqueue(): void {
+  if (hasFlag("--apply-preview")) {
+    const jobId = argValue("--job-id");
+    if (!jobId) {
+      usage();
+      process.exitCode = 1;
+      return;
+    }
+    process.exitCode = printApplyPreview(jobId) ? 0 : 1;
+    return;
+  }
+  if (hasFlag("--apply-prepare")) {
+    enqueueApplyPrepare();
+    return;
+  }
+
   const jobId = argValue("--job-id");
   const actionType = argValue("--action") as BrowserActionType | undefined;
 
