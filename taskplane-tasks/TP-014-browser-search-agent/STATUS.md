@@ -67,6 +67,9 @@
 
 ### Step 5: Testing & Verification
 **Status:** 🟨 In Progress
+
+**Plan:** Run the available verification gates for this repository: note that no dedicated test script/test directory exists, run `npm run build`, execute browser-search dry-run with credentials disabled, and record any environment limitation in STATUS.md.
+
 - [ ] Full tests or env limitation note
 - [ ] Build passes
 - [ ] Dry-run command tested
