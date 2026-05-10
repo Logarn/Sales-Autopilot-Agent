@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 7
+**Review Counter:** 8
 **Iteration:** 1
 **Size:** M
 
@@ -43,6 +43,7 @@ Plan: add a pure `src/jobCapture.ts` module exporting typed parsed job-detail ou
 **Status:** 🟨 In Progress
 - [x] Add sample capture text
 - [x] Update README workflow
+- [ ] Fix sample-visible client rating extraction for `out of 5` wording
 
 ---
 
@@ -89,3 +90,4 @@ Plan: add a pure `src/jobCapture.ts` module exporting typed parsed job-detail ou
 | 2026-05-10 17:38 | Review R005 | plan Step 2: APPROVE |
 | 2026-05-10 17:41 | Review R006 | code Step 2: APPROVE |
 | 2026-05-10 17:42 | Review R007 | plan Step 3: APPROVE |
+| 2026-05-10 17:43 | Review R008 | code Step 3: REVISE |
