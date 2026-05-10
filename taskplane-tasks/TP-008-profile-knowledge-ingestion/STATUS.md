@@ -1,6 +1,6 @@
 # TP-008: Profile Knowledge Ingestion — Status
 
-**Current Step:** Step 1: Knowledge file schema and loader
+**Current Step:** Step 2: CLI for adding knowledge
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
@@ -32,7 +32,7 @@
 ---
 
 ### Step 2: CLI for adding knowledge
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Add knowledge append command(s)
 - [ ] Add portfolio/video ingestion workflow
 - [ ] Print summaries
