@@ -1,6 +1,6 @@
 # TP-016: Browser Apply Preparer — Status
 
-**Current Step:** Step 4: Documentation
+**Current Step:** Step 5: Testing & Verification
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 3
@@ -54,10 +54,10 @@
 ---
 
 ### Step 5: Testing & Verification
-**Status:** ⬜ Not Started
-- [ ] Full tests or env limitation note
-- [ ] Build passes
-- [ ] Dry-run tested
+**Status:** 🟨 In Progress
+- [x] Full tests or env limitation note
+- [x] Build passes
+- [x] Dry-run tested
 
 ---
 
@@ -75,6 +75,7 @@
 ## Discoveries
 | Discovery | Disposition | Location |
 |-----------|-------------|----------|
+| `npm test` is unavailable (`Missing script: "test"`); used `npm run build` and synthetic DB dry-run preview instead. | Logged env/test limitation for Step 5. | package.json |
 
 ## Execution Log
 | Timestamp | Action | Outcome |
