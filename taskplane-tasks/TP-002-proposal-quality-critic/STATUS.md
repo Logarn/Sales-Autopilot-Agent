@@ -1,6 +1,6 @@
 # TP-002: Proposal Quality Critic — Status
 
-**Current Step:** Step 0: Preflight
+**Current Step:** Step 1: Add proposal critic types and module
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
@@ -11,7 +11,7 @@
 ---
 
 ### Step 0: Preflight
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 
 - [x] Required files and paths exist
 - [x] Dependencies satisfied (Node/npm available; package-lock present; node_modules absent and will require `npm install` before build/test)
@@ -19,7 +19,7 @@
 ---
 
 ### Step 1: Add proposal critic types and module
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 
 - [ ] Add proposal quality result types to `src/types.ts`
 - [ ] Create `src/critic.ts` with deterministic quality checks
