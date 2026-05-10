@@ -1,6 +1,6 @@
 # VM / Cloud Deployment Runbook
 
-This project can run as a background Upwork opportunity agent on a VM or cloud host. It polls configured sources, scores and deduplicates jobs, sends Slack review packets, tracks outcomes in SQLite, and can process a safe browser-action queue. It is not an auto-apply bot.
+This project can run as a background Upwork opportunity agent on a VM or cloud host. It polls configured sources, scores and deduplicates jobs, sends Slack review packets, tracks outcomes in SQLite, and can process a safe browser-action queue. It is Slack-first/local-CLI controlled, has no web UI, and is not an auto-apply bot.
 
 ## Runtime modes
 
@@ -21,7 +21,9 @@ Operational commands:
 | Heartbeat health report | `npm run health` |
 | Application report | `npm run report` |
 | Outcome analytics | `npm run analytics` |
+| Browser search runner | `npm run browser:search:prod` |
 | Browser queue worker | `npm run browser:worker:prod` |
+| Local Slack conversation parser/handler | `npm run slack:conversation -- parse "approve job <id>"` / `npm run slack:conversation -- handle --job-id <id> --text "approve and queue browser apply"` |
 | Development worker | `npm run worker:dev` |
 
 For Docker Compose:
@@ -54,6 +56,8 @@ docker compose down
 Core variables are documented in `.env.example`. Required values for normal operation:
 
 - `SLACK_CHANNEL_WEBHOOK_URL` — Slack incoming webhook for approval packets and alerts.
+- `SLACK_INBOUND_MODE=local_cli` — Slack conversation placeholder mode. Local CLI handling needs no extra credentials; future `events`, `socket_mode`, or `polling` modes require the matching Slack app/bot setup.
+- `SLACK_SIGNING_SECRET`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_POLL_CHANNEL_ID` — optional inbound Slack placeholders; leave empty unless an inbound mode is explicitly deployed.
 - `APIFY_API_TOKEN` — token for Apify-backed Upwork search scraping.
 - `DB_PATH` — SQLite path, default `./data/jobs.db`.
 - `SEARCH_QUERIES` or `QUERIES_CONFIG_PATH` — job search source configuration.
@@ -66,6 +70,10 @@ Important runtime controls:
 - `HEALTH_ALERT_COOLDOWN_MS` — per-finding Slack alert cooldown to avoid spam.
 - `PROFILE_CONFIG_PATH`, `PORTFOLIO_CONFIG_PATH`, `CONNECTS_RULES_CONFIG_PATH` — local profile/proof/risk inputs.
 - `MANUAL_JOBS_CONFIG_PATH` — manual queue JSON path.
+- `BROWSER_SEARCH_ENABLED=false` by default. Set `true` only when intentionally polling Upwork through the VM browser; the scheduler runs it as an optional job and RSS/Apify remains fallback behavior.
+- `BROWSER_SEARCH_INTERVAL_MS=300000` — browser-search cadence target for operators; keep in the 5–10 minute range.
+- `BROWSER_SEARCH_MAX_JOBS_PER_QUERY=10` and `BROWSER_SEARCH_FRESHNESS_WINDOW_MINUTES=60` — bound captures and freshness expectations.
+- `BROWSER_SEARCH_QUERIES` or `BROWSER_SEARCH_URLS` — optional browser-search inputs; URL inputs must be Upwork `/nx/search/jobs/` pages.
 - `BROWSER_WORKER_ENABLED=false` by default. Set `true` only when intentionally processing queued browser actions.
 - `BROWSER_DRY_RUN=true` by default. Keep enabled unless a human has prepared the VM browser session and accepts the platform risk.
 - `BROWSER_USER_DATA_DIR=./data/browser-profile` — VM-local browser session storage.
@@ -96,16 +104,17 @@ If `sqlite3` is not installed, stop the worker and copy `data/jobs.db` plus any 
 
 ## Browser session storage model
 
-The browser queue is safe by default and does not require local desktop control. Queue entries are stored in SQLite and processed only by the browser worker. In dry-run mode the worker records what it would do without launching a browser.
+Browser search and the browser queue are safe by default and do not require local desktop control. Search dry-run prints/writes heartbeat metadata without launching a browser; queue dry-run records what it would do without opening pages. Live browser search uses validated Upwork search URLs/queries, captures bounded job-detail text, normalizes it deterministically, and queues downstream browser review actions.
 
-If live browser inspection is enabled in the future, it should use the VM-local `BROWSER_USER_DATA_DIR` so cookies/session state stay on the server. Do not sync a personal laptop browser profile into the VM. Treat browser profile directories as sensitive secrets and include them in encrypted backups only when necessary.
+If live browser inspection is enabled, it should use the VM-local `BROWSER_USER_DATA_DIR` so cookies/session state stay on the server. Do not sync a personal laptop browser profile into the VM. Treat browser profile directories as sensitive secrets and include them in encrypted backups only when necessary.
 
 ## Safety and platform-risk guidance
 
 - Human approval is required before any real Upwork application is submitted.
-- The worker must not bypass CAPTCHA, 2FA, Cloudflare, login challenges, or other security controls.
-- The browser worker must pause on security challenges and wait for a human.
+- Browser search/worker code must not bypass CAPTCHA, 2FA, Cloudflare, login challenges, or other security controls.
+- Browser search/worker runs must pause on security challenges and wait for a human.
 - Do not store plaintext Upwork credentials in `.env`, config files, logs, captures, or diagnostics.
+- Do not add or deploy a web UI for this control plane; use Slack packets, the local Slack conversation CLI, application reports, and documented VM commands.
 - Do not fill proposal fields or submit proposals automatically as part of this runtime setup.
 - Keep Slack/webhook/API tokens in `.env` or the cloud secret manager, never in git.
 - Minimize captures and browser artifacts; avoid full authenticated page archives unless explicitly approved.
@@ -127,7 +136,7 @@ Autonomous runtime:
 npm run scheduler
 ```
 
-Scheduler mode runs the pipeline, optional browser queue processing, and heartbeat health checks every 5–10 minutes. Health alerts use the existing Slack webhook and are conservative: stale workers and browser/auth-required findings are rate-limited by `HEALTH_ALERT_COOLDOWN_MS`.
+Scheduler mode runs the pipeline, optional browser search, optional browser queue processing, and heartbeat health checks every 5–10 minutes. Browser search heartbeat metadata includes dry-run state, queries run, jobs found/captured/queued, paused reason, and errors. Health alerts use the existing Slack webhook and are conservative: stale workers and browser/auth-required findings are rate-limited by `HEALTH_ALERT_COOLDOWN_MS`.
 
 Incident checks:
 
@@ -147,4 +156,4 @@ npm run health
 # restart process manager or docker compose up --build -d
 ```
 
-Before enabling any live browser processing, verify that dry-run queue processing works and that a human can intervene on the VM session.
+Before enabling any live browser processing, verify that `npm run browser:search:prod` and dry-run queue processing work, and that a human can intervene on the VM session.

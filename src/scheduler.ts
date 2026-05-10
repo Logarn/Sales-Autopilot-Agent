@@ -1,14 +1,17 @@
-import { BROWSER_WORKER_ENABLED, SCHEDULER_INTERVAL_MS, validateRequiredConfig } from "./config";
+import { BROWSER_SEARCH_ENABLED, BROWSER_WORKER_ENABLED, SCHEDULER_INTERVAL_MS, validateRequiredConfig } from "./config";
 import { closeDb } from "./db";
 import { runHealthCheck } from "./health";
 import { writeHeartbeat } from "./heartbeat";
 import { logger } from "./logger";
+import { runBrowserSearch } from "./browserSearch";
 import { runBrowserWorker } from "./browserWorker";
 import { runPipeline, startupHealthCheck } from "./index";
 
+type SchedulerMetadata = Record<string, unknown>;
+
 interface SchedulerJob {
   name: string;
-  run: () => Promise<void>;
+  run: () => Promise<SchedulerMetadata | void>;
   enabled?: () => boolean;
 }
 
@@ -29,8 +32,8 @@ async function runJob(job: SchedulerJob): Promise<void> {
   runningJobs.add(job.name);
   writeHeartbeat({ worker: job.name, status: "running", metadata: { source: "scheduler" } });
   try {
-    await job.run();
-    writeHeartbeat({ worker: job.name, status: "success", metadata: { source: "scheduler" } });
+    const metadata = (await job.run()) ?? {};
+    writeHeartbeat({ worker: job.name, status: "success", metadata: { source: "scheduler", ...metadata } });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     writeHeartbeat({ worker: job.name, status: "error", error: message, metadata: { source: "scheduler" } });
@@ -46,6 +49,22 @@ function buildJobs(): SchedulerJob[] {
       name: "pipeline",
       run: async () => {
         await runPipeline("scheduler");
+      },
+    },
+    {
+      name: "browser-search",
+      enabled: () => BROWSER_SEARCH_ENABLED,
+      run: async () => {
+        const result = await runBrowserSearch();
+        return {
+          dryRun: result.summary.dryRun,
+          queriesRun: result.summary.queriesRun,
+          jobsFound: result.summary.jobsFound,
+          jobsCaptured: result.summary.jobsCaptured,
+          jobsQueued: result.summary.jobsQueued,
+          pausedReason: result.summary.pausedReason ?? null,
+          errors: result.summary.errors,
+        };
       },
     },
     {

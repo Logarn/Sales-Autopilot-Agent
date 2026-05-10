@@ -1,7 +1,7 @@
 # Slack Conversation Skill
 
 ## Purpose
-Handle future interactive Slack review decisions and discussion safely.
+Handle Slack-first/local-CLI review decisions and discussion safely without adding a web UI or auto-apply behavior.
 
 ## When to use
 Use this skill when the current task matches the purpose above and you need compact project-specific operating context without loading the whole repository.
@@ -65,6 +65,7 @@ Steve replies 'revise opening, mention Trattoria DTC proof'; the skill treats it
 - `src/agent.ts` proposal drafting, proof, Connects recommendations
 - `src/critic.ts` proposal quality checks
 - `src/slack.ts`, `src/slackPreview.ts` Slack packet formatting
+- `src/slackConversation.ts` local Slack-style parse/handle commands for approve/reject/revise/mark/queue handoffs
 - `src/browserQueue.ts`, `src/browserWorker.ts` queued browser actions
 - `src/applications.ts`, `src/db.ts` outcome tracking and persistence
 - `profile/profile.json`, `profile/portfolio.json`, `profile/connects-rules.json`, `profile/knowledge/`
@@ -73,4 +74,4 @@ Steve replies 'revise opening, mention Trattoria DTC proof'; the skill treats it
 Recommended next skill: `browser-apply or outcome-tracking`. Include the output schema above so the next skill can continue without rereading broad context.
 
 ## Platform safety emphasis
-Human approval is mandatory before any Upwork submission. Do not fill proposal fields, submit proposals, bypass CAPTCHA/2FA/login/security checks, or imply Slack reactions equal permission to apply unless a future approved workflow explicitly says so.
+Human approval is mandatory before any Upwork submission. Do not fill proposal fields, submit proposals, bypass CAPTCHA/2FA/login/security checks, add a web UI, or imply Slack reactions equal permission to apply unless a future approved workflow explicitly says so.

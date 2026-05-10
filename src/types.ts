@@ -293,6 +293,60 @@ export interface FeedJobResult {
   failedFeeds: string[];
 }
 
+export interface BrowserSearchQuery {
+  id: string;
+  label: string;
+  query: string;
+  url: string;
+}
+
+export interface BrowserSearchConfig {
+  enabled: boolean;
+  dryRun: boolean;
+  intervalMs: number;
+  maxJobsPerQuery: number;
+  freshnessWindowMinutes: number;
+  queries: BrowserSearchQuery[];
+}
+
+export interface BrowserSearchResultLink {
+  jobId: string | null;
+  title: string;
+  url: string;
+  sourceQueryId: string;
+  sourceQueryLabel: string;
+  discoveredAt: string;
+}
+
+export interface BrowserCapturedJobPage {
+  jobId: string | null;
+  url: string;
+  title: string;
+  text: string;
+  sourceQueryId: string;
+  sourceQueryLabel: string;
+  capturedAt: string;
+}
+
+export interface BrowserSearchRunSummary {
+  startedAt: string;
+  finishedAt: string;
+  dryRun: boolean;
+  queriesRun: number;
+  jobsFound: number;
+  jobsCaptured: number;
+  jobsQueued: number;
+  pausedReason?: string;
+  errors: string[];
+}
+
+export interface BrowserSearchRunResult {
+  summary: BrowserSearchRunSummary;
+  links: BrowserSearchResultLink[];
+  capturedPages: BrowserCapturedJobPage[];
+  normalizedPackets: NormalizedOpportunityPacket[];
+}
+
 export interface DedupeResult<TJob extends JobPosting> {
   jobs: TJob[];
   exactDuplicates: number;
@@ -331,6 +385,24 @@ export interface BrowserAction {
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export type SlackConversationIntentType =
+  | "approve"
+  | "reject"
+  | "revise"
+  | "regenerate"
+  | "mark_applied"
+  | "mark_replied"
+  | "enqueue_browser_apply"
+  | "unknown";
+
+export interface SlackConversationIntent {
+  type: SlackConversationIntentType;
+  jobId: string | null;
+  instruction: string | null;
+  confidence: "high" | "medium" | "low";
+  rawText: string;
 }
 
 export interface BrowserActionInput {

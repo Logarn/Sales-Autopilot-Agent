@@ -10,7 +10,7 @@ Use this skill when the current task matches the purpose above and you need comp
 Do not use this skill to bypass product guardrails, invent facts, store secrets, make paid LLM/API calls not requested by the operator, or replace existing deterministic code paths without an explicit task.
 
 ## Required inputs
-SEARCH_QUERIES, Apify token/source settings, manual job URLs
+SEARCH_QUERIES, optional BROWSER_SEARCH_QUERIES/BROWSER_SEARCH_URLS, Apify token/source settings, manual job URLs
 
 ## Optional inputs
 - Recent logs or captured artifacts
@@ -65,6 +65,7 @@ A Steve-fit search for Klaviyo Shopify retention work finds a DTC beauty brand a
 - `src/agent.ts` proposal drafting, proof, Connects recommendations
 - `src/critic.ts` proposal quality checks
 - `src/slack.ts`, `src/slackPreview.ts` Slack packet formatting
+- `src/browserSearch.ts` optional dry-run/live Upwork browser-search runner
 - `src/browserQueue.ts`, `src/browserWorker.ts` queued browser actions
 - `src/applications.ts`, `src/db.ts` outcome tracking and persistence
 - `profile/profile.json`, `profile/portfolio.json`, `profile/connects-rules.json`, `profile/knowledge/`
