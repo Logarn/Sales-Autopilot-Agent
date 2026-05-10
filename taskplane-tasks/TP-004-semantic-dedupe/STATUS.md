@@ -1,10 +1,10 @@
 # TP-004: Semantic Dedupe — Status
 
-**Current Step:** Step 4: Documentation
+**Current Step:** Step 5: Testing & Verification
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 8
+**Review Counter:** 9
 **Iteration:** 1
 **Size:** M
 
@@ -50,7 +50,7 @@
 ---
 
 ### Step 4: Documentation
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 
 - [x] Update README with dedupe behavior
 - [x] Document conservative deterministic strategy
@@ -58,7 +58,7 @@
 ---
 
 ### Step 5: Testing & Verification
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 
 - [ ] FULL test suite passing or absence of test script documented
 - [ ] All failures fixed
@@ -117,3 +117,4 @@
 | 2026-05-10 16:36 | Review R006 | plan Step 3: APPROVE |
 | 2026-05-10 16:37 | Review R007 | code Step 3: APPROVE |
 | 2026-05-10 16:38 | Review R008 | plan Step 4: APPROVE |
+| 2026-05-10 16:39 | Review R009 | code Step 4: APPROVE |
