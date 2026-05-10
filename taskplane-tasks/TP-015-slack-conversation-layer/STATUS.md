@@ -1,6 +1,6 @@
 # TP-015: Slack Conversation Layer — Status
 
-**Current Step:** Step 5: Testing & Verification
+**Current Step:** Step 6: Documentation & Delivery
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 3
@@ -68,7 +68,7 @@
 ---
 
 ### Step 6: Documentation & Delivery
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Docs updated
 - [ ] Discoveries logged
 
