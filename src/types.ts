@@ -97,6 +97,32 @@ export interface ConnectsRules {
   skipIfTopBidAbove: number;
 }
 
+export type ProposalQualitySeverity = "info" | "warning" | "critical";
+
+export type ProposalQualityCategory =
+  | "banned_phrase"
+  | "weak_opening"
+  | "generic_claim"
+  | "length"
+  | "cta"
+  | "proof_relevance"
+  | "voice";
+
+export interface ProposalQualityIssue {
+  category: ProposalQualityCategory;
+  severity: ProposalQualitySeverity;
+  message: string;
+  evidence?: string;
+  suggestion: string;
+}
+
+export interface ProposalQualityResult {
+  score: number;
+  issues: ProposalQualityIssue[];
+  positiveSignals: string[];
+  wordCount: number;
+}
+
 export interface ApplicationDraft {
   jobId: string;
   status: ApplicationStatus;
@@ -108,6 +134,7 @@ export interface ApplicationDraft {
   suggestedBoostConnects: number;
   connectsWarnings: string[];
   selectedPortfolioItems: PortfolioItem[];
+  proposalQuality?: ProposalQualityResult;
   proposalText: string;
   generatedAt: string;
 }
