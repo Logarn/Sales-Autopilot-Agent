@@ -23,7 +23,7 @@
 - [x] Add validation/repair helpers that merge LLM/deterministic data while rejecting unsafe direct links and preserving guarded fallback fields
 - [x] Build passes
 - [x] Replace rawTextHash snippet metadata with a non-reversible digest and prevent LLM-provided raw text from being preserved
-- [ ] Preserve deterministic direct job URL during repair and warn when discarding LLM-provided alternate URLs
+- [x] Preserve deterministic direct job URL during repair and warn when discarding LLM-provided alternate URLs
 
 ---
 

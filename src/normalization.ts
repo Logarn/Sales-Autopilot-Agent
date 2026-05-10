@@ -44,6 +44,10 @@ function nullableNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function canonicalizeUrl(url: string): string {
+  return url.trim().replace(/[?#].*$/, "").replace(/\/$/, "").toLowerCase();
+}
+
 export function hasSafeDirectJobLink(url: string): boolean {
   return SAFE_UPWORK_JOB_URL.test(url.trim());
 }
@@ -173,11 +177,16 @@ export function repairNormalizedOpportunityPacket(
   const warnings: string[] = [];
   const errors: string[] = [];
   const input = candidate ?? {};
+  const candidateUrl = sanitizeString(input.job?.url);
   const job = normalizeJob(input.job, fallback.job);
 
+  if (candidateUrl && canonicalizeUrl(candidateUrl) !== canonicalizeUrl(fallback.job.url)) {
+    warnings.push("LLM-provided job URL differed from deterministic capture and was ignored.");
+  }
+  job.url = fallback.job.url;
+
   if (!hasSafeDirectJobLink(job.url)) {
-    errors.push("Missing or unsafe direct Upwork job link; using deterministic URL and marking packet unsafe if unavailable.");
-    job.url = fallback.job.url;
+    errors.push("Missing or unsafe deterministic Upwork job link; packet is unsafe for downstream application preparation.");
   }
 
   const connectsRequired = nullableNumber(input.connects?.required) ?? fallback.connects.required;
