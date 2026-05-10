@@ -1,10 +1,10 @@
 # TP-014: Browser Search Agent — Status
 
-**Current Step:** Step 3: Queue/scheduler integration
+**Current Step:** Step 4: Documentation
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 3
-**Review Counter:** 7
+**Review Counter:** 8
 **Iteration:** 1
 **Size:** L
 
@@ -45,7 +45,7 @@
 ---
 
 ### Step 3: Queue/scheduler integration
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 
 **Plan:** Add an npm/CLI browser-search command around `runBrowserSearch`, wire an optional scheduler job gated by browser-search enablement so existing pipeline/RSS/Apify runs remain independent, and record structured heartbeat metadata from each search summary (queries/jobs/errors/paused reason). Verify build plus a dry-run CLI invocation without credentials.
 
@@ -57,7 +57,7 @@
 ---
 
 ### Step 4: Documentation
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] README/deployment updated
 
 ---
@@ -87,6 +87,7 @@
 | R005 | Plan | Step 2 | APPROVE | .reviews/R005-plan-step2.md |
 | R006 | Code | Step 2 | APPROVE | .reviews/R006-code-step2.md |
 | R007 | Plan | Step 3 | APPROVE | .reviews/R007-plan-step3.md |
+| R008 | Code | Step 3 | APPROVE | .reviews/R008-code-step3.md |
 
 ## Discoveries
 | Discovery | Disposition | Location |
@@ -109,3 +110,4 @@
 | 2026-05-10 21:44 | Review R005 | plan Step 2: APPROVE |
 | 2026-05-10 21:47 | Review R006 | code Step 2: APPROVE |
 | 2026-05-10 21:48 | Review R007 | plan Step 3: APPROVE |
+| 2026-05-10 21:50 | Review R008 | code Step 3: APPROVE |
