@@ -30,8 +30,8 @@
 ### Step 2: Browser apply worker path
 **Status:** 🟨 In Progress
 - [ ] Add apply/prepare action handler
-- [ ] Reviewer R005: keep dry-run/artifacts minimized and re-check stale payload validation
-- [ ] Reviewer R005: handle allowed attachments/highlights as safe attempts or explicit manual skips
+- [x] Reviewer R005: keep dry-run/artifacts minimized and re-check stale payload validation
+- [x] Reviewer R005: handle allowed attachments/highlights as safe attempts or explicit manual skips
 - [ ] Detect login/security states
 - [ ] Fill conservatively in enabled mode, never submit
 - [ ] Minimized diagnostics only
