@@ -13,7 +13,7 @@ import {
 } from "./types";
 
 const MISSING = "Not specified";
-const SAFE_UPWORK_JOB_URL = /^https:\/\/(?:www\.)?upwork\.com\/jobs\/[A-Za-z0-9/_~?=&%+.-]+$/i;
+const SAFE_UPWORK_JOB_URL = /^https:\/\/(?:www\.)?upwork\.com\/jobs\/[^\s?#]*~[A-Za-z0-9_-]{8,}(?:[/?#][^\s]*)?$/i;
 
 function sanitizeString(value: unknown, fallback = ""): string {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;

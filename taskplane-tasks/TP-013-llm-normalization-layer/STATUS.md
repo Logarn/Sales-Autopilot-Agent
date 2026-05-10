@@ -24,7 +24,7 @@
 - [x] Build passes
 - [x] Replace rawTextHash snippet metadata with a non-reversible digest and prevent LLM-provided raw text from being preserved
 - [x] Preserve deterministic direct job URL during repair and warn when discarding LLM-provided alternate URLs
-- [ ] Tighten direct-link validation to require a concrete Upwork job id
+- [x] Tighten direct-link validation to require a concrete Upwork job id
 
 ---
 
