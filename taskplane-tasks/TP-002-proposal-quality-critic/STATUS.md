@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 1
+**Review Counter:** 2
 **Iteration:** 1
 **Size:** M
 
@@ -25,6 +25,7 @@
 - [x] Create `src/critic.ts` with deterministic quality checks
 - [x] Ensure critic returns score, issues, and positive signals
 - [x] Run targeted build/typecheck: `npm run build`
+- [ ] Fix placeholder banned phrase matching for phrases like `With over X years of experience`
 
 ---
 
@@ -98,3 +99,4 @@
 
 *Reserved for execution notes*
 | 2026-05-10 16:05 | Review R001 | plan Step 1: APPROVE |
+| 2026-05-10 16:07 | Review R002 | code Step 1: REVISE |
