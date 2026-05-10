@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 8
+**Review Counter:** 9
 **Iteration:** 2
 **Size:** M
 
@@ -41,9 +41,9 @@
 
 ### Step 3: Documentation
 **Status:** 🟨 In Progress
-- [ ] Update README Slack webhook workflow
-- [ ] Document V0 vs later Slack interactivity
-- [ ] Update .env.example to clarify Slack V0 only requires incoming webhook URL
+- [x] Update README Slack webhook workflow
+- [x] Document V0 vs later Slack interactivity
+- [x] Update .env.example to clarify Slack V0 only requires incoming webhook URL
 
 ---
 
@@ -74,6 +74,7 @@
 | R006 | code | 2 | REVISE | .reviews/R006-code-step2.md |
 | R007 | code | 2 | APPROVE | .reviews/R007-code-step2.md |
 | R008 | plan | 3 | REVISE | .reviews/R008-plan-step3.md |
+| R009 | plan | 3 | APPROVE | .reviews/R009-plan-step3.md |
 
 ## Discoveries
 
@@ -98,8 +99,8 @@
 | 2026-05-10 19:47 | Review R006 | code Step 2: REVISE |
 | 2026-05-10 19:49 | Review R007 | code Step 2: APPROVE |
 | 2026-05-10 19:51 | Review R008 | plan Step 3: REVISE |
+| 2026-05-10 19:50 | Review R009 | plan Step 3: APPROVE |
 
 ## Blockers
 
 *None*
-| 2026-05-10 19:50 | Review R008 | plan Step 3: REVISE |

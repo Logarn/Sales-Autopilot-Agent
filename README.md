@@ -135,6 +135,19 @@ Examples of flagged issues:
 
 Slack packets show the Proposal Quality score plus the top issues and positive signals above the proposal draft.
 
+## Slack V0 Proposal Packet Preview
+
+V0 uses the existing Slack Incoming Webhook only. Set `SLACK_CHANNEL_WEBHOOK_URL` and run a preview before VM deployment:
+
+```bash
+npm run slack:preview -- --sample
+npm run slack:preview -- --job-id <stored-job-id>
+```
+
+The preview sends the same proposal packet structure used by normal notifications: match score units, reasons/risks, Connects plan, selected proof, proposal quality, and a draft proposal that can be copied manually into Upwork. If the webhook is not configured, the command exits non-zero with a clear message and does not print the secret. Preview sends also do not enter the production Slack retry queue.
+
+Webhook V0 is one-way. Buttons can open URLs such as Upwork or an optional `QUICK_BID_TEMPLATE_URL`, but incoming webhooks cannot receive Approve/Revise/Reject callbacks, Slack chat replies, or edits. Later interactive review workflows require a Slack app/socket mode or a separate polling approach; no Slack OAuth or socket-mode token is required for this V0 preview path.
+
 ## Job Detail Capture Workflow
 
 Use job detail capture when you have a promising Upwork job open in a browser but do not want to automate login or scraping. Copy the visible job-detail page text, save it under `captures/`, then import it into the manual job queue:
@@ -198,6 +211,8 @@ The worker must pause for human intervention on login, 2FA, CAPTCHA, Cloudflare,
 - `npm start` - run compiled worker
 - `npm run test:fetch` - fetch configured feeds once, print sample jobs
 - `npm run test:slack` - send Slack webhook test message
+- `npm run slack:preview -- --sample` - send a synthetic Slack V0 proposal packet preview
+- `npm run slack:preview -- --job-id <id>` - send a preview from stored job/application data
 - `npm run test:run-once` - run full pipeline one time and exit
 - `npm run add:manual-job -- --url <url> --title <title>` - add a manual job to the ingestion queue
 - `npm run capture:job -- --file captures/job-detail.txt [--url <url>]` - parse pasted Upwork job-detail text and create/update the manual job queue
@@ -220,6 +235,7 @@ The worker must pause for human intervention on login, 2FA, CAPTCHA, Cloudflare,
 See `.env.example` for full list. Core settings:
 
 ```env
+# Slack V0 uses only this incoming webhook URL; no Slack app/OAuth/socket-mode token is required.
 SLACK_CHANNEL_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
 APIFY_API_TOKEN=your_apify_token_here
 CRON_SCHEDULE=0 * * * *
