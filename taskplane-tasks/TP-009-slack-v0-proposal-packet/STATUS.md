@@ -1,6 +1,6 @@
 # TP-009: Slack V0 Proposal Packet — Status
 
-**Current Step:** Step 2: Slack preview/test command
+**Current Step:** Step 3: Documentation
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
@@ -40,7 +40,7 @@
 ---
 
 ### Step 3: Documentation
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] Update README Slack webhook workflow
 - [ ] Document V0 vs later Slack interactivity
 
