@@ -1,6 +1,6 @@
 # TP-015: Slack Conversation Layer — Status
 
-**Current Step:** Step 3: Approval/browser queue handoff
+**Current Step:** Step 4: Documentation
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 3
@@ -52,7 +52,7 @@
 ---
 
 ### Step 4: Documentation
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] README/deployment updated
 - [ ] Slack-first/no-web-UI documented
 
