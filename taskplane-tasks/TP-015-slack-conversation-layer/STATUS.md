@@ -27,7 +27,8 @@
 ---
 
 ### Step 2: Draft revision/update flow
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
+- [ ] Add DB helpers for draft lookup, proposal versioning, and revision audit events
 - [ ] Apply revision instruction or store request
 - [ ] Preserve proposal version/audit trail
 - [ ] Re-render/send Slack preview if configured
