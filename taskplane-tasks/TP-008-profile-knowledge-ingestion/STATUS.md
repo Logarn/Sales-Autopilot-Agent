@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 2
+**Review Counter:** 3
 **Iteration:** 1
 **Size:** M
 
@@ -26,6 +26,8 @@
 - [x] Add types for knowledge artifacts and profile enrichment
 - [x] Verify empty directory, valid markdown/json artifacts, malformed JSON handling, and truncation behavior
 - [x] Build passes
+- [ ] Fix safe traversal to warn/continue on unreadable knowledge directories
+- [ ] Restrict type inference to configured knowledge-directory-relative paths
 
 ---
 
@@ -81,6 +83,7 @@
 |-----------|-------------|----------|
 | Step 1 plan review requested explicit schema, safe-loader, and truncation verification criteria | Added as Step 1 checklist items | taskplane-tasks/TP-008-profile-knowledge-ingestion/.reviews/R001-plan-step1.md |
 | Operator proposed future optional LLM normalization layer before Slack packet output | Out of scope for TP-008; future architecture note: LLM-normalized structured packet -> deterministic guardrails/critic -> Slack webhook, with deterministic fallback and no secrets sent | Steering message 2026-05-10 |
+| Operator wants RSS/Apify fallback replaced by cloud/VM browser search agent polling Upwork every 5-10 minutes with authenticated saved searches, LLM-normalized packets, Slack approval/edit, and guarded browser apply prep/submit | Out of scope for TP-008; logged for future architecture tasks | Steering message 2026-05-10 |
 
 ## Execution Log
 
@@ -95,3 +98,4 @@
 *None*
 | 2026-05-10 19:04 | Review R001 | plan Step 1: REVISE |
 | 2026-05-10 19:05 | Review R002 | plan Step 1: APPROVE |
+| 2026-05-10 19:08 | Review R003 | code Step 1: REVISE |
