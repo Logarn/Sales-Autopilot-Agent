@@ -110,6 +110,11 @@
 | 2026-05-10 | Task staged | PROMPT.md and STATUS.md created |
 | 2026-05-10 19:03 | Task started | Runtime V2 lane-runner execution |
 | 2026-05-10 19:03 | Step 0 started | Preflight |
+| 2026-05-10 19:32 | ⚠️ Steering | Operator idea for product direction: before Slack packet output, route raw/captured job data through an optional LLM normalization layer (GPT or configured provider) that converts messy source data in |
+| 2026-05-10 19:32 | ⚠️ Steering | Operator strongly wants permanent alternative to RSS/Apify starvation: cloud/VM browser search agent polling Upwork every 5-10 min using authenticated session/saved searches, reading job descriptions, |
+| 2026-05-10 19:32 | ⚠️ Steering | Operator idea: define natural-language SKILL.md-style docs for agent capabilities so future agent can load/call only relevant skills on demand. Also true autonomy requires cron/scheduler + heartbeat/h |
+| 2026-05-10 19:32 | Worker iter 1 | done in 1713s, tools: 181 |
+| 2026-05-10 19:32 | Task complete | .DONE created |
 
 ## Blockers
 
