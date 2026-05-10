@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 1
-**Review Counter:** 4
+**Review Counter:** 5
 **Iteration:** 1
 **Size:** M
 
@@ -44,6 +44,7 @@
 ### Step 4: Testing & Verification
 **Status:** ⬜ Not Started
 - [ ] Full tests or env limitation note
+- [ ] Skills list/read CLI smoke test passes
 - [ ] Build passes
 
 ---
@@ -76,3 +77,4 @@
 | 2026-05-10 20:36 | Review R002 | plan Step 2: REVISE |
 | 2026-05-10 20:37 | Review R003 | plan Step 2: APPROVE |
 | 2026-05-10 20:38 | Review R004 | plan Step 3: APPROVE |
+| 2026-05-10 20:39 | Review R005 | plan Step 4: REVISE |
