@@ -1,10 +1,10 @@
 # TP-003: Advanced Scoring Model — Status
 
-**Current Step:** Step 1: Add structured scoring types and scorer
+**Current Step:** Step 2: Wire structured scoring into existing pipeline
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 2
+**Review Counter:** 3
 **Iteration:** 1
 **Size:** M
 
@@ -19,7 +19,7 @@
 ---
 
 ### Step 1: Add structured scoring types and scorer
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 
 - [x] Add score breakdown types to `src/types.ts`
 - [x] Create `src/scoring.ts` with component scores, reasons, and risks
@@ -100,3 +100,4 @@
 *Reserved for execution notes*
 | 2026-05-10 16:15 | Review R001 | plan Step 1: APPROVE |
 | 2026-05-10 16:19 | Review R002 | code Step 1: REVISE |
+| 2026-05-10 16:20 | Review R003 | code Step 1: APPROVE |
