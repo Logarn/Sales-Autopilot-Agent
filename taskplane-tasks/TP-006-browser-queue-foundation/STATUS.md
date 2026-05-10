@@ -1,10 +1,10 @@
 # TP-006: Browser Queue Foundation — Status
 
-**Current Step:** Step 3: Safety/policy guardrails
+**Current Step:** Step 4: Documentation
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 7
+**Review Counter:** 8
 **Iteration:** 1
 **Size:** L
 
@@ -39,7 +39,7 @@
 ---
 
 ### Step 3: Safety/policy guardrails
-**Status:** 🟨 In Progress
+**Status:** ✅ Complete
 - [x] Add browser worker env config
 - [x] Enforce dry-run default and explicit opt-in
 - [x] Document pause-on-security-challenge rules
@@ -48,7 +48,7 @@
 ---
 
 ### Step 4: Documentation
-**Status:** ⬜ Not Started
+**Status:** 🟨 In Progress
 - [ ] README updated
 - [ ] Product vision checked/updated
 
@@ -99,3 +99,4 @@
 | 2026-05-10 17:55 | Review R005 | code Step 2: REVISE |
 | 2026-05-10 17:57 | Review R006 | code Step 2: APPROVE |
 | 2026-05-10 17:58 | Review R007 | plan Step 3: APPROVE |
+| 2026-05-10 18:00 | Review R008 | code Step 3: APPROVE |
