@@ -110,14 +110,14 @@ function firstMatch(text: string, patterns: RegExp[]): string | null {
 function deriveJobId(url: string, text: string): string | null {
   const source = `${url}\n${text}`;
   return firstMatch(source, [
-    /upwork\.com\/jobs\/~([A-Za-z0-9_-]+)/i,
+    /upwork\.com\/jobs\/[^\s]*~([A-Za-z0-9_-]+)/i,
     /(?:Job ID|Job Id|ID)\s*:?\s*([A-Za-z0-9_-]{8,})/i,
   ]);
 }
 
 function deriveUrl(text: string, options: JobCaptureOptions): string {
   if (options.url?.trim()) return options.url.trim();
-  return firstMatch(text, [/https?:\/\/[^\s]+upwork\.com\/jobs\/[^\s]+/i]) ?? "";
+  return firstMatch(text, [/(https?:\/\/[^\s]+upwork\.com\/jobs\/[^\s]+)/i]) ?? "";
 }
 
 function deriveTitle(allLines: string[], text: string): string {
@@ -191,7 +191,7 @@ function deriveClient(text: string): ClientCapture {
     location: deriveLocation(text),
     rating,
     reviews: parseNumber(firstMatch(text, [/(\d+)\s+reviews?/i])),
-    spend: parseMoneyValue(firstMatch(text, [/\$([\d,.]+\s*[km]?)\s+total spent/i])),
+    spend: parseMoneyValue(firstMatch(text, [/\$([\d,.]+\s*[km]?)\+?\s+total spent/i])),
     hires: parseNumber(firstMatch(text, [/(\d+)\s+hires?/i])),
     jobsPosted: parseNumber(firstMatch(text, [/(\d+)\s+jobs posted/i])),
     hireRate: parseNumber(firstMatch(text, [/(\d+)%\s+hire rate/i])),
