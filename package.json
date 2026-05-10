@@ -1,7 +1,7 @@
 {
-  "name": "upwork-notifier",
+  "name": "upwork-agent",
   "version": "1.0.0",
-  "description": "Klaviyo + Shopify Upwork RSS notifier with Slack alerts",
+  "description": "Slack-controlled Upwork application agent with browser search, proposal drafting, and guardrails",
   "main": "dist/index.js",
   "type": "commonjs",
   "engines": {
@@ -48,7 +48,7 @@
   },
   "keywords": [
     "upwork",
-    "rss",
+    "agent",
     "slack",
     "notifier",
     "klaviyo",

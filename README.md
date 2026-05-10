@@ -30,7 +30,7 @@ The product direction is an Upwork revenue assistant, not an auto-apply bot: fin
 ## Project Structure
 
 ```text
-upwork-notifier/
+upwork-agent/
 ├── src/
 │   ├── index.ts
 │   ├── config.ts
