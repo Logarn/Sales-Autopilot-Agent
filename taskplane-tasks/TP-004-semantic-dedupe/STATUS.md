@@ -4,7 +4,7 @@
 **Status:** 🟡 In Progress
 **Last Updated:** 2026-05-10
 **Review Level:** 2
-**Review Counter:** 0
+**Review Counter:** 1
 **Iteration:** 1
 **Size:** M
 
@@ -21,10 +21,10 @@
 ### Step 1: Add fingerprinting utilities
 **Status:** 🟨 In Progress
 
-- [ ] Create `src/dedupe.ts` with normalization, fingerprinting, and similarity scoring
-- [ ] Fingerprint considers stable job fields and ignores noise
-- [ ] Add dedupe result types if necessary
-- [ ] Run targeted build/typecheck: `npm run build`
+- [x] Create `src/dedupe.ts` with normalization, fingerprinting, and similarity scoring
+- [x] Fingerprint considers stable job fields and ignores noise
+- [x] Add dedupe result types if necessary
+- [x] Run targeted build/typecheck: `npm run build`
 
 ---
 
@@ -107,3 +107,4 @@
 ## Notes
 
 *Reserved for execution notes*
+| 2026-05-10 16:29 | Review R001 | plan Step 1: APPROVE |

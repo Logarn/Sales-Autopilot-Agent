@@ -162,6 +162,12 @@ export interface FeedJobResult {
   failedFeeds: string[];
 }
 
+export interface DedupeResult<TJob extends JobPosting> {
+  jobs: TJob[];
+  exactDuplicates: number;
+  nearDuplicates: number;
+}
+
 export interface RunStats {
   fetched: number;
   newJobs: number;
