@@ -31,3 +31,9 @@ data/*.sqlite3
 !.env.example
 .pi/
 data/
+
+# Local profile binary assets
+profile/attachments/*
+profile/screenshots/*
+!profile/attachments/.gitkeep
+!profile/screenshots/.gitkeep
