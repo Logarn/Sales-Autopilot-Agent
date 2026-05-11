@@ -45,6 +45,7 @@
     "browser:search": "tsx src/browserSearch.ts",
     "browser:search:prod": "node dist/browserSearch.js",
     "browser:worker": "tsx src/browserWorker.ts",
+    "browser:readiness": "tsx src/browserWorker.ts --readiness",
     "browser:worker:prod": "node dist/browserWorker.js",
     "skills:list": "tsx src/skills.ts list",
     "skills:read": "tsx src/skills.ts read"
@@ -64,7 +65,8 @@
     "better-sqlite3": "^12.4.1",
     "cheerio": "^1.1.2",
     "dotenv": "^17.2.3",
-    "node-cron": "^4.2.1"
+    "node-cron": "^4.2.1",
+    "playwright": "^1.59.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

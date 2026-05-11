@@ -101,9 +101,11 @@ export const LLM_NORMALIZATION_ENABLED = parseBoolean(process.env.LLM_NORMALIZAT
 export const BROWSER_WORKER_ENABLED = parseBoolean(process.env.BROWSER_WORKER_ENABLED, false);
 export const BROWSER_HEADLESS = parseBoolean(process.env.BROWSER_HEADLESS, true);
 export const BROWSER_USER_DATA_DIR = process.env.BROWSER_USER_DATA_DIR ?? "./data/browser-profile";
+export const BROWSER_CHROME_EXECUTABLE_PATH = process.env.BROWSER_CHROME_EXECUTABLE_PATH ?? "";
 export const BROWSER_DRY_RUN = parseBoolean(process.env.BROWSER_DRY_RUN, true);
 export const BROWSER_ARTIFACT_DIR = process.env.BROWSER_ARTIFACT_DIR ?? "";
 export const BROWSER_ACTION_LIMIT = parseInteger(process.env.BROWSER_ACTION_LIMIT, 5);
+export const BROWSER_LIVE_ACTION_LIMIT = Math.max(1, parseInteger(process.env.BROWSER_LIVE_ACTION_LIMIT, 1));
 export const BROWSER_SEARCH_ENABLED = parseBoolean(process.env.BROWSER_SEARCH_ENABLED, false);
 export const BROWSER_SEARCH_INTERVAL_MS = Math.min(
   Math.max(parseInteger(process.env.BROWSER_SEARCH_INTERVAL_MS, 5 * 60 * 1000), 5 * 60 * 1000),

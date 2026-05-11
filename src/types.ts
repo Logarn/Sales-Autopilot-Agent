@@ -406,6 +406,7 @@ export interface BrowserApplyFillPlan {
   profile: string;
   rate: string;
   coverLetter: string;
+  screeningAnswers: string[];
   attachments: BrowserApplyAttachmentInstruction[];
   skippedAttachments: BrowserApplySkippedAttachment[];
   highlights: string[];
@@ -458,6 +459,12 @@ export interface BrowserActionInput {
   jobId: string;
   actionType: BrowserActionType;
   payload?: BrowserActionPayload;
+}
+
+export interface BrowserActionEnqueueResult {
+  id: number;
+  duplicate: boolean;
+  duplicateOf?: number;
 }
 
 export interface DailySummary {

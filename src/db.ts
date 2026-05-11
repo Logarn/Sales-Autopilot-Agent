@@ -7,6 +7,7 @@ import {
   ApplicationDraft,
   ApplicationStatus,
   BrowserAction,
+  BrowserActionEnqueueResult,
   BrowserActionInput,
   BrowserActionPayload,
   BrowserActionStatus,
@@ -449,6 +450,15 @@ const listBrowserActionsStmt = db.prepare<[BrowserActionStatus | null, BrowserAc
    WHERE (? IS NULL OR status = ?)
    ORDER BY created_at ASC, id ASC
    LIMIT ?`
+);
+const activeDuplicateBrowserActionStmt = db.prepare<[string, BrowserActionType], BrowserActionRow>(
+  `SELECT id, job_id, action_type, status, payload, attempts, last_error, created_at, updated_at
+   FROM browser_actions
+   WHERE job_id = ?
+     AND action_type = ?
+     AND status IN ('pending', 'in_progress', 'paused')
+   ORDER BY created_at ASC, id ASC
+   LIMIT 1`
 );
 const updateBrowserActionStatusStmt = db.prepare(
   `UPDATE browser_actions
@@ -1117,6 +1127,17 @@ export function enqueueBrowserAction(input: BrowserActionInput): number {
     JSON.stringify(input.payload ?? {})
   );
   return Number(result.lastInsertRowid);
+}
+
+export function enqueueBrowserActionDeduped(input: BrowserActionInput): BrowserActionEnqueueResult {
+  if (input.actionType === "prepare_application_review") {
+    const duplicate = activeDuplicateBrowserActionStmt.get(input.jobId, input.actionType);
+    if (duplicate) {
+      return { id: duplicate.id, duplicate: true, duplicateOf: duplicate.id };
+    }
+  }
+
+  return { id: enqueueBrowserAction(input), duplicate: false };
 }
 
 export function listBrowserActions(status: BrowserActionStatus | null = null, limit = 25): BrowserAction[] {

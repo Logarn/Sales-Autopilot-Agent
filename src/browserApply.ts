@@ -206,6 +206,7 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
         profile: parseProfile(draft),
         rate: parseRate(draft),
         coverLetter: draft.proposalText,
+        screeningAnswers: draft.structuredProposal?.clientRequestAnswers ?? [],
         attachments,
         skippedAttachments: skipped,
         highlights: draft.structuredProposal?.browserFillNotes.highlights ?? draft.selectedPortfolioItems.map((item) => item.name),

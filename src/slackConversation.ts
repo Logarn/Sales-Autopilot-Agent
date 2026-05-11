@@ -2,7 +2,7 @@ import { APP_NAME, SLACK_CHANNEL_WEBHOOK_URL } from "./config";
 import {
   applyApplicationRevision,
   closeDb,
-  enqueueBrowserAction,
+  enqueueBrowserActionDeduped,
   getApplicationDraft,
   getScoredJobForSlackPreview,
   recordApplicationRevisionRequest,
@@ -140,10 +140,10 @@ function shouldEnqueueBrowserApply(intent: SlackConversationIntent): boolean {
   return intent.type === "approve" && /\b(queue|enqueue|browser|apply queue|send to apply queue)\b/i.test(intent.rawText);
 }
 
-function enqueueBrowserApply(intent: SlackConversationIntent): number | null {
+function enqueueBrowserApply(intent: SlackConversationIntent): { id: number; duplicate: boolean } | null {
   if (!intent.jobId) return null;
   const job = getScoredJobForSlackPreview(intent.jobId);
-  return enqueueBrowserAction({
+  return enqueueBrowserActionDeduped({
     jobId: intent.jobId,
     actionType: "prepare_application_review",
     payload: {
@@ -162,12 +162,12 @@ function handleStatusIntent(intent: SlackConversationIntent): SlackConversationH
   if (intent.type === "approve") {
     const updated = updateApplicationStatus(intent.jobId, "approved", "Approved from Slack conversation command.");
     if (!updated) return { ok: false, message: `No stored application draft found for job_id=${intent.jobId}.`, intent };
-    const browserActionId = shouldEnqueueBrowserApply(intent) ? enqueueBrowserApply(intent) ?? undefined : undefined;
+    const browserAction = shouldEnqueueBrowserApply(intent) ? enqueueBrowserApply(intent) ?? undefined : undefined;
     return {
       ok: true,
-      message: `Application ${intent.jobId} approved.${browserActionId ? ` Browser review action #${browserActionId} queued.` : ""}`,
+      message: `Application ${intent.jobId} approved.${browserAction ? ` Browser review action #${browserAction.id} ${browserAction.duplicate ? "already exists; duplicate not queued" : "queued"}.` : ""}`,
       intent,
-      browserActionId,
+      browserActionId: browserAction?.id,
     };
   }
 
@@ -190,12 +190,12 @@ function handleStatusIntent(intent: SlackConversationIntent): SlackConversationH
   if (intent.type === "enqueue_browser_apply") {
     const draft = getApplicationDraft(intent.jobId);
     if (!draft) return { ok: false, message: `No stored application draft found for job_id=${intent.jobId}.`, intent };
-    const browserActionId = enqueueBrowserApply(intent);
+    const browserAction = enqueueBrowserApply(intent);
     return {
       ok: true,
-      message: `Browser review action #${browserActionId} queued for ${intent.jobId}. Human review required before applying.`,
+      message: `Browser review action #${browserAction?.id} ${browserAction?.duplicate ? "already exists; duplicate not queued" : "queued"} for ${intent.jobId}. Human review required before applying.`,
       intent,
-      browserActionId: browserActionId ?? undefined,
+      browserActionId: browserAction?.id,
     };
   }
 

@@ -2,6 +2,7 @@ import { buildBrowserApplyPlan } from "./browserApply";
 import {
   closeDb,
   enqueueBrowserAction,
+  enqueueBrowserActionDeduped,
   listBrowserActions,
   updateBrowserActionStatus,
 } from "./db";
@@ -132,7 +133,7 @@ function enqueueApplyPrepare(): void {
     process.exitCode = 1;
     return;
   }
-  const id = enqueueBrowserAction({
+  const resultInfo = enqueueBrowserActionDeduped({
     jobId,
     actionType: "prepare_application_review",
     payload: {
@@ -141,7 +142,11 @@ function enqueueApplyPrepare(): void {
       applyPlan: result.plan,
     },
   });
-  logger.info(`Queued browser apply preparation #${id} for job_id=${jobId}; final submit remains disabled.`);
+  if (resultInfo.duplicate) {
+    logger.info(`Duplicate browser apply preparation not queued for job_id=${jobId}; existing action #${resultInfo.id} is still active/paused.`);
+    return;
+  }
+  logger.info(`Queued browser apply preparation #${resultInfo.id} for job_id=${jobId}; final submit remains disabled.`);
 }
 
 function enqueue(): void {
@@ -194,9 +199,19 @@ function list(): void {
     return;
   }
 
+  const firstActivePrepareByJob = new Map<string, number>();
   for (const action of actions) {
+    const active = ["pending", "in_progress", "paused"].includes(action.status);
+    if (action.actionType === "prepare_application_review" && active && !firstActivePrepareByJob.has(action.jobId)) {
+      firstActivePrepareByJob.set(action.jobId, action.id);
+    }
+  }
+
+  for (const action of actions) {
+    const duplicateOf = action.actionType === "prepare_application_review" ? firstActivePrepareByJob.get(action.jobId) : undefined;
     console.log(`#${action.id} [${action.status}] ${action.actionType} job_id=${action.jobId}`);
     console.log(`  attempts: ${action.attempts} | updated: ${action.updatedAt}`);
+    if (duplicateOf && duplicateOf !== action.id) console.log(`  duplicate_of: #${duplicateOf} (same active prepare_application_review job)`);
     if (action.payload.url) console.log(`  url: ${action.payload.url}`);
     if (action.payload.notes) console.log(`  notes: ${action.payload.notes}`);
     if (action.lastError) console.log(`  last_error: ${action.lastError}`);
