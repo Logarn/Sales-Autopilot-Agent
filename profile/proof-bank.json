@@ -1,0 +1,294 @@
+{
+  "version": 1,
+  "owner": "Steve Logarn",
+  "records": [
+    {
+      "id": "dr-rachael-institute",
+      "name": "Dr. Rachael Institute",
+      "industry": ["health", "wellness", "supplements", "men's health", "dtc"],
+      "tools": ["Klaviyo", "SamCart", "Skio", "Loop"],
+      "headline": "+308% combined email/SMS revenue in 104 days, from $149K to $608K",
+      "supporting": [
+        "+562% campaign revenue, $76K to $504K",
+        "+42% flow revenue",
+        "+213% attributed orders",
+        "SMS launched from scratch with 20.6% click rate",
+        "Deliverability improved despite 472% email volume increase",
+        "46+ flow emails built"
+      ],
+      "useFor": [
+        "health/wellness/supplements",
+        "Klaviyo email/SMS management",
+        "SMS launch",
+        "subscription retention"
+      ],
+      "assetRules": [
+        {
+          "path": "profile/attachments/dr-rachael-email-performance-report.pdf",
+          "assetType": "attachment",
+          "safeToAttach": false,
+          "safeToMention": true,
+          "requiresManualReview": true,
+          "usage": "mention_only"
+        },
+        {
+          "path": "profile/screenshots/dr-rachael-klaviyo-performance.png",
+          "assetType": "screenshot",
+          "safeToAttach": "needs_review",
+          "safeToMention": true,
+          "requiresManualReview": true,
+          "usage": "recommend_only"
+        }
+      ]
+    },
+    {
+      "id": "truly-beauty",
+      "name": "Truly Beauty",
+      "industry": ["beauty", "skincare", "dtc", "subscription"],
+      "tools": ["Klaviyo", "Skio", "quiz", "ZPD", "predictive popup"],
+      "headline": "22,322% email revenue increase in 12 months; $1.2M+/month retention revenue",
+      "supporting": [
+        "Opt-in rate 2.6% to 10%",
+        "50,000+ quiz completions",
+        "2.4x higher revenue per recipient for quiz subscribers",
+        "1.8x LTV increase",
+        "Returns down 28%",
+        "Persona flows with 68–72% open rates",
+        "Subscription AOV +32%, churn down 12%"
+      ],
+      "useFor": [
+        "beauty/skincare",
+        "DTC retention",
+        "zero-party data/quiz",
+        "subscription optimization",
+        "Klaviyo growth"
+      ],
+      "assetRules": [
+        {
+          "path": "profile/attachments/truly-beauty-case-study.pdf",
+          "assetType": "attachment",
+          "safeToAttach": true,
+          "safeToMention": true,
+          "requiresManualReview": false,
+          "usage": "auto_attach"
+        }
+      ]
+    },
+    {
+      "id": "lifely",
+      "name": "Lifely",
+      "industry": ["furniture", "home goods", "high-AOV", "premium dtc"],
+      "tools": ["Klaviyo", "SMS"],
+      "headline": "Email revenue $145K to $425K/month, +193% in 6 months",
+      "supporting": [
+        "Opt-in rate 1.2% to 6.8%",
+        "Welcome flow placed order rate 12% vs 3–4% benchmark",
+        "Repeat purchases +42%",
+        "Returns down 28%",
+        "2-year CLV +17%",
+        "$180K from one campaign in 72 hours"
+      ],
+      "useFor": [
+        "high-AOV DTC",
+        "furniture/home goods",
+        "premium lifestyle",
+        "trust-based flows",
+        "considered purchases"
+      ],
+      "assetRules": [
+        {
+          "path": "profile/attachments/lifely-case-study.pdf",
+          "assetType": "attachment",
+          "safeToAttach": true,
+          "safeToMention": true,
+          "requiresManualReview": false,
+          "usage": "auto_attach"
+        }
+      ]
+    },
+    {
+      "id": "fly-boutique",
+      "name": "Fly Boutique",
+      "industry": ["fashion", "women's clothing", "boutique retail", "omnichannel"],
+      "tools": ["Klaviyo", "SMS"],
+      "headline": "Email revenue $83K to $300K/month in 6 months; deliverability 53% to 80%",
+      "supporting": [
+        "47% of emails going to spam fixed",
+        "Opt-in 0.8% to 3.2%",
+        "List 48K to 68K",
+        "List utilization 27% to 52%",
+        "Flows 2 to 15+, 80+ emails",
+        "Flow revenue $236K"
+      ],
+      "useFor": ["fashion/apparel", "deliverability rescue", "RFM segmentation", "flow buildout"],
+      "assetRules": [
+        {
+          "path": "profile/attachments/fly-boutique-case-study.pdf",
+          "assetType": "attachment",
+          "safeToAttach": true,
+          "safeToMention": true,
+          "requiresManualReview": false,
+          "usage": "auto_attach"
+        }
+      ]
+    },
+    {
+      "id": "whisker-seeker",
+      "name": "Whisker Seeker",
+      "industry": ["pet supplies", "dtc"],
+      "tools": ["Klaviyo", "Customer.io", "Recharge"],
+      "headline": "Scaled email revenue from $100K to $400K+, 209% lift",
+      "supporting": ["£2.3M total revenue"],
+      "useFor": ["pet DTC", "retention scaling", "performance proof"],
+      "assetRules": [
+        {
+          "path": "profile/attachments/dtc-brand-performance-real-figures.pdf",
+          "assetType": "attachment",
+          "safeToAttach": "needs_review",
+          "safeToMention": true,
+          "requiresManualReview": true,
+          "usage": "recommend_only"
+        }
+      ]
+    },
+    {
+      "id": "my-pet-chicken",
+      "name": "My Pet Chicken",
+      "industry": ["pet", "farm", "hobby", "dtc"],
+      "headline": "34% email revenue lift within 3 months; $791K total revenue during period",
+      "supporting": [],
+      "useFor": ["pet", "hobby", "ecommerce retention"],
+      "assetRules": [
+        {
+          "path": "profile/attachments/dtc-brand-performance-real-figures.pdf",
+          "assetType": "attachment",
+          "safeToAttach": "needs_review",
+          "safeToMention": true,
+          "requiresManualReview": true,
+          "usage": "recommend_only"
+        }
+      ]
+    },
+    {
+      "id": "endurance-wellness",
+      "name": "Endurance Wellness",
+      "industry": ["health", "wellness", "supplements", "subscriptions"],
+      "tools": ["Recharge", "SMS", "popups"],
+      "headline": "Full lifecycle foundation built in 7 days",
+      "supporting": [],
+      "useFor": ["lifecycle setup", "subscription foundation", "health/wellness strategy"],
+      "assetRules": [
+        {
+          "path": "profile/attachments/endurance-wellness-lifecycle-strategy.pdf",
+          "assetType": "attachment",
+          "safeToAttach": true,
+          "safeToMention": true,
+          "requiresManualReview": false,
+          "usage": "auto_attach"
+        }
+      ]
+    },
+    {
+      "id": "design-case-studies",
+      "name": "Design Case Studies",
+      "industry": ["health", "wellness", "supplements", "pet", "dtc"],
+      "brands": ["ARMRA", "Thrive Market", "Ritual", "Whisker Seeker", "Dr. Rachael", "Hangaritas"],
+      "skills": ["email design", "copywriting", "visual strategy", "Figma", "email design systems"],
+      "headline": "Premium DTC email design and campaign/flow visual systems proof",
+      "supporting": [],
+      "useFor": ["email design", "Figma", "campaign/flow build roles", "premium brand aesthetic"],
+      "assetRules": [
+        {
+          "path": "profile/attachments/design-case-studies-steve-logarn.pdf",
+          "assetType": "attachment",
+          "safeToAttach": true,
+          "safeToMention": true,
+          "requiresManualReview": false,
+          "usage": "auto_attach"
+        }
+      ]
+    },
+    {
+      "id": "kraymer-art-screenshot",
+      "name": "Kraymer Art screenshot",
+      "industry": ["art", "anime", "fandom", "jewelry", "dtc"],
+      "tools": ["Klaviyo", "Email", "SMS"],
+      "headline": "$26,189.52 attributed revenue, up 312% vs previous period",
+      "supporting": [
+        "$116,512.84 total revenue",
+        "22.48% attributed revenue share",
+        "$23,377.38 flow revenue",
+        "$2,812.14 campaign revenue"
+      ],
+      "useFor": ["small DTC", "art/fandom ecommerce", "Klaviyo flow optimization"],
+      "assetRules": [
+        {
+          "path": "profile/screenshots/kraymer-art-klaviyo-performance.png",
+          "assetType": "screenshot",
+          "safeToAttach": "needs_review",
+          "safeToMention": true,
+          "requiresManualReview": true,
+          "usage": "recommend_only"
+        },
+        {
+          "path": "profile/attachments/kraymer-retention-audit.pdf",
+          "assetType": "attachment",
+          "safeToAttach": "needs_review",
+          "safeToMention": true,
+          "requiresManualReview": true,
+          "usage": "recommend_only"
+        }
+      ]
+    },
+    {
+      "id": "hangaritas-screenshot",
+      "name": "Hangaritas screenshot",
+      "industry": ["beverage", "lifestyle", "dtc", "uk", "europe"],
+      "tools": ["Klaviyo", "Email"],
+      "headline": "£21,681.29 attributed revenue, up 173% vs previous period",
+      "supporting": [
+        "£135,244.78 total revenue",
+        "16.03% attributed revenue share",
+        "Total revenue up 231%",
+        "£9,982.09 campaign revenue",
+        "£11,699.20 flow revenue"
+      ],
+      "useFor": ["beverage brands", "lifestyle DTC", "UK ecommerce", "Klaviyo email/campaign strategy"],
+      "assetRules": [
+        {
+          "path": "profile/screenshots/hangaritas-klaviyo-performance.png",
+          "assetType": "screenshot",
+          "safeToAttach": "needs_review",
+          "safeToMention": true,
+          "requiresManualReview": true,
+          "usage": "recommend_only"
+        }
+      ]
+    },
+    {
+      "id": "dr-rachael-klaviyo-screenshot",
+      "name": "Dr. Rachael Klaviyo screenshot",
+      "industry": ["health", "wellness", "supplements"],
+      "tools": ["Klaviyo", "Email", "SMS"],
+      "headline": "$271,106.16 attributed revenue, 39.05% of total revenue",
+      "supporting": [
+        "$694,216.60 total revenue",
+        "Attributed revenue up 55%",
+        "$126,885.90 campaign revenue",
+        "$144,220.26 flow revenue",
+        "$268,458.47 email revenue"
+      ],
+      "useFor": ["health/wellness", "supplements", "Klaviyo performance proof"],
+      "assetRules": [
+        {
+          "path": "profile/screenshots/dr-rachael-klaviyo-performance.png",
+          "assetType": "screenshot",
+          "safeToAttach": "needs_review",
+          "safeToMention": true,
+          "requiresManualReview": true,
+          "usage": "recommend_only"
+        }
+      ]
+    }
+  ]
+}
