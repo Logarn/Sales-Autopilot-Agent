@@ -216,7 +216,7 @@ function buildProposalPacketBlocks(job: ScoredJob): IncomingWebhookSendArguments
       type: "section",
       text: {
         type: "mrkdwn",
-        text: slackText(`*✍️ Draft Proposal (copy manually into Upwork):*\n> ${proposalPreview}`),
+        text: slackText(`*✍️ Draft Proposal (review only):*\n> ${proposalPreview}`),
       },
     },
   ];
@@ -314,7 +314,7 @@ export function buildJobBlocks(job: ScoredJob): IncomingWebhookSendArguments["bl
       elements: [
         {
           type: "mrkdwn",
-          text: "Webhook V0 is one-way: buttons can only open URLs. Approve/revise/reject by copying the draft or using manual notes; true Slack callbacks require a Slack app or later polling flow.",
+          text: "Webhook V0 is one-way: buttons can only open URLs. Use available in-thread commands in Feature 3 flow or use manual notes; true Slack callbacks require a Slack app or later polling flow."
         },
       ],
     },

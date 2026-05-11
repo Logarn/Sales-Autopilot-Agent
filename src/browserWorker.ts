@@ -25,7 +25,13 @@ import { buildDeterministicOpportunityPacket, normalizedPacketToJobPosting } fro
 import { scoreJob } from "./filter";
 import { buildQuestionAnswers, isSafeUpworkJobUrl, parseCaptureQuestions } from "./browserCapture";
 import { logger } from "./logger";
-import { BrowserAction, BrowserApplyFillPlan, BrowserApplyValidationIssue } from "./types";
+import {
+  BrowserAction,
+  BrowserApplyFillPlan,
+  BrowserApplyValidationIssue,
+  ScoredJob,
+} from "./types";
+import { buildV3CapturePacket, SlackPacketV3Context } from "./slackPacketV3";
 import { postSlackThreadMessage } from "./slackThread";
 import {
   formatBrowserSessionStatus,
@@ -300,68 +306,22 @@ function boundedExcerpt(value: string, maxLength = 2000): string {
   return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
-function buildCommandText(): string {
-  return [
-    "Available commands:",
-    "• status",
-    "• approve",
-    "• reject",
-    "• revise: <instruction>",
-    "• prepare draft",
-    "• mark submitted",
-  ].join("\n");
-}
-
-function buildCaptureThreadMessage(input: {
-  jobTitle: string;
-  url: string;
-  fitScore: number;
-  reasons: string[];
-  risks: string[];
-  threadStatus: string;
-  requiredConnects: number;
-  suggestedBoostConnects: number;
-  suggestedBid: string;
-  proposalText: string;
-  proofRecommendations: string[];
-  applicationQuestions: string[];
-  questionAnswers: string[];
-  retryActionId: number;
-}): string {
-  const reasonList = input.reasons.length > 0 ? input.reasons.join("; ") : "No specific reasons flagged.";
-  const riskList = input.risks.length > 0 ? input.risks.join("; ") : "No major risks detected.";
-  const proofList = input.proofRecommendations.length > 0 ? input.proofRecommendations.join("; ") : "No specific proof items required.";
-  const qna =
-    input.applicationQuestions.length > 0
-      ? input.applicationQuestions
-          .map((question, index) => `Q: ${question}\nA: ${input.questionAnswers[index] ?? "Will answer from packet context."}`)
-          .join("\n\n")
-      : "No explicit screening questions detected on capture.";
-
-  return [
-    `✅ Browser capture and scoring complete for ${input.url}`,
-    `Job: ${input.jobTitle}`,
-    `Fit score: ${input.fitScore}/100`,
-    `Reasoning: ${reasonList}`,
-    `Risks: ${riskList}`,
-    `Connects: required ${input.requiredConnects} • suggested boost ${input.suggestedBoostConnects}`,
-    `Suggested bid: ${input.suggestedBid}`,
-    `Proof/attachment recommendations: ${proofList}`,
-    "",
-    "Draft proposal (short preview):",
-    boundedExcerpt(input.proposalText, 1400),
-    "",
-    "Application questions and proposed answers:",
-    qna,
-    `Browser capture status: ${input.threadStatus}`,
-    `Retry blocked states with: npm run browser:retry -- --id ${input.retryActionId}`,
-    buildCommandText(),
-  ].join("\n");
-}
-
 function normalizeCaptureQuestions(rawText: string): string[] {
-  const questions = parseCaptureQuestions(rawText);
-  return Array.from(new Set(questions)).slice(0, 6);
+  return parseCaptureQuestions(rawText).slice(0, 6);
+}
+
+async function postV3CapturePacketToThread(
+  job: ScoredJob,
+  thread: SlackThreadContext,
+  context: SlackPacketV3Context,
+): Promise<void> {
+  const packet = buildV3CapturePacket(job, context);
+  await postSlackThreadMessage({
+    channel: thread.channelId,
+    threadTs: thread.threadTs,
+    text: packet.text,
+    blocks: packet.blocks,
+  });
 }
 
 async function loadChromium(): Promise<PlaywrightChromiumLike | null> {
@@ -661,25 +621,16 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "captured", { jobId: scored.id });
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "scored", { jobId: scored.id });
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "packet_sent", { jobId: scored.id });
-        await postSlackThreadMessage({
-          channel: thread.channelId,
-          threadTs: thread.threadTs,
-          text: buildCaptureThreadMessage({
-            jobTitle: scored.title,
-            url,
-            fitScore: scored.score,
-            reasons: scored.scoreBreakdown.reasons,
-            risks: scored.scoreBreakdown.risks,
-            threadStatus: "packet_sent",
-            requiredConnects: scored.applicationDraft?.suggestedConnects ?? 0,
-            suggestedBoostConnects: scored.applicationDraft?.suggestedBoostConnects ?? 0,
-            suggestedBid: scored.applicationDraft?.suggestedBid ?? "n/a",
-            proposalText: scored.applicationDraft?.proposalText ?? "",
-            proofRecommendations: extractProofRecommendations(scored.applicationDraft),
-            applicationQuestions: questions,
-            questionAnswers: answers,
-            retryActionId: action.id,
-          }),
+        await postV3CapturePacketToThread(scored, thread, {
+          upworkUrl: url,
+          captureStatus: "packet_sent",
+          browserCaptureActionId: action.id,
+          requiredConnects: scored.applicationDraft?.suggestedConnects ?? 0,
+          suggestedBoostConnects: scored.applicationDraft?.suggestedBoostConnects ?? 0,
+          suggestedBid: scored.applicationDraft?.suggestedBid ?? "n/a",
+          applicationQuestions: questions,
+          questionAnswers: answers,
+          proofRecommendations: extractProofRecommendations(scored.applicationDraft),
         });
       }
       updateBrowserActionStatus(action.id, "paused", "Dry run: browser capture simulated from URL. Set BROWSER_DRY_RUN=false for real extraction.");
@@ -779,25 +730,16 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "scored", { jobId: scored.id });
       }
       if (thread) {
-        await postSlackThreadMessage({
-          channel: thread.channelId,
-          threadTs: thread.threadTs,
-          text: buildCaptureThreadMessage({
-            jobTitle: scored.title,
-            url,
-            fitScore: scored.score,
-            reasons: scored.scoreBreakdown.reasons,
-            risks: scored.scoreBreakdown.risks,
-            threadStatus: "packet_sent",
-            requiredConnects: scored.applicationDraft?.suggestedConnects ?? 0,
-            suggestedBoostConnects: scored.applicationDraft?.suggestedBoostConnects ?? 0,
-            suggestedBid: scored.applicationDraft?.suggestedBid ?? "n/a",
-            proposalText: scored.applicationDraft?.proposalText ?? "",
-            proofRecommendations: extractProofRecommendations(scored.applicationDraft),
-            applicationQuestions,
-            questionAnswers,
-            retryActionId: action.id,
-          }),
+        await postV3CapturePacketToThread(scored, thread, {
+          upworkUrl: url,
+          captureStatus: "packet_sent",
+          browserCaptureActionId: action.id,
+          requiredConnects: scored.applicationDraft?.suggestedConnects ?? 0,
+          suggestedBoostConnects: scored.applicationDraft?.suggestedBoostConnects ?? 0,
+          suggestedBid: scored.applicationDraft?.suggestedBid ?? "n/a",
+          applicationQuestions,
+          questionAnswers,
+          proofRecommendations: extractProofRecommendations(scored.applicationDraft),
         });
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "packet_sent", { jobId: scored.id });
       }

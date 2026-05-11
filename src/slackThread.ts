@@ -23,6 +23,7 @@ export interface SlackThreadMessage {
   channel: string;
   threadTs: string;
   text: string;
+  blocks?: Array<Record<string, unknown>>;
 }
 
 export async function postSlackThreadMessage(params: SlackThreadMessage): Promise<boolean> {
@@ -36,6 +37,7 @@ export async function postSlackThreadMessage(params: SlackThreadMessage): Promis
       channel: params.channel,
       thread_ts: params.threadTs,
       text: params.text,
+      ...(params.blocks ? { blocks: params.blocks } : {}),
     });
     return true;
   } catch (error) {
