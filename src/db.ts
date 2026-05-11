@@ -201,6 +201,43 @@ export interface SlackQueueItem {
   attempts: number;
 }
 
+export type SlackThreadStatus =
+  | "capture_pending"
+  | "capture_recorded"
+  | "approve_requested"
+  | "reject_requested"
+  | "revise_requested"
+  | "prepare_draft_requested"
+  | "prepared_draft"
+  | "retry_requested"
+  | "submitted_marked"
+  | "status_checked"
+  | "error";
+
+interface SlackThreadStateRow {
+  id: number;
+  channel_id: string;
+  message_ts: string;
+  thread_ts: string;
+  upwork_url: string;
+  job_id: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SlackThreadState {
+  id: number;
+  channelId: string;
+  messageTs: string;
+  threadTs: string;
+  upworkUrl: string;
+  jobId: string | null;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface ApplicationDraftRow {
   job_id: string;
   status: ApplicationStatus;
@@ -276,6 +313,20 @@ CREATE TABLE IF NOT EXISTS slack_queue (
   attempts INTEGER DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS slack_thread_state (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id TEXT NOT NULL,
+  message_ts TEXT NOT NULL,
+  thread_ts TEXT NOT NULL,
+  upwork_url TEXT NOT NULL,
+  job_id TEXT,
+  status TEXT NOT NULL DEFAULT 'capture_pending',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(channel_id, message_ts)
+);
+CREATE INDEX IF NOT EXISTS idx_slack_thread_state_channel_thread ON slack_thread_state(channel_id, thread_ts);
 
 CREATE TABLE IF NOT EXISTS applications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -440,6 +491,48 @@ const queueDeleteStmt = db.prepare("DELETE FROM slack_queue WHERE id = ?");
 const queueAttemptStmt = db.prepare(
   "UPDATE slack_queue SET attempts = attempts + 1 WHERE id = ?"
 );
+const insertSlackThreadStateStmt = db.prepare(
+  `INSERT INTO slack_thread_state (
+    channel_id,
+    message_ts,
+    thread_ts,
+    upwork_url,
+    job_id,
+    status
+  )
+   VALUES (?, ?, ?, ?, ?, ?)
+   ON CONFLICT(channel_id, message_ts) DO UPDATE SET
+    thread_ts = excluded.thread_ts,
+    upwork_url = excluded.upwork_url,
+    job_id = COALESCE(excluded.job_id, slack_thread_state.job_id),
+    status = excluded.status,
+    updated_at = datetime('now')`
+);
+const getSlackThreadStateByChannelThreadStmt = db.prepare<[string, string], SlackThreadStateRow>(
+  `SELECT id, channel_id, message_ts, thread_ts, upwork_url, job_id, status, created_at, updated_at
+   FROM slack_thread_state
+   WHERE channel_id = ? AND thread_ts = ?
+   ORDER BY created_at DESC, id DESC
+   LIMIT 1`
+);
+const getSlackThreadStateByChannelMessageStmt = db.prepare<[string, string], SlackThreadStateRow>(
+  `SELECT id, channel_id, message_ts, thread_ts, upwork_url, job_id, status, created_at, updated_at
+   FROM slack_thread_state
+   WHERE channel_id = ? AND message_ts = ?
+   LIMIT 1`
+);
+const updateSlackThreadStateStatusStmt = db.prepare(
+  `UPDATE slack_thread_state
+   SET status = ?, job_id = COALESCE(?, job_id), upwork_url = COALESCE(?, upwork_url), updated_at = datetime('now')
+   WHERE channel_id = ? AND thread_ts = ?`
+);
+const listSlackThreadStatesStmt = db.prepare<[string, number], SlackThreadStateRow>(
+  `SELECT id, channel_id, message_ts, thread_ts, upwork_url, job_id, status, created_at, updated_at
+   FROM slack_thread_state
+   WHERE channel_id = ?
+   ORDER BY updated_at DESC
+   LIMIT ?`
+);
 const insertBrowserActionStmt = db.prepare(
   `INSERT INTO browser_actions (job_id, action_type, status, payload, attempts, last_error, updated_at)
    VALUES (?, ?, 'pending', ?, 0, NULL, datetime('now'))`
@@ -450,6 +543,11 @@ const listBrowserActionsStmt = db.prepare<[BrowserActionStatus | null, BrowserAc
    WHERE (? IS NULL OR status = ?)
    ORDER BY created_at ASC, id ASC
    LIMIT ?`
+);
+const getBrowserActionByIdStmt = db.prepare<[number], BrowserActionRow>(
+  `SELECT id, job_id, action_type, status, payload, attempts, last_error, created_at, updated_at
+   FROM browser_actions
+   WHERE id = ?`
 );
 const activeDuplicateBrowserActionStmt = db.prepare<[string, BrowserActionType], BrowserActionRow>(
   `SELECT id, job_id, action_type, status, payload, attempts, last_error, created_at, updated_at
@@ -556,6 +654,21 @@ function rowToHeartbeat(row: HeartbeatRow): HeartbeatRecord {
     updatedAt: row.updated_at,
   };
 }
+
+function rowToSlackThreadState(row: SlackThreadStateRow): SlackThreadState {
+  return {
+    id: row.id,
+    channelId: row.channel_id,
+    messageTs: row.message_ts,
+    threadTs: row.thread_ts,
+    upworkUrl: row.upwork_url,
+    jobId: row.job_id,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 const upsertApplicationStmt = db.prepare(
   `INSERT INTO applications (
     job_id,
@@ -1144,6 +1257,11 @@ export function listBrowserActions(status: BrowserActionStatus | null = null, li
   return listBrowserActionsStmt.all(status, status, limit).map(rowToBrowserAction);
 }
 
+export function getBrowserActionById(id: number): BrowserAction | null {
+  const row = getBrowserActionByIdStmt.get(id);
+  return row ? rowToBrowserAction(row) : null;
+}
+
 export function updateBrowserActionStatus(id: number, status: BrowserActionStatus, lastError?: string): boolean {
   const result = updateBrowserActionStatusStmt.run(status, lastError ?? null, id);
   return result.changes > 0;
@@ -1152,6 +1270,56 @@ export function updateBrowserActionStatus(id: number, status: BrowserActionStatu
 export function incrementBrowserActionAttempts(id: number, lastError?: string): boolean {
   const result = incrementBrowserActionAttemptStmt.run(lastError ?? null, id);
   return result.changes > 0;
+}
+
+export function upsertSlackThreadState(input: {
+  channelId: string;
+  messageTs: string;
+  threadTs: string;
+  upworkUrl: string;
+  jobId?: string | null;
+  status: SlackThreadStatus;
+}): SlackThreadState {
+  insertSlackThreadStateStmt.run(
+    input.channelId,
+    input.messageTs,
+    input.threadTs,
+    input.upworkUrl,
+    input.jobId ?? null,
+    input.status
+  );
+
+  const row = getSlackThreadStateByChannelMessageStmt.get(input.channelId, input.messageTs);
+  if (!row) {
+    throw new Error(`Failed to persist slack thread mapping for ${input.channelId}/${input.messageTs}`);
+  }
+  return rowToSlackThreadState(row);
+}
+
+export function getSlackThreadStateByThreadTs(channelId: string, threadTs: string): SlackThreadState | null {
+  const row = getSlackThreadStateByChannelThreadStmt.get(channelId, threadTs);
+  return row ? rowToSlackThreadState(row) : null;
+}
+
+export function updateSlackThreadStateStatus(
+  channelId: string,
+  threadTs: string,
+  status: string,
+  options?: { jobId?: string | null; upworkUrl?: string }
+): SlackThreadState | null {
+  updateSlackThreadStateStatusStmt.run(
+    status,
+    options?.jobId ?? null,
+    options?.upworkUrl ?? null,
+    channelId,
+    threadTs
+  );
+  const row = getSlackThreadStateByChannelThreadStmt.get(channelId, threadTs);
+  return row ? rowToSlackThreadState(row) : null;
+}
+
+export function listSlackThreadStates(channelId: string, limit = 100): SlackThreadState[] {
+  return listSlackThreadStatesStmt.all(channelId, limit).map(rowToSlackThreadState);
 }
 
 export function recordHeartbeat(input: HeartbeatWriteInput): HeartbeatRecord {

@@ -27,6 +27,16 @@ function parseDelimitedList(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
+function parseDelimitedListLoose(value: string | undefined): string[] {
+  if (!value || value.trim().length === 0) {
+    return [];
+  }
+  return value
+    .split(/[|,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function parseQueriesFromEnvOrFile(): string[] {
   const envQueries = parseDelimitedList(process.env.SEARCH_QUERIES);
   if (envQueries.length > 0) {
@@ -71,6 +81,8 @@ export const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET ?? "";
 export const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN ?? "";
 export const SLACK_APP_TOKEN = process.env.SLACK_APP_TOKEN ?? "";
 export const SLACK_POLL_CHANNEL_ID = process.env.SLACK_POLL_CHANNEL_ID ?? "";
+export const SLACK_SOCKET_MODE_ENABLED = parseBoolean(process.env.SLACK_SOCKET_MODE_ENABLED, false);
+export const SLACK_ALLOWED_CHANNEL_IDS = parseDelimitedListLoose(process.env.SLACK_ALLOWED_CHANNEL_IDS);
 export const APIFY_API_TOKEN = process.env.APIFY_API_TOKEN ?? "";
 export const QUICK_BID_TEMPLATE_URL = process.env.QUICK_BID_TEMPLATE_URL ?? "";
 export const CRON_SCHEDULE = process.env.CRON_SCHEDULE ?? "*/5 * * * *";

@@ -23,6 +23,8 @@
     "test:slack": "tsx src/slack.ts",
     "slack:preview": "tsx src/slackPreview.ts",
     "slack:conversation": "tsx src/slackConversation.ts",
+    "slack:socket": "tsx src/slackSocket.ts",
+    "test:slack-socket": "tsx src/slackSocket.test.ts",
     "test:run-once": "tsx src/index.ts --run-once",
     "test:health": "tsx src/health.ts",
     "test:slack-flag": "tsx src/index.ts --test-slack",
@@ -62,6 +64,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@slack/bolt": "^4.7.2",
     "@slack/webhook": "^7.0.4",
     "better-sqlite3": "^12.4.1",
     "cheerio": "^1.1.2",
