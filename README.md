@@ -213,6 +213,26 @@ Sample artifacts live in `profile/knowledge/voice/`, `profile/knowledge/portfoli
 
 The browser queue is a cloud/VM-safe foundation for future human-in-the-loop browser assistance. Browser search can poll configured Upwork search pages from a persistent VM browser session, capture bounded job-detail text, normalize it deterministically, and queue downstream browser review actions. Both browser search and queued browser actions are disabled/dry-run by default.
 
+### Manual local browser flow
+
+Use one visible Chrome session for manual Upwork login and challenge resolution, then let the worker connect to that same session over CDP without relaunching Chrome or locking the profile:
+
+```bash
+npm run browser:session
+npm run browser:cdp:check
+```
+
+Recommended local flow:
+
+1. Run `npm run browser:session`
+2. Sign in to Upwork manually in the visible Chrome window
+3. Set `BROWSER_SESSION_MODE=cdp`
+4. Verify CDP is reachable with `npm run browser:cdp:check`
+5. Run the worker in dry-run or review mode
+6. If Upwork shows a login/check/challenge page, resolve it manually in the visible Chrome session, then retry the paused action
+
+In CDP mode, if the session is not running, the worker pauses safely and tells you to start it with `npm run browser:session`. In launch mode, the worker keeps the old behavior of launching the persistent profile directly. In both modes, final submit remains blocked.
+
 Run a no-credentials search dry run:
 
 ```bash

@@ -106,11 +106,13 @@ function runTests(): void {
   assertIncludes(beautyText, "Manual review warnings", "manual warnings section");
   assertIncludes(beautyText, "Browser status", "browser status section");
   assertIncludes(beautyText, "Strong fit. I’m preparing the Upwork draft now", "auto-prepare success note");
+  assertIncludes(beautyText, "already being staged for review", "queued auto-prepare workflow wording");
   for (const cmd of ["status", "approve", "reject", "revise: <instruction>", "prepare draft", "retry <action-id>", "mark submitted"]) {
     assertIncludes(beautyText, cmd, `command ${cmd}`);
   }
   assertNotIncludes(beautyText, "copy/paste", "copy paste workflow");
   assertNotIncludes(beautyText, "copy the proposal", "copy proposal workflow");
+  assertNotIncludes(beautyText, "Use `prepare draft` to stage", "queued auto-prepare should not imply manual prepare is required");
 
   const healthJob = createScoredJob({
     title: "Supplements retention strategist for Klaviyo + SMS",

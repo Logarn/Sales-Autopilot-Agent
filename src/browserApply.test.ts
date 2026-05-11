@@ -17,7 +17,7 @@ function cleanupDatabase(path: string): void {
   }
 }
 
-function runTests(): void {
+async function runTests(): Promise<void> {
   const tempDb = resolve(process.cwd(), "data/.tmp-browser-apply.db");
   cleanupDatabase(tempDb);
   process.env.DB_PATH = tempDb;
@@ -53,6 +53,15 @@ function runTests(): void {
       duplicate: boolean;
       duplicateStatus?: string | null;
     }) => string;
+  };
+  const {
+    acquireBrowserSession,
+    buildBrowserSessionLaunchCommand,
+    classifyBrowserSessionError,
+  } = require("./browserSessionControl") as {
+    acquireBrowserSession: (chromium: any, options: any) => Promise<{ mode: string; context: { newPage: () => Promise<unknown> }; close: () => Promise<void> }>;
+    buildBrowserSessionLaunchCommand: (input: { chromeExecutablePath: string; userDataDir: string; cdpUrl: string; startUrl?: string }) => { executablePath: string; args: string[] };
+    classifyBrowserSessionError: (error: unknown) => string;
   };
 
   try {
@@ -260,6 +269,70 @@ function runTests(): void {
     });
     assert(duplicateReply.includes("already exists as browser action #99 (paused)"), "Duplicate prepare reply should reference existing action and status");
 
+    const launchCommand = buildBrowserSessionLaunchCommand({
+      chromeExecutablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      userDataDir: "./data/browser-profile",
+      cdpUrl: "http://127.0.0.1:9222",
+      startUrl: "https://www.upwork.com",
+    });
+    assert(launchCommand.args.some((arg: string) => arg.includes("--remote-debugging-port=9222")), "Browser session command should enable remote debugging");
+
+    const originalFetch = global.fetch;
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/mock", Browser: "Chrome/136" }),
+    } as Response);
+
+    const cdpContext = { newPage: async () => ({}) };
+    let connectOverCdpCalled = false;
+    const cdpSession = await acquireBrowserSession(
+      {
+        connectOverCDP: async () => {
+          connectOverCdpCalled = true;
+          return { contexts: () => [cdpContext], close: async () => undefined };
+        },
+        launchPersistentContext: async () => {
+          throw new Error("launch path should not be used in cdp mode");
+        },
+      },
+      {
+        mode: "cdp",
+        userDataDir: "./data/browser-profile",
+        chromeExecutablePath: null,
+        cdpUrl: "http://127.0.0.1:9222",
+        headless: false,
+      },
+    );
+    assert(connectOverCdpCalled, "CDP mode should use connectOverCDP path");
+    assert(cdpSession.mode === "cdp", "CDP mode should preserve cdp connection mode");
+
+    let launchPersistentCalled = false;
+    const launchContext = { newPage: async () => ({}), close: async () => undefined };
+    const launchSession = await acquireBrowserSession(
+      {
+        connectOverCDP: async () => {
+          throw new Error("cdp path should not be used in launch mode");
+        },
+        launchPersistentContext: async () => {
+          launchPersistentCalled = true;
+          return launchContext;
+        },
+      },
+      {
+        mode: "launch",
+        userDataDir: "./data/browser-profile",
+        chromeExecutablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        cdpUrl: "http://127.0.0.1:9222",
+        headless: true,
+      },
+    );
+    assert(launchPersistentCalled, "Launch mode should preserve launchPersistentContext path");
+    assert(launchSession.mode === "launch", "Launch mode should preserve launch connection mode");
+
+    assert(classifyBrowserSessionError(new Error("ProcessSingleton lock already held")) === "browser_profile_in_use", "Profile lock error should classify as browser_profile_in_use");
+    assert(classifyBrowserSessionError(new Error("connect ECONNREFUSED 127.0.0.1:9222")) === "cdp_unavailable", "Missing CDP endpoint should classify as cdp_unavailable");
+
+    global.fetch = originalFetch;
     console.log("browser apply profile tests passed");
   } finally {
     const { closeDb } = require("./db") as { closeDb: () => void };
@@ -269,11 +342,9 @@ function runTests(): void {
 }
 
 if (require.main === module) {
-  try {
-    runTests();
-  } catch (error) {
+  runTests().catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`browser apply profile tests failed: ${message}`);
     process.exitCode = 1;
-  }
+  });
 }

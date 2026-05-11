@@ -112,6 +112,8 @@ export const LLM_BASE_URL = process.env.LLM_BASE_URL ?? "https://api.openai.com/
 export const LLM_NORMALIZATION_ENABLED = parseBoolean(process.env.LLM_NORMALIZATION_ENABLED, false);
 export const BROWSER_WORKER_ENABLED = parseBoolean(process.env.BROWSER_WORKER_ENABLED, false);
 export const BROWSER_HEADLESS = parseBoolean(process.env.BROWSER_HEADLESS, true);
+export const BROWSER_SESSION_MODE = process.env.BROWSER_SESSION_MODE === "cdp" ? "cdp" : "launch";
+export const BROWSER_CDP_URL = process.env.BROWSER_CDP_URL ?? "http://127.0.0.1:9222";
 export const BROWSER_USER_DATA_DIR = process.env.BROWSER_USER_DATA_DIR ?? "./data/browser-profile";
 export const BROWSER_CHROME_EXECUTABLE_PATH = process.env.BROWSER_CHROME_EXECUTABLE_PATH ?? "";
 export const BROWSER_DRY_RUN = parseBoolean(process.env.BROWSER_DRY_RUN, true);

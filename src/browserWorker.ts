@@ -7,10 +7,12 @@ import {
   AUTO_PREPARE_REQUIRE_BROWSER_HEALTHY,
   BROWSER_ACTION_LIMIT,
   BROWSER_ARTIFACT_DIR,
+  BROWSER_CDP_URL,
   BROWSER_CHROME_EXECUTABLE_PATH,
   BROWSER_DRY_RUN,
   BROWSER_HEADLESS,
   BROWSER_LIVE_ACTION_LIMIT,
+  BROWSER_SESSION_MODE,
   BROWSER_USER_DATA_DIR,
   BROWSER_WORKER_ENABLED,
 } from "./config";
@@ -45,10 +47,20 @@ import {
   getBrowserSessionStatus,
   recordBrowserManualAttention,
 } from "./browserSession";
+import {
+  acquireBrowserSession,
+  BrowserSessionMode,
+  classifyBrowserSessionError,
+  findChromeExecutable,
+  PlaywrightChromiumLike,
+  checkCdpEndpoint,
+} from "./browserSessionControl";
 
 type DetectedBrowserState =
   | "dry_run"
   | "browser_unavailable"
+  | "browser_profile_in_use"
+  | "cdp_unavailable"
   | "login_required"
   | "two_factor_required"
   | "captcha_or_security_challenge"
@@ -93,6 +105,8 @@ export interface AutoPrepareDraftDecision {
 interface BrowserWorkerOptions {
   dryRun: boolean;
   headless: boolean;
+  sessionMode: BrowserSessionMode;
+  cdpUrl: string;
   userDataDir: string;
   chromeExecutablePath: string | null;
   artifactDir: string | null;
@@ -154,35 +168,13 @@ interface ApplyPreparationDiagnostics {
   manualFields: string[];
 }
 
-interface PlaywrightContextLike {
-  newPage(): Promise<PlaywrightPageLike>;
-  close(): Promise<unknown>;
-}
-
-interface PlaywrightChromiumLike {
-  launchPersistentContext(
-    userDataDir: string,
-    options: { headless: boolean; executablePath?: string }
-  ): Promise<PlaywrightContextLike>;
-}
-
-function findChromeExecutable(): string | null {
-  const candidates = [
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
-    "/Applications/Chromium.app/Contents/MacOS/Chromium",
-    "/usr/bin/google-chrome-stable",
-    "/usr/bin/google-chrome",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/chromium",
-  ];
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
-}
 
 function loadOptions(): BrowserWorkerOptions {
   return {
     dryRun: BROWSER_DRY_RUN,
     headless: BROWSER_HEADLESS,
+    sessionMode: BROWSER_SESSION_MODE,
+    cdpUrl: BROWSER_CDP_URL,
     userDataDir: path.resolve(process.cwd(), BROWSER_USER_DATA_DIR),
     chromeExecutablePath: BROWSER_CHROME_EXECUTABLE_PATH ? path.resolve(process.cwd(), BROWSER_CHROME_EXECUTABLE_PATH) : findChromeExecutable(),
     artifactDir: BROWSER_ARTIFACT_DIR ? path.resolve(process.cwd(), BROWSER_ARTIFACT_DIR) : null,
@@ -545,16 +537,23 @@ async function getReadiness(options: BrowserWorkerOptions): Promise<{
   playwrightAvailable: boolean;
   chromeExecutableFound: boolean;
   chromeExecutablePath: string | null;
+  sessionMode: BrowserSessionMode;
+  cdpUrl: string;
+  cdpReachable: boolean;
   userDataDir: string;
   dryRun: boolean;
   workerEnabled: boolean;
   submitGuardEnabled: true;
   liveActionLimit: number;
 }> {
+  const cdpCheck = options.sessionMode === "cdp" ? await checkCdpEndpoint(options.cdpUrl) : null;
   return {
     playwrightAvailable: Boolean(await loadChromium()),
     chromeExecutableFound: Boolean(options.chromeExecutablePath),
     chromeExecutablePath: options.chromeExecutablePath,
+    sessionMode: options.sessionMode,
+    cdpUrl: options.cdpUrl,
+    cdpReachable: cdpCheck?.reachable ?? false,
     userDataDir: options.userDataDir,
     dryRun: options.dryRun,
     workerEnabled: BROWSER_WORKER_ENABLED,
@@ -567,7 +566,8 @@ async function logReadiness(options: BrowserWorkerOptions): Promise<void> {
   const readiness = await getReadiness(options);
   logger.info(
     `Browser readiness: playwrightAvailable=${readiness.playwrightAvailable} chromeExecutableFound=${readiness.chromeExecutableFound} ` +
-      `chromeExecutablePath=${readiness.chromeExecutablePath ?? "n/a"} userDataDir=${readiness.userDataDir} ` +
+      `chromeExecutablePath=${readiness.chromeExecutablePath ?? "n/a"} sessionMode=${readiness.sessionMode} ` +
+      `cdpUrl=${readiness.cdpUrl} cdpReachable=${readiness.cdpReachable} userDataDir=${readiness.userDataDir} ` +
       `dryRun=${readiness.dryRun} workerEnabled=${readiness.workerEnabled} submitGuardEnabled=${readiness.submitGuardEnabled} ` +
       `liveActionLimit=${readiness.liveActionLimit} ${formatBrowserSessionStatus()}`
   );
@@ -705,13 +705,38 @@ async function inspectWithBrowser(
     };
   }
 
-  let context: PlaywrightContextLike | null = null;
+  let sessionHandle: Awaited<ReturnType<typeof acquireBrowserSession>> | null = null;
   try {
-    context = await chromium.launchPersistentContext(options.userDataDir, {
-      headless: options.headless,
-      ...(options.chromeExecutablePath ? { executablePath: options.chromeExecutablePath } : {}),
-    });
-    const page = await context.newPage();
+    try {
+      sessionHandle = await acquireBrowserSession(chromium, {
+        mode: options.sessionMode,
+        userDataDir: options.userDataDir,
+        chromeExecutablePath: options.chromeExecutablePath,
+        cdpUrl: options.cdpUrl,
+        headless: options.headless,
+      });
+    } catch (error) {
+      const classified = classifyBrowserSessionError(error);
+      const message = error instanceof Error ? error.message : String(error);
+      if (classified === "browser_profile_in_use") {
+        saveTextArtifact(options, action, "browser-profile-in-use.json", JSON.stringify({ actionId: action.id, jobId: action.jobId, actionType: action.actionType, url, message }, null, 2));
+        return {
+          state: "browser_profile_in_use",
+          fields: { attemptedFields: [], skippedFields: [], manualFields: [] },
+          bodyText: "",
+        };
+      }
+      if (classified === "cdp_unavailable" || options.sessionMode === "cdp") {
+        saveTextArtifact(options, action, "cdp-unavailable.json", JSON.stringify({ actionId: action.id, jobId: action.jobId, actionType: action.actionType, url, message, cdpUrl: options.cdpUrl }, null, 2));
+        return {
+          state: "cdp_unavailable",
+          fields: { attemptedFields: [], skippedFields: [], manualFields: [] },
+          bodyText: "",
+        };
+      }
+      throw error;
+    }
+    const page = await sessionHandle.context.newPage();
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
     const bodyText = (await page.locator("body").first().textContent({ timeout: 5000 })) ?? "";
     const snapshot: PageSnapshot = {
@@ -745,7 +770,7 @@ async function inspectWithBrowser(
     );
     return { state, snapshot, fields, bodyText };
   } finally {
-    await context?.close();
+    await sessionHandle?.close();
   }
 }
 
@@ -759,10 +784,23 @@ function extractProofRecommendations(draft?: { selectedPortfolioItems?: { name: 
 }
 
 function terminalStatusForState(state: DetectedBrowserState): "completed" | "paused" {
-  if (["login_required", "two_factor_required", "captcha_or_security_challenge", "browser_unavailable", "field_preparation_incomplete", "submit_guard_failed"].includes(state)) {
+  if (["login_required", "two_factor_required", "captcha_or_security_challenge", "browser_unavailable", "browser_profile_in_use", "cdp_unavailable", "field_preparation_incomplete", "submit_guard_failed"].includes(state)) {
     return "paused";
   }
   return "completed";
+}
+
+function stateStatusMessage(state: DetectedBrowserState): string {
+  if (state === "browser_profile_in_use") {
+    return "Chrome profile is already open. Use CDP mode or close Chrome before retrying.";
+  }
+  if (state === "cdp_unavailable") {
+    return "Persistent Chrome session is not running. Start it with npm run browser:session.";
+  }
+  if (state === "captcha_or_security_challenge" || state === "login_required" || state === "two_factor_required") {
+    return `Detected state: ${state}. Resolve the browser page in the visible Chrome session, then retry.`;
+  }
+  return `Detected state: ${state}; stop-before-submit enforced.`;
 }
 
 async function processAction(action: BrowserAction, options: BrowserWorkerOptions): Promise<void> {
@@ -894,7 +932,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       if (state === "field_preparation_incomplete") {
         logger.warn(`Required fields not filled confidently for browser action #${action.id}: ${getRequiredSkippedFields(fields).join(", ")}`);
       }
-      updateBrowserActionStatus(action.id, terminalStatusForState(state), `Detected state: ${state}; stop-before-submit enforced.`);
+      updateBrowserActionStatus(action.id, terminalStatusForState(state), stateStatusMessage(state));
       if (["login_required", "two_factor_required", "captcha_or_security_challenge", "field_preparation_incomplete"].includes(state)) {
         await recordBrowserManualAttention({
           actionId: action.id,
@@ -918,7 +956,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "captured", { jobId: action.jobId });
       }
 
-      if (["login_required", "two_factor_required", "captcha_or_security_challenge", "browser_unavailable", "no_url"].includes(state)) {
+      if (["login_required", "two_factor_required", "captcha_or_security_challenge", "browser_unavailable", "browser_profile_in_use", "cdp_unavailable", "no_url"].includes(state)) {
         const threadStatus = String(state);
         const alreadyManual = thread ? getSlackThreadStateByThreadTs(thread.channelId, thread.threadTs)?.status === "manual_attention_required" : false;
         if (thread) {
@@ -931,20 +969,26 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
                 "⚠️ Browser capture is blocked.",
                 `State: ${threadStatus}`,
                 `URL: ${url}`,
-                `Please open the browser profile manually (resolve login/security challenge if present) and then run:\n	npm run browser:retry -- --id ${action.id}`,
-                "If this repeats, check Slack session status and login challenge flow.",
+                threadStatus === "browser_profile_in_use"
+                  ? "Chrome profile is already open. Use CDP mode or close Chrome before retrying."
+                  : threadStatus === "cdp_unavailable"
+                    ? "Persistent Chrome session is not running. Start it with npm run browser:session."
+                    : "Resolve the browser page in the visible Chrome session, then retry.",
+                `Retry command: npm run browser:retry -- --id ${action.id}`, 
               ].join("\n"),
             });
           }
-          await recordBrowserManualAttention({
-            actionId: action.id,
-            jobId: action.jobId,
-            url: snapshot?.url ?? url,
-            title: snapshot?.title ?? null,
-            reason: threadStatus,
-          });
+          if (["login_required", "two_factor_required", "captcha_or_security_challenge"].includes(threadStatus)) {
+            await recordBrowserManualAttention({
+              actionId: action.id,
+              jobId: action.jobId,
+              url: snapshot?.url ?? url,
+              title: snapshot?.title ?? null,
+              reason: threadStatus,
+            });
+          }
         }
-        updateBrowserActionStatus(action.id, "paused", `Browser capture blocked: ${threadStatus}`);
+        updateBrowserActionStatus(action.id, "paused", stateStatusMessage(state));
         logger.warn(`Browser action #${action.id} blocked: ${threadStatus}`);
         return;
       }
@@ -1001,7 +1045,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       return;
     }
 
-    updateBrowserActionStatus(action.id, terminalStatusForState(state), `Detected state: ${state}; stop-before-submit enforced.`);
+    updateBrowserActionStatus(action.id, terminalStatusForState(state), stateStatusMessage(state));
     logger.info(`Browser action #${action.id} detected state: ${state}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

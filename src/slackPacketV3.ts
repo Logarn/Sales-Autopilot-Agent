@@ -142,6 +142,10 @@ function blockSection(text: string): Record<string, unknown> {
   };
 }
 
+function isAutoPrepareQueued(note?: string): boolean {
+  return Boolean(note && /Strong fit\. I’m preparing the Upwork draft now\./.test(note));
+}
+
 export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Context): SlackPacketV3Message {
   const draft = job.applicationDraft;
   const commands = context.commandHints?.length ? context.commandHints : DEFAULT_COMMAND_HINTS;
@@ -166,6 +170,11 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
   const title = job.title || "Untitled Upwork job";
   const url = job.url || context.upworkUrl || "(Upwork URL missing)";
 
+  const autoPrepareQueued = isAutoPrepareQueued(context.autoPrepareNote);
+  const workflowLine = autoPrepareQueued
+    ? "*Workflow:* The browser draft is already being staged for review. Use Slack only for revisions, status checks, retries, or marking submitted after your manual Upwork review. No copy-paste step is required, and final submit stays manual."
+    : "*Workflow:* Use `prepare draft` only when you want the browser draft staged manually. No copy-paste step is required, and final submit stays manual.";
+
   const text = [
     `✅ *V3 Review Packet*`,
     `*Job:* ${title}`,
@@ -188,7 +197,7 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
     `*Browser status:*\n${browserText}`,
     `*Draft preparation policy:*\n${context.autoPrepareNote ?? "Reply `prepare draft` when you want the browser draft staged for review."}`,
     buildCommandsText(commands),
-    "*Workflow:* Use `prepare draft` to stage the Upwork application in-browser for review when needed. No copy-paste step is required, and final submit stays manual.",
+    workflowLine,
   ].join("\n\n");
 
   const blocks: Array<Record<string, unknown>> = [
@@ -213,7 +222,7 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
         },
       ],
     },
-    blockSection("*Workflow:* Use `prepare draft` to stage the Upwork application in-browser for review when needed. No copy-paste step is required, and final submit stays manual."),
+    blockSection(workflowLine),
   ];
 
   return { text, blocks };

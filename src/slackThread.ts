@@ -10,7 +10,7 @@ function getSlackClient(): WebClient | null {
   }
 
   if (!SLACK_BOT_TOKEN) {
-    logger.warn("SLACK_BOT_TOKEN is not configured; cannot post thread replies from browser worker.");
+    logger.warn("SLACK_BOT_TOKEN is not configured; browser worker cannot post Slack thread replies. Configure SLACK_BOT_TOKEN to verify real Slack thread delivery. Do not print token values.");
     client = null;
     return null;
   }
