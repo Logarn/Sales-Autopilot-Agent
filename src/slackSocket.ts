@@ -12,6 +12,10 @@ import {
   updateBrowserActionStatus,
 } from "./db";
 import {
+  buildCaptureActionPayload,
+  deriveCaptureThreadJobId,
+} from "./browserCapture";
+import {
   SLACK_APP_TOKEN,
   SLACK_BOT_TOKEN,
   SLACK_SOCKET_MODE_ENABLED,
@@ -207,12 +211,31 @@ async function handleUrlMessage(params: {
     status: "capture_pending",
   });
 
+  const jobIdForAction = deriveCaptureThreadJobId(upworkUrl.normalizedUrl, upworkUrl.jobId);
+  const action = enqueueBrowserActionDeduped({
+    jobId: jobIdForAction,
+    actionType: "capture_job_from_url",
+    payload: {
+      ...buildCaptureActionPayload(
+        upworkUrl.normalizedUrl,
+        params.channelId,
+        params.messageTs,
+        params.threadTs,
+      ),
+      sourceQuery: "slack_url",
+      notes: "Slack socket URL posted; browser capture required before scoring and draft prep.",
+    },
+  });
+
   const details = [
     `✅ Captured Upwork URL for tracking.`,
     `• Thread: ${state.threadTs}`,
     `• Message: ${state.messageTs}`,
     `• Job ID: ${state.jobId ?? "unknown"}`,
     `• Status: ${statusLabel(state.status)}`,
+    action.duplicate
+      ? `• Browser capture action already queued as #${action.id} for this posting.`
+      : `• Browser capture action queued as #${action.id}.`,
     `
 ${availableCommandsText()}`,
   ].join("\n");

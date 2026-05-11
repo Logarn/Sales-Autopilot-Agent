@@ -13,12 +13,20 @@ import {
 import { buildBrowserApplyPlan } from "./browserApply";
 import {
   closeDb,
+  getSlackThreadStateByThreadTs,
   incrementBrowserActionAttempts,
   listBrowserActions,
+  markJobSeen,
   updateBrowserActionStatus,
+  updateSlackThreadStateStatus,
 } from "./db";
+import { buildApplicationDraft } from "./agent";
+import { buildDeterministicOpportunityPacket, normalizedPacketToJobPosting } from "./normalization";
+import { scoreJob } from "./filter";
+import { buildQuestionAnswers, isSafeUpworkJobUrl, parseCaptureQuestions } from "./browserCapture";
 import { logger } from "./logger";
 import { BrowserAction, BrowserApplyFillPlan, BrowserApplyValidationIssue } from "./types";
+import { postSlackThreadMessage } from "./slackThread";
 import {
   formatBrowserSessionStatus,
   getBrowserSessionStatus,
@@ -36,7 +44,14 @@ type DetectedBrowserState =
   | "page_loaded"
   | "field_preparation_incomplete"
   | "submit_guard_failed"
-  | "no_url";
+  | "no_url"
+  | "captured";
+
+interface SlackThreadContext {
+  channelId: string;
+  messageTs: string;
+  threadTs: string;
+}
 
 interface BrowserWorkerOptions {
   dryRun: boolean;
@@ -142,7 +157,24 @@ function getActionUrl(action: BrowserAction): string | null {
   }
   if (action.actionType === "open_job") return `https://www.upwork.com/jobs/${action.jobId}`;
   if (action.actionType === "open_apply_page") return `https://www.upwork.com/ab/proposals/job/${action.jobId}/apply/`;
+  if (action.actionType === "capture_job_from_url") return `https://www.upwork.com/jobs/${action.jobId}`;
   return null;
+}
+
+function getSlackThreadContextFromPayload(action: BrowserAction): SlackThreadContext | null {
+  const payload = action.payload as {
+    channelId?: string;
+    threadTs?: string;
+    messageTs?: string;
+  };
+  if (!payload.channelId || !payload.threadTs || !payload.messageTs) {
+    return null;
+  }
+  return {
+    channelId: payload.channelId,
+    threadTs: payload.threadTs,
+    messageTs: payload.messageTs,
+  };
 }
 
 function detectState(snapshot: PageSnapshot, action: BrowserAction): DetectedBrowserState {
@@ -164,6 +196,12 @@ function detectState(snapshot: PageSnapshot, action: BrowserAction): DetectedBro
   }
   if (haystack.includes("log in") || haystack.includes("login") || haystack.includes("sign in")) {
     return "login_required";
+  }
+  if (
+    action.actionType === "capture_job_from_url" &&
+    (isSafeUpworkJobUrl(snapshot.url) || snapshot.url.includes("/ab/proposals/job/") || snapshot.url.includes("/jobs/") )
+  ) {
+    return "captured";
   }
   if (action.actionType === "open_apply_page" || snapshot.url.includes("/apply")) {
     return "apply_page_loaded";
@@ -260,6 +298,70 @@ function formatApplyDiagnostics(diagnostics: ApplyPreparationDiagnostics): strin
 
 function boundedExcerpt(value: string, maxLength = 2000): string {
   return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+function buildCommandText(): string {
+  return [
+    "Available commands:",
+    "• status",
+    "• approve",
+    "• reject",
+    "• revise: <instruction>",
+    "• prepare draft",
+    "• mark submitted",
+  ].join("\n");
+}
+
+function buildCaptureThreadMessage(input: {
+  jobTitle: string;
+  url: string;
+  fitScore: number;
+  reasons: string[];
+  risks: string[];
+  threadStatus: string;
+  requiredConnects: number;
+  suggestedBoostConnects: number;
+  suggestedBid: string;
+  proposalText: string;
+  proofRecommendations: string[];
+  applicationQuestions: string[];
+  questionAnswers: string[];
+  retryActionId: number;
+}): string {
+  const reasonList = input.reasons.length > 0 ? input.reasons.join("; ") : "No specific reasons flagged.";
+  const riskList = input.risks.length > 0 ? input.risks.join("; ") : "No major risks detected.";
+  const proofList = input.proofRecommendations.length > 0 ? input.proofRecommendations.join("; ") : "No specific proof items required.";
+  const qna =
+    input.applicationQuestions.length > 0
+      ? input.applicationQuestions
+          .map((question, index) => `Q: ${question}\nA: ${input.questionAnswers[index] ?? "Will answer from packet context."}`)
+          .join("\n\n")
+      : "No explicit screening questions detected on capture.";
+
+  return [
+    `✅ Browser capture and scoring complete for ${input.url}`,
+    `Job: ${input.jobTitle}`,
+    `Fit score: ${input.fitScore}/100`,
+    `Reasoning: ${reasonList}`,
+    `Risks: ${riskList}`,
+    `Connects: required ${input.requiredConnects} • suggested boost ${input.suggestedBoostConnects}`,
+    `Suggested bid: ${input.suggestedBid}`,
+    `Proof/attachment recommendations: ${proofList}`,
+    "",
+    "Draft proposal (short preview):",
+    boundedExcerpt(input.proposalText, 1400),
+    "",
+    "Application questions and proposed answers:",
+    qna,
+    `Browser capture status: ${input.threadStatus}`,
+    `Retry blocked states with: npm run browser:retry -- --id ${input.retryActionId}`,
+    buildCommandText(),
+  ].join("\n");
+}
+
+function normalizeCaptureQuestions(rawText: string): string[] {
+  const questions = parseCaptureQuestions(rawText);
+  return Array.from(new Set(questions)).slice(0, 6);
 }
 
 async function loadChromium(): Promise<PlaywrightChromiumLike | null> {
@@ -414,11 +516,25 @@ async function inspectWithBrowser(
   options: BrowserWorkerOptions,
   url: string,
   plan?: BrowserApplyFillPlan
-): Promise<{ state: DetectedBrowserState; snapshot?: PageSnapshot; fields: Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields"> }> {
+): Promise<{
+  state: DetectedBrowserState;
+  snapshot?: PageSnapshot;
+  fields: Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields">;
+  bodyText: string;
+}> {
   const chromium = await loadChromium();
   if (!chromium) {
-    saveTextArtifact(options, action, "browser-unavailable.json", JSON.stringify({ actionId: action.id, jobId: action.jobId, actionType: action.actionType, url }, null, 2));
-    return { state: "browser_unavailable", fields: { attemptedFields: [], skippedFields: [], manualFields: [] } };
+    saveTextArtifact(
+      options,
+      action,
+      "browser-unavailable.json",
+      JSON.stringify({ actionId: action.id, jobId: action.jobId, actionType: action.actionType, url }, null, 2)
+    );
+    return {
+      state: "browser_unavailable",
+      fields: { attemptedFields: [], skippedFields: [], manualFields: [] },
+      bodyText: "",
+    };
   }
 
   let context: PlaywrightContextLike | null = null;
@@ -447,12 +563,31 @@ async function inspectWithBrowser(
       options,
       action,
       "snapshot.json",
-      JSON.stringify({ state, url: snapshot.url, title: snapshot.title, textLength: bodyText.length, artifactPolicy: "minimized-no-html-no-screenshot" }, null, 2)
+      JSON.stringify(
+        {
+          state,
+          url: snapshot.url,
+          title: snapshot.title,
+          textLength: bodyText.length,
+          artifactPolicy: "minimized-no-html-no-screenshot",
+        },
+        null,
+        2
+      )
     );
-    return { state, snapshot, fields };
+    return { state, snapshot, fields, bodyText };
   } finally {
     await context?.close();
   }
+}
+
+function extractProofRecommendations(draft?: { selectedPortfolioItems?: { name: string; result?: string }[] } | null): string[] {
+  if (!draft?.selectedPortfolioItems || draft.selectedPortfolioItems.length === 0) {
+    return [];
+  }
+  return draft.selectedPortfolioItems
+    .slice(0, 5)
+    .map((item) => `${item.name}: ${item.result ? item.result : "good portfolio match"}`);
 }
 
 function terminalStatusForState(state: DetectedBrowserState): "completed" | "paused" {
@@ -475,6 +610,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       : [];
   const plan = applyPlanResult?.plan ?? null;
   const url = plan?.applyUrl ?? getActionUrl(action);
+  const thread = getSlackThreadContextFromPayload(action);
 
   if (action.actionType === "prepare_application_review" && (!applyPlanResult?.valid || stalePayloadErrors.length > 0)) {
     const issues = [...(applyPlanResult?.issues ?? []), ...stalePayloadErrors];
@@ -485,6 +621,9 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
 
   if (!url) {
     updateBrowserActionStatus(action.id, "paused", "No URL available for browser action.");
+    if (thread) {
+      updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "capture_failed");
+    }
     return;
   }
 
@@ -501,41 +640,179 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
 
   if (options.dryRun) {
     const state: DetectedBrowserState = "dry_run";
-    if (action.actionType === "prepare_application_review") {
-      const diagnostics = buildApplyDiagnostics(action, plan, applyPlanResult?.issues ?? [], state);
-      logger.info(`[dry-run]\n${formatApplyDiagnostics(diagnostics)}`);
-      saveApplyDiagnostics(options, action, diagnostics);
-    } else {
-      logger.info(`[dry-run] Would process browser action #${action.id} ${action.actionType}: ${url}`);
-      saveTextArtifact(options, action, "dry-run.json", JSON.stringify({ actionId: action.id, jobId: action.jobId, actionType: action.actionType, url, state }, null, 2));
+    if (action.actionType === "capture_job_from_url") {
+      const capture = buildDeterministicOpportunityPacket(`Upwork URL capture preview (dry-run): ${url}`, {
+        url,
+        source: "deterministic",
+        capturedAt: new Date(),
+      });
+      const job = normalizedPacketToJobPosting(capture);
+      const scored = scoreJob(job);
+      scored.applicationDraft = buildApplicationDraft(scored);
+
+      const questions = normalizeCaptureQuestions(`Upwork URL capture (dry-run): ${url}`);
+      const answers = buildQuestionAnswers(questions, {
+        bid: scored.applicationDraft?.suggestedBid ?? "standard",
+        profileSummary: scored.title,
+      });
+
+      markJobSeen(scored, false);
+      if (thread) {
+        updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "captured", { jobId: scored.id });
+        updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "scored", { jobId: scored.id });
+        updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "packet_sent", { jobId: scored.id });
+        await postSlackThreadMessage({
+          channel: thread.channelId,
+          threadTs: thread.threadTs,
+          text: buildCaptureThreadMessage({
+            jobTitle: scored.title,
+            url,
+            fitScore: scored.score,
+            reasons: scored.scoreBreakdown.reasons,
+            risks: scored.scoreBreakdown.risks,
+            threadStatus: "packet_sent",
+            requiredConnects: scored.applicationDraft?.suggestedConnects ?? 0,
+            suggestedBoostConnects: scored.applicationDraft?.suggestedBoostConnects ?? 0,
+            suggestedBid: scored.applicationDraft?.suggestedBid ?? "n/a",
+            proposalText: scored.applicationDraft?.proposalText ?? "",
+            proofRecommendations: extractProofRecommendations(scored.applicationDraft),
+            applicationQuestions: questions,
+            questionAnswers: answers,
+            retryActionId: action.id,
+          }),
+        });
+      }
+      updateBrowserActionStatus(action.id, "paused", "Dry run: browser capture simulated from URL. Set BROWSER_DRY_RUN=false for real extraction.");
+      logger.info(`[dry-run] Browser capture action #${action.id} simulated for ${url}`);
+      return;
     }
+
+    const diagnostics = buildApplyDiagnostics(action, plan, applyPlanResult?.issues ?? [], state);
+    logger.info(`[dry-run]\n${formatApplyDiagnostics(diagnostics)}`);
+    saveApplyDiagnostics(options, action, diagnostics);
+    saveTextArtifact(options, action, "dry-run.json", JSON.stringify({ actionId: action.id, jobId: action.jobId, actionType: action.actionType, url, state }, null, 2));
     updateBrowserActionStatus(action.id, "paused", "Dry run: browser action not opened. Set BROWSER_DRY_RUN=false to inspect pages.");
+    if (thread) {
+      updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "status_checked");
+    }
     return;
   }
 
   try {
-    const { state, snapshot, fields } = await inspectWithBrowser(action, options, url, plan ?? undefined);
+    const { state, snapshot, fields, bodyText } = await inspectWithBrowser(action, options, url, plan ?? undefined);
+
     if (action.actionType === "prepare_application_review") {
       const diagnostics = buildApplyDiagnostics(action, plan, applyPlanResult?.issues ?? [], state, fields);
       saveApplyDiagnostics(options, action, diagnostics);
       if (state === "field_preparation_incomplete") {
         logger.warn(`Required fields not filled confidently for browser action #${action.id}: ${getRequiredSkippedFields(fields).join(", ")}`);
       }
+      updateBrowserActionStatus(action.id, terminalStatusForState(state), `Detected state: ${state}; stop-before-submit enforced.`);
+      if (["login_required", "two_factor_required", "captcha_or_security_challenge", "field_preparation_incomplete"].includes(state)) {
+        await recordBrowserManualAttention({
+          actionId: action.id,
+          jobId: action.jobId,
+          url: snapshot?.url ?? url,
+          title: snapshot?.title ?? null,
+          reason: state,
+        });
+      }
+      logger.info(`Browser action #${action.id} detected state: ${state}`);
+      return;
     }
-    updateBrowserActionStatus(action.id, terminalStatusForState(state), `Detected state: ${state}; stop-before-submit enforced.`);
-    if (["login_required", "two_factor_required", "captcha_or_security_challenge", "field_preparation_incomplete"].includes(state)) {
-      await recordBrowserManualAttention({
-        actionId: action.id,
-        jobId: action.jobId,
+
+    if (action.actionType === "capture_job_from_url") {
+      if (thread) {
+        updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "captured", { jobId: action.jobId });
+      }
+
+      if (["login_required", "two_factor_required", "captcha_or_security_challenge", "browser_unavailable", "no_url"].includes(state)) {
+        const threadStatus = String(state);
+        const alreadyManual = thread ? getSlackThreadStateByThreadTs(thread.channelId, thread.threadTs)?.status === "manual_attention_required" : false;
+        if (thread) {
+          updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "manual_attention_required");
+          if (!alreadyManual) {
+            await postSlackThreadMessage({
+              channel: thread.channelId,
+              threadTs: thread.threadTs,
+              text: [
+                "⚠️ Browser capture is blocked.",
+                `State: ${threadStatus}`,
+                `URL: ${url}`,
+                `Please open the browser profile manually (resolve login/security challenge if present) and then run:\n	npm run browser:retry -- --id ${action.id}`,
+                "If this repeats, check Slack session status and login challenge flow.",
+              ].join("\n"),
+            });
+          }
+          await recordBrowserManualAttention({
+            actionId: action.id,
+            jobId: action.jobId,
+            url: snapshot?.url ?? url,
+            title: snapshot?.title ?? null,
+            reason: threadStatus,
+          });
+        }
+        updateBrowserActionStatus(action.id, "paused", `Browser capture blocked: ${threadStatus}`);
+        logger.warn(`Browser action #${action.id} blocked: ${threadStatus}`);
+        return;
+      }
+
+      const normalized = buildDeterministicOpportunityPacket(bodyText, {
         url: snapshot?.url ?? url,
-        title: snapshot?.title ?? null,
-        reason: state,
+        source: "deterministic",
+        capturedAt: new Date(),
       });
+      const job = normalizedPacketToJobPosting(normalized);
+      const scored = scoreJob(job);
+      scored.applicationDraft = buildApplicationDraft(scored);
+
+      const mergedQuestions = normalizeCaptureQuestions(bodyText);
+      const applicationQuestions = mergedQuestions.length > 0 ? mergedQuestions : normalized.applicationQuestions.slice(0, 6);
+      const questionAnswers = buildQuestionAnswers(applicationQuestions, {
+        bid: scored.applicationDraft?.suggestedBid ?? "standard",
+        profileSummary: scored.title,
+      });
+
+      markJobSeen(scored, false);
+      if (thread) {
+        updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "captured", { jobId: scored.id });
+        updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "scored", { jobId: scored.id });
+      }
+      if (thread) {
+        await postSlackThreadMessage({
+          channel: thread.channelId,
+          threadTs: thread.threadTs,
+          text: buildCaptureThreadMessage({
+            jobTitle: scored.title,
+            url,
+            fitScore: scored.score,
+            reasons: scored.scoreBreakdown.reasons,
+            risks: scored.scoreBreakdown.risks,
+            threadStatus: "packet_sent",
+            requiredConnects: scored.applicationDraft?.suggestedConnects ?? 0,
+            suggestedBoostConnects: scored.applicationDraft?.suggestedBoostConnects ?? 0,
+            suggestedBid: scored.applicationDraft?.suggestedBid ?? "n/a",
+            proposalText: scored.applicationDraft?.proposalText ?? "",
+            proofRecommendations: extractProofRecommendations(scored.applicationDraft),
+            applicationQuestions,
+            questionAnswers,
+            retryActionId: action.id,
+          }),
+        });
+        updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "packet_sent", { jobId: scored.id });
+      }
+      updateBrowserActionStatus(action.id, "completed", "Capture completed and packet posted to Slack thread.");
+      return;
     }
+
+    updateBrowserActionStatus(action.id, terminalStatusForState(state), `Detected state: ${state}; stop-before-submit enforced.`);
     logger.info(`Browser action #${action.id} detected state: ${state}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     updateBrowserActionStatus(action.id, "failed", message);
+    if (thread) {
+      updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "capture_failed");
+    }
     logger.error(`Browser action #${action.id} failed: ${message}`);
   }
 }

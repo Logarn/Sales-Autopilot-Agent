@@ -364,7 +364,7 @@ export interface RunStats {
   failedFeeds: number;
 }
 
-export type BrowserActionType = "open_job" | "open_apply_page" | "prepare_application_review";
+export type BrowserActionType = "capture_job_from_url" | "open_job" | "open_apply_page" | "prepare_application_review";
 
 export type BrowserActionStatus = "pending" | "in_progress" | "completed" | "failed" | "paused" | "cancelled";
 

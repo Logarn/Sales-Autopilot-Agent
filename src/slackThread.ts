@@ -1,0 +1,45 @@
+import { WebClient } from "@slack/web-api";
+import { SLACK_BOT_TOKEN } from "./config";
+import { logger } from "./logger";
+
+let client: WebClient | null | undefined;
+
+function getSlackClient(): WebClient | null {
+  if (client !== undefined) {
+    return client;
+  }
+
+  if (!SLACK_BOT_TOKEN) {
+    logger.warn("SLACK_BOT_TOKEN is not configured; cannot post thread replies from browser worker.");
+    client = null;
+    return null;
+  }
+
+  client = new WebClient(SLACK_BOT_TOKEN);
+  return client;
+}
+
+export interface SlackThreadMessage {
+  channel: string;
+  threadTs: string;
+  text: string;
+}
+
+export async function postSlackThreadMessage(params: SlackThreadMessage): Promise<boolean> {
+  const slack = getSlackClient();
+  if (!slack) {
+    return false;
+  }
+
+  try {
+    await slack.chat.postMessage({
+      channel: params.channel,
+      thread_ts: params.threadTs,
+      text: params.text,
+    });
+    return true;
+  } catch (error) {
+    logger.error(`Failed to post Slack thread message: ${String(error)}`);
+    return false;
+  }
+}

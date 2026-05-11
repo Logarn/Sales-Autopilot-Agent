@@ -204,6 +204,11 @@ export interface SlackQueueItem {
 export type SlackThreadStatus =
   | "capture_pending"
   | "capture_recorded"
+  | "captured"
+  | "scored"
+  | "packet_sent"
+  | "manual_attention_required"
+  | "capture_failed"
   | "approve_requested"
   | "reject_requested"
   | "revise_requested"
@@ -449,8 +454,8 @@ const countStmt = db.prepare<[], CountRow>("SELECT COUNT(*) as count FROM seen_j
 const isSeenStmt = db.prepare<[string], SeenRow>(
   "SELECT 1 as found FROM seen_jobs WHERE id = ? LIMIT 1"
 );
-const insertSeenStmt = db.prepare(
-  `INSERT OR IGNORE INTO seen_jobs (
+const upsertSeenStmt = db.prepare(
+  `INSERT INTO seen_jobs (
     id,
     title,
     url,
@@ -469,7 +474,25 @@ const insertSeenStmt = db.prepare(
     fingerprint,
     notified
   )
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+   ON CONFLICT(id) DO UPDATE SET
+     title = excluded.title,
+     url = excluded.url,
+     description = excluded.description,
+     score = excluded.score,
+     match_level = excluded.match_level,
+     budget = excluded.budget,
+     client_country = excluded.client_country,
+     client_rating = excluded.client_rating,
+     client_spend = excluded.client_spend,
+     client_hire_rate = excluded.client_hire_rate,
+     skills = excluded.skills,
+     experience_level = excluded.experience_level,
+     connects_cost = excluded.connects_cost,
+     posted_at = excluded.posted_at,
+     fingerprint = excluded.fingerprint,
+     notified = CASE WHEN seen_jobs.notified = 1 OR excluded.notified = 1 THEN 1 ELSE 0 END,
+     seen_at = datetime('now')`
 );
 const seenFingerprintStmt = db.prepare<[string], SeenRow>(
   "SELECT 1 as found FROM seen_jobs WHERE fingerprint = ? LIMIT 1"
@@ -838,7 +861,7 @@ function rowToJobPosting(row: SeenFingerprintRow): JobPosting {
 }
 
 export function markJobSeen(job: ScoredJob, notified: boolean): void {
-  insertSeenStmt.run(
+  upsertSeenStmt.run(
     job.id,
     job.title,
     job.url,
@@ -1243,7 +1266,7 @@ export function enqueueBrowserAction(input: BrowserActionInput): number {
 }
 
 export function enqueueBrowserActionDeduped(input: BrowserActionInput): BrowserActionEnqueueResult {
-  if (input.actionType === "prepare_application_review") {
+  if (input.actionType === "prepare_application_review" || input.actionType === "capture_job_from_url") {
     const duplicate = activeDuplicateBrowserActionStmt.get(input.jobId, input.actionType);
     if (duplicate) {
       return { id: duplicate.id, duplicate: true, duplicateOf: duplicate.id };

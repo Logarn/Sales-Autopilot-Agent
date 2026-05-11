@@ -11,6 +11,7 @@ import { clearBrowserManualAttention, formatBrowserSessionStatus, getBrowserSess
 import { BrowserActionPayload, BrowserActionStatus, BrowserActionType } from "./types";
 
 const VALID_ACTION_TYPES: BrowserActionType[] = [
+  "capture_job_from_url",
   "open_job",
   "open_apply_page",
   "prepare_application_review",
@@ -37,7 +38,7 @@ function hasFlag(name: string): boolean {
 
 function usage(): void {
   console.log(`Usage:
-  npm run browser:enqueue -- --job-id <id> --action <open_job|open_apply_page|prepare_application_review> [--url <url>] [--payload '{"key":"value"}'] [--notes <text>]
+  npm run browser:enqueue -- --job-id <id> --action <capture_job_from_url|open_job|open_apply_page|prepare_application_review> [--url <url>] [--payload '{"key":"value"}'] [--notes <text>]
   npm run browser:enqueue -- --apply-preview --job-id <id>
   npm run browser:enqueue -- --apply-prepare --job-id <id> [--notes <text>]
   npm run browser:list -- [--status pending] [--limit 25]
@@ -45,6 +46,7 @@ function usage(): void {
   npm run browser:retry -- --id <paused-action-id>
 
 Examples:
+  npm run browser:enqueue -- --job-id job-123 --action capture_job_from_url --url https://www.upwork.com/jobs/~0123
   npm run browser:enqueue -- --job-id job-123 --action open_job --url https://www.upwork.com/jobs/~0123
   npm run browser:enqueue -- --apply-preview --job-id manual:upwork-0123456789abcdef
   npm run browser:enqueue -- --apply-prepare --job-id manual:upwork-0123456789abcdef
@@ -203,19 +205,19 @@ function list(): void {
     return;
   }
 
-  const firstActivePrepareByJob = new Map<string, number>();
+  const firstActiveByJob = new Map<string, number>();
   for (const action of actions) {
     const active = ["pending", "in_progress", "paused"].includes(action.status);
-    if (action.actionType === "prepare_application_review" && active && !firstActivePrepareByJob.has(action.jobId)) {
-      firstActivePrepareByJob.set(action.jobId, action.id);
+    if (!firstActiveByJob.has(action.jobId) && active) {
+      firstActiveByJob.set(action.jobId, action.id);
     }
   }
 
   for (const action of actions) {
-    const duplicateOf = action.actionType === "prepare_application_review" ? firstActivePrepareByJob.get(action.jobId) : undefined;
+    const duplicateOf = firstActiveByJob.get(action.jobId);
     console.log(`#${action.id} [${action.status}] ${action.actionType} job_id=${action.jobId}`);
     console.log(`  attempts: ${action.attempts} | updated: ${action.updatedAt}`);
-    if (duplicateOf && duplicateOf !== action.id) console.log(`  duplicate_of: #${duplicateOf} (same active prepare_application_review job)`);
+    if (duplicateOf && duplicateOf !== action.id) console.log(`  duplicate_of: #${duplicateOf} (same active job)`);
     if (action.payload.url) console.log(`  url: ${action.payload.url}`);
     if (action.payload.notes) console.log(`  notes: ${action.payload.notes}`);
     if (action.lastError) console.log(`  last_error: ${action.lastError}`);

@@ -25,6 +25,7 @@
     "slack:conversation": "tsx src/slackConversation.ts",
     "slack:socket": "tsx src/slackSocket.ts",
     "test:slack-socket": "tsx src/slackSocket.test.ts",
+    "test:capture": "tsx src/browserCapture.test.ts",
     "test:run-once": "tsx src/index.ts --run-once",
     "test:health": "tsx src/health.ts",
     "test:slack-flag": "tsx src/index.ts --test-slack",
