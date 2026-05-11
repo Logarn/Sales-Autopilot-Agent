@@ -19,6 +19,11 @@ import {
 } from "./db";
 import { logger } from "./logger";
 import { BrowserAction, BrowserApplyFillPlan, BrowserApplyValidationIssue } from "./types";
+import {
+  formatBrowserSessionStatus,
+  getBrowserSessionStatus,
+  recordBrowserManualAttention,
+} from "./browserSession";
 
 type DetectedBrowserState =
   | "dry_run"
@@ -149,8 +154,11 @@ function detectState(snapshot: PageSnapshot, action: BrowserAction): DetectedBro
   if (
     haystack.includes("captcha") ||
     haystack.includes("cloudflare") ||
+    haystack.includes("__cf_chl") ||
+    haystack.includes("challenge - upwork") ||
     haystack.includes("security check") ||
-    haystack.includes("verify you are human")
+    haystack.includes("verify you are human") ||
+    haystack.includes("checking if the site connection is secure")
   ) {
     return "captcha_or_security_challenge";
   }
@@ -291,7 +299,7 @@ async function logReadiness(options: BrowserWorkerOptions): Promise<void> {
     `Browser readiness: playwrightAvailable=${readiness.playwrightAvailable} chromeExecutableFound=${readiness.chromeExecutableFound} ` +
       `chromeExecutablePath=${readiness.chromeExecutablePath ?? "n/a"} userDataDir=${readiness.userDataDir} ` +
       `dryRun=${readiness.dryRun} workerEnabled=${readiness.workerEnabled} submitGuardEnabled=${readiness.submitGuardEnabled} ` +
-      `liveActionLimit=${readiness.liveActionLimit}`
+      `liveActionLimit=${readiness.liveActionLimit} ${formatBrowserSessionStatus()}`
   );
 }
 
@@ -406,7 +414,7 @@ async function inspectWithBrowser(
   options: BrowserWorkerOptions,
   url: string,
   plan?: BrowserApplyFillPlan
-): Promise<{ state: DetectedBrowserState; fields: Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields"> }> {
+): Promise<{ state: DetectedBrowserState; snapshot?: PageSnapshot; fields: Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields"> }> {
   const chromium = await loadChromium();
   if (!chromium) {
     saveTextArtifact(options, action, "browser-unavailable.json", JSON.stringify({ actionId: action.id, jobId: action.jobId, actionType: action.actionType, url }, null, 2));
@@ -441,7 +449,7 @@ async function inspectWithBrowser(
       "snapshot.json",
       JSON.stringify({ state, url: snapshot.url, title: snapshot.title, textLength: bodyText.length, artifactPolicy: "minimized-no-html-no-screenshot" }, null, 2)
     );
-    return { state, fields };
+    return { state, snapshot, fields };
   } finally {
     await context?.close();
   }
@@ -506,7 +514,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
   }
 
   try {
-    const { state, fields } = await inspectWithBrowser(action, options, url, plan ?? undefined);
+    const { state, snapshot, fields } = await inspectWithBrowser(action, options, url, plan ?? undefined);
     if (action.actionType === "prepare_application_review") {
       const diagnostics = buildApplyDiagnostics(action, plan, applyPlanResult?.issues ?? [], state, fields);
       saveApplyDiagnostics(options, action, diagnostics);
@@ -515,6 +523,15 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       }
     }
     updateBrowserActionStatus(action.id, terminalStatusForState(state), `Detected state: ${state}; stop-before-submit enforced.`);
+    if (["login_required", "two_factor_required", "captcha_or_security_challenge", "field_preparation_incomplete"].includes(state)) {
+      await recordBrowserManualAttention({
+        actionId: action.id,
+        jobId: action.jobId,
+        url: snapshot?.url ?? url,
+        title: snapshot?.title ?? null,
+        reason: state,
+      });
+    }
     logger.info(`Browser action #${action.id} detected state: ${state}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -525,6 +542,11 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
 
 export async function runBrowserWorker(options = loadOptions()): Promise<void> {
   await logReadiness(options);
+  const session = getBrowserSessionStatus();
+  if (session.blocked) {
+    logger.warn(`Browser worker paused due to session state: ${formatBrowserSessionStatus(session)}`);
+    return;
+  }
   if (!BROWSER_WORKER_ENABLED) {
     logger.info("Browser worker is disabled. Set BROWSER_WORKER_ENABLED=true to process queued browser actions.");
     return;

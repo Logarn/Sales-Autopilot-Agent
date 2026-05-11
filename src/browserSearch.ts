@@ -20,6 +20,7 @@ import {
   BrowserSearchRunResult,
   BrowserSearchRunSummary,
 } from "./types";
+import { formatBrowserSessionStatus, getBrowserSessionStatus, recordBrowserManualAttention } from "./browserSession";
 
 const UPWORK_SEARCH_URL = "https://www.upwork.com/nx/search/jobs/";
 const UPWORK_HOSTS = new Set(["upwork.com", "www.upwork.com"]);
@@ -37,7 +38,7 @@ const SECURITY_STATES = [
   "sign in",
 ];
 
-type BrowserSearchPausedReason = "browser_search_disabled" | "no_browser_search_queries" | "dry_run" | "browser_unavailable" | "login_or_security_required";
+type BrowserSearchPausedReason = "browser_search_disabled" | "no_browser_search_queries" | "dry_run" | "browser_unavailable" | "login_or_security_required" | "browser_session_blocked";
 
 interface PlaywrightPageLike {
   goto(url: string, options?: { waitUntil?: string; timeout?: number }): Promise<unknown>;
@@ -137,6 +138,8 @@ export function isSafeUpworkJobUrl(url: string): boolean {
 }
 
 export function shouldSkipBrowserSearch(config: BrowserSearchConfig): BrowserSearchPausedReason | null {
+  const session = getBrowserSessionStatus();
+  if (session.blocked) return "browser_session_blocked";
   if (!config.enabled) return "browser_search_disabled";
   if (config.queries.length === 0) return "no_browser_search_queries";
   if (config.dryRun) return "dry_run";
@@ -250,7 +253,7 @@ export async function runBrowserSearch(config = getBrowserSearchConfig()): Promi
   const summary = createInitialSummary(config);
   const skipReason = shouldSkipBrowserSearch(config);
   if (skipReason) {
-    logger.info(`Browser search paused: ${skipReason}`);
+    logger.info(`Browser search paused: ${skipReason}; ${formatBrowserSessionStatus()}`);
     return emptyResult(finish(summary, skipReason));
   }
 
@@ -271,6 +274,7 @@ export async function runBrowserSearch(config = getBrowserSearchConfig()): Promi
       await page.goto(query.url, { waitUntil: "domcontentloaded", timeout: 45000 });
       summary.queriesRun += 1;
       if (await assertNoSecurityPause(page)) {
+        await recordBrowserManualAttention({ url: page.url(), title: await page.title(), reason: "browser_search_login_or_security_required" });
         return { summary: finish(summary, "login_or_security_required"), links, capturedPages, normalizedPackets };
       }
       const queryLinks = await extractSearchLinks(page, query, config.maxJobsPerQuery);
@@ -280,6 +284,7 @@ export async function runBrowserSearch(config = getBrowserSearchConfig()): Promi
       for (const link of queryLinks) {
         const captured = await captureJobPage(page, link);
         if (!captured) {
+          await recordBrowserManualAttention({ url: page.url(), title: await page.title(), reason: "browser_search_login_or_security_required" });
           return { summary: finish(summary, "login_or_security_required"), links, capturedPages, normalizedPackets };
         }
         capturedPages.push(captured);

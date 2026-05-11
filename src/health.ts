@@ -3,6 +3,7 @@ import { closeDb, getHealthAlertLastSent, listBrowserActions, recordHealthAlertS
 import { HeartbeatRecord, readHeartbeats, readStaleHeartbeats, writeHeartbeat } from "./heartbeat";
 import { logger } from "./logger";
 import { sendHealthAlert } from "./slack";
+import { formatBrowserSessionStatus, getBrowserSessionStatus } from "./browserSession";
 
 type HealthSeverity = "ok" | "warning" | "critical";
 
@@ -21,8 +22,20 @@ export interface HealthReport {
 }
 
 function browserStateFindings(): HealthFinding[] {
+  const session = getBrowserSessionStatus();
+  const sessionFindings: HealthFinding[] = session.blocked
+    ? [
+        {
+          key: "browser-session-state",
+          severity: session.state === "browser_session_unhealthy" ? "critical" : "warning",
+          message: `Browser session requires attention: ${formatBrowserSessionStatus(session)}`,
+        },
+      ]
+    : [];
   const paused = listBrowserActions("paused", 50);
-  return paused
+  return [
+    ...sessionFindings,
+    ...paused
     .filter((action) => {
       const error = (action.lastError ?? "").toLowerCase();
       return ["login_required", "two_factor_required", "captcha_or_security_challenge", "browser_unavailable"].some((state) =>
@@ -32,8 +45,9 @@ function browserStateFindings(): HealthFinding[] {
     .map((action) => ({
       key: `browser-action-${action.id}`,
       severity: "warning" as const,
-      message: `Browser action #${action.id} requires attention: ${action.lastError}`,
-    }));
+      message: `Browser action #${action.id} requires attention: ${action.lastError}; retry: npm run browser:retry -- --id ${action.id}`,
+    })),
+  ];
 }
 
 export function buildHealthReport(now = new Date()): HealthReport {

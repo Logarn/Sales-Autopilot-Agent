@@ -6,6 +6,7 @@ import { logger } from "./logger";
 import { runBrowserSearch } from "./browserSearch";
 import { runBrowserWorker } from "./browserWorker";
 import { runPipeline, startupHealthCheck } from "./index";
+import { formatBrowserSessionStatus, getBrowserSessionStatus } from "./browserSession";
 
 type SchedulerMetadata = Record<string, unknown>;
 
@@ -43,6 +44,15 @@ async function runJob(job: SchedulerJob): Promise<void> {
   }
 }
 
+function browserSessionAllowsScheduledBrowserWork(): boolean {
+  const session = getBrowserSessionStatus();
+  if (session.blocked) {
+    logger.warn(`Skipping scheduled browser task; ${formatBrowserSessionStatus(session)}`);
+    return false;
+  }
+  return true;
+}
+
 function buildJobs(): SchedulerJob[] {
   return [
     {
@@ -53,7 +63,7 @@ function buildJobs(): SchedulerJob[] {
     },
     {
       name: "browser-search",
-      enabled: () => BROWSER_SEARCH_ENABLED,
+      enabled: () => BROWSER_SEARCH_ENABLED && browserSessionAllowsScheduledBrowserWork(),
       run: async () => {
         const result = await runBrowserSearch();
         return {
@@ -69,7 +79,7 @@ function buildJobs(): SchedulerJob[] {
     },
     {
       name: "browser-worker",
-      enabled: () => BROWSER_WORKER_ENABLED,
+      enabled: () => BROWSER_WORKER_ENABLED && browserSessionAllowsScheduledBrowserWork(),
       run: runBrowserWorker,
     },
     {

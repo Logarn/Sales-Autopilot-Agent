@@ -106,11 +106,16 @@ export const BROWSER_DRY_RUN = parseBoolean(process.env.BROWSER_DRY_RUN, true);
 export const BROWSER_ARTIFACT_DIR = process.env.BROWSER_ARTIFACT_DIR ?? "";
 export const BROWSER_ACTION_LIMIT = parseInteger(process.env.BROWSER_ACTION_LIMIT, 5);
 export const BROWSER_LIVE_ACTION_LIMIT = Math.max(1, parseInteger(process.env.BROWSER_LIVE_ACTION_LIMIT, 1));
+export const BROWSER_MANUAL_ATTENTION_ALERT_COOLDOWN_MS = parseInteger(process.env.BROWSER_MANUAL_ATTENTION_ALERT_COOLDOWN_MS, 60 * 60 * 1000);
+export const BROWSER_SESSION_CHALLENGE_THRESHOLD = Math.max(1, parseInteger(process.env.BROWSER_SESSION_CHALLENGE_THRESHOLD, 2));
+export const BROWSER_SESSION_CHALLENGE_WINDOW_MS = parseInteger(process.env.BROWSER_SESSION_CHALLENGE_WINDOW_MS, 60 * 60 * 1000);
 export const BROWSER_SEARCH_ENABLED = parseBoolean(process.env.BROWSER_SEARCH_ENABLED, false);
 export const BROWSER_SEARCH_INTERVAL_MS = Math.min(
-  Math.max(parseInteger(process.env.BROWSER_SEARCH_INTERVAL_MS, 5 * 60 * 1000), 5 * 60 * 1000),
-  10 * 60 * 1000
+  Math.max(parseInteger(process.env.BROWSER_SEARCH_INTERVAL_MS, 10 * 60 * 1000), 8 * 60 * 1000),
+  14 * 60 * 1000
 );
+export const BROWSER_SEARCH_JITTER_MIN_MS = parseInteger(process.env.BROWSER_SEARCH_JITTER_MIN_MS, 8 * 60 * 1000);
+export const BROWSER_SEARCH_JITTER_MAX_MS = parseInteger(process.env.BROWSER_SEARCH_JITTER_MAX_MS, 14 * 60 * 1000);
 export const BROWSER_SEARCH_MAX_JOBS_PER_QUERY = Math.max(
   1,
   parseInteger(process.env.BROWSER_SEARCH_MAX_JOBS_PER_QUERY, 10)

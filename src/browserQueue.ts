@@ -7,6 +7,7 @@ import {
   updateBrowserActionStatus,
 } from "./db";
 import { logger } from "./logger";
+import { clearBrowserManualAttention, formatBrowserSessionStatus, getBrowserSessionStatus } from "./browserSession";
 import { BrowserActionPayload, BrowserActionStatus, BrowserActionType } from "./types";
 
 const VALID_ACTION_TYPES: BrowserActionType[] = [
@@ -41,13 +42,15 @@ function usage(): void {
   npm run browser:enqueue -- --apply-prepare --job-id <id> [--notes <text>]
   npm run browser:list -- [--status pending] [--limit 25]
   npm run browser:update -- --id <action-id> --status <pending|in_progress|completed|failed|paused|cancelled> [--error <text>]
+  npm run browser:retry -- --id <paused-action-id>
 
 Examples:
   npm run browser:enqueue -- --job-id job-123 --action open_job --url https://www.upwork.com/jobs/~0123
   npm run browser:enqueue -- --apply-preview --job-id manual:upwork-0123456789abcdef
   npm run browser:enqueue -- --apply-prepare --job-id manual:upwork-0123456789abcdef
   npm run browser:list -- --status pending
-  npm run browser:update -- --id 1 --status paused --error "Login required"`);
+  npm run browser:update -- --id 1 --status paused --error "Login required"
+  npm run browser:retry -- --id 3`);
 }
 
 function parsePositiveInteger(value: string | undefined, fallback: number): number {
@@ -194,6 +197,7 @@ function list(): void {
 
   console.log(`\nBrowser Actions (latest ${actions.length})`);
   console.log("===============================");
+  console.log(`Session: ${formatBrowserSessionStatus()}`);
   if (actions.length === 0) {
     console.log("No browser actions found.");
     return;
@@ -215,7 +219,35 @@ function list(): void {
     if (action.payload.url) console.log(`  url: ${action.payload.url}`);
     if (action.payload.notes) console.log(`  notes: ${action.payload.notes}`);
     if (action.lastError) console.log(`  last_error: ${action.lastError}`);
+    if (action.status === "paused") console.log(`  retry: npm run browser:retry -- --id ${action.id}`);
   }
+}
+
+function retry(): void {
+  const id = Number.parseInt(argValue("--id") ?? "", 10);
+  if (!Number.isFinite(id) || id <= 0) {
+    usage();
+    process.exitCode = 1;
+    return;
+  }
+  const action = listBrowserActions(null, 100).find((item) => item.id === id);
+  if (!action) {
+    logger.error(`No browser action found for id=${id}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (action.status !== "paused") {
+    logger.error(`Browser action #${id} is ${action.status}; only paused actions can be retried.`);
+    process.exitCode = 1;
+    return;
+  }
+  const session = getBrowserSessionStatus();
+  if (session.lastManualAttention?.actionId === id) {
+    clearBrowserManualAttention(id);
+    logger.info(`Cleared manual attention state for action #${id}.`);
+  }
+  updateBrowserActionStatus(id, "pending", "Manual retry requested; stopBeforeSubmit remains enforced.");
+  logger.info(`Browser action #${id} marked pending. Run browser worker separately when ready.`);
 }
 
 function update(): void {
@@ -250,6 +282,10 @@ function main(): void {
     }
     if (hasFlag("--update")) {
       update();
+      return;
+    }
+    if (hasFlag("--retry")) {
+      retry();
       return;
     }
     usage();
