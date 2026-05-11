@@ -24,3 +24,10 @@ data/*.sqlite3
 
 # Pi project-local packages (if using pi install -l)
 .pi/npm/
+
+# Local secrets/runtime
+.env
+.env.*
+!.env.example
+.pi/
+data/
