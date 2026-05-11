@@ -1,7 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { CONNECTS_RULES_CONFIG_PATH } from "./config";
-import { getApplicationDraft, getApplicationJobLink } from "./db";
+import { getApplicationDraft, getApplicationJobLink, getScoredJobForSlackPreview } from "./db";
+import { buildProposalContextPack } from "./skills/profileContextSkill";
+import { selectPortfolioAssetsForJob } from "./skills/portfolioSelectionSkill";
 import {
   ApplicationDraft,
   BrowserApplyAttachmentInstruction,
@@ -122,6 +124,26 @@ function buildAttachmentInstructions(items: PortfolioItem[]): {
   return { attachments, skipped };
 }
 
+function buildAutoAttachmentInstructions(paths: string[]): {
+  attachments: BrowserApplyAttachmentInstruction[];
+  skipped: BrowserApplySkippedAttachment[];
+} {
+  const attachments: BrowserApplyAttachmentInstruction[] = [];
+  const skipped: BrowserApplySkippedAttachment[] = [];
+
+  for (const filePath of paths) {
+    const resolvedPath = path.resolve(process.cwd(), filePath);
+    const name = path.basename(filePath);
+    if (!fs.existsSync(resolvedPath)) {
+      skipped.push({ id: filePath, name, reason: `Attachment file not found: ${filePath}` });
+      continue;
+    }
+    attachments.push({ id: filePath, name, filePath, sensitivity: "approved_external" });
+  }
+
+  return { attachments, skipped };
+}
+
 function parseRate(draft: ApplicationDraft): string {
   const structuredRate = safeTrim(draft.structuredProposal?.browserFillNotes.rate);
   if (structuredRate) return structuredRate;
@@ -179,10 +201,10 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
   }
 
   if (draft.status !== "approved") {
-    issues.push(issue("error", "not_approved", `Application status must be approved before browser preparation; found ${draft.status}.`));
+    issues.push(issue("warning", "not_approved", `Application is ${draft.status}; prepare draft is allowed for human review, but final submit remains manual.`));
   }
   if (!draft.proposalText.trim()) {
-    issues.push(issue("error", "missing_proposal", "Approved application has no proposal text to fill."));
+    issues.push(issue("error", "missing_proposal", "Application draft has no proposal text to fill."));
   }
 
   const urlInfo = deriveApplyUrl(link?.url);
@@ -190,16 +212,31 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
     issues.push(issue("error", "invalid_upwork_link", "A direct Upwork job/apply URL is required before browser preparation."));
   }
 
-  const { attachments, skipped } = buildAttachmentInstructions(draft.selectedPortfolioItems);
+  const scoredJob = getScoredJobForSlackPreview(jobId);
+  const profileContext = scoredJob ? buildProposalContextPack(scoredJob) : null;
+  const portfolioSelection = scoredJob ? selectPortfolioAssetsForJob(scoredJob) : null;
+
+  const profileAttachments = profileContext?.selectedAttachments ?? [];
+  const fallbackDraftAttachments = draft.selectedPortfolioItems.map((item) => item.filePath).filter(Boolean);
+  const { attachments, skipped } = profileAttachments.length > 0
+    ? buildAutoAttachmentInstructions(profileAttachments)
+    : buildAttachmentInstructions(draft.selectedPortfolioItems);
   for (const skippedAttachment of skipped) {
     issues.push(issue("warning", "attachment_skipped", `${skippedAttachment.name}: ${skippedAttachment.reason}`));
   }
+
+  const manualReviewAssets = portfolioSelection?.recommendOnlyAssets.map((asset) => `${asset.name} — ${asset.path}`) ?? [];
+  const mentionOnlyProof = portfolioSelection?.mentionOnlyProof.map((proof) => `${proof.name}: ${proof.headline}`) ?? [];
+  const figmaRecommendations = profileContext?.selectedFigmaLinks.map((link) => `${link.name}: ${link.url}`) ?? [];
+  const videoRecommendations = profileContext?.selectedVideoLinks.map((link) => `${link.name}: ${link.url}`) ?? [];
+  const manualReviewWarnings = profileContext?.manualReviewWarnings ?? [];
 
   const connects = buildConnectsPlan(draft, loadConnectsRules(options.connectsRulesPath), issues);
   const plan: BrowserApplyFillPlan | null = urlInfo
     ? {
         schemaVersion: "1.0",
         jobId,
+        jobTitle: scoredJob?.title ?? link?.title ?? jobId,
         sourceUrl: urlInfo.sourceUrl,
         applyUrl: urlInfo.applyUrl,
         status: draft.status,
@@ -209,7 +246,12 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
         screeningAnswers: draft.structuredProposal?.clientRequestAnswers ?? [],
         attachments,
         skippedAttachments: skipped,
-        highlights: draft.structuredProposal?.browserFillNotes.highlights ?? draft.selectedPortfolioItems.map((item) => item.name),
+        manualReviewAssets,
+        mentionOnlyProof,
+        figmaRecommendations,
+        videoRecommendations,
+        manualReviewWarnings,
+        highlights: draft.structuredProposal?.browserFillNotes.highlights ?? (profileAttachments.length > 0 ? profileAttachments : fallbackDraftAttachments),
         connects,
         stopBeforeSubmit: true,
         dryRunSafe: true,

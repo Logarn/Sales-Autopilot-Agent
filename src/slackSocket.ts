@@ -2,8 +2,10 @@ import { App } from "@slack/bolt";
 import { clearBrowserManualAttention, getBrowserSessionStatus } from "./browserSession";
 import {
   enqueueBrowserActionDeduped,
+  getApplicationDraft,
   getApplicationStatus,
   getBrowserActionById,
+  getScoredJobForSlackPreview,
   getSlackThreadStateByThreadTs,
   updateApplicationStatus,
   updateSlackThreadStateStatus,
@@ -22,6 +24,8 @@ import {
   SLACK_ALLOWED_CHANNEL_IDS,
 } from "./config";
 import { logger } from "./logger";
+import { buildProposalContextPack } from "./skills/profileContextSkill";
+import { selectPortfolioAssetsForJob } from "./skills/portfolioSelectionSkill";
 
 export type SlackSocketParsedCommandType =
   | "status"
@@ -186,6 +190,83 @@ function statusLabel(status?: string | null): string {
   return status;
 }
 
+export function buildPrepareDraftQueueReply(input: {
+  jobId: string;
+  threadTitle: string;
+  upworkUrl: string;
+  actionId: number;
+  duplicate: boolean;
+  duplicateStatus?: string | null;
+}): string {
+  const draft = getApplicationDraft(input.jobId);
+  const scoredJob = getScoredJobForSlackPreview(input.jobId);
+  const profileContext = scoredJob ? buildProposalContextPack(scoredJob) : null;
+  const selection = scoredJob ? selectPortfolioAssetsForJob(scoredJob) : null;
+
+  const autoAttachAssets = profileContext?.selectedAttachments ?? [];
+  const recommendOnlyAssets = selection?.recommendOnlyAssets.map((asset) => `${asset.name} — ${asset.path}`) ?? [];
+  const warnings = profileContext?.manualReviewWarnings ?? [];
+
+  return [
+    input.duplicate
+      ? `Draft preparation already exists as browser action #${input.actionId}${input.duplicateStatus ? ` (${input.duplicateStatus})` : ""}.`
+      : `Draft preparation queued as browser action #${input.actionId}.`,
+    `Job: ${input.threadTitle}`,
+    `Job ID: ${input.jobId}`,
+    `Upwork URL: ${input.upworkUrl}`,
+    `Stored proposal draft: ${draft?.proposalText ? `present (${draft.proposalText.length} chars)` : "missing"}`,
+    `Auto-attach assets: ${autoAttachAssets.length > 0 ? autoAttachAssets.join(", ") : "none"}`,
+    `Recommend-only assets: ${recommendOnlyAssets.length > 0 ? recommendOnlyAssets.join("; ") : "none"}`,
+    `Manual review warnings: ${warnings.length > 0 ? warnings.join("; ") : "none"}`,
+    "Browser draft preparation is for human review only. Final submit remains manual and will not be clicked.",
+    "Next commands: retry <action-id> | status | mark submitted",
+  ].join("\n");
+}
+
+export function queuePrepareDraftFromSlackThread(input: { channelId: string; threadTs: string }): { ok: boolean; text: string; actionId?: number } {
+  const state = getSlackThreadStateByThreadTs(input.channelId, input.threadTs);
+  if (!state?.jobId) {
+    return { ok: false, text: "I cannot queue a browser draft without a tracked job id for this thread." };
+  }
+
+  const draft = getApplicationDraft(state.jobId);
+  const scoredJob = getScoredJobForSlackPreview(state.jobId);
+  if (!draft || !scoredJob || !draft.proposalText.trim()) {
+    return { ok: false, text: `I cannot prepare a browser draft yet for ${state.jobId}. The stored/generated application draft is missing. Please regenerate or revise the draft first.` };
+  }
+  const browserSession = getBrowserSessionStatus();
+  if (browserSession.blocked) {
+    return { ok: false, text: `I cannot prepare a browser draft right now because browser attention is required (${browserSession.state}). Resolve the browser state first, then retry.` };
+  }
+
+  const action = enqueueBrowserActionDeduped({
+    jobId: state.jobId,
+    actionType: "prepare_application_review",
+    payload: {
+      url: state.upworkUrl,
+      channelId: state.channelId,
+      threadTs: state.threadTs,
+      messageTs: state.messageTs,
+      applicationId: state.jobId,
+      notes: "Slack socket: prepare draft command from tracked thread. Prepare browser review only; do not submit.",
+    },
+  });
+  const duplicateAction = action.duplicate ? getBrowserActionById(action.id) : null;
+  updateSlackThreadStateStatus(state.channelId, state.threadTs, "prepare_draft_requested");
+  return {
+    ok: true,
+    actionId: action.id,
+    text: buildPrepareDraftQueueReply({
+      jobId: state.jobId,
+      threadTitle: scoredJob.title,
+      upworkUrl: state.upworkUrl,
+      actionId: action.id,
+      duplicate: action.duplicate,
+      duplicateStatus: duplicateAction?.status ?? null,
+    }),
+  };
+}
+
 async function postThreadReply(client: App["client"], channel: string, threadTs: string, text: string): Promise<void> {
   await client.chat.postMessage({ channel, thread_ts: threadTs, text });
 }
@@ -348,24 +429,11 @@ async function handleThreadCommand(params: {
   }
 
   if (command.type === "prepare_draft") {
-    const action = enqueueBrowserActionDeduped({
-      jobId: state.jobId as string,
-      actionType: "prepare_application_review",
-      payload: {
-        url: state.upworkUrl,
-        notes: "Slack socket: prepare draft command from tracked thread.",
-      },
-    });
-    const actionMsg = action.duplicate
-      ? `Draft prepare action already queued (${action.id}).`
-      : `Draft prepare action queued as #${action.id}.`;
-    updateSlackThreadStateStatus(state.channelId, state.threadTs, "prepare_draft_requested");
-    await postThreadReply(
-      params.client,
-      params.channelId,
-      params.threadTs,
-      `${actionMsg} Browser action is queued; manual review required, no browser submit will be attempted here.`
-    );
+    const result = queuePrepareDraftFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs });
+    if (!result.ok) {
+      updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
+    }
+    await postThreadReply(params.client, params.channelId, params.threadTs, result.text);
     return;
   }
 

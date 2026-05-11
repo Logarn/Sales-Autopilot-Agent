@@ -1,6 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
+  AUTO_PREPARE_DRAFT_ENABLED,
+  AUTO_PREPARE_MAX_CONNECTS,
+  AUTO_PREPARE_MIN_SCORE,
+  AUTO_PREPARE_REQUIRE_BROWSER_HEALTHY,
   BROWSER_ACTION_LIMIT,
   BROWSER_ARTIFACT_DIR,
   BROWSER_CHROME_EXECUTABLE_PATH,
@@ -13,6 +17,8 @@ import {
 import { buildBrowserApplyPlan } from "./browserApply";
 import {
   closeDb,
+  enqueueBrowserActionDeduped,
+  getBrowserActionById,
   getSlackThreadStateByThreadTs,
   incrementBrowserActionAttempts,
   listBrowserActions,
@@ -34,6 +40,7 @@ import {
 import { buildV3CapturePacket, SlackPacketV3Context } from "./slackPacketV3";
 import { postSlackThreadMessage } from "./slackThread";
 import {
+  BrowserSessionStatus,
   formatBrowserSessionStatus,
   getBrowserSessionStatus,
   recordBrowserManualAttention,
@@ -57,6 +64,30 @@ interface SlackThreadContext {
   channelId: string;
   messageTs: string;
   threadTs: string;
+}
+
+interface AutoPrepareDraftOptions {
+  enabled?: boolean;
+  minScore?: number;
+  maxConnects?: number;
+  requireBrowserHealthy?: boolean;
+  sessionStatus?: BrowserSessionStatus;
+}
+
+export type AutoPrepareDraftDecisionCategory =
+  | "eligible_auto_prepare"
+  | "skipped_manual_override_available"
+  | "blocked_no_manual_override"
+  | "duplicate_existing_action";
+
+export interface AutoPrepareDraftDecision {
+  shouldQueue: boolean;
+  category: AutoPrepareDraftDecisionCategory;
+  reason: string;
+  note: string;
+  actionId?: number;
+  duplicate?: boolean;
+  duplicateStatus?: string | null;
 }
 
 interface BrowserWorkerOptions {
@@ -94,6 +125,7 @@ interface PlaywrightPageLike {
 interface ApplyPreparationDiagnostics {
   actionId: number;
   jobId: string;
+  jobTitle: string | null;
   actionType: string;
   sourceUrl: string | null;
   applyUrl: string | null;
@@ -109,6 +141,11 @@ interface ApplyPreparationDiagnostics {
   boostConnects: number | null;
   totalConnects: number | null;
   selectedAttachments: string[];
+  manualReviewAssets: string[];
+  mentionOnlyProof: string[];
+  figmaRecommendations: string[];
+  videoRecommendations: string[];
+  manualReviewWarnings: string[];
   skippedAttachments: Array<{ name: string; reason: string }>;
   selectedHighlights: string[];
   warnings: string[];
@@ -237,6 +274,7 @@ function buildWarnings(plan: BrowserApplyFillPlan | null, issues: BrowserApplyVa
   if (plan) {
     warnings.push(...plan.connects.notes);
     warnings.push(...plan.skippedAttachments.map((attachment) => `${attachment.name}: ${attachment.reason}`));
+    warnings.push(...plan.manualReviewWarnings);
   }
   return Array.from(new Set(warnings));
 }
@@ -252,6 +290,7 @@ function buildApplyDiagnostics(
     actionId: action.id,
     jobId: action.jobId,
     actionType: action.actionType,
+    jobTitle: plan?.jobTitle ?? null,
     sourceUrl: plan?.sourceUrl ?? null,
     applyUrl: plan?.applyUrl ?? null,
     intendedAction: action.actionType === "prepare_application_review" ? "Open Upwork apply page, prepare fields for human review, and stop before submit." : action.actionType,
@@ -266,6 +305,11 @@ function buildApplyDiagnostics(
     boostConnects: plan?.connects.boost ?? null,
     totalConnects: plan?.connects.total ?? null,
     selectedAttachments: plan?.attachments.map((attachment) => attachment.name) ?? [],
+    manualReviewAssets: plan?.manualReviewAssets ?? [],
+    mentionOnlyProof: plan?.mentionOnlyProof ?? [],
+    figmaRecommendations: plan?.figmaRecommendations ?? [],
+    videoRecommendations: plan?.videoRecommendations ?? [],
+    manualReviewWarnings: plan?.manualReviewWarnings ?? [],
     skippedAttachments: plan?.skippedAttachments.map(({ name, reason }) => ({ name, reason })) ?? [],
     selectedHighlights: plan?.highlights ?? [],
     warnings: buildWarnings(plan, issues),
@@ -287,6 +331,7 @@ function formatApplyDiagnostics(diagnostics: ApplyPreparationDiagnostics): strin
   return [
     `Browser apply preparation plan #${diagnostics.actionId}`,
     `  job_id: ${diagnostics.jobId}`,
+    `  job_title: ${diagnostics.jobTitle ?? "n/a"}`,
     `  source_url: ${diagnostics.sourceUrl ?? "n/a"}`,
     `  apply_url: ${diagnostics.applyUrl ?? "n/a"}`,
     `  intended_action: ${diagnostics.intendedAction}`,
@@ -294,10 +339,16 @@ function formatApplyDiagnostics(diagnostics: ApplyPreparationDiagnostics): strin
     `  screening_answers_count: ${diagnostics.screeningAnswersCount}`,
     `  rate_bid_amount: ${diagnostics.rate ?? "n/a"}`,
     `  connects: required=${diagnostics.requiredConnects ?? "n/a"} boost=${diagnostics.boostConnects ?? "n/a"} total=${diagnostics.totalConnects ?? "n/a"}`,
-    `  selected_attachments: ${diagnostics.selectedAttachments.length > 0 ? diagnostics.selectedAttachments.join(", ") : "none"}`,
+    `  auto_attach_assets: ${diagnostics.selectedAttachments.length > 0 ? diagnostics.selectedAttachments.join(", ") : "none"}`,
+    `  manual_review_assets: ${diagnostics.manualReviewAssets.length > 0 ? diagnostics.manualReviewAssets.join("; ") : "none"}`,
+    `  mention_only_proof: ${diagnostics.mentionOnlyProof.length > 0 ? diagnostics.mentionOnlyProof.join("; ") : "none"}`,
+    `  figma_recommendations: ${diagnostics.figmaRecommendations.length > 0 ? diagnostics.figmaRecommendations.join("; ") : "none"}`,
+    `  video_recommendations: ${diagnostics.videoRecommendations.length > 0 ? diagnostics.videoRecommendations.join("; ") : "none"}`,
     `  skipped_attachments: ${diagnostics.skippedAttachments.length > 0 ? diagnostics.skippedAttachments.map((item) => `${item.name} (${item.reason})`).join("; ") : "none"}`,
+    `  manual_review_warnings: ${diagnostics.manualReviewWarnings.length > 0 ? diagnostics.manualReviewWarnings.join("; ") : "none"}`,
     `  selected_highlights: ${diagnostics.selectedHighlights.length > 0 ? diagnostics.selectedHighlights.join("; ") : "none"}`,
     `  stop_before_submit: ${diagnostics.stopBeforeSubmit}`,
+    `  final_submit_blocked: true`,
     `  warnings: ${diagnostics.warnings.length > 0 ? diagnostics.warnings.join("; ") : "none"}`,
   ].join("\n");
 }
@@ -322,6 +373,163 @@ async function postV3CapturePacketToThread(
     text: packet.text,
     blocks: packet.blocks,
   });
+}
+
+function buildPrepareDraftStatusMessage(input: {
+  heading: string;
+  diagnostics: ApplyPreparationDiagnostics;
+  nextCommand?: string;
+}): string {
+  const { diagnostics } = input;
+  return [
+    input.heading,
+    `Job: ${diagnostics.jobTitle ?? diagnostics.jobId}`,
+    `Job ID: ${diagnostics.jobId}`,
+    `Apply URL: ${diagnostics.applyUrl ?? diagnostics.sourceUrl ?? "n/a"}`,
+    `Cover letter: present=${diagnostics.coverLetterPresent} length=${diagnostics.coverLetterLength}`,
+    `Screening answers: ${diagnostics.screeningAnswersCount}`,
+    `Rate/bid: ${diagnostics.rate ?? "n/a"}`,
+    `Connects: required=${diagnostics.requiredConnects ?? "n/a"} boost=${diagnostics.boostConnects ?? "n/a"} total=${diagnostics.totalConnects ?? "n/a"}`,
+    `Auto-attach assets: ${diagnostics.selectedAttachments.length > 0 ? diagnostics.selectedAttachments.join(", ") : "none"}`,
+    `Manual-review assets: ${diagnostics.manualReviewAssets.length > 0 ? diagnostics.manualReviewAssets.join("; ") : "none"}`,
+    `Mention-only proof: ${diagnostics.mentionOnlyProof.length > 0 ? diagnostics.mentionOnlyProof.join("; ") : "none"}`,
+    `Warnings: ${diagnostics.warnings.length > 0 ? diagnostics.warnings.join("; ") : "none"}`,
+    `Stop before submit: ${diagnostics.stopBeforeSubmit}`,
+    "Final submit was not clicked.",
+    input.nextCommand ? `Next command: ${input.nextCommand}` : "Next commands: retry <action-id> | status | mark submitted",
+  ].join("\n");
+}
+
+async function postPrepareDraftStatusToThread(
+  thread: SlackThreadContext | null,
+  input: { heading: string; diagnostics: ApplyPreparationDiagnostics; nextCommand?: string },
+): Promise<void> {
+  if (!thread) return;
+  await postSlackThreadMessage({
+    channel: thread.channelId,
+    threadTs: thread.threadTs,
+    text: buildPrepareDraftStatusMessage(input),
+  });
+}
+
+function hasHardRedFlags(job: ScoredJob): boolean {
+  const redFlagTerms = ["scam", "commission only", "full-time", "full time", "on-site", "onsite", "w2", "verification", "blocked"];
+  const signals = [
+    ...(job.scoreBreakdown?.risks ?? []),
+    ...(job.applicationDraft?.redFlags ?? []),
+  ].map((item) => item.toLowerCase());
+  return (job.scoreBreakdown?.redFlagScore?.score ?? 100) < 40 || signals.some((item) => redFlagTerms.some((term) => item.includes(term)));
+}
+
+export function decideAutoPrepareDraft(
+  job: ScoredJob,
+  options: AutoPrepareDraftOptions = {},
+): AutoPrepareDraftDecision {
+  const enabled = options.enabled ?? AUTO_PREPARE_DRAFT_ENABLED;
+  const minScore = options.minScore ?? AUTO_PREPARE_MIN_SCORE;
+  const maxConnects = options.maxConnects ?? AUTO_PREPARE_MAX_CONNECTS;
+  const requireBrowserHealthy = options.requireBrowserHealthy ?? AUTO_PREPARE_REQUIRE_BROWSER_HEALTHY;
+  const session = options.sessionStatus ?? getBrowserSessionStatus();
+  const draft = job.applicationDraft;
+  const totalConnects = (draft?.suggestedConnects ?? job.connectsCost ?? 0) + (draft?.suggestedBoostConnects ?? 0);
+
+  if (!enabled) {
+    return {
+      shouldQueue: false,
+      category: "skipped_manual_override_available",
+      reason: "auto-prepare disabled",
+      note: "Not auto-preparing because: auto-prepare is disabled. You can still reply `prepare draft` if you want me to stage it.",
+    };
+  }
+  if (!draft?.proposalText?.trim()) {
+    return {
+      shouldQueue: false,
+      category: "blocked_no_manual_override",
+      reason: "draft missing",
+      note: "Not auto-preparing because no stored proposal draft exists yet. Revise/regenerate the proposal first.",
+    };
+  }
+  if (job.score < minScore) {
+    return {
+      shouldQueue: false,
+      category: "skipped_manual_override_available",
+      reason: "score too low",
+      note: "Not auto-preparing because: score is below the auto-prepare threshold. You can still reply `prepare draft` if you want me to stage it.",
+    };
+  }
+  if (totalConnects > maxConnects) {
+    return {
+      shouldQueue: false,
+      category: "skipped_manual_override_available",
+      reason: "Connects too high",
+      note: "Not auto-preparing because: total Connects exceeds the auto-prepare threshold. Reply `prepare draft` if you want to manually approve staging this one.",
+    };
+  }
+  if (requireBrowserHealthy && session.blocked) {
+    return {
+      shouldQueue: false,
+      category: "blocked_no_manual_override",
+      reason: "browser needs attention",
+      note: "Not auto-preparing because Upwork needs manual browser attention. Resolve the browser issue first, then use `retry <action-id>` or `status`. I did not submit anything.",
+    };
+  }
+  if (hasHardRedFlags(job)) {
+    return {
+      shouldQueue: false,
+      category: "blocked_no_manual_override",
+      reason: "red flag",
+      note: "Not auto-preparing because a hard red flag was detected. Review the job first before staging any browser draft.",
+    };
+  }
+
+  return {
+    shouldQueue: true,
+    category: "eligible_auto_prepare",
+    reason: "eligible",
+    note: "Strong fit. I’m preparing the Upwork draft now. Final submit remains manual.",
+  };
+}
+
+function queuePrepareDraftActionForThread(
+  job: ScoredJob,
+  thread: SlackThreadContext,
+): AutoPrepareDraftDecision {
+  const action = enqueueBrowserActionDeduped({
+    jobId: job.id,
+    actionType: "prepare_application_review",
+    payload: {
+      url: job.url,
+      channelId: thread.channelId,
+      threadTs: thread.threadTs,
+      messageTs: thread.messageTs,
+      applicationId: job.id,
+      notes: "Auto-prepare browser draft from browser capture worker. Prepare review only; do not submit.",
+    },
+  });
+  const duplicateAction = action.duplicate ? getBrowserActionById(action.id) : null;
+  return {
+    shouldQueue: !action.duplicate,
+    category: action.duplicate ? "duplicate_existing_action" : "eligible_auto_prepare",
+    reason: action.duplicate ? "duplicate prepare action exists" : "eligible",
+    note: action.duplicate
+      ? `Draft preparation is already queued/paused as browser action #${action.id}${duplicateAction?.status ? ` (${duplicateAction.status})` : ""}. No duplicate was created.`
+      : `Strong fit. I’m preparing the Upwork draft now. Final submit remains manual. Browser action #${action.id}.`,
+    actionId: action.id,
+    duplicate: action.duplicate,
+    duplicateStatus: duplicateAction?.status ?? null,
+  };
+}
+
+export function autoPrepareDraftForThread(
+  job: ScoredJob,
+  thread: SlackThreadContext,
+  options: AutoPrepareDraftOptions = {},
+): AutoPrepareDraftDecision {
+  const decision = decideAutoPrepareDraft(job, options);
+  if (!decision.shouldQueue) {
+    return decision;
+  }
+  return queuePrepareDraftActionForThread(job, thread);
 }
 
 async function loadChromium(): Promise<PlaywrightChromiumLike | null> {
@@ -574,7 +782,13 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
 
   if (action.actionType === "prepare_application_review" && (!applyPlanResult?.valid || stalePayloadErrors.length > 0)) {
     const issues = [...(applyPlanResult?.issues ?? []), ...stalePayloadErrors];
-    saveApplyDiagnostics(options, action, buildApplyDiagnostics(action, plan, issues, "validation_failed"));
+    const diagnostics = buildApplyDiagnostics(action, plan, issues, "validation_failed");
+    saveApplyDiagnostics(options, action, diagnostics);
+    await postPrepareDraftStatusToThread(thread, {
+      heading: `⚠️ Draft preparation paused for browser action #${action.id}.`,
+      diagnostics,
+      nextCommand: `retry ${action.id}`,
+    });
     updateBrowserActionStatus(action.id, "paused", `Apply preparation validation failed: ${issues.map((item) => item.code).join(", ")}`);
     return;
   }
@@ -617,7 +831,17 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       });
 
       markJobSeen(scored, false);
+      let autoPrepareDecision: AutoPrepareDraftDecision = {
+        shouldQueue: false,
+        category: "blocked_no_manual_override",
+        reason: "no thread context",
+        note: "Not auto-preparing because no Slack thread context was available for browser staging.",
+      };
       if (thread) {
+        autoPrepareDecision = decideAutoPrepareDraft(scored);
+        if (autoPrepareDecision.shouldQueue) {
+          autoPrepareDecision = queuePrepareDraftActionForThread(scored, thread);
+        }
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "captured", { jobId: scored.id });
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "scored", { jobId: scored.id });
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "packet_sent", { jobId: scored.id });
@@ -625,13 +849,19 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           upworkUrl: url,
           captureStatus: "packet_sent",
           browserCaptureActionId: action.id,
+          browserDraftStatus: autoPrepareDecision.actionId ? (autoPrepareDecision.duplicate ? autoPrepareDecision.duplicateStatus ?? "queued" : "queued") : undefined,
+          browserDraftActionId: autoPrepareDecision.actionId,
           requiredConnects: scored.applicationDraft?.suggestedConnects ?? 0,
           suggestedBoostConnects: scored.applicationDraft?.suggestedBoostConnects ?? 0,
           suggestedBid: scored.applicationDraft?.suggestedBid ?? "n/a",
           applicationQuestions: questions,
           questionAnswers: answers,
           proofRecommendations: extractProofRecommendations(scored.applicationDraft),
+          autoPrepareNote: autoPrepareDecision.note,
         });
+        if (autoPrepareDecision.actionId && !autoPrepareDecision.duplicate) {
+          updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "prepare_draft_requested", { jobId: scored.id });
+        }
       }
       updateBrowserActionStatus(action.id, "paused", "Dry run: browser capture simulated from URL. Set BROWSER_DRY_RUN=false for real extraction.");
       logger.info(`[dry-run] Browser capture action #${action.id} simulated for ${url}`);
@@ -645,6 +875,12 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
     updateBrowserActionStatus(action.id, "paused", "Dry run: browser action not opened. Set BROWSER_DRY_RUN=false to inspect pages.");
     if (thread) {
       updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "status_checked");
+    }
+    if (action.actionType === "prepare_application_review") {
+      await postPrepareDraftStatusToThread(thread, {
+        heading: `🧪 Draft preparation dry-run ready for browser action #${action.id}.`,
+        diagnostics,
+      });
     }
     return;
   }
@@ -668,6 +904,11 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           reason: state,
         });
       }
+      await postPrepareDraftStatusToThread(thread, {
+        heading: state === "apply_page_loaded" ? `✅ Draft preparation ready for review for browser action #${action.id}.` : `⚠️ Draft preparation paused for browser action #${action.id}.`,
+        diagnostics,
+        nextCommand: state === "apply_page_loaded" ? "status" : `retry ${action.id}`,
+      });
       logger.info(`Browser action #${action.id} detected state: ${state}`);
       return;
     }
@@ -725,7 +966,17 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       });
 
       markJobSeen(scored, false);
+      let autoPrepareDecision: AutoPrepareDraftDecision = {
+        shouldQueue: false,
+        category: "blocked_no_manual_override",
+        reason: "no thread context",
+        note: "Not auto-preparing because no Slack thread context was available for browser staging.",
+      };
       if (thread) {
+        autoPrepareDecision = decideAutoPrepareDraft(scored);
+        if (autoPrepareDecision.shouldQueue) {
+          autoPrepareDecision = queuePrepareDraftActionForThread(scored, thread);
+        }
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "captured", { jobId: scored.id });
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "scored", { jobId: scored.id });
       }
@@ -734,14 +985,17 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           upworkUrl: url,
           captureStatus: "packet_sent",
           browserCaptureActionId: action.id,
+          browserDraftStatus: autoPrepareDecision.actionId ? (autoPrepareDecision.duplicate ? autoPrepareDecision.duplicateStatus ?? "queued" : "queued") : undefined,
+          browserDraftActionId: autoPrepareDecision.actionId,
           requiredConnects: scored.applicationDraft?.suggestedConnects ?? 0,
           suggestedBoostConnects: scored.applicationDraft?.suggestedBoostConnects ?? 0,
           suggestedBid: scored.applicationDraft?.suggestedBid ?? "n/a",
           applicationQuestions,
           questionAnswers,
           proofRecommendations: extractProofRecommendations(scored.applicationDraft),
+          autoPrepareNote: autoPrepareDecision.note,
         });
-        updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "packet_sent", { jobId: scored.id });
+        updateSlackThreadStateStatus(thread.channelId, thread.threadTs, autoPrepareDecision.actionId && !autoPrepareDecision.duplicate ? "prepare_draft_requested" : "packet_sent", { jobId: scored.id });
       }
       updateBrowserActionStatus(action.id, "completed", "Capture completed and packet posted to Slack thread.");
       return;

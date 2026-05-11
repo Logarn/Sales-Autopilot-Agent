@@ -121,6 +121,10 @@ export const BROWSER_LIVE_ACTION_LIMIT = Math.max(1, parseInteger(process.env.BR
 export const BROWSER_MANUAL_ATTENTION_ALERT_COOLDOWN_MS = parseInteger(process.env.BROWSER_MANUAL_ATTENTION_ALERT_COOLDOWN_MS, 60 * 60 * 1000);
 export const BROWSER_SESSION_CHALLENGE_THRESHOLD = Math.max(1, parseInteger(process.env.BROWSER_SESSION_CHALLENGE_THRESHOLD, 2));
 export const BROWSER_SESSION_CHALLENGE_WINDOW_MS = parseInteger(process.env.BROWSER_SESSION_CHALLENGE_WINDOW_MS, 60 * 60 * 1000);
+export const AUTO_PREPARE_DRAFT_ENABLED = parseBoolean(process.env.AUTO_PREPARE_DRAFT_ENABLED, true);
+export const AUTO_PREPARE_MIN_SCORE = parseInteger(process.env.AUTO_PREPARE_MIN_SCORE, 80);
+export const AUTO_PREPARE_MAX_CONNECTS = parseInteger(process.env.AUTO_PREPARE_MAX_CONNECTS, 30);
+export const AUTO_PREPARE_REQUIRE_BROWSER_HEALTHY = parseBoolean(process.env.AUTO_PREPARE_REQUIRE_BROWSER_HEALTHY, true);
 export const BROWSER_SEARCH_ENABLED = parseBoolean(process.env.BROWSER_SEARCH_ENABLED, false);
 export const BROWSER_SEARCH_INTERVAL_MS = Math.min(
   Math.max(parseInteger(process.env.BROWSER_SEARCH_INTERVAL_MS, 10 * 60 * 1000), 8 * 60 * 1000),

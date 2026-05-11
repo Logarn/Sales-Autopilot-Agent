@@ -81,6 +81,7 @@ function runTests(): void {
     upworkUrl: beautyJob.url,
     captureStatus: "packet_sent",
     browserCaptureActionId: 11,
+    autoPrepareNote: "Strong fit. I’m preparing the Upwork draft now. Final submit remains manual.",
     applicationQuestions: ["How would you improve our Klaviyo revenue mix?"],
     questionAnswers: ["I would start with segmentation quality, flow timing, and what is happening between first purchase and second purchase."],
   });
@@ -104,6 +105,7 @@ function runTests(): void {
   assertIncludes(beautyText, "Mention-only proof", "mention-only proof section");
   assertIncludes(beautyText, "Manual review warnings", "manual warnings section");
   assertIncludes(beautyText, "Browser status", "browser status section");
+  assertIncludes(beautyText, "Strong fit. I’m preparing the Upwork draft now", "auto-prepare success note");
   for (const cmd of ["status", "approve", "reject", "revise: <instruction>", "prepare draft", "retry <action-id>", "mark submitted"]) {
     assertIncludes(beautyText, cmd, `command ${cmd}`);
   }
@@ -118,9 +120,12 @@ function runTests(): void {
   const healthText = buildV3CapturePacket(healthJob, {
     upworkUrl: healthJob.url,
     captureStatus: "captured",
+    autoPrepareNote: "Not auto-preparing because Upwork needs manual browser attention. Resolve the browser issue first, then use `retry <action-id>` or `status`. I did not submit anything.",
     applicationQuestions: [],
   }).text;
   assertIncludes(healthText, "Dr. Rachael Institute", "health proof rendering");
+  assertIncludes(healthText, "manual browser attention", "auto-prepare blocked note rendering");
+  assertNotIncludes(healthText, "Reply `prepare draft` to override", "hard block note should not suggest manual override");
   assertIncludes(healthText, "mention-only", "mention-only warning rendering");
   assertNotIncludes(healthText, "profile/attachments/dr-rachael-email-performance-report.pdf\n\n*Auto-attach assets", "sensitive health report not auto attached");
 

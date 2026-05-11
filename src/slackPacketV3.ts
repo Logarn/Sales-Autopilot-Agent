@@ -15,6 +15,7 @@ export interface SlackPacketV3Context {
   requiredConnects?: number;
   suggestedBoostConnects?: number;
   suggestedBid?: string;
+  autoPrepareNote?: string;
   commandHints?: string[];
 }
 
@@ -185,8 +186,9 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
     `*Video recommendations:*\n${formatLinkList(profileContext.selectedVideoLinks, "No video links recommended.")}`,
     `*Manual review warnings:*\n${bulletList(manualWarnings, "No manual review warnings.", 8)}`,
     `*Browser status:*\n${browserText}`,
+    `*Draft preparation policy:*\n${context.autoPrepareNote ?? "Reply `prepare draft` when you want the browser draft staged for review."}`,
     buildCommandsText(commands),
-    "*Workflow:* Use `prepare draft` to stage the Upwork application in-browser for review. No copy-paste step is required, and final submit stays manual.",
+    "*Workflow:* Use `prepare draft` to stage the Upwork application in-browser for review when needed. No copy-paste step is required, and final submit stays manual.",
   ].join("\n\n");
 
   const blocks: Array<Record<string, unknown>> = [
@@ -200,6 +202,7 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
     blockSection(`*Auto-attach assets for browser draft prep:*\n${formatAssetNames(autoAttachAssets, "No auto-attach assets selected.")}\n\n*Recommend-only assets (manual review first):*\n${formatAssetNames(recommendOnlyAssets, "No recommend-only assets selected.")}\n\n*Mention-only proof:*\n${bulletList(mentionOnlyProof, "No mention-only proof selected.")}`),
     blockSection(`*Figma recommendations:*\n${formatLinkList(profileContext.selectedFigmaLinks, "No Figma links recommended.")}\n\n*Video recommendations:*\n${formatLinkList(profileContext.selectedVideoLinks, "No video links recommended.")}`),
     blockSection(`*Manual review warnings:*\n${bulletList(manualWarnings, "No manual review warnings.", 8)}`),
+    blockSection(`*Draft preparation policy:*\n${context.autoPrepareNote ?? "Reply `prepare draft` when you want the browser draft staged for review."}`),
     blockSection(buildCommandsText(commands)),
     {
       type: "context",
@@ -210,7 +213,7 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
         },
       ],
     },
-    blockSection("*Workflow:* Use `prepare draft` to stage the Upwork application in-browser for review. No copy-paste step is required, and final submit stays manual."),
+    blockSection("*Workflow:* Use `prepare draft` to stage the Upwork application in-browser for review when needed. No copy-paste step is required, and final submit stays manual."),
   ];
 
   return { text, blocks };

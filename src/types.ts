@@ -400,6 +400,7 @@ export interface BrowserApplyConnectsPlan {
 export interface BrowserApplyFillPlan {
   schemaVersion: "1.0";
   jobId: string;
+  jobTitle: string;
   sourceUrl: string;
   applyUrl: string;
   status: ApplicationStatus;
@@ -409,6 +410,11 @@ export interface BrowserApplyFillPlan {
   screeningAnswers: string[];
   attachments: BrowserApplyAttachmentInstruction[];
   skippedAttachments: BrowserApplySkippedAttachment[];
+  manualReviewAssets: string[];
+  mentionOnlyProof: string[];
+  figmaRecommendations: string[];
+  videoRecommendations: string[];
+  manualReviewWarnings: string[];
   highlights: string[];
   connects: BrowserApplyConnectsPlan;
   stopBeforeSubmit: true;
