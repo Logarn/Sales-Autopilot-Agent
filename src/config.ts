@@ -3,7 +3,7 @@ import * as path from "node:path";
 import dotenv from "dotenv";
 import { DEFAULT_SEARCH_QUERIES } from "./feeds";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 function parseInteger(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
@@ -17,13 +17,30 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   return ["1", "true", "yes", "on"].includes(value.toLowerCase());
 }
 
+function parseDelimitedList(value: string | undefined): string[] {
+  if (!value || value.trim().length === 0) {
+    return [];
+  }
+  return value
+    .split("|")
+    .map((q) => q.trim())
+    .filter(Boolean);
+}
+
+function parseDelimitedListLoose(value: string | undefined): string[] {
+  if (!value || value.trim().length === 0) {
+    return [];
+  }
+  return value
+    .split(/[|,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function parseQueriesFromEnvOrFile(): string[] {
-  const envQueries = process.env.SEARCH_QUERIES;
-  if (envQueries && envQueries.trim().length > 0) {
-    return envQueries
-      .split("|")
-      .map((q) => q.trim())
-      .filter(Boolean);
+  const envQueries = parseDelimitedList(process.env.SEARCH_QUERIES);
+  if (envQueries.length > 0) {
+    return envQueries;
   }
 
   const configPath =
@@ -43,19 +60,102 @@ function parseQueriesFromEnvOrFile(): string[] {
   return DEFAULT_SEARCH_QUERIES;
 }
 
-export const APP_NAME = "Upwork Notifier";
+function parseBrowserSearchInputs(): string[] {
+  const explicitQueries = parseDelimitedList(process.env.BROWSER_SEARCH_QUERIES);
+  if (explicitQueries.length > 0) {
+    return explicitQueries;
+  }
+
+  const explicitUrls = parseDelimitedList(process.env.BROWSER_SEARCH_URLS);
+  if (explicitUrls.length > 0) {
+    return explicitUrls;
+  }
+
+  return SEARCH_QUERIES;
+}
+
+export const APP_NAME = "Upwork Revenue Assistant";
 export const SLACK_CHANNEL_WEBHOOK_URL = process.env.SLACK_CHANNEL_WEBHOOK_URL ?? "";
+export const SLACK_INBOUND_MODE = process.env.SLACK_INBOUND_MODE ?? "local_cli";
+export const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET ?? "";
+export const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN ?? "";
+export const SLACK_APP_TOKEN = process.env.SLACK_APP_TOKEN ?? "";
+export const SLACK_POLL_CHANNEL_ID = process.env.SLACK_POLL_CHANNEL_ID ?? "";
+export const DISCOVERY_SLACK_CHANNEL_ID = process.env.DISCOVERY_SLACK_CHANNEL_ID ?? "";
+export const SLACK_SOCKET_MODE_ENABLED = parseBoolean(process.env.SLACK_SOCKET_MODE_ENABLED, false);
+export const SLACK_ALLOWED_CHANNEL_IDS = parseDelimitedListLoose(process.env.SLACK_ALLOWED_CHANNEL_IDS);
 export const APIFY_API_TOKEN = process.env.APIFY_API_TOKEN ?? "";
 export const QUICK_BID_TEMPLATE_URL = process.env.QUICK_BID_TEMPLATE_URL ?? "";
 export const CRON_SCHEDULE = process.env.CRON_SCHEDULE ?? "*/5 * * * *";
 export const DAILY_SUMMARY_CRON = process.env.DAILY_SUMMARY_CRON ?? "0 8 * * *";
+export const SCHEDULER_INTERVAL_MS = Math.min(
+  Math.max(parseInteger(process.env.SCHEDULER_INTERVAL_MS, 5 * 60 * 1000), 5 * 60 * 1000),
+  10 * 60 * 1000
+);
+export const HEARTBEAT_STALE_AFTER_MS = parseInteger(process.env.HEARTBEAT_STALE_AFTER_MS, 15 * 60 * 1000);
+export const HEALTH_ALERT_COOLDOWN_MS = parseInteger(process.env.HEALTH_ALERT_COOLDOWN_MS, 60 * 60 * 1000);
 export const TIMEZONE = process.env.TIMEZONE ?? "Africa/Nairobi";
 export const LOG_LEVEL = process.env.LOG_LEVEL ?? "info";
 export const DB_PATH = process.env.DB_PATH ?? "./data/jobs.db";
+export const PROFILE_CONFIG_PATH = process.env.PROFILE_CONFIG_PATH ?? "./profile/profile.json";
+export const PORTFOLIO_CONFIG_PATH = process.env.PORTFOLIO_CONFIG_PATH ?? "./profile/portfolio.json";
+export const MANUAL_JOBS_CONFIG_PATH = process.env.MANUAL_JOBS_CONFIG_PATH ?? "./config/manual-jobs.json";
+export const CONNECTS_RULES_CONFIG_PATH = process.env.CONNECTS_RULES_CONFIG_PATH ?? "./profile/connects-rules.json";
+export const PROFILE_KNOWLEDGE_DIR = process.env.PROFILE_KNOWLEDGE_DIR ?? "./profile/knowledge";
 export const MIN_SCORE_TO_NOTIFY = parseInteger(process.env.MIN_SCORE_TO_NOTIFY, 4);
 export const MIN_SCORE_HIGH = parseInteger(process.env.MIN_SCORE_HIGH, 8);
 export const MAX_DESCRIPTION_LENGTH = parseInteger(process.env.MAX_DESCRIPTION_LENGTH, 300);
 export const ENABLE_LOW_MATCH_DIGEST = parseBoolean(process.env.ENABLE_LOW_MATCH_DIGEST, false);
+export const LLM_PROVIDER = process.env.LLM_PROVIDER ?? "openai-compatible";
+export const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
+export const LLM_API_KEY = process.env.LLM_API_KEY ?? OPENAI_API_KEY;
+export const LLM_MODEL = process.env.LLM_MODEL ?? "gpt-4o-mini";
+export const LLM_BASE_URL = process.env.LLM_BASE_URL ?? "https://api.openai.com/v1";
+export const LLM_NORMALIZATION_ENABLED = parseBoolean(process.env.LLM_NORMALIZATION_ENABLED, false);
+export const JOB_INTELLIGENCE_ENABLED = parseBoolean(process.env.JOB_INTELLIGENCE_ENABLED, false);
+export const JOB_INTELLIGENCE_MODEL = process.env.JOB_INTELLIGENCE_MODEL ?? LLM_MODEL;
+export const JOB_INTELLIGENCE_TEMPERATURE = Number.isFinite(Number.parseFloat(process.env.JOB_INTELLIGENCE_TEMPERATURE ?? ""))
+  ? Number.parseFloat(process.env.JOB_INTELLIGENCE_TEMPERATURE ?? "")
+  : 0;
+export const BROWSER_WORKER_ENABLED = parseBoolean(process.env.BROWSER_WORKER_ENABLED, false);
+export const BROWSER_HEADLESS = parseBoolean(process.env.BROWSER_HEADLESS, true);
+export const BROWSER_SESSION_MODE = process.env.BROWSER_SESSION_MODE === "cdp" ? "cdp" : "launch";
+export const BROWSER_CDP_URL = process.env.BROWSER_CDP_URL ?? "http://127.0.0.1:9222";
+export const BROWSER_START_URL = process.env.BROWSER_START_URL ?? "https://www.upwork.com/nx/find-work/best-matches/";
+export const BROWSER_USER_DATA_DIR = process.env.BROWSER_USER_DATA_DIR ?? "./data/browser-profile";
+export const BROWSER_CHROME_EXECUTABLE_PATH = process.env.BROWSER_CHROME_EXECUTABLE_PATH ?? "";
+export const BROWSER_DRY_RUN = parseBoolean(process.env.BROWSER_DRY_RUN, true);
+export const BROWSER_ARTIFACT_DIR = process.env.BROWSER_ARTIFACT_DIR ?? "";
+export const BROWSER_ACTION_LIMIT = parseInteger(process.env.BROWSER_ACTION_LIMIT, 5);
+export const BROWSER_LIVE_ACTION_LIMIT = Math.max(1, parseInteger(process.env.BROWSER_LIVE_ACTION_LIMIT, 1));
+export const BROWSER_MANUAL_ATTENTION_ALERT_COOLDOWN_MS = parseInteger(process.env.BROWSER_MANUAL_ATTENTION_ALERT_COOLDOWN_MS, 60 * 60 * 1000);
+export const BROWSER_SESSION_CHALLENGE_THRESHOLD = Math.max(1, parseInteger(process.env.BROWSER_SESSION_CHALLENGE_THRESHOLD, 2));
+export const BROWSER_SESSION_CHALLENGE_WINDOW_MS = parseInteger(process.env.BROWSER_SESSION_CHALLENGE_WINDOW_MS, 60 * 60 * 1000);
+export const AUTO_PREPARE_DRAFT_ENABLED = parseBoolean(process.env.AUTO_PREPARE_DRAFT_ENABLED, true);
+export const AUTO_PREPARE_MIN_SCORE = parseInteger(process.env.AUTO_PREPARE_MIN_SCORE, 80);
+export const AUTO_PREPARE_MAX_CONNECTS = parseInteger(process.env.AUTO_PREPARE_MAX_CONNECTS, 30);
+export const AUTO_PREPARE_REQUIRE_BROWSER_HEALTHY = parseBoolean(process.env.AUTO_PREPARE_REQUIRE_BROWSER_HEALTHY, true);
+export const BROWSER_SEARCH_ENABLED = parseBoolean(process.env.BROWSER_SEARCH_ENABLED, false);
+export const BROWSER_SEARCH_INTERVAL_MS = Math.min(
+  Math.max(parseInteger(process.env.BROWSER_SEARCH_INTERVAL_MS, 10 * 60 * 1000), 8 * 60 * 1000),
+  14 * 60 * 1000
+);
+export const BROWSER_SEARCH_JITTER_MIN_MS = parseInteger(process.env.BROWSER_SEARCH_JITTER_MIN_MS, 8 * 60 * 1000);
+export const BROWSER_SEARCH_JITTER_MAX_MS = parseInteger(process.env.BROWSER_SEARCH_JITTER_MAX_MS, 14 * 60 * 1000);
+export const BROWSER_SEARCH_MAX_JOBS_PER_QUERY = Math.max(
+  1,
+  parseInteger(process.env.BROWSER_SEARCH_MAX_JOBS_PER_QUERY, 10)
+);
+export const DISCOVERY_SCHEDULER_ENABLED = parseBoolean(process.env.DISCOVERY_SCHEDULER_ENABLED, false);
+export const DISCOVERY_JITTER_MIN_MS = parseInteger(process.env.DISCOVERY_JITTER_MIN_MS, 8 * 60 * 1000);
+export const DISCOVERY_JITTER_MAX_MS = parseInteger(process.env.DISCOVERY_JITTER_MAX_MS, 14 * 60 * 1000);
+export const DISCOVERY_MAX_JOBS_PER_RUN = Math.max(1, parseInteger(process.env.DISCOVERY_MAX_JOBS_PER_RUN, 3));
+export const DISCOVERY_MAX_SCROLLS_PER_RUN = Math.max(0, parseInteger(process.env.DISCOVERY_MAX_SCROLLS_PER_RUN, 4));
+export const DISCOVERY_SKIP_IF_PENDING_CAPTURE_COUNT_GT = Math.max(0, parseInteger(process.env.DISCOVERY_SKIP_IF_PENDING_CAPTURE_COUNT_GT, 3));
+export const BROWSER_SEARCH_FRESHNESS_WINDOW_MINUTES = Math.max(
+  1,
+  parseInteger(process.env.BROWSER_SEARCH_FRESHNESS_WINDOW_MINUTES, 60)
+);
 export const FETCH_RETRY_ATTEMPTS = parseInteger(process.env.FETCH_RETRY_ATTEMPTS, 3);
 export const FEED_DELAY_MS = parseInteger(process.env.FEED_DELAY_MS, 10000);
 export const APIFY_REQUEST_TIMEOUT_MS = parseInteger(
@@ -65,6 +165,7 @@ export const APIFY_REQUEST_TIMEOUT_MS = parseInteger(
 export const SLACK_DELAY_MS = parseInteger(process.env.SLACK_DELAY_MS, 2000);
 export const SLACK_RETRY_ATTEMPTS = parseInteger(process.env.SLACK_RETRY_ATTEMPTS, 3);
 export const SEARCH_QUERIES = parseQueriesFromEnvOrFile();
+export const BROWSER_SEARCH_INPUTS = parseBrowserSearchInputs();
 export { parseBoolean, parseInteger };
 
 export function validateRequiredConfig(): void {

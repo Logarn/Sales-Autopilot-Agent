@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "links": [
+    {
+      "id": "youtube-intro",
+      "name": "YouTube intro",
+      "url": "https://youtu.be/j8hyGjHXqVs",
+      "useFor": ["video", "intro", "Loom", "high-trust long-term roles"],
+      "safeToMention": true,
+      "safeToAutoInclude": false,
+      "requiresManualReview": true
+    }
+  ]
+}

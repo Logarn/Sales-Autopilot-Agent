@@ -67,17 +67,169 @@ function normalizeLevel(level: string): string {
   return level || "Not specified";
 }
 
-function buildJobBlocks(job: ScoredJob): IncomingWebhookSendArguments["blocks"] {
-  const description = truncateText(job.description, MAX_DESCRIPTION_LENGTH);
-  const headline = `${levelBadge(job)}  •  Score: ${job.score}`;
-  const posted = `${timeAgo(job.postedAt)} (${formatInTimezone(job.postedAt, TIMEZONE)})`;
+const SLACK_MESSAGE_BLOCK_LIMIT = 50;
+const SLACK_SECTION_TEXT_LIMIT = 3000;
+const SLACK_FIELD_TEXT_LIMIT = 2000;
+const PROPOSAL_DRAFT_PREVIEW_LENGTH = 2200;
 
-  const actionElements: Array<{
-    type: "button";
-    text: { type: "plain_text"; text: string };
-    url: string;
-    action_id: string;
-  }> = [
+function slackText(text: string, maxLength = SLACK_SECTION_TEXT_LIMIT): string {
+  return truncateText(text, maxLength);
+}
+
+function bulletList(items: string[], fallback: string, limit = 4): string {
+  if (items.length === 0) {
+    return `• ${fallback}`;
+  }
+  return items.slice(0, limit).map((item) => `• ${item}`).join("\n");
+}
+
+function buildScoreSummary(job: ScoredJob): string {
+  const breakdown = job.scoreBreakdown;
+  const components = [
+    `Fit ${breakdown.fitScore.score}/100`,
+    `Client ${breakdown.clientQualityScore.score}/100`,
+    `Opportunity ${breakdown.opportunityScore.score}/100`,
+    `Red flags ${breakdown.redFlagScore.score}/100`,
+    `Connects risk ${breakdown.connectsRiskScore.score}/100`,
+  ].join(" • ");
+  return slackText(
+    `*📊 Match Score:* ${job.score}/100\n${components}\n\n*✅ Reasons to consider:*\n${bulletList(
+      breakdown.reasons,
+      "No strong reasons captured.",
+      4,
+    )}\n\n*⚠️ Risks / watch-outs:*\n${bulletList(breakdown.risks, "None detected.", 4)}`,
+  );
+}
+
+function buildProposalQualityText(job: ScoredJob): string {
+  const quality = job.applicationDraft?.proposalQuality;
+  if (!quality) {
+    return "*🧪 Proposal Quality:* Not generated yet — review the job details before drafting manually.";
+  }
+
+  const issues = quality.issues.map((issue) => `${issue.message}${issue.evidence ? ` (${issue.evidence})` : ""}`);
+  return slackText(
+    `*🧪 Proposal Quality:* ${quality.score}/100 • ${quality.wordCount} words\n*Top issues:*\n${bulletList(
+      issues,
+      "None detected.",
+      3,
+    )}\n\n*Positive signals:*\n${bulletList(quality.positiveSignals, "No strong positive signals captured.", 3)}`,
+  );
+}
+
+function buildProposalPacketBlocks(job: ScoredJob): IncomingWebhookSendArguments["blocks"] {
+  const draft = job.applicationDraft;
+  if (!draft) {
+    return [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "*🧾 Proposal draft:* No generated draft found yet. Use the job details, score reasons, and risks above to decide whether to draft manually.",
+        },
+      },
+    ];
+  }
+
+  const structured = draft.structuredProposal;
+  const proofItems = structured?.suggestedAttachments?.length
+    ? structured.suggestedAttachments.map((item, index) => {
+        const highlight = structured.suggestedHighlights[index];
+        return highlight ? `${item} — ${highlight}` : item;
+      })
+    : draft.selectedPortfolioItems.map((item) => `${item.name} — ${item.result}`);
+  const clientAnswers = structured?.clientRequestAnswers ?? [];
+  const proposalPreview = slackText(structured?.browserFillNotes.approvedText ?? draft.proposalText, PROPOSAL_DRAFT_PREVIEW_LENGTH).replace(/\n/g, "\n> ");
+  const structuredSectionText = structured
+    ? slackText(
+        `*🧩 Proposal Structure:*\n*Opening:* ${structured.opening}\n*Diagnosis:* ${structured.diagnosis}\n*Proof:* ${structured.proof}\n*Client asks:*\n${bulletList(clientAnswers, "No explicit application questions detected.", 4)}\n*Rate/retainer:* ${structured.rateRetainerAnswer}\n*CTA:* ${structured.cta}`,
+      )
+    : null;
+  const browserNotes = structured?.browserFillNotes;
+
+  return [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: slackText(
+          `*🧠 Fit & Positioning:* ${draft.fitScore}/100\n*Why it fits:*\n${bulletList(
+            draft.fitReasons,
+            "No strong fit reasons captured.",
+            4,
+          )}\n\n*Red flags to sanity-check:*\n${bulletList(draft.redFlags, "None detected.", 4)}`,
+        ),
+      },
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: slackText(
+          `*🎫 Connects Plan:* Required ${draft.suggestedConnects} connects • Suggested boost ${draft.suggestedBoostConnects} connects\n*Bid:* ${draft.suggestedBid}\n${bulletList(
+            draft.connectsWarnings,
+            "Within default guardrails.",
+            4,
+          )}`,
+        ),
+      },
+    },
+    ...(structuredSectionText
+      ? [
+          {
+            type: "section" as const,
+            text: {
+              type: "mrkdwn" as const,
+              text: structuredSectionText,
+            },
+          },
+        ]
+      : []),
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: slackText(`*📎 Proof to Use:*\n${bulletList(proofItems, "No attachment recommended.", 4)}`),
+      },
+    },
+    ...(browserNotes
+      ? [
+          {
+            type: "section" as const,
+            text: {
+              type: "mrkdwn" as const,
+              text: slackText(
+                `*🖥️ Browser Fill Notes:*\n*Profile:* ${browserNotes.profileNotes.join(" • ") || "Use default profile."}\n*Rate:* ${browserNotes.rate}\n*Attachments:* ${browserNotes.attachments.join(", ") || "None"}\n*Highlights:* ${browserNotes.highlights.join("; ") || "None"}\n*Connects:* ${browserNotes.connectsPlan}`,
+              ),
+            },
+          },
+        ]
+      : []),
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: buildProposalQualityText(job),
+      },
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: slackText(`*✍️ Draft Proposal (review only):*\n> ${proposalPreview}`),
+      },
+    },
+  ];
+}
+
+function buildActionElements(job: ScoredJob): Array<{
+  type: "button";
+  text: { type: "plain_text"; text: string };
+  url: string;
+  action_id: string;
+  style?: "primary";
+}> {
+  const actionElements: ReturnType<typeof buildActionElements> = [
     {
       type: "button",
       text: { type: "plain_text", text: "🔗 View & Bid on Upwork" },
@@ -96,6 +248,14 @@ function buildJobBlocks(job: ScoredJob): IncomingWebhookSendArguments["blocks"] 
     });
   }
 
+  return actionElements;
+}
+
+export function buildJobBlocks(job: ScoredJob): IncomingWebhookSendArguments["blocks"] {
+  const description = truncateText(job.description, MAX_DESCRIPTION_LENGTH);
+  const headline = `${levelBadge(job)}  •  Score: ${job.score}/100`;
+  const posted = `${timeAgo(job.postedAt)} (${formatInTimezone(job.postedAt, TIMEZONE)})`;
+
   return [
     {
       type: "section",
@@ -107,36 +267,60 @@ function buildJobBlocks(job: ScoredJob): IncomingWebhookSendArguments["blocks"] 
     {
       type: "section",
       fields: [
-        { type: "mrkdwn", text: `*💰 Budget:*\n${job.budget || "Not specified"}` },
-        { type: "mrkdwn", text: `*🕐 Posted:*\n${posted}` },
-        { type: "mrkdwn", text: `*🌍 Client:*\n${job.clientCountry || "Not specified"}` },
+        { type: "mrkdwn", text: slackText(`*💰 Budget:*\n${job.budget || "Not specified"}`, SLACK_FIELD_TEXT_LIMIT) },
+        { type: "mrkdwn", text: slackText(`*🕐 Posted:*\n${posted}`, SLACK_FIELD_TEXT_LIMIT) },
+        { type: "mrkdwn", text: slackText(`*🌍 Client:*\n${job.clientCountry || "Not specified"}`, SLACK_FIELD_TEXT_LIMIT) },
         {
           type: "mrkdwn",
-          text: `*⭐ Rating:*\n${job.clientRating.toFixed(1)}/5 (${job.clientFeedbackCount} review${job.clientFeedbackCount === 1 ? "" : "s"})`,
+          text: slackText(
+            `*⭐ Rating:*\n${job.clientRating.toFixed(1)}/5 (${job.clientFeedbackCount} review${job.clientFeedbackCount === 1 ? "" : "s"})`,
+            SLACK_FIELD_TEXT_LIMIT,
+          ),
         },
-        { type: "mrkdwn", text: `*💵 Total Spent:*\n${formatCompactUsd(job.clientSpend)}` },
-        { type: "mrkdwn", text: `*📊 Hire Rate:*\n${job.clientHireRate}% (${job.clientTotalHires} hires)` },
-        { type: "mrkdwn", text: `*🎯 Level:*\n${normalizeLevel(job.experienceLevel)}` },
-        { type: "mrkdwn", text: `*🎫 Connects:*\n${job.connectsCost || 0}` },
+        { type: "mrkdwn", text: slackText(`*💵 Total Spent:*\n${formatCompactUsd(job.clientSpend)}`, SLACK_FIELD_TEXT_LIMIT) },
+        { type: "mrkdwn", text: slackText(`*📊 Hire Rate:*\n${job.clientHireRate}% (${job.clientTotalHires} hires)`, SLACK_FIELD_TEXT_LIMIT) },
+        { type: "mrkdwn", text: slackText(`*🎯 Level:*\n${normalizeLevel(job.experienceLevel)}`, SLACK_FIELD_TEXT_LIMIT) },
+        { type: "mrkdwn", text: slackText(`*🎫 Connects:*\n${job.connectsCost || 0}`, SLACK_FIELD_TEXT_LIMIT) },
       ],
     },
     {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*📝 Description:*\n>${description.replace(/\n/g, " ")}`,
+        text: buildScoreSummary(job),
       },
     },
     {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*🏷️ Skills:*\n${job.skills.length ? job.skills.join(", ") : "Not specified"}\n\n*🔑 Matched Keywords:*\n${job.matchedKeywords.length ? job.matchedKeywords.join(", ") : "None"}`,
+        text: `*📝 Job Description:*\n>${description.replace(/\n/g, " ")}`,
       },
     },
     {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: slackText(
+          `*🏷️ Skills:*\n${job.skills.length ? job.skills.join(", ") : "Not specified"}\n\n*🔑 Matched Keywords:*\n${
+            job.matchedKeywords.length ? job.matchedKeywords.join(", ") : "None"
+          }`,
+        ),
+      },
+    },
+    ...(buildProposalPacketBlocks(job) ?? []),
+    {
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: "Webhook V0 is one-way: buttons can only open URLs. Use available in-thread commands in Feature 3 flow or use manual notes; true Slack callbacks require a Slack app or later polling flow."
+        },
+      ],
+    },
+    {
       type: "actions",
-      elements: actionElements,
+      elements: buildActionElements(job),
     },
     { type: "divider" },
   ];
@@ -161,10 +345,14 @@ async function sendWithRetry(payload: IncomingWebhookSendArguments, attempts = 1
   }
 }
 
+export async function sendSlackPreviewMessage(payload: IncomingWebhookSendArguments): Promise<void> {
+  await sendWithRetry(payload);
+  await sleep(SLACK_DELAY_MS);
+}
+
 export async function sendSlackMessage(payload: IncomingWebhookSendArguments): Promise<boolean> {
   try {
-    await sendWithRetry(payload);
-    await sleep(SLACK_DELAY_MS);
+    await sendSlackPreviewMessage(payload);
     return true;
   } catch (error) {
     logger.error(`Slack send failed, queueing payload: ${String(error)}`);
@@ -193,6 +381,54 @@ export async function flushSlackQueue(): Promise<void> {
   }
 }
 
+export function buildBatchedJobNotificationPayloads(jobs: ScoredJob[]): Array<IncomingWebhookSendArguments & { jobIds: string[] }> {
+  const sorted = [...jobs].sort((a, b) => b.score - a.score).slice(0, 10);
+  const hasHigh = sorted.some((job) => job.matchLevel === "high");
+  const header = hasHigh ? "<!channel> 🔥 *High-priority Upwork matches found*" : "⚡ *New Upwork matches found*";
+  const payloads: Array<IncomingWebhookSendArguments & { jobIds: string[] }> = [];
+  let batchBlocks: NonNullable<IncomingWebhookSendArguments["blocks"]> = [];
+  let batchJobIds: string[] = [];
+
+  const startBatch = (part: number): NonNullable<IncomingWebhookSendArguments["blocks"]> => [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `${header}\n*${jobs.length} jobs found this cycle*${part > 1 ? ` — part ${part}` : ""}`,
+      },
+    },
+    { type: "divider" },
+  ];
+
+  const flushBatch = () => {
+    if (batchJobIds.length === 0) {
+      return;
+    }
+    payloads.push({
+      text: `${APP_NAME}: ${jobs.length} new jobs`,
+      blocks: batchBlocks,
+      jobIds: batchJobIds,
+    });
+    batchBlocks = [];
+    batchJobIds = [];
+  };
+
+  for (const job of sorted) {
+    const jobBlocks = buildJobBlocks(job) ?? [];
+    if (batchBlocks.length === 0) {
+      batchBlocks = startBatch(payloads.length + 1);
+    }
+    if (batchJobIds.length > 0 && batchBlocks.length + jobBlocks.length > SLACK_MESSAGE_BLOCK_LIMIT) {
+      flushBatch();
+      batchBlocks = startBatch(payloads.length + 1);
+    }
+    batchBlocks.push(...jobBlocks.slice(0, Math.max(0, SLACK_MESSAGE_BLOCK_LIMIT - batchBlocks.length)));
+    batchJobIds.push(job.id);
+  }
+  flushBatch();
+  return payloads;
+}
+
 export async function sendJobNotifications(jobs: ScoredJob[]): Promise<Set<string>> {
   if (jobs.length === 0) {
     return new Set<string>();
@@ -202,30 +438,13 @@ export async function sendJobNotifications(jobs: ScoredJob[]): Promise<Set<strin
   const notifiedIds = new Set<string>();
 
   if (sorted.length > 3) {
-    const hasHigh = sorted.some((job) => job.matchLevel === "high");
-    const header = hasHigh
-      ? "<!channel> 🔥 *High-priority Upwork matches found*"
-      : "⚡ *New Upwork matches found*";
-    const blocks: IncomingWebhookSendArguments["blocks"] = [
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `${header}\n*${sorted.length} jobs found this cycle*`,
-        },
-      },
-      { type: "divider" },
-    ];
-    for (const job of sorted.slice(0, 10)) {
-      blocks.push(...(buildJobBlocks(job) ?? []));
-    }
-    const sent = await sendSlackMessage({
-      text: `${APP_NAME}: ${sorted.length} new jobs`,
-      blocks,
-    });
-    if (sent) {
-      for (const job of sorted) {
-        notifiedIds.add(job.id);
+    for (const payload of buildBatchedJobNotificationPayloads(sorted)) {
+      const { jobIds, ...slackPayload } = payload;
+      const sent = await sendSlackMessage(slackPayload);
+      if (sent) {
+        for (const jobId of jobIds) {
+          notifiedIds.add(jobId);
+        }
       }
     }
     return notifiedIds;
@@ -240,7 +459,7 @@ export async function sendJobNotifications(jobs: ScoredJob[]): Promise<Set<strin
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `${mention}${levelBadge(job)}  •  Score: ${job.score}`,
+            text: `${mention}${levelBadge(job)}  •  Score: ${job.score}/100`,
           },
         },
         ...(buildJobBlocks(job) ?? []),
@@ -261,7 +480,7 @@ export async function sendStartupMessage(feedCount: number): Promise<void> {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `🟢 *Upwork Notifier started.* Monitoring *${feedCount} queries* every 5 minutes.`,
+          text: `🟢 *Upwork Agent started.* Monitoring *${feedCount} queries* every 5 minutes.`,
         },
       },
     ],
@@ -277,6 +496,22 @@ export async function sendFeedFailureAlert(): Promise<void> {
         text: {
           type: "mrkdwn",
           text: "⚠️ *Feed fetch failed* - all feeds were unreachable in the latest cycle.",
+        },
+      },
+    ],
+  });
+}
+
+export async function sendHealthAlert(message: string, severity: "warning" | "critical" = "warning"): Promise<boolean> {
+  const icon = severity === "critical" ? "🚨" : "⚠️";
+  return sendSlackMessage({
+    text: `${icon} ${APP_NAME} health alert`,
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `${icon} *${APP_NAME} health alert*\n${message}`,
         },
       },
     ],

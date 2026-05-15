@@ -1,0 +1,133 @@
+{
+  "items": [
+    {
+      "id": "general-portfolio",
+      "name": "Portfolio.pdf",
+      "description": "General Steve Logarn portfolio. Safe default proof when the job is broad or when no industry-specific case study is clearly better.",
+      "industries": [
+        "DTC",
+        "ecommerce",
+        "Shopify",
+        "general",
+        "retention"
+      ],
+      "platforms": [
+        "Klaviyo",
+        "Shopify",
+        "Email Marketing",
+        "SMS"
+      ],
+      "bestFitJobTypes": [
+        "high-quality general retention jobs",
+        "Klaviyo strategy",
+        "Shopify email marketing",
+        "email marketing",
+        "lifecycle marketing"
+      ],
+      "result": "General proof of retention strategy, lifecycle marketing, and DTC email/SMS credibility.",
+      "sensitivity": "safe",
+      "allowedUsage": "always_include_when_relevant",
+      "filePath": "profile/attachments/Portfolio.pdf",
+      "neverUseWhen": [
+        "client requests no attachments"
+      ]
+    },
+    {
+      "id": "truly-beauty-case-study",
+      "name": "Truly Beauty - Case Study.pdf",
+      "description": "Beauty/skincare DTC retention and lifecycle proof.",
+      "industries": [
+        "beauty",
+        "skincare",
+        "cosmetics",
+        "DTC",
+        "ecommerce",
+        "Shopify"
+      ],
+      "platforms": [
+        "Klaviyo",
+        "Shopify",
+        "Email Marketing",
+        "SMS"
+      ],
+      "bestFitJobTypes": [
+        "email flows",
+        "campaign strategy",
+        "retention marketing",
+        "lifecycle marketing",
+        "Klaviyo audit",
+        "Klaviyo optimization"
+      ],
+      "result": "Relevant proof for beauty and skincare brands that need lifecycle, retention, email, or SMS help.",
+      "sensitivity": "approved_external",
+      "allowedUsage": "include_only_when_relevant",
+      "filePath": "profile/attachments/Truly Beauty - Case Study.pdf",
+      "neverUseWhen": [
+        "B2B SaaS",
+        "generic VA jobs",
+        "client requests no attachments"
+      ]
+    },
+    {
+      "id": "lifely-case-study",
+      "name": "Lifely.pdf",
+      "description": "Lifely case study. Use for wellness, health, supplements, lifestyle, DTC retention, and Shopify lifecycle jobs when relevant.",
+      "industries": [
+        "wellness",
+        "health",
+        "supplements",
+        "lifestyle",
+        "DTC",
+        "ecommerce",
+        "Shopify"
+      ],
+      "platforms": [
+        "Klaviyo",
+        "Shopify",
+        "Email Marketing",
+        "SMS"
+      ],
+      "bestFitJobTypes": [
+        "retention marketing",
+        "email automation",
+        "flow optimization",
+        "campaign calendar",
+        "Klaviyo audit",
+        "lifecycle marketing"
+      ],
+      "result": "Relevant proof for wellness/supplement/lifestyle DTC lifecycle marketing.",
+      "sensitivity": "approved_external",
+      "allowedUsage": "include_only_when_relevant",
+      "filePath": "profile/attachments/Lifely.pdf",
+      "neverUseWhen": [
+        "beauty-only job",
+        "B2B SaaS",
+        "generic VA jobs",
+        "client requests no attachments"
+      ]
+    },
+    {
+      "id": "profile-screenshot",
+      "name": "Screenshot_42.png",
+      "description": "Profile screenshot / visual proof. Use only when a lightweight credibility image is explicitly useful.",
+      "industries": [
+        "general"
+      ],
+      "platforms": [
+        "Upwork"
+      ],
+      "bestFitJobTypes": [
+        "manual review",
+        "profile proof"
+      ],
+      "result": "Visual credibility asset.",
+      "sensitivity": "safe",
+      "allowedUsage": "include_only_when_relevant",
+      "filePath": "profile/attachments/Screenshot_42.png",
+      "neverUseWhen": [
+        "client requests no attachments",
+        "formal case study preferred"
+      ]
+    }
+  ]
+}

@@ -12,12 +12,15 @@ import {
   getDailySummary,
   getDbStats,
   isFirstRun,
+  isJobFingerprintSeen,
   isJobSeen,
   markJobSeen,
 } from "./db";
+import { buildApplicationDraft } from "./agent";
 import { fetchAllFeeds } from "./fetcher";
 import { scoreJob, shouldNotify } from "./filter";
 import { logger } from "./logger";
+import { runHealthCheck, printHealthReport } from "./health";
 import {
   flushSlackQueue,
   sendDailySummary,
@@ -43,7 +46,7 @@ function emptyStats(): RunStats {
   };
 }
 
-async function runPipeline(reason: string): Promise<RunStats> {
+export async function runPipeline(reason: string): Promise<RunStats> {
   if (shuttingDown) {
     logger.warn("Skipping run because shutdown is in progress.");
     return emptyStats();
@@ -70,7 +73,7 @@ async function runPipeline(reason: string): Promise<RunStats> {
 
   const dedupMap = new Map<string, ScoredJob>();
   for (const rawJob of feedResult.jobs) {
-    if (isJobSeen(rawJob.id)) {
+    if (isJobSeen(rawJob.id) || isJobFingerprintSeen(rawJob)) {
       continue;
     }
     if (!dedupMap.has(rawJob.id)) {
@@ -102,6 +105,7 @@ async function runPipeline(reason: string): Promise<RunStats> {
 
     const notify = shouldNotify(job);
     if (notify) {
+      job.applicationDraft = buildApplicationDraft(job);
       notifyCandidates.push(job);
     }
   }
@@ -130,7 +134,8 @@ async function runPipeline(reason: string): Promise<RunStats> {
   return stats;
 }
 
-async function startupHealthCheck(): Promise<void> {
+export async function startupHealthCheck(options: { sendSlackStartup?: boolean } = {}): Promise<void> {
+  const sendSlackStartup = options.sendSlackStartup ?? true;
   logger.info("Running startup health checks...");
   const slackOk = await testSlackWebhook();
   if (!slackOk) {
@@ -150,7 +155,9 @@ async function startupHealthCheck(): Promise<void> {
     `DB stats: total=${dbStats.total}, high=${dbStats.high}, medium=${dbStats.medium}, low=${dbStats.low}, skip=${dbStats.skip}`
   );
 
-  await sendStartupMessage(SEARCH_QUERIES.length);
+  if (sendSlackStartup) {
+    await sendStartupMessage(SEARCH_QUERIES.length);
+  }
 }
 
 function setupGracefulShutdown(): void {
@@ -169,7 +176,7 @@ function setupGracefulShutdown(): void {
 }
 
 function buildTestSlackJob(): ScoredJob {
-  return {
+  return scoreJob({
     id: "test-slack-high-match",
     title: "TEST: Klaviyo Email Flow Expert for Shopify Store",
     url: "https://www.upwork.com/jobs/~test123456789",
@@ -188,11 +195,7 @@ function buildTestSlackJob(): ScoredJob {
     connectsCost: 16,
     skills: ["Klaviyo", "Email Marketing", "SMS Marketing", "Shopify", "Segmentation"],
     sourceQuery: "manual-test",
-    score: 12,
-    matchLevel: "high",
-    matchedKeywords: ["klaviyo", "shopify", "email marketing", "email flows"],
-    negativeKeywords: [],
-  };
+  });
 }
 
 async function runTestSlackNotification(): Promise<void> {
@@ -216,6 +219,15 @@ async function main(): Promise<void> {
   }
 
   validateRequiredConfig();
+
+  const healthCheck = process.argv.includes("--health-check");
+  if (healthCheck) {
+    const report = await runHealthCheck({ alert: process.argv.includes("--alert") });
+    printHealthReport(report);
+    closeDb();
+    return;
+  }
+
   await startupHealthCheck();
 
   const runOnce = process.argv.includes("--run-once");
@@ -248,8 +260,10 @@ async function main(): Promise<void> {
   await runPipeline("startup-immediate");
 }
 
-main().catch((error) => {
-  logger.error(`Fatal error: ${String(error)}`);
-  closeDb();
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    logger.error(`Fatal error: ${String(error)}`);
+    closeDb();
+    process.exitCode = 1;
+  });
+}

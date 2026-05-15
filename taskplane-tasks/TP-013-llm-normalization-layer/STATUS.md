@@ -1,0 +1,105 @@
+# TP-013: LLM Normalization Layer — Status
+
+**Current Step:** Step 6: Documentation & Delivery
+**Status:** ✅ Complete
+**Last Updated:** 2026-05-10
+**Review Level:** 2
+**Review Counter:** 14
+**Iteration:** 1
+**Size:** L
+
+---
+
+### Step 0: Preflight
+**Status:** ✅ Complete
+- [x] Required files and paths exist
+- [x] Dependencies satisfied or documented
+
+---
+
+### Step 1: Normalized schema
+**Status:** ✅ Complete
+- [x] Define normalized packet types/schema for core job, client, requirements, questions, skills, connects, risks, proof hints, and proposal instructions
+- [x] Add validation/repair helpers that merge LLM/deterministic data while rejecting unsafe direct links and preserving guarded fallback fields
+- [x] Build passes
+- [x] Replace rawTextHash snippet metadata with a non-reversible digest and prevent LLM-provided raw text from being preserved
+- [x] Preserve deterministic direct job URL during repair and warn when discarding LLM-provided alternate URLs
+- [x] Tighten direct-link validation to require a concrete Upwork job id
+
+---
+
+### Step 2: Optional OpenAI-compatible provider
+**Status:** ✅ Complete
+- [x] Add LLM config
+- [x] Implement safe provider wrapper
+- [x] Support no-key fallback
+- [x] Build passes
+
+---
+
+### Step 3: Normalization pipeline
+**Status:** ✅ Complete
+- [x] Normalize via LLM when enabled, with disabled/no-key/provider-error/invalid-JSON/invalid-repair cases falling back to deterministic packets
+- [x] Feed downstream workflow by converting repaired packets to existing JobPosting/score/proposal-compatible structures while preserving deterministic connects and direct-link guardrails
+- [x] Add CLI command that reads a capture file, accepts optional URL metadata, and prints safe normalized JSON without logging secrets
+- [x] Build passes
+
+---
+
+### Step 4: Docs and examples
+**Status:** ✅ Complete
+- [x] README updated
+- [x] .env.example updated
+- [x] Example command added
+
+---
+
+### Step 5: Testing & Verification
+**Status:** ✅ Complete
+- [x] Full tests or env limitation note
+- [x] Build passes
+- [x] Fallback CLI tested
+
+---
+
+### Step 6: Documentation & Delivery
+**Status:** ✅ Complete
+- [x] Docs updated
+- [x] Discoveries logged
+
+---
+
+## Reviews
+| # | Type | Step | Verdict | File |
+|---|------|------|---------|------|
+
+## Discoveries
+| Discovery | Disposition | Location |
+|-----------|-------------|----------|
+| No npm test script is configured; full test step is limited to documented build and CLI fallback verification. | Documented for Step 5 verification. | package.json |
+
+## Execution Log
+| Timestamp | Action | Outcome |
+|-----------|--------|---------|
+| 2026-05-10 | Task staged | PROMPT.md and STATUS.md created |
+| 2026-05-10 20:58 | Task started | Runtime V2 lane-runner execution |
+| 2026-05-10 20:58 | Step 0 started | Preflight |
+| 2026-05-10 21:18 | Worker iter 1 | done in 1220s, tools: 154 |
+| 2026-05-10 21:18 | Task complete | .DONE created |
+
+## Blockers
+*None*
+| 2026-05-10 20:59 | Review R001 | plan Step 1: APPROVE |
+| 2026-05-10 21:02 | Review R002 | code Step 1: REVISE |
+| 2026-05-10 21:03 | Review R003 | code Step 1: REVISE |
+| 2026-05-10 21:05 | Review R004 | code Step 1: REVISE |
+| 2026-05-10 21:06 | Review R005 | code Step 1: APPROVE |
+| 2026-05-10 21:07 | Review R006 | plan Step 2: APPROVE |
+| 2026-05-10 21:09 | Review R007 | code Step 2: APPROVE |
+| 2026-05-10 21:10 | Review R008 | plan Step 3: REVISE |
+| 2026-05-10 21:11 | Review R009 | plan Step 3: APPROVE |
+| 2026-05-10 21:13 | Review R010 | code Step 3: APPROVE |
+| 2026-05-10 21:14 | Review R011 | plan Step 4: APPROVE |
+| 2026-05-10 21:16 | Review R012 | code Step 4: APPROVE |
+| 2026-05-10 21:16 | Review R013 | plan Step 5: APPROVE |
+| 2026-05-10 21:18 | Review R014 | code Step 5: APPROVE |

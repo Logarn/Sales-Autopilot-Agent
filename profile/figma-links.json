@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "links": [
+    {
+      "id": "dr-rachael-2026-campaigns",
+      "name": "Dr Rachael 2026 campaigns",
+      "url": "https://www.figma.com/design/xh9qiTkqXVFm83VFyH28pB/Dr-Rachael?node-id=1-3&t=o7ilQxOCFMMUCZQo-1",
+      "useFor": ["design", "Figma", "campaign design", "health/wellness"],
+      "safeToMention": true,
+      "safeToAutoInclude": false,
+      "requiresManualReview": true
+    },
+    {
+      "id": "dr-rachael-flow-designs",
+      "name": "Dr Rachael Flow Designs",
+      "url": "https://www.figma.com/design/xh9qiTkqXVFm83VFyH28pB/Dr-Rachael?node-id=1-2&p=f&t=o7ilQxOCFMMUCZQo-0",
+      "useFor": ["design", "Figma", "flow design", "health/wellness"],
+      "safeToMention": true,
+      "safeToAutoInclude": false,
+      "requiresManualReview": true
+    },
+    {
+      "id": "hangaritas-campaign-designs",
+      "name": "Hangaritas Campaign Designs",
+      "url": "https://www.figma.com/design/p5j398xIBWipKL1cNH7Xax/Hangaritas?node-id=0-1&t=tPj5RgnOlvoNBcx3-1",
+      "useFor": ["design", "Figma", "campaign design", "beverage", "lifestyle"],
+      "safeToMention": true,
+      "safeToAutoInclude": false,
+      "requiresManualReview": true
+    },
+    {
+      "id": "kraymer-template-designs",
+      "name": "Kraymer Template Designs",
+      "url": "https://www.figma.com/design/VpHteyAUpAJkDa7MCs4rLi/kraymerart?t=tPj5RgnOlvoNBcx3-1",
+      "useFor": ["design", "Figma", "template design", "art", "fandom"],
+      "safeToMention": true,
+      "safeToAutoInclude": false,
+      "requiresManualReview": true
+    }
+  ]
+}
