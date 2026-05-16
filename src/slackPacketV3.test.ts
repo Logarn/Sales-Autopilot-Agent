@@ -105,6 +105,11 @@ function runTests(): void {
   assertIncludes(beautyText, "*Fit:* 🟢 High — 89/100", "fit score");
   assertIncludes(beautyText, "*Source:* Manual Slack URL", "manual source label");
   assertIncludes(beautyText, "*Recommended action:* Review lead", "recommended action");
+  assertIncludes(beautyText, "🧭 *Lead context*", "lead context section");
+  assertIncludes(beautyText, "• Platform: Klaviyo", "lead context platform");
+  assertIncludes(beautyText, "• Platform tier: Core", "lead context tier");
+  assertIncludes(beautyText, "• Business: DTC ecommerce", "lead context business");
+  assertIncludes(beautyText, "• Vertical: Beauty", "lead context vertical");
   assertIncludes(beautyText, "🧠 *Why this might be a fit*", "fit section");
   assertIncludes(beautyText, "⚠️ *Watch-outs*", "watch-outs section");
   assertIncludes(beautyText, "✍️ *Draft angle*", "draft angle section");
@@ -223,7 +228,49 @@ function runTests(): void {
   }).text;
   assertIncludes(missingText, "Proposal draft is not yet available.", "missing draft fallback");
   assertNotIncludes(missingText, "Screening answers", "missing Q&A omitted from main message");
-  assertIncludes(missingText, "*Platform:* Not analyzed yet", "future parser layout fallback");
+  assertIncludes(missingText, "• Platform: Not analyzed yet", "job intelligence unavailable fallback");
+
+  const brevoText = buildV3CapturePacket(createScoredJob({
+    title: "Brevo email automation specialist for ecommerce brand",
+    applicationDraft: {
+      ...beautyJob.applicationDraft!,
+      jobIntelligence: {
+        schemaVersion: "1.0",
+        primaryPlatform: "Brevo",
+        platformsMentioned: ["Brevo"],
+        platformCategory: "ESP",
+        platformPreferenceTier: "non_core_review",
+        platformFitReason: "Brevo is a non-core ESP; review carefully before using Klaviyo-specific language.",
+        shouldSkipForPlatform: false,
+        skipReason: "Non-core platform but ecommerce retention scope may still be relevant.",
+        businessType: "DTC ecommerce",
+        ecommerceVertical: "beauty",
+        jobCategory: "Email marketing",
+        taskType: "Email flows / retention strategy",
+        requiredSkills: ["Brevo", "Email automation"],
+        clientGoal: "Improve retention automation",
+        redFlags: [],
+        fitScoreReasoning: "Potential retention fit but platform is non-core.",
+        proposalAngle: "Stay platform-specific to Brevo unless migration is confirmed.",
+        proofRecommendations: [],
+        draftConstraints: ["Do not pretend this is Klaviyo."],
+        platformMismatchWarnings: ["platform_mismatch: job primary platform is Brevo, but draft mentions Klaviyo."],
+        needsManualReview: true,
+        confidence: "medium",
+      },
+    },
+  }), {
+    upworkUrl: beautyJob.url,
+    captureStatus: "packet_sent",
+    applicationQuestions: [],
+  }).text;
+  assertIncludes(brevoText, "• Platform: Brevo", "job intelligence primary platform");
+  assertIncludes(brevoText, "• Platform tier: Non-core / review carefully", "job intelligence tier humanized");
+  assertIncludes(brevoText, "• Business: DTC ecommerce", "job intelligence business");
+  assertIncludes(brevoText, "• Vertical: Beauty", "job intelligence vertical");
+  assertIncludes(brevoText, "• Work type: Email marketing / Email flows / retention strategy", "job intelligence work type");
+  assertIncludes(brevoText, "Platform mismatch: job primary platform is Brevo, but draft mentions Klaviyo.", "platform mismatch watch-out");
+  assertIncludes(brevoText, "Needs manual review before draft prep.", "manual review watch-out");
 
   const capturedNormalized = buildDeterministicOpportunityPacket(
     "Beauty Shopify Klaviyo retention role. Need help with quiz segmentation, zero-party data, campaigns, flows, and repeat purchase strategy.",
