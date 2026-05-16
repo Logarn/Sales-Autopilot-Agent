@@ -1,0 +1,20 @@
+{
+  "maxRequiredPerJob": 50,
+  "idealBoostMin": 10,
+  "idealBoostMax": 30,
+  "maxBoost": 50,
+  "dailyCap": 75,
+  "weeklyCap": 225,
+  "neverBidMax": true,
+  "requireApprovalAbove": 30,
+  "targetBoostRank": 3,
+  "skipIfTopBidAbove": 50,
+  "notes": [
+    "Always pay the required Connects if the job itself is worth applying to and required Connects are under the hard cap.",
+    "For boosted proposals, aim to stay top three when possible.",
+    "Ideal boost range is 10-30 Connects if that gets us into the top three.",
+    "Anything above 50 Connects is too high by default.",
+    "If the first/top bid is around 100 Connects, skip rather than waste Connects.",
+    "Never bid max automatically. Require human judgment for expensive boosts."
+  ]
+}

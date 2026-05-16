@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "id": "portfolio-general",
+      "name": "Portfolio",
+      "path": "profile/attachments/portfolio.pdf",
+      "kind": "attachment",
+      "categories": ["general", "retention", "dtc"],
+      "safeToMention": true,
+      "safeToAttach": true,
+      "safeToAutoInclude": false,
+      "requiresManualReview": true,
+      "recommendedUsage": "broad proof when a general portfolio is specifically useful"
+    },
+    {
+      "id": "steve-intro-pdf",
+      "name": "Steve intro PDF",
+      "path": "profile/attachments/steve-logarn-intro.pdf",
+      "kind": "attachment",
+      "categories": ["intro", "general"],
+      "safeToMention": true,
+      "safeToAttach": false,
+      "safeToAutoInclude": false,
+      "requiresManualReview": true,
+      "recommendedUsage": "manual review only"
+    },
+    {
+      "id": "meet-steve-logarn-pdf",
+      "name": "Meet Steve Logarn",
+      "path": "profile/attachments/meet-steve-logarn-2.pdf",
+      "kind": "attachment",
+      "categories": ["intro", "general"],
+      "safeToMention": true,
+      "safeToAttach": false,
+      "safeToAutoInclude": false,
+      "requiresManualReview": true,
+      "recommendedUsage": "manual review only"
+    },
+    {
+      "id": "truly-beauty-case-study",
+      "name": "Truly Beauty case study",
+      "path": "profile/attachments/truly-beauty-case-study.pdf",
+      "kind": "attachment",
+      "categories": ["beauty", "skincare", "klaviyo", "subscription"],
+      "safeToMention": true,
+      "safeToAttach": true,
+      "safeToAutoInclude": true,
+      "requiresManualReview": false,
+      "recommendedUsage": "beauty/skincare/Klaviyo roles"
+    },
+    {
+      "id": "lifely-case-study",
+      "name": "Lifely case study",
+      "path": "profile/attachments/lifely-case-study.pdf",
+      "kind": "attachment",
+      "categories": ["furniture", "home goods", "high-AOV", "premium dtc"],
+      "safeToMention": true,
+      "safeToAttach": true,
+      "safeToAutoInclude": true,
+      "requiresManualReview": false,
+      "recommendedUsage": "high-AOV / furniture / home goods roles"
+    },
+    {
+      "id": "fly-boutique-case-study",
+      "name": "Fly Boutique case study",
+      "path": "profile/attachments/fly-boutique-case-study.pdf",
+      "kind": "attachment",
+      "categories": ["fashion", "apparel", "deliverability", "rfm"],
+      "safeToMention": true,
+      "safeToAttach": true,
+      "safeToAutoInclude": true,
+      "requiresManualReview": false,
+      "recommendedUsage": "fashion/apparel or deliverability rescue roles"
+    },
+    {
+      "id": "endurance-wellness-strategy",
+      "name": "Endurance Wellness lifecycle strategy",
+      "path": "profile/attachments/endurance-wellness-lifecycle-strategy.pdf",
+      "kind": "attachment",
+      "categories": ["health", "wellness", "subscription", "foundation"],
+      "safeToMention": true,
+      "safeToAttach": true,
+      "safeToAutoInclude": true,
+      "requiresManualReview": false,
+      "recommendedUsage": "lifecycle setup and subscription foundation work"
+    },
+    {
+      "id": "design-case-studies",
+      "name": "Design Case Studies",
+      "path": "profile/attachments/design-case-studies-steve-logarn.pdf",
+      "kind": "attachment",
+      "categories": ["design", "figma", "email design", "premium dtc"],
+      "safeToMention": true,
+      "safeToAttach": true,
+      "safeToAutoInclude": true,
+      "requiresManualReview": false,
+      "recommendedUsage": "design/Figma/email design roles"
+    },
+    {
+      "id": "dr-rachael-report",
+      "name": "Dr. Rachael email performance report",
+      "path": "profile/attachments/dr-rachael-email-performance-report.pdf",
+      "kind": "attachment",
+      "categories": ["health", "wellness", "supplements", "klaviyo", "sms"],
+      "safeToMention": true,
+      "safeToAttach": false,
+      "safeToAutoInclude": false,
+      "requiresManualReview": true,
+      "recommendedUsage": "mention-only proof for health/supplement roles"
+    },
+    {
+      "id": "dtc-performance-figures",
+      "name": "DTC brand performance real figures",
+      "path": "profile/attachments/dtc-brand-performance-real-figures.pdf",
+      "kind": "attachment",
+      "categories": ["pet", "dtc", "performance proof"],
+      "safeToMention": true,
+      "safeToAttach": false,
+      "safeToAutoInclude": false,
+      "requiresManualReview": true,
+      "recommendedUsage": "pet/DTC recommend-only proof"
+    },
+    {
+      "id": "kraymer-retention-audit",
+      "name": "Kraymer retention audit",
+      "path": "profile/attachments/kraymer-retention-audit.pdf",
+      "kind": "attachment",
+      "categories": ["art", "anime", "fandom", "small dtc"],
+      "safeToMention": true,
+      "safeToAttach": false,
+      "safeToAutoInclude": false,
+      "requiresManualReview": true,
+      "recommendedUsage": "art/fandom recommend-only proof"
+    },
+    {
+      "id": "dr-rachael-screenshot",
+      "name": "Dr. Rachael Klaviyo screenshot",
+      "path": "profile/screenshots/dr-rachael-klaviyo-performance.png",
+      "kind": "screenshot",
+      "categories": ["health", "wellness", "supplements", "klaviyo"],
+      "safeToMention": true,
+      "safeToAttach": false,
+      "safeToAutoInclude": false,
+      "requiresManualReview": true,
+      "recommendedUsage": "recommend-only health proof"
+    },
+    {
+      "id": "hangaritas-screenshot",
+      "name": "Hangaritas Klaviyo screenshot",
+      "path": "profile/screenshots/hangaritas-klaviyo-performance.png",
+      "kind": "screenshot",
+      "categories": ["beverage", "lifestyle", "uk", "europe", "klaviyo"],
+      "safeToMention": true,
+      "safeToAttach": false,
+      "safeToAutoInclude": false,
+      "requiresManualReview": true,
+      "recommendedUsage": "recommend-only beverage/lifestyle/UK proof"
+    },
+    {
+      "id": "kraymer-screenshot",
+      "name": "Kraymer Art Klaviyo screenshot",
+      "path": "profile/screenshots/kraymer-art-klaviyo-performance.png",
+      "kind": "screenshot",
+      "categories": ["art", "anime", "fandom", "jewelry", "klaviyo"],
+      "safeToMention": true,
+      "safeToAttach": false,
+      "safeToAutoInclude": false,
+      "requiresManualReview": true,
+      "recommendedUsage": "recommend-only art/fandom proof"
+    }
+  ]
+}

@@ -8,3 +8,42 @@ data/*.sqlite3
 *.log
 .env
 .env
+
+# Taskplane/Pi runtime artifacts (machine-specific, do not commit)
+.pi/batch-state.json
+.pi/batch-history.json
+.pi/lane-state-*
+.pi/merge-result-*
+.pi/merge-request-*
+.pi/worker-conversation-*
+.pi/orch-logs/
+.pi/orch-abort-signal
+.pi/settings.json
+.pi/taskplane.json
+.worktrees/
+.taskplane-tasks/
+taskplane-tasks/
+pi-session*.html
+
+# Pi project-local packages (if using pi install -l)
+.pi/npm/
+
+# Local secrets/runtime
+.env
+.env.*
+!.env.example
+.pi/
+data/
+data/browser-profile/
+data/personal-cdp-profile/
+
+# Local profile binary assets and screenshots/temp artifacts
+profile/attachments/*
+profile/attachments/*.pdf
+profile/screenshots/*
+screenshots/
+temp/
+tmp/
+TemporaryItems/
+!profile/attachments/.gitkeep
+!profile/screenshots/.gitkeep
