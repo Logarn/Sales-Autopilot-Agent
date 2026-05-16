@@ -52,6 +52,8 @@
     "browser:session": "tsx src/browserSessionCli.ts --start",
     "browser:cdp:check": "tsx src/browserSessionCli.ts --check",
     "browser:session:clear": "tsx src/browserSessionCli.ts --clear",
+    "browser:preferred:start": "tsx src/preferredBrowserCli.ts --start",
+    "browser:preferred:check": "tsx src/preferredBrowserCli.ts --check",
     "browser:tool": "tsx src/browserToolCli.ts",
     "browser:worker": "tsx src/browserWorker.ts",
     "browser:readiness": "tsx src/browserWorker.ts --readiness",

@@ -247,14 +247,14 @@ async function scrollBestMatchesPage(page: DiscoveryPageLike): Promise<boolean> 
   }
 }
 
-function blockedResult(inspection: BrowserSessionInspection): DiscoveryBestMatchesResult {
+function blockedResult(inspection: BrowserSessionInspection, error?: string): DiscoveryBestMatchesResult {
   return {
     ok: false,
     tool: DISCOVERY_BEST_MATCHES_TOOL,
     sessionState: inspection.sessionState,
     manualAttentionReason: inspection.manualAttentionReason,
     manualAttentionRequired: inspection.manualAttentionRequired,
-    blocked: inspection.blocked,
+    blocked: inspection.blocked || inspection.sessionState !== "logged_in",
     jobsFound: 0,
     jobsQueued: 0,
     duplicatesSkipped: 0,
@@ -262,6 +262,7 @@ function blockedResult(inspection: BrowserSessionInspection): DiscoveryBestMatch
     invalidSkipped: 0,
     scrollsPerformed: 0,
     retryAllowedAfterManualFix: inspection.retryAllowedAfterManualFix,
+    error,
   };
 }
 
@@ -270,6 +271,9 @@ export async function runDiscoveryBestMatches(context: DiscoveryContextLike, opt
   const inspection = await inspectBrowserSession(context);
   if (inspection.blocked || inspection.manualAttentionRequired || inspection.sessionState === "browser_session_unhealthy") {
     return blockedResult(inspection);
+  }
+  if (inspection.sessionState !== "logged_in") {
+    return blockedResult(inspection, `Preferred browser is not ready for discovery: ${inspection.sessionState}. Start it with npm run browser:preferred:start, log into Upwork manually if needed, then confirm with npm run browser:preferred:check.`);
   }
 
   const selected = selectRelevantBrowserPage(context.pages?.() ?? []);
@@ -311,6 +315,9 @@ export async function runDiscoveryBestMatches(context: DiscoveryContextLike, opt
     const inspectionAfterScroll = pass === 0 ? inspection : await inspectBrowserSession(context);
     if (inspectionAfterScroll.blocked || inspectionAfterScroll.manualAttentionRequired || inspectionAfterScroll.sessionState === "browser_session_unhealthy") {
       return blockedResult(inspectionAfterScroll);
+    }
+    if (inspectionAfterScroll.sessionState !== "logged_in") {
+      return blockedResult(inspectionAfterScroll, `Preferred browser stopped being ready during discovery: ${inspectionAfterScroll.sessionState}.`);
     }
 
     const html = await page.evaluate(() => (globalThis as unknown as { document: { documentElement: { outerHTML: string } } }).document.documentElement.outerHTML);

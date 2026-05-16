@@ -213,25 +213,42 @@ Sample artifacts live in `profile/knowledge/voice/`, `profile/knowledge/portfoli
 
 The browser queue is a cloud/VM-safe foundation for future human-in-the-loop browser assistance. Browser search can poll configured Upwork search pages from a persistent VM browser session, capture bounded job-detail text, normalize it deterministically, and queue downstream browser review actions. Both browser search and queued browser actions are disabled/dry-run by default.
 
-### Manual local browser flow
+### Preferred Upwork Browser v0
 
-Use one visible Chrome session for manual Upwork login and challenge resolution, then let the worker connect to that same session over CDP without relaunching Chrome or locking the profile:
+Use one official visible Chrome/CDP environment for Upwork discovery. It uses a dedicated non-default Chrome profile, opens Best Matches by default, and is expected to stay open/logged in:
+
+```bash
+npm run browser:preferred:start
+npm run browser:preferred:check
+```
+
+Defaults:
+
+```txt
+BROWSER_PREFERRED_USER_DATA_DIR=./data/personal-cdp-profile
+BROWSER_PREFERRED_PROFILE_DIRECTORY=Default
+BROWSER_CDP_URL=http://127.0.0.1:9222
+BROWSER_START_URL=https://www.upwork.com/nx/find-work/best-matches/
+```
+
+Recommended local flow:
+
+1. Run `npm run browser:preferred:start`
+2. Sign in to Upwork manually in the visible Chrome window if needed
+3. Keep that Chrome window open
+4. Run `npm run browser:preferred:check`
+5. Discovery may run only when `readyForDiscovery=true`
+
+Status output includes `online`, `cdpReachable`, `upworkLoggedIn`, `upworkSessionState`, `currentUrl`, `title`, `readyForDiscovery`, and `reason` when not ready. If the preferred browser is offline/logged out/unknown, discovery should not silently switch browsers; it pauses and reports the issue.
+
+The older isolated agent profile command remains available when explicitly needed:
 
 ```bash
 npm run browser:session
 npm run browser:cdp:check
 ```
 
-Recommended local flow:
-
-1. Run `npm run browser:session`
-2. Sign in to Upwork manually in the visible Chrome window
-3. Set `BROWSER_SESSION_MODE=cdp`
-4. Verify CDP is reachable with `npm run browser:cdp:check`
-5. Run the worker in dry-run or review mode
-6. If Upwork shows a login/check/challenge page, resolve it manually in the visible Chrome session, then retry the paused action
-
-In CDP mode, if the session is not running, the worker pauses safely and tells you to start it with `npm run browser:session`. In launch mode, the worker keeps the old behavior of launching the persistent profile directly. In both modes, final submit remains blocked.
+In CDP mode, if the session is not running, the worker pauses safely and tells you to start a browser session. In launch mode, the worker keeps the old behavior of launching the persistent profile directly. In both modes, final submit remains blocked.
 
 Run a no-credentials search dry run:
 

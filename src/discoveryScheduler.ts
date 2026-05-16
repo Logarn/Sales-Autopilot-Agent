@@ -178,6 +178,19 @@ export async function runDiscoverySchedulerCycle(
       log(JSON.stringify({ event: "discovery_run_skipped", reason: result.skippedReason, sessionState: result.sessionState, nextRunInMs }));
       return result;
     }
+    if (inspection.sessionState !== "logged_in") {
+      const result = skippedResult({
+        runType,
+        sessionState: inspection.sessionState,
+        reason: "preferred_browser_not_ready_for_discovery",
+        nextRunInMs,
+        lockAcquired: true,
+        manualAttentionRequired: inspection.manualAttentionRequired,
+        blocked: true,
+      });
+      log(JSON.stringify({ event: "discovery_run_skipped", reason: result.skippedReason, sessionState: result.sessionState, nextRunInMs }));
+      return result;
+    }
 
     const pendingCaptureCount = countPendingCaptureActions(deps.listActions?.() ?? []);
     if (pendingCaptureCount > config.skipIfPendingCaptureCountGt) {

@@ -120,6 +120,7 @@ export function buildBrowserSessionLaunchCommand(input: {
   userDataDir: string;
   cdpUrl: string;
   startUrl?: string;
+  profileDirectory?: string;
 }): BrowserSessionLaunchCommand {
   const port = parseRemoteDebuggingPort(input.cdpUrl);
   return {
@@ -127,6 +128,7 @@ export function buildBrowserSessionLaunchCommand(input: {
     args: [
       `--remote-debugging-port=${port}`,
       `--user-data-dir=${path.resolve(input.userDataDir)}`,
+      ...(input.profileDirectory ? [`--profile-directory=${input.profileDirectory}`] : []),
       "--no-first-run",
       "--no-default-browser-check",
       "--new-window",
@@ -232,6 +234,7 @@ export async function startPersistentChromeSession(input: {
   userDataDir: string;
   cdpUrl: string;
   startUrl?: string;
+  profileDirectory?: string;
 }): Promise<{ started: boolean; message: string }> {
   const executablePath = input.chromeExecutablePath ?? findChromeExecutable();
   if (!executablePath) {
@@ -243,6 +246,7 @@ export async function startPersistentChromeSession(input: {
     userDataDir: input.userDataDir,
     cdpUrl: input.cdpUrl,
     startUrl: input.startUrl,
+    profileDirectory: input.profileDirectory,
   });
   fs.mkdirSync(path.resolve(input.userDataDir), { recursive: true });
   const child = spawn(command.executablePath, command.args, {
@@ -253,6 +257,6 @@ export async function startPersistentChromeSession(input: {
 
   return {
     started: true,
-    message: `Started visible Chrome session with remote debugging at ${input.cdpUrl}. Open Upwork manually, sign in if needed, then run npm run browser:cdp:check.`,
+    message: `Started visible Chrome session with remote debugging at ${input.cdpUrl} using profile ${path.resolve(input.userDataDir)}. Open Upwork manually, sign in if needed, then run a browser status check.`,
   };
 }

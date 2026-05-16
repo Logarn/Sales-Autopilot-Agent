@@ -123,6 +123,8 @@ export const BROWSER_SESSION_MODE = process.env.BROWSER_SESSION_MODE === "cdp" ?
 export const BROWSER_CDP_URL = process.env.BROWSER_CDP_URL ?? "http://127.0.0.1:9222";
 export const BROWSER_START_URL = process.env.BROWSER_START_URL ?? "https://www.upwork.com/nx/find-work/best-matches/";
 export const BROWSER_USER_DATA_DIR = process.env.BROWSER_USER_DATA_DIR ?? "./data/browser-profile";
+export const BROWSER_PREFERRED_USER_DATA_DIR = process.env.BROWSER_PREFERRED_USER_DATA_DIR ?? "./data/personal-cdp-profile";
+export const BROWSER_PREFERRED_PROFILE_DIRECTORY = process.env.BROWSER_PREFERRED_PROFILE_DIRECTORY ?? "Default";
 export const BROWSER_CHROME_EXECUTABLE_PATH = process.env.BROWSER_CHROME_EXECUTABLE_PATH ?? "";
 export const BROWSER_DRY_RUN = parseBoolean(process.env.BROWSER_DRY_RUN, true);
 export const BROWSER_ARTIFACT_DIR = process.env.BROWSER_ARTIFACT_DIR ?? "";
