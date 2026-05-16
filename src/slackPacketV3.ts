@@ -1,5 +1,6 @@
 import { buildProposalContextPack } from "./skills/profileContextSkill";
 import { selectPortfolioAssetsForJob } from "./skills/portfolioSelectionSkill";
+import { qaProposalPlatformGrounding } from "./proposalQa";
 import { JobIntelligence, ScoredJob } from "./types";
 import { truncateText } from "./utils";
 
@@ -235,12 +236,14 @@ function formatLeadContext(job: ScoredJob, context: SlackPacketV3Context): { tex
     workType ? `• Work type: ${sentenceCase(workType)}` : null,
   ].filter((value): value is string => Boolean(value));
 
-  const mismatchWarnings = [
-    ...(intelligence?.platformMismatchWarnings ?? []),
-    ...(context.platformMismatchWarning ? [context.platformMismatchWarning] : []),
-  ];
+  const qa = qaProposalPlatformGrounding({
+    draftText: job.applicationDraft?.proposalText,
+    intelligence,
+  });
+  const contextMismatchWarnings = context.platformMismatchWarning ? [`Platform mismatch: ${context.platformMismatchWarning.replace(/^platform_mismatch:\s*/i, "")}`] : [];
   const watchOuts = [
-    ...mismatchWarnings.map((warning) => `Platform mismatch: ${warning.replace(/^platform_mismatch:\s*/i, "")}`),
+    ...qa.warnings.map((warning) => warning.message),
+    ...contextMismatchWarnings,
     intelligence?.needsManualReview ? "Needs manual review before draft prep." : null,
     intelligence?.skipReason ? `Platform review note: ${intelligence.skipReason}` : null,
   ].filter((value): value is string => Boolean(value));
