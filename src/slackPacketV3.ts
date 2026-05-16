@@ -1,6 +1,6 @@
 import { buildProposalContextPack } from "./skills/profileContextSkill";
 import { selectPortfolioAssetsForJob } from "./skills/portfolioSelectionSkill";
-import { ScoredJob } from "./types";
+import { JobIntelligence, ScoredJob } from "./types";
 import { truncateText } from "./utils";
 
 export interface SlackPacketV3Context {
@@ -25,6 +25,7 @@ export interface SlackPacketV3Context {
   ecommerceVertical?: string;
   platformPreferenceTier?: string;
   platformMismatchWarning?: string;
+  jobIntelligence?: JobIntelligence;
 }
 
 export interface SlackPacketV3Message {
@@ -201,6 +202,52 @@ function optionalField(label: string, value?: string): string | null {
   return safe ? `*${label}:* ${safe}` : null;
 }
 
+function sentenceCase(value: string): string {
+  const normalized = value.replace(/_/g, " ").trim();
+  return normalized ? `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}` : normalized;
+}
+
+function formatPlatformTier(value?: string): string | undefined {
+  if (!value?.trim()) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "core") return "Core";
+  if (normalized === "secondary") return "Secondary";
+  if (normalized === "non_core_review") return "Non-core / review carefully";
+  if (normalized === "unknown") return "Unknown";
+  return sentenceCase(value);
+}
+
+function formatLeadContext(job: ScoredJob, context: SlackPacketV3Context): { text: string; watchOuts: string[] } {
+  const intelligence = context.jobIntelligence ?? job.applicationDraft?.jobIntelligence;
+  const platform = intelligence?.primaryPlatform ?? context.platform;
+  const platformTier = formatPlatformTier(intelligence?.platformPreferenceTier ?? context.platformPreferenceTier);
+  const businessType = intelligence?.businessType ?? context.businessType;
+  const vertical = intelligence?.ecommerceVertical ?? context.ecommerceVertical;
+  const jobCategory = intelligence?.jobCategory;
+  const taskType = intelligence?.taskType;
+  const workType = [jobCategory, taskType].map((value) => value?.trim()).filter(Boolean).join(" / ");
+
+  const lines = [
+    `• Platform: ${platform?.trim() || "Not analyzed yet"}`,
+    platformTier ? `• Platform tier: ${platformTier}` : null,
+    businessType ? `• Business: ${sentenceCase(businessType)}` : null,
+    vertical && vertical !== "unknown" ? `• Vertical: ${sentenceCase(vertical)}` : null,
+    workType ? `• Work type: ${sentenceCase(workType)}` : null,
+  ].filter((value): value is string => Boolean(value));
+
+  const mismatchWarnings = [
+    ...(intelligence?.platformMismatchWarnings ?? []),
+    ...(context.platformMismatchWarning ? [context.platformMismatchWarning] : []),
+  ];
+  const watchOuts = [
+    ...mismatchWarnings.map((warning) => `Platform mismatch: ${warning.replace(/^platform_mismatch:\s*/i, "")}`),
+    intelligence?.needsManualReview ? "Needs manual review before draft prep." : null,
+    intelligence?.skipReason ? `Platform review note: ${intelligence.skipReason}` : null,
+  ].filter((value): value is string => Boolean(value));
+
+  return { text: `🧭 *Lead context*\n${lines.join("\n")}`, watchOuts };
+}
+
 export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Context): SlackPacketV3Message {
   const draft = job.applicationDraft;
   const commands = context.commandHints?.length ? context.commandHints : DEFAULT_COMMAND_HINTS;
@@ -237,13 +284,11 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
     : includeRetry && context.autoPrepareNote
       ? context.autoPrepareNote
       : "Strong fit. Reply `prepare draft` when ready.";
-  const futureIntelligence = [
-    optionalField("Platform", context.platform ?? "Not analyzed yet"),
-    optionalField("Business type", context.businessType),
-    optionalField("Ecommerce vertical", context.ecommerceVertical),
-    optionalField("Platform tier", context.platformPreferenceTier),
-    optionalField("Platform warning", context.platformMismatchWarning),
-  ].filter((value): value is string => Boolean(value));
+  const leadContext = formatLeadContext(job, context);
+  const watchOuts = sanitizeLines([
+    ...(job.scoreBreakdown?.risks ?? job.applicationDraft?.redFlags ?? manualWarnings),
+    ...leadContext.watchOuts,
+  ]);
 
   const topSection = [
     `🚀 *New Upwork Lead*`,
@@ -269,9 +314,9 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
 
   const sections = [
     topSection,
-    futureIntelligence.length > 0 ? `🧭 *Lead context*\n${futureIntelligence.join("\n")}` : null,
+    leadContext.text,
     `🧠 *Why this might be a fit*\n${bulletList(sanitizeLines(job.scoreBreakdown?.reasons ?? job.applicationDraft?.fitReasons ?? profileContext.selectedPositioning), "No fit reasons captured.")}`,
-    `⚠️ *Watch-outs*\n${bulletList(sanitizeLines(job.scoreBreakdown?.risks ?? job.applicationDraft?.redFlags ?? manualWarnings), "No major risks detected.")}`,
+    `⚠️ *Watch-outs*\n${bulletList(watchOuts, "No major risks detected.")}`,
     `✍️ *Draft angle*\n${quoteBlock(profileContext.proposalAngle, "Draft angle is not available yet.")}\n\n*Proposal preview (review only):*\n${proposalPreview}`,
     hasQuestions ? `📝 *Screening answers*\n${questionText}` : null,
     proofSection,
