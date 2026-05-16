@@ -272,6 +272,43 @@ function runTests(): void {
   assertIncludes(brevoText, "Platform mismatch: job primary platform is Brevo, but draft mentions Klaviyo.", "platform mismatch watch-out");
   assertIncludes(brevoText, "Needs manual review before draft prep.", "manual review watch-out");
 
+  const qaGeneratedWarningText = buildV3CapturePacket(createScoredJob({
+    title: "HubSpot lifecycle email specialist for ecommerce brand",
+    applicationDraft: {
+      ...beautyJob.applicationDraft!,
+      proposalText: "I would start by auditing your Klaviyo flows, campaign segments, and lifecycle revenue attribution.",
+      jobIntelligence: {
+        schemaVersion: "1.0",
+        primaryPlatform: "HubSpot",
+        platformsMentioned: ["HubSpot"],
+        platformCategory: "CRM",
+        platformPreferenceTier: "non_core_review",
+        platformFitReason: "HubSpot is non-core; review carefully.",
+        shouldSkipForPlatform: false,
+        skipReason: "Use HubSpot/platform-neutral language unless migration is confirmed.",
+        businessType: "DTC ecommerce",
+        ecommerceVertical: "home",
+        jobCategory: "Lifecycle marketing",
+        taskType: "CRM email automation",
+        requiredSkills: ["HubSpot", "Email automation"],
+        clientGoal: "Improve lifecycle automation",
+        redFlags: [],
+        fitScoreReasoning: "Potential lifecycle fit but platform is non-core.",
+        proposalAngle: "Stay grounded in HubSpot unless migration is confirmed.",
+        proofRecommendations: [],
+        draftConstraints: ["Do not pretend this is Klaviyo."],
+        platformMismatchWarnings: [],
+        needsManualReview: true,
+        confidence: "medium",
+      },
+    },
+  }), {
+    upworkUrl: beautyJob.url,
+    captureStatus: "packet_sent",
+    applicationQuestions: [],
+  }).text;
+  assertIncludes(qaGeneratedWarningText, "Platform mismatch: job primary platform is HubSpot, but draft mentions Klaviyo.", "Slack should surface QA-generated platform mismatch warning");
+
   const capturedNormalized = buildDeterministicOpportunityPacket(
     "Beauty Shopify Klaviyo retention role. Need help with quiz segmentation, zero-party data, campaigns, flows, and repeat purchase strategy.",
     {
