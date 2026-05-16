@@ -14,7 +14,7 @@ async function runTests(): Promise<void> {
   assertState(inspect("https://www.upwork.com/ab/account-security/login", "Log In - Upwork", "Log in Continue with Google Sign in").internalState, "logged_out");
   assertState(inspect("https://www.upwork.com/", "Upwork | Hire Top Freelance Talent with Confidence", "Find talent Post a job Log in Sign up").internalState, "logged_out");
   assertState(inspect("https://accounts.google.com/signin/v2/identifier", "Sign in - Google Accounts", "Email or phone Use another account").internalState, "login_in_progress");
-  assertState(inspect("https://accounts.google.com/signin/chooser", "Choose an account", "manyaos.47@gmail.com Use another account").internalState, "login_in_progress");
+  assertState(inspect("https://accounts.google.com/signin/chooser", "Choose an account", "user@example.com Use another account").internalState, "login_in_progress");
 
   const password = inspect("https://accounts.google.com/signin/challenge/pwd", "Welcome", "Enter your password");
   assertState(password.internalState, "password_required");

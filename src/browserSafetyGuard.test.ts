@@ -20,7 +20,7 @@ async function runTests(): Promise<void> {
     { selector: "a:has-text('Log in')", label: "normal Upwork sign-in" },
     { selector: "button:has-text('Continue with Google')", label: "Continue with Google" },
     { selector: "input[type='email']", label: "safe Google email field" },
-    { selector: "text=manyaos.47@gmail.com", label: "manyaos.47@gmail.com" },
+    { selector: "text=user@example.com", label: "user@example.com" },
   ];
   for (const target of allowed) {
     assert.equal(classifySensitiveTarget(target).blocked, false, `should allow ${JSON.stringify(target)}`);
@@ -32,7 +32,7 @@ async function runTests(): Promise<void> {
   assert.equal(clicked, true, "allowed click should execute");
 
   let filled = false;
-  await guardedFill({ fill: async () => { filled = true; } }, { selector: "input[type='email']" }, "manyaos.47@gmail.com");
+  await guardedFill({ fill: async () => { filled = true; } }, { selector: "input[type='email']" }, "user@example.com");
   assert.equal(filled, true, "allowed fill should execute");
 
   let unsafeClicked = false;

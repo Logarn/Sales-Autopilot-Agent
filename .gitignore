@@ -9,7 +9,7 @@ data/*.sqlite3
 .env
 .env
 
-# Taskplane runtime artifacts (machine-specific, do not commit)
+# Taskplane/Pi runtime artifacts (machine-specific, do not commit)
 .pi/batch-state.json
 .pi/batch-history.json
 .pi/lane-state-*
@@ -19,8 +19,11 @@ data/*.sqlite3
 .pi/orch-logs/
 .pi/orch-abort-signal
 .pi/settings.json
+.pi/taskplane.json
 .worktrees/
 .taskplane-tasks/
+taskplane-tasks/
+pi-session*.html
 
 # Pi project-local packages (if using pi install -l)
 .pi/npm/
@@ -31,9 +34,16 @@ data/*.sqlite3
 !.env.example
 .pi/
 data/
+data/browser-profile/
+data/personal-cdp-profile/
 
-# Local profile binary assets
+# Local profile binary assets and screenshots/temp artifacts
 profile/attachments/*
+profile/attachments/*.pdf
 profile/screenshots/*
+screenshots/
+temp/
+tmp/
+TemporaryItems/
 !profile/attachments/.gitkeep
 !profile/screenshots/.gitkeep
