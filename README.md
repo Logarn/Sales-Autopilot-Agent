@@ -1,4 +1,4 @@
-# Upwork Revenue Assistant
+# Upwork Autonomous Sales Agent
 
 Node.js + TypeScript background worker that monitors Upwork jobs, scores fit, generates human-in-the-loop proposal packets, selects relevant proof, deduplicates via SQLite, and posts rich Slack notifications for high-priority opportunities.
 
