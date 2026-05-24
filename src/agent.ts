@@ -1,4 +1,6 @@
 import { critiqueProposal } from "./critic";
+import { evaluateConnectsStrategy, formatConnectsStrategy } from "./connectsStrategy";
+import { buildDeterministicJobIntelligence } from "./jobIntelligenceParser";
 import { loadConnectsRules, loadFreelancerProfile, loadPortfolioLibrary } from "./profile";
 import { loadProfileKnowledge } from "./profileKnowledge";
 import {
@@ -101,6 +103,10 @@ function selectProofPoints(profile: FreelancerProfile, job: JobPosting, knowledg
   return [...new Set([...knowledge, ...proof, ...directSkillMatches])].slice(0, 5);
 }
 
+function trimTerminalPunctuation(value: string): string {
+  return value.trim().replace(/[.!?]+$/g, "");
+}
+
 function extractClientRequestAnswers(
   job: ScoredJob,
   profile: FreelancerProfile,
@@ -115,7 +121,7 @@ function extractClientRequestAnswers(
   };
 
   if (/rate|hourly|budget|price|retainer/i.test(source)) {
-    add(`Rate: ${suggestedBid}. If this becomes a retainer, I would scope the first month around audit, priority fixes, and reporting before expanding.`);
+    add(`Rate: ${trimTerminalPunctuation(suggestedBid)}. If this becomes a retainer, I would scope the first month around audit, priority fixes, and reporting before expanding.`);
   }
   if (/portfolio|example|case stud|sample|previous work|proof/i.test(source)) {
     const namedExamples = portfolioItems.map((item) => `${item.name}${item.result ? ` (${item.result})` : ""}`);
@@ -260,9 +266,17 @@ function suggestBid(job: ScoredJob, profile: FreelancerProfile): string {
 function evaluateConnects(job: ScoredJob): {
   suggestedBoostConnects: number;
   warnings: string[];
+  strategy: NonNullable<ScoredJob["scoreBreakdown"]["connectsStrategy"]>;
 } {
   const rules = loadConnectsRules();
   const warnings: string[] = [];
+  const baseBoost = job.scoreBreakdown.connectsStrategy?.suggestedBoostConnects ?? (job.matchLevel === "high" ? rules.idealBoostMin : 0);
+  const strategy = job.scoreBreakdown.connectsStrategy ?? evaluateConnectsStrategy({
+    job,
+    score: job.score,
+    scoreBreakdown: job.scoreBreakdown,
+    suggestedBoostConnects: baseBoost,
+  });
 
   if (job.connectsCost > rules.maxRequiredPerJob) {
     warnings.push(
@@ -274,7 +288,13 @@ function evaluateConnects(job: ScoredJob): {
     );
   }
 
-  const suggestedBoostConnects = job.matchLevel === "high" ? rules.idealBoostMin : 0;
+  const suggestedBoostConnects = strategy.decision === "safe_apply" ? strategy.suggestedBoostConnects : 0;
+  warnings.push(formatConnectsStrategy(strategy));
+  if (strategy.decision === "skip") {
+    warnings.push("Do not spend Connects on this job unless Steve explicitly overrides after review.");
+  } else if (strategy.decision === "manual_review") {
+    warnings.push("Manual review required before spending Connects or boosting.");
+  }
   if (suggestedBoostConnects > 0) {
     warnings.push(
       `Boost only if ${suggestedBoostConnects}-${rules.idealBoostMax} Connects keeps the proposal near top ${rules.targetBoostRank}. Do not chase bids above ${rules.skipIfTopBidAbove}.`
@@ -285,7 +305,7 @@ function evaluateConnects(job: ScoredJob): {
     warnings.push("Never bid max automatically. Human approval required for expensive boost races.");
   }
 
-  return { suggestedBoostConnects, warnings };
+  return { suggestedBoostConnects, warnings, strategy: { ...strategy, suggestedBoostConnects, totalConnects: strategy.requiredConnects + suggestedBoostConnects } };
 }
 
 export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
@@ -335,6 +355,7 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
 
   const truncatedProposal = truncateText(proposal, 1800);
   const proposalQuality = critiqueProposal(truncatedProposal, job, profile);
+  const jobIntelligence = buildDeterministicJobIntelligence(job, truncatedProposal);
   const connects = evaluateConnects(job);
   if (bidRuleKnowledge.length) {
     connects.warnings.push(...bidRuleKnowledge.map((artifact) => `Profile bid rule: ${artifact.summary}`));
@@ -350,9 +371,11 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
     suggestedConnects: job.connectsCost,
     suggestedBoostConnects: connects.suggestedBoostConnects,
     connectsWarnings: connects.warnings,
+    connectsStrategy: connects.strategy,
     selectedPortfolioItems: portfolioItems,
     proposalQuality,
     proposalText: truncatedProposal,
+    jobIntelligence,
     structuredProposal: buildStructuredProposalDraft({
       job,
       profile,
