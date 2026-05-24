@@ -1,0 +1,16 @@
+[Unit]
+Description=Upwork Agent health check
+After=network.target
+Wants=network.target
+
+[Service]
+Type=oneshot
+User=upwork-agent
+WorkingDirectory=/opt/upwork-agent/app
+EnvironmentFile=-/opt/upwork-agent/app/.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/env npm run health
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ReadWritePaths=/opt/upwork-agent/app /opt/upwork-agent/shared

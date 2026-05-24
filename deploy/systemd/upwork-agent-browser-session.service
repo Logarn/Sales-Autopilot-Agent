@@ -1,0 +1,22 @@
+[Unit]
+Description=Upwork Agent browser session
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=upwork-agent
+WorkingDirectory=/opt/upwork-agent/app
+EnvironmentFile=-/opt/upwork-agent/app/.env
+Environment=NODE_ENV=production
+Environment=DISPLAY=:0
+ExecStart=/usr/bin/env npm run browser:session
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ReadWritePaths=/opt/upwork-agent/app /opt/upwork-agent/shared
+
+[Install]
+WantedBy=multi-user.target

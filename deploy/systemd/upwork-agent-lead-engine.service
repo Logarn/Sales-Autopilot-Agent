@@ -1,0 +1,21 @@
+[Unit]
+Description=Upwork Agent lead engine
+After=network.target upwork-agent-browser-session.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=upwork-agent
+WorkingDirectory=/opt/upwork-agent/app
+EnvironmentFile=-/opt/upwork-agent/app/.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/env npm run agent:run
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ReadWritePaths=/opt/upwork-agent/app /opt/upwork-agent/shared
+
+[Install]
+WantedBy=multi-user.target
