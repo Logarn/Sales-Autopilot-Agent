@@ -86,13 +86,19 @@ async function runTests(): Promise<void> {
 
   const {
     DISCOVERY_BEST_MATCHES_TOOL,
+    DISCOVERY_SOURCES,
+    buildConfiguredDiscoverySources,
     canonicalizeDiscoveryUpworkJobUrl,
     extractBestMatchesJobLinksFromHtml,
     extractBestMatchesJobLinksWithStats,
+    extractDiscoveryJobLinksWithStats,
     isAlreadyHandledDiscoveryJob,
     isDuplicateDiscoveryJob,
     isValidDiscoveryUpworkJobId,
+    loadSavedDiscoverySearches,
     runDiscoveryBestMatches,
+    runDiscoveryConfiguredSources,
+    runDiscoverySource,
   } = await import("./browserDiscoveryTool");
   const { closeDb, listBrowserActions } = await import("./db");
 
@@ -150,6 +156,33 @@ async function runTests(): Promise<void> {
     assert.equal(links[0]?.sourceLabel, "Best Matches");
     assert.equal(links[0]?.postedAtText, "1 hour ago");
     assert.equal(links[0]?.discoveredAt, discoveredAt.toISOString());
+
+    const recentLinks = extractDiscoveryJobLinksWithStats(
+      `<article><a href="/jobs/~022056111111111111111">Recent email role</a><span>Posted 2 minutes ago</span></article>`,
+      { maxJobs: 5, now: discoveredAt, source: DISCOVERY_SOURCES.recent_jobs }
+    ).links;
+    assert.equal(recentLinks[0]?.sourceType, "recent_jobs");
+    assert.equal(recentLinks[0]?.sourceLabel, "Recent Jobs");
+    assert.equal(recentLinks[0]?.sourceUrl, DISCOVERY_SOURCES.recent_jobs.url);
+
+    const savedConfigPath = path.join(tempDir, "saved-searches.json");
+    fs.writeFileSync(savedConfigPath, JSON.stringify({
+      searches: [
+        {
+          id: "klaviyo-dtc",
+          name: "Klaviyo DTC",
+          purpose: "Focused Klaviyo DTC roles",
+          sourceType: "saved_search",
+          query: "Klaviyo Shopify retention",
+        },
+      ],
+    }));
+    const savedSources = buildConfiguredDiscoverySources(loadSavedDiscoverySearches(savedConfigPath));
+    const savedSearch = savedSources.find((source) => source.sourceLabel === "Saved Search - Klaviyo DTC");
+    assert(savedSearch, "configured sources should include named saved searches");
+    assert.equal(savedSearch?.sourceType, "saved_search");
+    assert(savedSearch?.url.includes("Klaviyo+Shopify+retention"), "saved search query should be encoded into an Upwork search URL");
+    if (!savedSearch) throw new Error("saved search source missing");
 
     const capped = extractBestMatchesJobLinksFromHtml(html, { maxJobs: 2, now: discoveredAt });
     assert.equal(capped.length, 2, "max-jobs cap should be enforced after dedupe/apply filtering");
@@ -212,6 +245,28 @@ async function runTests(): Promise<void> {
     assert.equal(queued.length, 1);
     assert.equal(queued[0]?.actionType, "capture_job_from_url");
     assert.equal(queued[0]?.payload.url, "https://www.upwork.com/jobs/~022054888888888888888");
+
+    const recentDiscovery = await runDiscoverySource(
+      discoveryContext(`<article><a href="/jobs/~022056222222222222222">Fresh recent role</a><span>Posted 3 minutes ago</span></article>`),
+      DISCOVERY_SOURCES.recent_jobs,
+      { maxJobs: 5, now: discoveredAt }
+    );
+    assert.equal(recentDiscovery.ok, true);
+    assert.equal(recentDiscovery.jobsQueued, 1, "recent jobs discovery should enqueue valid capture actions");
+    const recentQueued = listBrowserActions(null, 10).find((item) => item.payload.url === "https://www.upwork.com/jobs/~022056222222222222222");
+    const recentPayload = recentQueued?.payload.discovery as { sourceLabel?: string; sourceType?: string } | undefined;
+    assert.equal(recentPayload?.sourceLabel, "Recent Jobs");
+    assert.equal(recentPayload?.sourceType, "recent_jobs");
+
+    const multiSourceDiscovery = await runDiscoveryConfiguredSources(
+      discoveryContext(`<article><a href="/jobs/~022056333333333333333">Multi source duplicate role</a><span>Posted 4 minutes ago</span></article>`),
+      { maxJobs: 2, now: discoveredAt },
+      [DISCOVERY_SOURCES.recent_jobs, savedSearch]
+    );
+    assert.equal(multiSourceDiscovery.ok, true);
+    assert.deepEqual(multiSourceDiscovery.sourcesChecked, ["Recent Jobs", "Saved Search - Klaviyo DTC"]);
+    assert.equal(multiSourceDiscovery.jobsQueued, 1, "multi-source discovery should dedupe jobs across sources");
+    assert.equal(multiSourceDiscovery.duplicatesSkipped, 1, "second source should count duplicate canonical jobs");
 
     const scrolledDiscovery = await runDiscoveryBestMatches(
       scrollingDiscoveryContext([

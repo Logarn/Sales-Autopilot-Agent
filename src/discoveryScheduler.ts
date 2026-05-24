@@ -10,7 +10,7 @@ import {
   DISCOVERY_SCHEDULER_ENABLED,
   DISCOVERY_SKIP_IF_PENDING_CAPTURE_COUNT_GT,
 } from "./config";
-import { runDiscoveryBestMatches, DiscoveryBestMatchesResult } from "./browserDiscoveryTool";
+import { runDiscoveryConfiguredSources, DiscoveryBestMatchesResult } from "./browserDiscoveryTool";
 import { inspectBrowserSession } from "./browserSessionInspector";
 import { acquireBrowserSession, findChromeExecutable, PlaywrightChromiumLike } from "./browserSessionControl";
 import { closeDb, listBrowserActions } from "./db";
@@ -268,7 +268,7 @@ export async function runDiscoveryOnceFromCdp(config = getDiscoverySchedulerConf
       return { sessionState: inspection.sessionState, manualAttentionRequired: inspection.manualAttentionRequired, blocked: inspection.blocked };
     },
     listActions: () => listBrowserActions(null, 1000),
-    runDiscovery: (options) => runDiscoveryBestMatches(context as never, { maxJobs: options.maxJobs, maxScrolls: options.maxScrolls, now: options.now }),
+    runDiscovery: (options) => runDiscoveryConfiguredSources(context as never, { maxJobs: options.maxJobs, maxScrolls: options.maxScrolls, now: options.now }),
   }, "discovery.run_once", null));
 }
 
@@ -287,7 +287,7 @@ async function runContinuousScheduler(config = getDiscoverySchedulerConfig()): P
         return { sessionState: inspection.sessionState, manualAttentionRequired: inspection.manualAttentionRequired, blocked: inspection.blocked };
       },
       listActions: () => listBrowserActions(null, 1000),
-      runDiscovery: (options) => runDiscoveryBestMatches(context as never, { maxJobs: options.maxJobs, maxScrolls: options.maxScrolls, now: options.now }),
+      runDiscovery: (options) => runDiscoveryConfiguredSources(context as never, { maxJobs: options.maxJobs, maxScrolls: options.maxScrolls, now: options.now }),
       log: (message) => process.stderr.write(`${message}\n`),
     }, "discovery.scheduler", delay));
     process.stdout.write(`${JSON.stringify(result)}\n`);

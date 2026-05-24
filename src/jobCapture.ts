@@ -39,6 +39,8 @@ export interface ManualJobCapture {
   connectsCost: number;
   skills: string[];
   sourceQuery: string;
+  proposalCount?: number | null;
+  competitionLevel?: "low" | "medium" | "high" | "unknown";
 }
 
 export interface JobDetailCaptureResult {
@@ -185,6 +187,13 @@ function deriveConnects(text: string): number | null {
   return parseNumber(firstMatch(text, [/requires\s+(\d+)\s+Connects/i, /Connects to apply\s*:?\s*(\d+)/i, /(\d+)\s+Connects/i]));
 }
 
+function deriveCompetitionLevel(proposals: number | null): "low" | "medium" | "high" | "unknown" {
+  if (proposals === null) return "unknown";
+  if (proposals >= 50) return "high";
+  if (proposals >= 20) return "medium";
+  return "low";
+}
+
 function deriveClient(text: string): ClientCapture {
   const rating = parseNumber(firstMatch(text, [/(\d(?:\.\d+)?)\s*(?:out of\s*5|of\s*5|stars?)/i]));
   return {
@@ -232,6 +241,8 @@ export function parseJobDetailCapture(text: string, options: JobCaptureOptions =
     connectsCost: connectsCost ?? 0,
     skills,
     sourceQuery: "job-detail-capture",
+    proposalCount: activity.proposals,
+    competitionLevel: deriveCompetitionLevel(activity.proposals),
   };
 
   return {
