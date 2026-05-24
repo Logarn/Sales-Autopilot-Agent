@@ -15,6 +15,7 @@ import {
   queueSlackMessage,
 } from "./db";
 import { logger } from "./logger";
+import { formatConnectsStrategy } from "./connectsStrategy";
 import { DailySummary, ScoredJob } from "./types";
 import { sleep, timeAgo, truncateText, formatInTimezone } from "./utils";
 
@@ -170,7 +171,7 @@ function buildProposalPacketBlocks(job: ScoredJob): IncomingWebhookSendArguments
             draft.connectsWarnings,
             "Within default guardrails.",
             4,
-          )}`,
+          )}\n${draft.connectsStrategy ? formatConnectsStrategy(draft.connectsStrategy) : ""}`,
         ),
       },
     },

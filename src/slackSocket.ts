@@ -1,12 +1,14 @@
 import { App } from "@slack/bolt";
 import { clearBrowserManualAttention, getBrowserSessionStatus } from "./browserSession";
 import {
+  applyApplicationRevision,
   enqueueBrowserActionDeduped,
   getApplicationDraft,
   getApplicationStatus,
   getBrowserActionById,
   getScoredJobForSlackPreview,
   getSlackThreadStateByThreadTs,
+  listBrowserActions,
   updateApplicationStatus,
   updateSlackThreadStateStatus,
   upsertSlackThreadState,
@@ -29,6 +31,8 @@ import {
 import { logger } from "./logger";
 import { buildProposalContextPack } from "./skills/profileContextSkill";
 import { selectPortfolioAssetsForJob } from "./skills/portfolioSelectionSkill";
+import { buildProofAvailabilityReport, formatProofAvailabilityLines } from "./proofAvailability";
+import { formatConnectsStrategy } from "./connectsStrategy";
 
 export type SlackSocketParsedCommandType =
   | "status"
@@ -187,6 +191,99 @@ function statusLabel(status?: string | null): string {
   return status;
 }
 
+function cleanRevisionInstruction(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+export function buildDeterministicProposalRevision(currentText: string, instruction: string): string {
+  const current = currentText.trim();
+  const cleanInstruction = cleanRevisionInstruction(instruction);
+  if (!cleanInstruction) return current;
+
+  const paragraphs = current.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+  const nextParagraphs = paragraphs.length > 0 ? [...paragraphs] : [current];
+  let changed = false;
+
+  if (/(opener|opening|first line|first sentence|lead\b)/i.test(cleanInstruction) && /(direct|clear|short|tight|strong)/i.test(cleanInstruction)) {
+    nextParagraphs[0] = "I can help tighten this by focusing first on the highest-leverage retention work, then turning it into clear Klaviyo/SMS execution.";
+    changed = true;
+  }
+
+  const addMatch = cleanInstruction.match(/\b(?:add|include|mention)\s+(.+)$/i);
+  if (addMatch?.[1]) {
+    nextParagraphs.push(`I would also address ${addMatch[1].replace(/[.]+$/g, "").trim()}.`);
+    changed = true;
+  }
+
+  if (!changed) {
+    nextParagraphs.push(`Revision guidance applied: ${cleanInstruction}.`);
+  }
+
+  return nextParagraphs.join("\n\n");
+}
+
+function describeQueuedBrowserDraft(jobId: string): string {
+  const activeDraftActions = listBrowserActions(null, 1000)
+    .filter((action) =>
+      action.jobId === jobId &&
+      action.actionType === "prepare_application_review" &&
+      !["cancelled", "failed"].includes(action.status)
+    );
+
+  if (activeDraftActions.length === 0) {
+    return "Browser draft status: no browser draft has been queued yet.";
+  }
+
+  const latest = activeDraftActions[activeDraftActions.length - 1];
+  return `Browser draft needs update: yes - browser action #${latest.id} is ${latest.status}. Re-run prepare draft after reviewing this revision.`;
+}
+
+export function applySlackThreadRevision(input: {
+  channelId: string;
+  threadTs: string;
+  instruction: string;
+}): { ok: boolean; text: string; proposalVersion?: number } {
+  const state = getSlackThreadStateByThreadTs(input.channelId, input.threadTs);
+  if (!state?.jobId) {
+    return { ok: false, text: "I cannot revise a draft without a tracked job id for this thread." };
+  }
+
+  const instruction = cleanRevisionInstruction(input.instruction);
+  if (!instruction) {
+    return { ok: false, text: `I cannot revise ${state.jobId} without a revision instruction.` };
+  }
+
+  const draft = getApplicationDraft(state.jobId);
+  if (!draft?.proposalText.trim()) {
+    recordApplicationRevisionRequest(state.jobId, instruction);
+    updateSlackThreadStateStatus(state.channelId, state.threadTs, "revise_requested");
+    return {
+      ok: false,
+      text: `Revision request recorded for ${state.jobId}: ${instruction} (no stored proposal draft was found to update).`,
+    };
+  }
+
+  const revisedText = buildDeterministicProposalRevision(draft.proposalText, instruction);
+  const revision = applyApplicationRevision(state.jobId, instruction, revisedText);
+  updateSlackThreadStateStatus(state.channelId, state.threadTs, "revise_requested");
+
+  if (!revision) {
+    return { ok: false, text: `I could not apply the revision for ${state.jobId}; no stored draft row was updated.` };
+  }
+
+  return {
+    ok: true,
+    proposalVersion: revision.proposalVersion,
+    text: [
+      `Revision applied to stored proposal draft for ${state.jobId}.`,
+      `Stored proposal version: v${revision.proposalVersion}`,
+      `Instruction: ${instruction}`,
+      describeQueuedBrowserDraft(state.jobId),
+      "Final submit remains manual.",
+    ].join("\n"),
+  };
+}
+
 export function buildPrepareDraftQueueReply(input: {
   jobId: string;
   threadTitle: string;
@@ -201,8 +298,11 @@ export function buildPrepareDraftQueueReply(input: {
   const selection = scoredJob ? selectPortfolioAssetsForJob(scoredJob) : null;
 
   const autoAttachAssets = profileContext?.selectedAttachments ?? [];
-  const recommendOnlyAssets = selection?.recommendOnlyAssets.map((asset) => `${asset.name} — ${asset.path}`) ?? [];
+  const proofAvailabilityLines = selection
+    ? formatProofAvailabilityLines(buildProofAvailabilityReport(selection), { includePath: true, limit: 8 })
+    : [];
   const warnings = profileContext?.manualReviewWarnings ?? [];
+  const connectsStrategy = draft?.connectsStrategy ?? scoredJob?.scoreBreakdown.connectsStrategy;
 
   return [
     input.duplicate
@@ -212,8 +312,9 @@ export function buildPrepareDraftQueueReply(input: {
     `Job ID: ${input.jobId}`,
     `Upwork URL: ${input.upworkUrl}`,
     `Stored proposal draft: ${draft?.proposalText ? `present (${draft.proposalText.length} chars)` : "missing"}`,
+    connectsStrategy ? formatConnectsStrategy(connectsStrategy) : "Connects strategy: not calculated.",
     `Auto-attach assets: ${autoAttachAssets.length > 0 ? autoAttachAssets.join(", ") : "none"}`,
-    `Recommend-only assets: ${recommendOnlyAssets.length > 0 ? recommendOnlyAssets.join("; ") : "none"}`,
+    `Proof availability: ${proofAvailabilityLines.length > 0 ? proofAvailabilityLines.join(" | ") : "none"}`,
     `Manual review warnings: ${warnings.length > 0 ? warnings.join("; ") : "none"}`,
     "Browser draft preparation is for human review only. Final submit remains manual and will not be clicked.",
     "Next commands: retry <action-id> | status | mark submitted",
@@ -400,7 +501,7 @@ async function handleThreadCommand(params: {
     if (state.jobId && maybeJobStatus) {
       updateApplicationStatus(state.jobId, "approved", "Approved from Slack socket thread command.");
     }
-    const updated = updateSlackThreadStateStatus(state.channelId, state.threadTs, "approve_requested");
+    updateSlackThreadStateStatus(state.channelId, state.threadTs, "approve_requested");
     await postThreadReply(
       params.client,
       params.channelId,
@@ -420,28 +521,16 @@ async function handleThreadCommand(params: {
   }
 
   if (command.type === "revise") {
-    if (state.jobId) {
-      const revisionText = command.instruction ? command.instruction : "Manual revision requested from Slack socket.";
-      const revised = recordApplicationRevisionRequest(state.jobId, revisionText);
-      if (!revised) {
-        updateSlackThreadStateStatus(state.channelId, state.threadTs, "revise_requested");
-        await postThreadReply(
-          params.client,
-          params.channelId,
-          params.threadTs,
-          `Revision request recorded for ${state.jobId}: ${revisionText} (no stored draft was found to apply).`
-        );
-      } else {
-        updateSlackThreadStateStatus(state.channelId, state.threadTs, "revise_requested");
-        await postThreadReply(
-          params.client,
-          params.channelId,
-          params.threadTs,
-          `Revision requested for ${state.jobId}: ${revisionText}`
-        );
-      }
-      return;
+    const result = applySlackThreadRevision({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      instruction: command.instruction ?? "",
+    });
+    if (!result.ok) {
+      updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
     }
+    await postThreadReply(params.client, params.channelId, params.threadTs, result.text);
+    return;
   }
 
   if (command.type === "prepare_draft") {

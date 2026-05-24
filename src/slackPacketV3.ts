@@ -1,6 +1,9 @@
 import { buildProposalContextPack } from "./skills/profileContextSkill";
 import { selectPortfolioAssetsForJob } from "./skills/portfolioSelectionSkill";
+import { buildProofAvailabilityReport, formatProofAvailabilityLines } from "./proofAvailability";
+import { formatConnectsStrategy } from "./connectsStrategy";
 import { qaProposalPlatformGrounding } from "./proposalQa";
+import { decideLeadHandling } from "./leadDecision";
 import { JobIntelligence, ScoredJob } from "./types";
 import { truncateText } from "./utils";
 
@@ -32,6 +35,11 @@ export interface SlackPacketV3Context {
 export interface SlackPacketV3Message {
   text: string;
   blocks: Array<Record<string, unknown>>;
+}
+
+export function shouldPostLeadPacket(job: ScoredJob, context: SlackPacketV3Context): boolean {
+  const intelligence = context.jobIntelligence ?? job.applicationDraft?.jobIntelligence;
+  return decideLeadHandling(job, intelligence).shouldPostToSlack;
 }
 
 const DEFAULT_COMMAND_HINTS = [
@@ -128,30 +136,6 @@ function quoteBlock(value: string, fallback: string): string {
     .split(/\r?\n/)
     .map((line) => `> ${line}`)
     .join("\n");
-}
-
-function humanizeAssetLabel(value: string): string {
-  const withoutSuffix = value
-    .split(/[\\/]/)
-    .pop()
-    ?.replace(/\.[a-z0-9]+$/i, "") ?? value;
-  return withoutSuffix
-    .split(/[-_\s]+/)
-    .filter(Boolean)
-    .map((part) => {
-      const lower = part.toLowerCase();
-      if (["dtc", "sms", "pdf", "crm", "esp"].includes(lower)) return lower.toUpperCase();
-      return `${lower.charAt(0).toUpperCase()}${lower.slice(1)}`;
-    })
-    .join(" ");
-}
-
-function formatAssetNames(values: string[], fallback: string, limit = 5): string {
-  const safeValues = sanitizeLines(values);
-  if (safeValues.length === 0) {
-    return `• ${fallback}`;
-  }
-  return safeValues.slice(0, limit).map((value) => `• ${humanizeAssetLabel(value)}`).join("\n");
 }
 
 function formatLinkList(values: Array<{ name: string; url: string }>, fallback: string, limit = 4): string {
@@ -253,6 +237,9 @@ function formatLeadContext(job: ScoredJob, context: SlackPacketV3Context): { tex
 
 export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Context): SlackPacketV3Message {
   const draft = job.applicationDraft;
+  const intelligence = context.jobIntelligence ?? draft?.jobIntelligence;
+  const leadDecision = decideLeadHandling(job, intelligence);
+
   const commands = context.commandHints?.length ? context.commandHints : DEFAULT_COMMAND_HINTS;
   const required = context.requiredConnects ?? draft?.suggestedConnects ?? job.connectsCost ?? 0;
   const boost = context.suggestedBoostConnects ?? draft?.suggestedBoostConnects ?? 0;
@@ -267,17 +254,20 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
 
   const profileContext = buildProposalContextPack(job);
   const portfolioSelection = selectPortfolioAssetsForJob(job);
+  const proofAvailability = buildProofAvailabilityReport(portfolioSelection);
 
-  const recommendOnlyAssets = portfolioSelection.recommendOnlyAssets.map((asset) => asset.name);
-  const autoAttachAssets = profileContext.selectedAttachments;
-  const mentionOnlyProof = portfolioSelection.mentionOnlyProof.map((proof) => `${proof.name}: ${proof.headline}`);
+  const proofAvailabilityLines = formatProofAvailabilityLines(proofAvailability, { limit: 6 });
   const manualWarnings = profileContext.manualReviewWarnings;
 
   const title = job.title || "Untitled Upwork job";
   const url = job.url || context.upworkUrl || "(Upwork URL missing)";
 
   const autoPrepareQueued = isAutoPrepareQueued(context);
-  const recommendedAction = autoPrepareQueued ? "Draft is being staged for manual review" : "Review lead";
+  const recommendedAction = autoPrepareQueued
+    ? "Draft is being staged for manual review"
+    : leadDecision.decision === "manual_review"
+      ? "Manual platform review before draft prep"
+      : "Review lead";
   const workflowLine = autoPrepareQueued
     ? "Final submit remains manual. The browser draft may be staged for review, but nothing is submitted automatically."
     : "Use `prepare draft` when you want the Upwork draft staged. Final submit remains manual.";
@@ -308,9 +298,7 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
   const proofSection = [
     `📎 *Suggested proof/assets*`,
     `*Proof points:*\n${bulletList(profileContext.selectedProofPoints, "No proof points selected.")}`,
-    `\n*Assets:*\n${formatAssetNames(autoAttachAssets, "No auto-attach assets selected.")}`,
-    recommendOnlyAssets.length > 0 ? `\n*Manual review first:*\n${formatAssetNames(recommendOnlyAssets, "No recommend-only assets selected.")}` : null,
-    mentionOnlyProof.length > 0 ? `\n*Mention-only proof:*\n${bulletList(mentionOnlyProof, "No mention-only proof selected.")}` : null,
+    `\n*Availability:*\n${bulletList(proofAvailabilityLines, "No proof assets selected.", 6)}`,
     profileContext.selectedFigmaLinks.length > 0 ? `\n*Figma:*\n${formatLinkList(profileContext.selectedFigmaLinks, "No Figma links recommended.")}` : null,
     profileContext.selectedVideoLinks.length > 0 ? `\n*Video:*\n${formatLinkList(profileContext.selectedVideoLinks, "No video links recommended.")}` : null,
   ].filter((value): value is string => Boolean(value)).join("\n");
@@ -323,7 +311,7 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
     `✍️ *Draft angle*\n${quoteBlock(profileContext.proposalAngle, "Draft angle is not available yet.")}\n\n*Proposal preview (review only):*\n${proposalPreview}`,
     hasQuestions ? `📝 *Screening answers*\n${questionText}` : null,
     proofSection,
-    `*Connects / bid:* required ${required} • suggested boost ${boost} • ${bid}`,
+    `*Connects / bid:* required ${required} • suggested boost ${boost} • ${bid}\n${draft?.connectsStrategy ? formatConnectsStrategy(draft.connectsStrategy) : "Connects strategy: not calculated."}`,
     `*Draft note:* ${draftNote}`,
     buildCommandsText(commands, { includeRetry }),
     workflowLine,
