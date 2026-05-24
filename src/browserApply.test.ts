@@ -40,12 +40,13 @@ async function runTests(): Promise<void> {
   const { buildBrowserApplyPlan } = require("./browserApply") as {
     buildBrowserApplyPlan: (jobId: string) => { plan: any; valid: boolean; issues: Array<{ severity: string; code: string; message: string }> };
   };
-  const { autoPrepareDraftForThread, buildCaptureCompletionStatus, decideAutoPrepareDraft, detectStateWithDiagnostics, isCaptureBlockedState, selectPageForBrowserAction, settlePageAndDetect } = require("./browserWorker") as {
+  const { autoPrepareDraftForThread, buildCaptureCompletionStatus, decideAutoPrepareDraft, detectStateWithDiagnostics, isCaptureBlockedState, postV3CapturePacketToThread, selectPageForBrowserAction, settlePageAndDetect } = require("./browserWorker") as {
     autoPrepareDraftForThread: (job: any, thread: { channelId: string; messageTs: string; threadTs: string }, options?: any) => { shouldQueue: boolean; category: string; note: string; actionId?: number; duplicate?: boolean };
     buildCaptureCompletionStatus: (input: { hasThreadContext: boolean; packetPosted: boolean; discoverySlackStatus?: "not_discovery" | "missing_channel" | "post_failed" | "posted" }) => string;
     decideAutoPrepareDraft: (job: any, options?: any) => { shouldQueue: boolean; category: string; note: string; reason: string };
     detectStateWithDiagnostics: (snapshot: { url: string; title: string; textExcerpt: string }, action: any) => { state: string; source: string; matchedText?: string; summary: string };
     isCaptureBlockedState: (state: string) => boolean;
+    postV3CapturePacketToThread: (job: any, thread: { channelId: string; messageTs: string; threadTs: string }, context: any, postThreadMessage?: (params: any) => Promise<boolean>) => Promise<"posted" | "skipped" | "failed">;
     selectPageForBrowserAction: (context: { pages?: () => Array<{ url: () => string }>; newPage: () => Promise<any> }, targetUrl: string) => Promise<{ page: any; reusedExistingPage: boolean; reason: string }>;
     settlePageAndDetect: (page: any, action: any) => Promise<{ snapshot: any; bodyText: string; detection: { state: string; source: string; matchedText?: string }; samples: Array<any> }>;
   };
@@ -75,6 +76,32 @@ async function runTests(): Promise<void> {
     classifyBrowserSessionError: (error: unknown) => string;
   };
 
+  const klaviyoIntel = (overrides: Record<string, unknown> = {}) => ({
+    schemaVersion: "1.0",
+    primaryPlatform: "Klaviyo",
+    platformsMentioned: ["Klaviyo"],
+    platformCategory: "ESP",
+    platformPreferenceTier: "core",
+    platformFitReason: "Klaviyo is the stated platform.",
+    shouldSkipForPlatform: false,
+    skipReason: "",
+    businessType: "DTC ecommerce",
+    ecommerceVertical: "beauty",
+    jobCategory: "Lifecycle marketing",
+    taskType: "Klaviyo retention flows and campaigns",
+    requiredSkills: ["Klaviyo", "Email Marketing", "SMS Marketing"],
+    clientGoal: "Increase repeat purchase and retention revenue",
+    redFlags: [],
+    fitScoreReasoning: "Strong DTC lifecycle fit.",
+    proposalAngle: "Lead with retention audit and priority lifecycle fixes.",
+    proofRecommendations: [],
+    draftConstraints: [],
+    platformMismatchWarnings: [],
+    needsManualReview: false,
+    confidence: "high",
+    ...overrides,
+  });
+
   try {
     const beautyJob = scoreJob({
       id: "beauty-job-1",
@@ -96,6 +123,7 @@ async function runTests(): Promise<void> {
       sourceQuery: "manual",
     });
     beautyJob.applicationDraft = buildApplicationDraft(beautyJob);
+    beautyJob.applicationDraft.jobIntelligence = klaviyoIntel();
     markJobSeen(beautyJob, false);
     upsertSlackThreadState({
       channelId: "C123",
@@ -106,6 +134,56 @@ async function runTests(): Promise<void> {
       status: "packet_sent",
     });
 
+    let threadPostCalled = false;
+    const postedStatus = await postV3CapturePacketToThread(
+      beautyJob,
+      { channelId: "C123", messageTs: "111.222", threadTs: "111.222" },
+      { upworkUrl: beautyJob.url, captureStatus: "packet_sent" },
+      async () => {
+        threadPostCalled = true;
+        return true;
+      },
+    );
+    assert(postedStatus === "posted", "Thread packet helper should report posted when Slack thread post succeeds");
+    assert(threadPostCalled, "Eligible thread packet should call Slack post helper");
+
+    const failedThreadStatus = await postV3CapturePacketToThread(
+      beautyJob,
+      { channelId: "C123", messageTs: "111.222", threadTs: "111.222" },
+      { upworkUrl: beautyJob.url, captureStatus: "packet_sent" },
+      async () => false,
+    );
+    assert(failedThreadStatus === "failed", "Thread packet helper should report failed when Slack post fails");
+
+    threadPostCalled = false;
+    const skippedThreadStatus = await postV3CapturePacketToThread(
+      {
+        ...beautyJob,
+        applicationDraft: {
+          ...beautyJob.applicationDraft,
+          jobIntelligence: klaviyoIntel({
+            primaryPlatform: "HubSpot",
+            platformsMentioned: ["HubSpot"],
+            platformPreferenceTier: "non_core_review",
+            shouldSkipForPlatform: true,
+            skipReason: "HubSpot CRM admin without ecommerce lifecycle scope.",
+            businessType: "B2B SaaS",
+            ecommerceVertical: "SaaS",
+            taskType: "CRM cleanup",
+            clientGoal: "Organize contacts",
+          }),
+        },
+      },
+      { channelId: "C123", messageTs: "111.222", threadTs: "111.222" },
+      { upworkUrl: beautyJob.url, captureStatus: "packet_sent" },
+      async () => {
+        threadPostCalled = true;
+        return true;
+      },
+    );
+    assert(skippedThreadStatus === "skipped", "Thread packet helper should report skipped when lead decision rejects posting");
+    assert(!threadPostCalled, "Skipped thread packet must not call Slack post helper");
+
     const beautyPlanResult = buildBrowserApplyPlan(beautyJob.id);
     assert(Boolean(beautyPlanResult.plan), "Beauty job should produce an apply plan");
     assert(beautyPlanResult.valid, `Beauty job plan should be valid, got issues: ${JSON.stringify(beautyPlanResult.issues)}`);
@@ -113,6 +191,18 @@ async function runTests(): Promise<void> {
     assert(
       beautyPlanResult.plan.attachments.some((item: { filePath: string }) => item.filePath === "profile/attachments/truly-beauty-case-study.pdf"),
       "Beauty job should auto-attach Truly Beauty case study",
+    );
+    assert(
+      beautyPlanResult.plan.missingLocalAssets.includes("profile/attachments/truly-beauty-case-study.pdf"),
+      "Browser draft prep should report selected assets that are missing locally",
+    );
+    assert(
+      beautyPlanResult.plan.proofAvailability.some((line: string) => line.includes("Status: File missing locally - manual upload needed")),
+      "Browser draft prep should include proof availability status lines",
+    );
+    assert(
+      beautyPlanResult.issues.some((issue) => issue.code === "attachment_missing_locally"),
+      "Missing local assets should be surfaced as warnings",
     );
     assert(
       !beautyPlanResult.plan.attachments.some((item: { filePath: string }) => item.filePath.includes("dr-rachael")),
@@ -130,6 +220,7 @@ async function runTests(): Promise<void> {
     });
     assert(prepareReply.includes("browser action #99"), "Prepare reply should include action id");
     assert(prepareReply.includes("profile/attachments/truly-beauty-case-study.pdf"), "Prepare reply should include selected auto-attach asset");
+    assert(prepareReply.includes("Status: File missing locally - manual upload needed"), "Prepare reply should include clear proof availability status");
     assert(prepareReply.includes("Final submit remains manual"), "Prepare reply should keep manual submit reminder");
     assert(!prepareReply.toLowerCase().includes("copy/paste"), "Prepare reply must not introduce copy/paste workflow");
 
@@ -190,6 +281,20 @@ async function runTests(): Promise<void> {
     assert(duplicateAutoPrepare.duplicate === true, "Duplicate auto-prepare should not queue a second action");
     assert(duplicateAutoPrepare.note.includes("No duplicate was created"), "Duplicate note should explain that no duplicate was created");
 
+    const missingIntelligenceDecision = decideAutoPrepareDraft(
+      { ...beautyJob, applicationDraft: { ...beautyJob.applicationDraft, jobIntelligence: undefined } },
+      {
+        enabled: true,
+        minScore: 80,
+        maxConnects: 30,
+        requireBrowserHealthy: true,
+        sessionStatus: { state: "healthy", updatedAt: new Date().toISOString(), challengeEvents: [], blocked: false, alertCooldownRemainingMs: 0 },
+      },
+    );
+    assert(!missingIntelligenceDecision.shouldQueue, "Missing job intelligence should not auto-queue browser draft prep");
+    assert(missingIntelligenceDecision.category === "skipped_manual_override_available", "Missing job intelligence should require manual review");
+    assert(missingIntelligenceDecision.note.includes("job intelligence and platform eligibility"), "Missing-intelligence note should explain platform review gating");
+
     const lowScoreDecision = decideAutoPrepareDraft(
       { ...beautyJob, score: 60 },
       {
@@ -217,6 +322,68 @@ async function runTests(): Promise<void> {
     assert(!highConnectsDecision.shouldQueue, "High-connects job should not auto-queue");
     assert(highConnectsDecision.category === "skipped_manual_override_available", "High-connects job should allow manual override");
     assert(highConnectsDecision.note.includes("manually approve staging this one"), "High-connects note should allow manual override");
+
+    const ineligiblePlatformDecision = decideAutoPrepareDraft(
+      {
+        ...beautyJob,
+        applicationDraft: {
+          ...beautyJob.applicationDraft,
+          jobIntelligence: {
+            ...beautyJob.applicationDraft.jobIntelligence,
+            primaryPlatform: "HubSpot",
+            platformsMentioned: ["HubSpot"],
+            platformPreferenceTier: "non_core_review",
+            shouldSkipForPlatform: true,
+            skipReason: "HubSpot CRM admin without ecommerce lifecycle scope.",
+            businessType: "B2B SaaS",
+            ecommerceVertical: "SaaS",
+            taskType: "CRM cleanup",
+            clientGoal: "Organize contacts",
+          },
+        },
+      },
+      {
+        enabled: true,
+        minScore: 80,
+        maxConnects: 30,
+        requireBrowserHealthy: true,
+        sessionStatus: { state: "healthy", updatedAt: new Date().toISOString(), challengeEvents: [], blocked: false, alertCooldownRemainingMs: 0 },
+      },
+    );
+    assert(!ineligiblePlatformDecision.shouldQueue, "Ineligible platform should not auto-queue");
+    assert(ineligiblePlatformDecision.category === "blocked_no_manual_override", "Ineligible platform should be blocked");
+    assert(
+      ineligiblePlatformDecision.note.includes("platform is currently ineligible") ||
+      ineligiblePlatformDecision.note.includes("lead decision is skip"),
+      "Ineligible platform note should explain block"
+    );
+
+    const manualReviewDecision = decideAutoPrepareDraft(
+      {
+        ...beautyJob,
+        title: "DTC retention strategist (platform not specified)",
+        description: "Need ecommerce lifecycle retention support across email and SMS.",
+        applicationDraft: {
+          ...beautyJob.applicationDraft,
+          jobIntelligence: {
+            ...beautyJob.applicationDraft.jobIntelligence,
+            primaryPlatform: "unknown",
+            platformsMentioned: [],
+            platformPreferenceTier: "unknown",
+          },
+        },
+      },
+      {
+        enabled: true,
+        minScore: 80,
+        maxConnects: 30,
+        requireBrowserHealthy: true,
+        sessionStatus: { state: "healthy", updatedAt: new Date().toISOString(), challengeEvents: [], blocked: false, alertCooldownRemainingMs: 0 },
+      },
+    );
+    assert(!manualReviewDecision.shouldQueue, "Manual-review lead should not auto-queue");
+    assert(manualReviewDecision.category === "skipped_manual_override_available", "Manual-review lead should allow manual override only");
+    assert(manualReviewDecision.note.includes("manual review"), "Manual-review decision should explain review gating");
 
     const missingDraftDecision = decideAutoPrepareDraft(
       { ...beautyJob, applicationDraft: undefined },

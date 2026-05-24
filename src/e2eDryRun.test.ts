@@ -158,7 +158,7 @@ async function runTests(): Promise<void> {
     });
 
     assert(packet.text.includes("Truly Beauty"), "selected proof should include Truly Beauty");
-    assert(packet.text.includes("profile/attachments/truly-beauty-case-study.pdf"), "selected auto-attach should include truly-beauty-case-study.pdf");
+    assert(packet.text.includes("Status: File missing locally - manual upload needed"), "packet should show proof availability without raw local paths");
     assert(!packet.text.toLowerCase().includes("copy/paste"), "packet should not include copy/paste instruction");
 
     const prepareActionsBeforeWorker = listBrowserActions(null, 20).filter((action) => action.actionType === "prepare_application_review" && action.jobId === storedJob.id);
@@ -177,10 +177,13 @@ async function runTests(): Promise<void> {
     const planResult = buildBrowserApplyPlan(storedJob.id);
     assert(planResult.valid, "apply plan should be valid for dry-run verification");
     assert(planResult.plan.stopBeforeSubmit === true, "apply plan must include stopBeforeSubmit=true");
+    assert(planResult.plan.screeningAnswers.length > 0, "apply plan should persist structured screening answers across the browser queue boundary");
+    assert(planResult.plan.connectsStrategy.decision === "safe_apply", "apply plan should preserve the safe Connects strategy after reload");
 
     const diagnosticsPath = resolve(tempDir, "artifacts", `browser-action-${queued.actionId}-prepare_application_review-apply-diagnostics.json`);
     const diagnostics = JSON.parse(readFileSync(diagnosticsPath, "utf8"));
     assert(diagnostics.final_submit_blocked !== false, "final_submit_blocked should remain true in diagnostics");
+    assert(diagnostics.connectsDecision === "safe_apply", "diagnostics should report the persisted safe Connects decision");
 
     console.log(JSON.stringify({
       captureQueued: queuedCapture,

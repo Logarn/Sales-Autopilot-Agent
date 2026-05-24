@@ -1,7 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { CONNECTS_RULES_CONFIG_PATH } from "./config";
+import { evaluateConnectsStrategy } from "./connectsStrategy";
 import { getApplicationDraft, getApplicationJobLink, getScoredJobForSlackPreview } from "./db";
+import { buildProofAvailabilityReport, formatProofAvailabilityLines } from "./proofAvailability";
 import { buildProposalContextPack } from "./skills/profileContextSkill";
 import { selectPortfolioAssetsForJob } from "./skills/portfolioSelectionSkill";
 import {
@@ -113,11 +115,6 @@ function buildAttachmentInstructions(items: PortfolioItem[]): {
       skipped.push({ id: item.id, name, reason: "Portfolio item has no file path." });
       continue;
     }
-    const resolvedPath = path.resolve(process.cwd(), item.filePath);
-    if (!fs.existsSync(resolvedPath)) {
-      skipped.push({ id: item.id, name, reason: `Attachment file not found: ${item.filePath}` });
-      continue;
-    }
     attachments.push({ id: item.id, name, filePath: item.filePath, sensitivity: item.sensitivity });
   }
 
@@ -132,12 +129,7 @@ function buildAutoAttachmentInstructions(paths: string[]): {
   const skipped: BrowserApplySkippedAttachment[] = [];
 
   for (const filePath of paths) {
-    const resolvedPath = path.resolve(process.cwd(), filePath);
     const name = path.basename(filePath);
-    if (!fs.existsSync(resolvedPath)) {
-      skipped.push({ id: filePath, name, reason: `Attachment file not found: ${filePath}` });
-      continue;
-    }
     attachments.push({ id: filePath, name, filePath, sensitivity: "approved_external" });
   }
 
@@ -187,6 +179,12 @@ function buildConnectsPlan(draft: ApplicationDraft, rules: ConnectsRules, issues
   return { required, boost, total, approvalRequired, notes };
 }
 
+function findMissingLocalAssets(attachments: BrowserApplyAttachmentInstruction[]): string[] {
+  return attachments
+    .map((attachment) => attachment.filePath)
+    .filter((filePath) => !fs.existsSync(path.resolve(process.cwd(), filePath)));
+}
+
 export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOptions = {}): BrowserApplyPlanResult {
   const issues: BrowserApplyValidationIssue[] = [];
   const draft = getApplicationDraft(jobId);
@@ -224,14 +222,37 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
   for (const skippedAttachment of skipped) {
     issues.push(issue("warning", "attachment_skipped", `${skippedAttachment.name}: ${skippedAttachment.reason}`));
   }
+  const missingLocalAssets = findMissingLocalAssets(attachments);
+  for (const missingPath of missingLocalAssets) {
+    issues.push(issue("warning", "attachment_missing_locally", `${missingPath} is selected for review but is missing locally.`));
+  }
 
   const manualReviewAssets = portfolioSelection?.recommendOnlyAssets.map((asset) => `${asset.name} — ${asset.path}`) ?? [];
   const mentionOnlyProof = portfolioSelection?.mentionOnlyProof.map((proof) => `${proof.name}: ${proof.headline}`) ?? [];
+  const proofAvailability = portfolioSelection
+    ? formatProofAvailabilityLines(buildProofAvailabilityReport(portfolioSelection), { includePath: true, limit: 8 })
+    : [];
   const figmaRecommendations = profileContext?.selectedFigmaLinks.map((link) => `${link.name}: ${link.url}`) ?? [];
   const videoRecommendations = profileContext?.selectedVideoLinks.map((link) => `${link.name}: ${link.url}`) ?? [];
   const manualReviewWarnings = profileContext?.manualReviewWarnings ?? [];
 
   const connects = buildConnectsPlan(draft, loadConnectsRules(options.connectsRulesPath), issues);
+  const connectsStrategy = draft.connectsStrategy ?? (scoredJob
+    ? evaluateConnectsStrategy({
+        job: scoredJob,
+        score: scoredJob.score,
+        scoreBreakdown: scoredJob.scoreBreakdown,
+        suggestedBoostConnects: connects.boost,
+      })
+    : {
+        decision: connects.approvalRequired ? "manual_review" : "safe_apply",
+        requiredConnects: connects.required,
+        suggestedBoostConnects: connects.boost,
+        totalConnects: connects.total,
+        expectedValueScore: connects.approvalRequired ? 50 : 70,
+        reasons: [],
+        risks: connects.notes,
+      });
   const plan: BrowserApplyFillPlan | null = urlInfo
     ? {
         schemaVersion: "1.0",
@@ -248,11 +269,14 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
         skippedAttachments: skipped,
         manualReviewAssets,
         mentionOnlyProof,
+        proofAvailability,
         figmaRecommendations,
         videoRecommendations,
         manualReviewWarnings,
+        missingLocalAssets,
         highlights: draft.structuredProposal?.browserFillNotes.highlights ?? (profileAttachments.length > 0 ? profileAttachments : fallbackDraftAttachments),
         connects,
+        connectsStrategy,
         stopBeforeSubmit: true,
         dryRunSafe: true,
         validationIssues: issues,
