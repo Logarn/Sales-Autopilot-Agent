@@ -48,7 +48,7 @@ Preferred browser model:
 Repo path:
 
 ```txt
-/Users/admin/upwork-rss-reader
+/Users/admin/upwork-rss-reader-gascity-test
 ```
 
 Product has been renamed in code/docs to:
@@ -63,15 +63,28 @@ Package name:
 upwork-agent
 ```
 
-Main branch contains the latest integrated work.
+This handoff should be treated as test-repo state, not the old main project.
 
-Known uncommitted local file usually present:
+Promotion and deployment references:
 
 ```txt
-.pi/taskplane.json
+docs/DEPLOYMENT.md
+docs/CONTABO_RUNBOOK.md
 ```
 
-This is Taskplane runtime metadata, not app code.
+Validation commands:
+
+```bash
+npm run validate:promotion
+npm run validate:contabo-env
+npm run preflight:contabo
+```
+
+Contabo deployment prep must preserve the existing safety boundary:
+
+- lead engine may run continuously later
+- browser session may be reused over CDP later
+- final Upwork submit remains manual
 
 ## Implemented capabilities
 

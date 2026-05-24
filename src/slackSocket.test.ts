@@ -45,7 +45,8 @@ function runTests(): void {
   mkdirSync(dirname(tempDb), { recursive: true });
   process.env.DB_PATH = tempDb;
 
-  const { buildSlackSocketStartupError, parseSlackThreadCommand, parseUpworkJobUrlFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread } = require("./slackSocket") as {
+  const { applySlackThreadRevision, buildSlackSocketStartupError, parseSlackThreadCommand, parseUpworkJobUrlFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread } = require("./slackSocket") as {
+    applySlackThreadRevision: (input: { channelId: string; threadTs: string; instruction: string }) => { ok: boolean; text: string; proposalVersion?: number };
     buildSlackSocketStartupError: (input: { socketEnabled: boolean; botToken: string; appToken: string }) => string | null;
     parseSlackThreadCommand: (value: string) => {
       type: string;
@@ -57,8 +58,9 @@ function runTests(): void {
     queueCaptureFromSlackUrl: (input: { channelId: string; messageTs: string; threadTs: string; text: string }) => { parsed: any; state: any; action: any } | null;
     queuePrepareDraftFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string; actionId?: number };
   };
-  const { closeDb, getBrowserActionById, markJobSeen, upsertSlackThreadState, listBrowserActions } = require("./db") as {
+  const { closeDb, getApplicationDraft, getBrowserActionById, markJobSeen, upsertSlackThreadState, listBrowserActions } = require("./db") as {
     closeDb: () => void;
+    getApplicationDraft: (jobId: string) => { proposalText: string } | null;
     getBrowserActionById: (id: number) => { payload: Record<string, unknown> } | null;
     markJobSeen: (job: any, notified: boolean) => void;
     upsertSlackThreadState: (input: any) => unknown;
@@ -195,6 +197,7 @@ function runTests(): void {
     assert(prepareResult.ok, `Expected prepare draft queue to succeed, got: ${prepareResult.text}`);
     assert(typeof prepareResult.actionId === "number", "Prepare draft should return an action id.");
     assert(prepareResult.text.includes("profile/attachments/truly-beauty-case-study.pdf"), "Prepare draft reply should include selected auto-attach asset.");
+    assert(prepareResult.text.includes("Status: File missing locally - manual upload needed"), "Prepare draft reply should report missing local proof assets.");
     assert(prepareResult.text.includes("Final submit remains manual"), "Prepare draft reply should keep manual submit reminder.");
     assert(!prepareResult.text.toLowerCase().includes("copy/paste"), "Prepare draft reply must not introduce copy/paste workflow.");
 
@@ -205,6 +208,17 @@ function runTests(): void {
 
     const queuedActions = listBrowserActions(null, 10).filter((action) => action.actionType === "prepare_application_review" && action.jobId === prepareJob.id);
     assert(queuedActions.length === 1, `Expected exactly one queued prepare_application_review action, got ${queuedActions.length}`);
+
+    const revisionResult = applySlackThreadRevision({
+      channelId: "C123",
+      threadTs: "111.222",
+      instruction: "make opener more direct",
+    });
+    assert(revisionResult.ok, `Expected Slack revise to apply stored draft update, got: ${revisionResult.text}`);
+    assert(revisionResult.proposalVersion === 2, `Expected revised proposal version 2, got ${revisionResult.proposalVersion}`);
+    assert(revisionResult.text.includes("Browser draft needs update: yes"), "Revision reply should flag that queued browser draft needs updating.");
+    const revisedDraft = getApplicationDraft(prepareJob.id);
+    assert(Boolean(revisedDraft?.proposalText.includes("highest-leverage retention work")), "Stored draft should be updated with deterministic revision text.");
 
     const envError = buildSlackSocketStartupError({ socketEnabled: false, botToken: "", appToken: "" });
     assert(typeof envError === "string", "Expected an error when socket mode is disabled.");

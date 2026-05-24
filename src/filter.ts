@@ -1,8 +1,8 @@
 import { scoreJobStructured, getKeywordConfig as getStructuredKeywordConfig } from "./scoring";
-import { JobPosting, ScoredJob } from "./types";
+import { JobIntelligence, JobPosting, ScoredJob } from "./types";
 
-export function scoreJob(job: JobPosting): ScoredJob {
-  const scoreResult = scoreJobStructured(job);
+export function scoreJob(job: JobPosting, intelligence?: JobIntelligence | null): ScoredJob {
+  const scoreResult = scoreJobStructured(job, intelligence);
 
   return {
     ...job,

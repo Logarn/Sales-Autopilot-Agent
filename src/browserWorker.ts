@@ -26,6 +26,7 @@ import {
   incrementBrowserActionAttempts,
   listBrowserActions,
   markJobSeen,
+  updateApplicationStatus,
   updateBrowserActionStatus,
   updateSlackThreadStateStatus,
   upsertSlackThreadState,
@@ -33,7 +34,7 @@ import {
 import { buildApplicationDraft } from "./agent";
 import { buildDeterministicOpportunityPacket, normalizedPacketToJobPosting } from "./normalization";
 import { scoreJob } from "./filter";
-import { attachJobIntelligenceToDraft } from "./jobIntelligenceParser";
+import { detectPlatformMismatchWarnings, parseJobIntelligence } from "./jobIntelligenceParser";
 import { assessCaptureQuality, buildQuestionAnswers, canonicalizeUpworkJobUrl, extractUpworkJobContent, extractUpworkJobIdFromUrl, extractUpworkSourceContextJobContent, isSafeUpworkJobUrl, parseCaptureQuestions } from "./browserCapture";
 import type { UpworkStructuredExtractionResult } from "./browserCapture";
 import { logger } from "./logger";
@@ -43,7 +44,9 @@ import {
   BrowserApplyValidationIssue,
   ScoredJob,
 } from "./types";
-import { buildV3CapturePacket, SlackPacketV3Context } from "./slackPacketV3";
+import { buildV3CapturePacket, shouldPostLeadPacket, SlackPacketV3Context } from "./slackPacketV3";
+import { evaluatePlatformEligibility } from "./platformEligibility";
+import { decideLeadHandling } from "./leadDecision";
 import { postSlackChannelMessage, postSlackThreadMessage } from "./slackThread";
 import {
   BrowserSessionStatus,
@@ -119,6 +122,21 @@ interface BrowserWorkerOptions {
   liveActionLimit: number;
 }
 
+export interface ControlledWorkerRunOptions {
+  maxActions?: number;
+  dryRun?: boolean;
+  allowedActionTypes?: Array<"capture_job_from_url" | "open_job" | "open_apply_page" | "prepare_application_review">;
+}
+
+export interface ControlledWorkerRunSummary {
+  actionsProcessed: number;
+  actionsCompleted: number;
+  actionsPaused: number;
+  actionsSkipped: number;
+  stoppedReason: string;
+  remainingPendingCount: number;
+}
+
 interface PageSnapshot {
   url: string;
   title: string;
@@ -177,6 +195,7 @@ export interface BrowserInspectionDiagnostics {
 interface PlaywrightLocatorLike {
   count(): Promise<number>;
   first(): PlaywrightLocatorLike;
+  nth?(index: number): PlaywrightLocatorLike;
   textContent(options?: { timeout?: number }): Promise<string | null>;
   fill(value: string, options?: { timeout?: number }): Promise<unknown>;
   setInputFiles(files: string[], options?: { timeout?: number }): Promise<unknown>;
@@ -214,12 +233,16 @@ interface ApplyPreparationDiagnostics {
   requiredConnects: number | null;
   boostConnects: number | null;
   totalConnects: number | null;
+  connectsDecision: string | null;
+  connectsExpectedValue: number | null;
   selectedAttachments: string[];
   manualReviewAssets: string[];
   mentionOnlyProof: string[];
+  proofAvailability: string[];
   figmaRecommendations: string[];
   videoRecommendations: string[];
   manualReviewWarnings: string[];
+  missingLocalAssets: string[];
   skippedAttachments: Array<{ name: string; reason: string }>;
   selectedHighlights: string[];
   warnings: string[];
@@ -411,7 +434,9 @@ function buildWarnings(plan: BrowserApplyFillPlan | null, issues: BrowserApplyVa
   const warnings = issues.map((item) => `[${item.severity}] ${item.code}: ${item.message}`);
   if (plan) {
     warnings.push(...plan.connects.notes);
+    warnings.push(...plan.connectsStrategy.risks.map((risk) => `Connects strategy: ${risk}`));
     warnings.push(...plan.skippedAttachments.map((attachment) => `${attachment.name}: ${attachment.reason}`));
+    warnings.push(...plan.missingLocalAssets.map((asset) => `Missing local asset: ${asset}`));
     warnings.push(...plan.manualReviewWarnings);
   }
   return Array.from(new Set(warnings));
@@ -442,12 +467,16 @@ function buildApplyDiagnostics(
     requiredConnects: plan?.connects.required ?? null,
     boostConnects: plan?.connects.boost ?? null,
     totalConnects: plan?.connects.total ?? null,
+    connectsDecision: plan?.connectsStrategy.decision ?? null,
+    connectsExpectedValue: plan?.connectsStrategy.expectedValueScore ?? null,
     selectedAttachments: plan?.attachments.map((attachment) => attachment.name) ?? [],
     manualReviewAssets: plan?.manualReviewAssets ?? [],
     mentionOnlyProof: plan?.mentionOnlyProof ?? [],
+    proofAvailability: plan?.proofAvailability ?? [],
     figmaRecommendations: plan?.figmaRecommendations ?? [],
     videoRecommendations: plan?.videoRecommendations ?? [],
     manualReviewWarnings: plan?.manualReviewWarnings ?? [],
+    missingLocalAssets: plan?.missingLocalAssets ?? [],
     skippedAttachments: plan?.skippedAttachments.map(({ name, reason }) => ({ name, reason })) ?? [],
     selectedHighlights: plan?.highlights ?? [],
     warnings: buildWarnings(plan, issues),
@@ -477,14 +506,20 @@ function formatApplyDiagnostics(diagnostics: ApplyPreparationDiagnostics): strin
     `  screening_answers_count: ${diagnostics.screeningAnswersCount}`,
     `  rate_bid_amount: ${diagnostics.rate ?? "n/a"}`,
     `  connects: required=${diagnostics.requiredConnects ?? "n/a"} boost=${diagnostics.boostConnects ?? "n/a"} total=${diagnostics.totalConnects ?? "n/a"}`,
+    `  connects_decision: ${diagnostics.connectsDecision ?? "n/a"} ev=${diagnostics.connectsExpectedValue ?? "n/a"}`,
     `  auto_attach_assets: ${diagnostics.selectedAttachments.length > 0 ? diagnostics.selectedAttachments.join(", ") : "none"}`,
     `  manual_review_assets: ${diagnostics.manualReviewAssets.length > 0 ? diagnostics.manualReviewAssets.join("; ") : "none"}`,
     `  mention_only_proof: ${diagnostics.mentionOnlyProof.length > 0 ? diagnostics.mentionOnlyProof.join("; ") : "none"}`,
+    `  proof_availability: ${diagnostics.proofAvailability.length > 0 ? diagnostics.proofAvailability.join("; ") : "none"}`,
     `  figma_recommendations: ${diagnostics.figmaRecommendations.length > 0 ? diagnostics.figmaRecommendations.join("; ") : "none"}`,
     `  video_recommendations: ${diagnostics.videoRecommendations.length > 0 ? diagnostics.videoRecommendations.join("; ") : "none"}`,
+    `  missing_local_assets: ${diagnostics.missingLocalAssets.length > 0 ? diagnostics.missingLocalAssets.join("; ") : "none"}`,
     `  skipped_attachments: ${diagnostics.skippedAttachments.length > 0 ? diagnostics.skippedAttachments.map((item) => `${item.name} (${item.reason})`).join("; ") : "none"}`,
     `  manual_review_warnings: ${diagnostics.manualReviewWarnings.length > 0 ? diagnostics.manualReviewWarnings.join("; ") : "none"}`,
     `  selected_highlights: ${diagnostics.selectedHighlights.length > 0 ? diagnostics.selectedHighlights.join("; ") : "none"}`,
+    `  fields_filled: ${diagnostics.attemptedFields.length > 0 ? diagnostics.attemptedFields.join(", ") : "none"}`,
+    `  fields_not_filled: ${diagnostics.skippedFields.length > 0 ? diagnostics.skippedFields.join(", ") : "none"}`,
+    `  fields_manual_review: ${diagnostics.manualFields.length > 0 ? diagnostics.manualFields.join(", ") : "none"}`,
     `  stop_before_submit: ${diagnostics.stopBeforeSubmit}`,
     `  final_submit_blocked: true`,
     `  warnings: ${diagnostics.warnings.length > 0 ? diagnostics.warnings.join("; ") : "none"}`,
@@ -710,18 +745,33 @@ export async function settlePageAndDetect(
   return { snapshot: finalSnapshot, bodyText: finalBodyText, detection: finalDetection, samples };
 }
 
-async function postV3CapturePacketToThread(
+export async function postV3CapturePacketToThread(
   job: ScoredJob,
   thread: SlackThreadContext,
   context: SlackPacketV3Context,
-): Promise<void> {
+  postThreadMessage: typeof postSlackThreadMessage = postSlackThreadMessage,
+): Promise<"posted" | "skipped" | "failed"> {
+  if (!shouldPostLeadPacket(job, context)) {
+    const intelligence = context.jobIntelligence ?? job.applicationDraft?.jobIntelligence;
+    const eligibility = evaluatePlatformEligibility(intelligence);
+    logger.info(
+      `Lead skipped for platform eligibility: jobId=${job.id} primaryPlatform=${intelligence?.primaryPlatform ?? "unknown"} ` +
+      `platformEligibility=${eligibility.platformEligibility} skippedBecausePlatform=${eligibility.skippedBecausePlatform} ` +
+      `eligibilityReason=${eligibility.eligibilityReason}`
+    );
+    return "skipped";
+  }
   const packet = buildV3CapturePacket(job, context);
-  await postSlackThreadMessage({
+  const posted = await postThreadMessage({
     channel: thread.channelId,
     threadTs: thread.threadTs,
     text: packet.text,
     blocks: packet.blocks,
   });
+  if (posted && job.applicationDraft) {
+    updateApplicationStatus(job.id, "sent_to_slack", "Lead packet posted to Slack for review.");
+  }
+  return posted ? "posted" : "failed";
 }
 
 function buildPrepareDraftStatusMessage(input: {
@@ -730,21 +780,34 @@ function buildPrepareDraftStatusMessage(input: {
   nextCommand?: string;
 }): string {
   const { diagnostics } = input;
+  const readyState = diagnostics.state === "apply_page_loaded" || diagnostics.state === "dry_run" || diagnostics.state === "prepared";
+  const needsManualReview = diagnostics.validationIssues.some((issue) => issue.severity === "warning" || issue.severity === "error") ||
+    diagnostics.missingLocalAssets.length > 0 ||
+    diagnostics.manualFields.length > 0 ||
+    diagnostics.connectsDecision !== "safe_apply";
   return [
     input.heading,
+    `Review state: ${readyState ? "draft prepared for human review" : "paused before final review"}`,
     `Job: ${diagnostics.jobTitle ?? diagnostics.jobId}`,
     `Job ID: ${diagnostics.jobId}`,
     `Apply URL: ${diagnostics.applyUrl ?? diagnostics.sourceUrl ?? "n/a"}`,
-    `Cover letter: present=${diagnostics.coverLetterPresent} length=${diagnostics.coverLetterLength}`,
-    `Screening answers: ${diagnostics.screeningAnswersCount}`,
+    `Cover letter ready: ${diagnostics.coverLetterPresent ? `yes (${diagnostics.coverLetterLength} chars)` : "no"}`,
+    `Screening answers ready: ${diagnostics.screeningAnswersCount > 0 ? `yes (${diagnostics.screeningAnswersCount})` : "none detected"}`,
     `Rate/bid: ${diagnostics.rate ?? "n/a"}`,
     `Connects: required=${diagnostics.requiredConnects ?? "n/a"} boost=${diagnostics.boostConnects ?? "n/a"} total=${diagnostics.totalConnects ?? "n/a"}`,
+    `Connects decision: ${diagnostics.connectsDecision ?? "n/a"}${diagnostics.connectsExpectedValue !== null ? ` (EV ${diagnostics.connectsExpectedValue}/100)` : ""}`,
     `Auto-attach assets: ${diagnostics.selectedAttachments.length > 0 ? diagnostics.selectedAttachments.join(", ") : "none"}`,
     `Manual-review assets: ${diagnostics.manualReviewAssets.length > 0 ? diagnostics.manualReviewAssets.join("; ") : "none"}`,
     `Mention-only proof: ${diagnostics.mentionOnlyProof.length > 0 ? diagnostics.mentionOnlyProof.join("; ") : "none"}`,
+    `Proof availability: ${diagnostics.proofAvailability.length > 0 ? diagnostics.proofAvailability.join("; ") : "none"}`,
+    `Missing local assets: ${diagnostics.missingLocalAssets.length > 0 ? diagnostics.missingLocalAssets.join("; ") : "none"}`,
+    `Fields filled: ${diagnostics.attemptedFields.length > 0 ? diagnostics.attemptedFields.join(", ") : "none"}`,
+    `Fields not filled: ${diagnostics.skippedFields.length > 0 ? diagnostics.skippedFields.join(", ") : "none"}`,
+    `Manual review fields: ${diagnostics.manualFields.length > 0 ? diagnostics.manualFields.join(", ") : "none"}`,
+    `Needs manual action before submit: ${needsManualReview ? "yes" : "no"}`,
     `Warnings: ${diagnostics.warnings.length > 0 ? diagnostics.warnings.join("; ") : "none"}`,
     `Stop before submit: ${diagnostics.stopBeforeSubmit}`,
-    "Final submit was not clicked.",
+    "Final submit remains manual and was not clicked.",
     input.nextCommand ? `Next command: ${input.nextCommand}` : "Next commands: retry <action-id> | status | mark submitted",
   ].join("\n");
 }
@@ -796,6 +859,65 @@ export function decideAutoPrepareDraft(
       category: "blocked_no_manual_override",
       reason: "draft missing",
       note: "Not auto-preparing because no stored proposal draft exists yet. Revise/regenerate the proposal first.",
+    };
+  }
+  if (!draft.jobIntelligence) {
+    return {
+      shouldQueue: false,
+      category: "skipped_manual_override_available",
+      reason: "job intelligence missing",
+      note: "Not auto-preparing until job intelligence and platform eligibility are available or manually reviewed. You can still reply `prepare draft` after review.",
+    };
+  }
+  const leadDecision = decideLeadHandling(job, draft.jobIntelligence);
+  if (leadDecision.decision === "skip") {
+    return {
+      shouldQueue: false,
+      category: "blocked_no_manual_override",
+      reason: "lead decision skip",
+      note: `Not auto-preparing because lead decision is skip. ${leadDecision.reason}`,
+    };
+  }
+  if (leadDecision.decision === "manual_review") {
+    return {
+      shouldQueue: false,
+      category: "skipped_manual_override_available",
+      reason: "lead decision manual review",
+      note: `Not auto-preparing until manual review is completed. ${leadDecision.reason} You can still reply \`prepare draft\` after review.`,
+    };
+  }
+  const connectsStrategy = draft.connectsStrategy ?? job.scoreBreakdown.connectsStrategy;
+  if (connectsStrategy?.decision === "skip") {
+    return {
+      shouldQueue: false,
+      category: "blocked_no_manual_override",
+      reason: "connects strategy skip",
+      note: "Not auto-preparing because the Connects strategy says expected value is too weak. Do not spend Connects on this lead without explicit review.",
+    };
+  }
+  if (connectsStrategy?.decision === "manual_review") {
+    return {
+      shouldQueue: false,
+      category: "skipped_manual_override_available",
+      reason: "connects strategy manual review",
+      note: "Not auto-preparing because Connects spend needs manual review. Reply `prepare draft` only after confirming the spend is worth it.",
+    };
+  }
+  const eligibility = evaluatePlatformEligibility(draft.jobIntelligence);
+  if (eligibility.platformEligibility === "ineligible") {
+    return {
+      shouldQueue: false,
+      category: "blocked_no_manual_override",
+      reason: "platform ineligible",
+      note: `Not auto-preparing because platform is currently ineligible. ${eligibility.eligibilityReason}`,
+    };
+  }
+  if (eligibility.platformEligibility === "manual_review") {
+    return {
+      shouldQueue: false,
+      category: "skipped_manual_override_available",
+      reason: "platform manual review",
+      note: `Not auto-preparing until platform is confirmed. ${eligibility.eligibilityReason} You can still reply \`prepare draft\` after manual review.`,
     };
   }
   if (job.score < minScore) {
@@ -946,6 +1068,34 @@ async function tryFillFirst(page: PlaywrightPageLike, selectors: string[], value
   return false;
 }
 
+async function tryFillScreeningAnswers(page: PlaywrightPageLike, answers: string[]): Promise<{ filled: number; skipped: number }> {
+  const cleanAnswers = answers.map((answer) => answer.trim()).filter(Boolean);
+  if (cleanAnswers.length === 0) return { filled: 0, skipped: 0 };
+
+  const textareas = page.locator("textarea");
+  if (typeof textareas.nth !== "function") {
+    return { filled: 0, skipped: cleanAnswers.length };
+  }
+
+  const count = await textareas.count();
+  if (count <= 1) {
+    return { filled: 0, skipped: cleanAnswers.length };
+  }
+
+  let filled = 0;
+  for (let index = 0; index < cleanAnswers.length && index + 1 < count; index += 1) {
+    try {
+      await textareas.nth(index + 1).fill(cleanAnswers[index], { timeout: 1500 });
+      filled += 1;
+    } catch {
+      // Leave the remaining answer for manual review rather than risking a wrong field.
+      break;
+    }
+  }
+
+  return { filled, skipped: cleanAnswers.length - filled };
+}
+
 async function trySetFiles(page: PlaywrightPageLike, selectors: string[], files: string[]): Promise<boolean> {
   if (files.length === 0) return false;
   for (const selector of selectors) {
@@ -996,10 +1146,23 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
   const skippedFields: string[] = [];
   const manualFields: string[] = [];
 
-  if (await tryFillFirst(page, ["textarea[name*='cover']", "textarea[aria-label*='Cover']", "textarea"], plan.coverLetter)) {
+  const coverLetterFilled = await tryFillFirst(page, ["textarea[name*='cover']", "textarea[aria-label*='Cover']", "textarea"], plan.coverLetter);
+  if (coverLetterFilled) {
     attemptedFields.push("coverLetter");
   } else {
     skippedFields.push("coverLetter");
+  }
+
+  if (plan.screeningAnswers.length > 0) {
+    const screening = coverLetterFilled
+      ? await tryFillScreeningAnswers(page, plan.screeningAnswers)
+      : { filled: 0, skipped: plan.screeningAnswers.length };
+    if (screening.filled > 0) {
+      attemptedFields.push(`screeningAnswers:${screening.filled}`);
+    }
+    if (screening.skipped > 0) {
+      manualFields.push("screeningAnswers");
+    }
   }
 
   if (await tryFillFirst(page, ["input[name*='rate']", "input[aria-label*='rate' i]", "input[placeholder*='$']"], plan.rate)) {
@@ -1285,6 +1448,20 @@ async function postDiscoveryCapturePacket(input: {
   const discovery = getDiscoverySourceMetadata(input.action);
   if (!discovery) return { status: "not_discovery" };
   if (!DISCOVERY_SLACK_CHANNEL_ID.trim()) return { status: "missing_channel" };
+  if (!shouldPostLeadPacket(input.scored, {
+    upworkUrl: input.upworkUrl,
+    captureStatus: "packet_sent",
+    jobIntelligence: input.scored.applicationDraft?.jobIntelligence,
+  })) {
+    const intelligence = input.scored.applicationDraft?.jobIntelligence;
+    const eligibility = evaluatePlatformEligibility(intelligence);
+    logger.info(
+      `Discovery lead skipped for platform eligibility: jobId=${input.scored.id} primaryPlatform=${intelligence?.primaryPlatform ?? "unknown"} ` +
+      `platformEligibility=${eligibility.platformEligibility} skippedBecausePlatform=${eligibility.skippedBecausePlatform} ` +
+      `eligibilityReason=${eligibility.eligibilityReason}`
+    );
+    return { status: "not_discovery" };
+  }
 
   const packet = buildV3CapturePacket(input.scored, {
     upworkUrl: input.upworkUrl,
@@ -1309,6 +1486,7 @@ async function postDiscoveryCapturePacket(input: {
     blocks: packet.blocks,
   });
   if (!result.ok || !result.ts) return { status: "post_failed" };
+  updateApplicationStatus(input.scored.id, "sent_to_slack", "Discovery lead packet posted to Slack channel.");
 
   const channelId = result.channel ?? DISCOVERY_SLACK_CHANNEL_ID;
   upsertSlackThreadState({
@@ -1401,8 +1579,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         }
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "captured", { jobId: scored.id });
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "scored", { jobId: scored.id });
-        updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "packet_sent", { jobId: scored.id });
-        await postV3CapturePacketToThread(scored, thread, {
+        const threadPostStatus = await postV3CapturePacketToThread(scored, thread, {
           upworkUrl: url,
           captureStatus: "packet_sent",
           browserCaptureActionId: action.id,
@@ -1416,8 +1593,10 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           proofRecommendations: extractProofRecommendations(scored.applicationDraft),
           autoPrepareNote: autoPrepareDecision.note,
         });
-        if (autoPrepareDecision.actionId && !autoPrepareDecision.duplicate) {
-          updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "prepare_draft_requested", { jobId: scored.id });
+        if (threadPostStatus === "posted") {
+          updateSlackThreadStateStatus(thread.channelId, thread.threadTs, autoPrepareDecision.actionId && !autoPrepareDecision.duplicate ? "prepare_draft_requested" : "packet_sent", { jobId: scored.id });
+        } else {
+          logger.info(`Dry-run Slack thread lead message was not posted for jobId=${scored.id}; status=${threadPostStatus}`);
         }
       }
       updateBrowserActionStatus(action.id, "paused", "Dry run: browser capture simulated from URL. Set BROWSER_DRY_RUN=false for real extraction.");
@@ -1460,6 +1639,12 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           title: snapshot?.title ?? null,
           reason: state,
         });
+      }
+      if (state === "apply_page_loaded") {
+        updateApplicationStatus(action.jobId, "draft_prepared", "Browser draft prepared for final human review. Final submit was not clicked.");
+        if (thread) {
+          updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "prepared_draft", { jobId: action.jobId });
+        }
       }
       await postPrepareDraftStatusToThread(thread, {
         heading: state === "apply_page_loaded" ? `✅ Draft preparation ready for review for browser action #${action.id}.` : `⚠️ Draft preparation paused for browser action #${action.id}.`,
@@ -1547,17 +1732,11 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         capturedAt: new Date(),
       });
       const job = normalizedPacketToJobPosting(normalized);
-      const scored = scoreJob(job);
-      scored.applicationDraft = buildApplicationDraft(scored);
+      let intelligenceResult: Awaited<ReturnType<typeof parseJobIntelligence>> | null = null;
+      let jobIntelligence: Awaited<ReturnType<typeof parseJobIntelligence>>["intelligence"] = null;
       try {
-        const intelligenceResult = await attachJobIntelligenceToDraft(scored, scored.applicationDraft);
-        const platformMismatchWarnings = intelligenceResult.intelligence?.platformMismatchWarnings ?? [];
-        if (platformMismatchWarnings.length > 0) {
-          scored.applicationDraft.redFlags = Array.from(new Set([...scored.applicationDraft.redFlags, ...platformMismatchWarnings]));
-          scored.scoreBreakdown.risks = Array.from(new Set([...scored.scoreBreakdown.risks, ...platformMismatchWarnings]));
-          scored.scoreBreakdown.redFlagScore.risks = Array.from(new Set([...scored.scoreBreakdown.redFlagScore.risks, ...platformMismatchWarnings]));
-        }
-        saveTextArtifact(options, action, "job-intelligence.json", JSON.stringify(intelligenceResult, null, 2));
+        intelligenceResult = await parseJobIntelligence({ job });
+        jobIntelligence = intelligenceResult.intelligence;
         if (!intelligenceResult.ok) {
           logger.info(`Job intelligence unavailable for browser action #${action.id}: ${intelligenceResult.unavailableReason ?? intelligenceResult.error ?? "unknown"}`);
         }
@@ -1565,6 +1744,20 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         const message = error instanceof Error ? error.message : String(error);
         logger.warn(`Job intelligence failed safely for browser action #${action.id}: ${message}`);
       }
+      const scored = scoreJob(job, jobIntelligence);
+      scored.applicationDraft = buildApplicationDraft(scored);
+      if (jobIntelligence) {
+        const platformMismatchWarnings = detectPlatformMismatchWarnings(jobIntelligence.primaryPlatform, jobIntelligence.platformsMentioned, scored.applicationDraft.proposalText);
+        if (platformMismatchWarnings.length > 0) {
+          jobIntelligence.platformMismatchWarnings = Array.from(new Set([...jobIntelligence.platformMismatchWarnings, ...platformMismatchWarnings]));
+          jobIntelligence.needsManualReview = true;
+          scored.applicationDraft.redFlags = Array.from(new Set([...scored.applicationDraft.redFlags, ...platformMismatchWarnings]));
+          scored.scoreBreakdown.risks = Array.from(new Set([...scored.scoreBreakdown.risks, ...platformMismatchWarnings]));
+          scored.scoreBreakdown.redFlagScore.risks = Array.from(new Set([...scored.scoreBreakdown.redFlagScore.risks, ...platformMismatchWarnings]));
+        }
+        scored.applicationDraft.jobIntelligence = jobIntelligence;
+      }
+      saveTextArtifact(options, action, "job-intelligence.json", JSON.stringify(intelligenceResult ?? { ok: false, unavailableReason: "not_run" }, null, 2));
 
       const mergedQuestions = normalizeCaptureQuestions(extractionBodyText ?? bodyText);
       const applicationQuestions = mergedQuestions.length > 0 ? mergedQuestions : normalized.applicationQuestions.slice(0, 6);
@@ -1589,7 +1782,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         }
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "captured", { jobId: scored.id });
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "scored", { jobId: scored.id });
-        await postV3CapturePacketToThread(scored, thread, {
+        const threadPostStatus = await postV3CapturePacketToThread(scored, thread, {
           upworkUrl: url,
           captureStatus: "packet_sent",
           browserCaptureActionId: action.id,
@@ -1603,8 +1796,12 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           proofRecommendations: extractProofRecommendations(scored.applicationDraft),
           autoPrepareNote: autoPrepareDecision.note,
         });
-        packetPosted = true;
-        updateSlackThreadStateStatus(thread.channelId, thread.threadTs, autoPrepareDecision.actionId && !autoPrepareDecision.duplicate ? "prepare_draft_requested" : "packet_sent", { jobId: scored.id });
+        packetPosted = threadPostStatus === "posted";
+        if (packetPosted) {
+          updateSlackThreadStateStatus(thread.channelId, thread.threadTs, autoPrepareDecision.actionId && !autoPrepareDecision.duplicate ? "prepare_draft_requested" : "packet_sent", { jobId: scored.id });
+        } else {
+          logger.info(`Slack thread lead message was not posted for jobId=${scored.id}; status=${threadPostStatus}`);
+        }
       } else {
         const discoveryNotification = await postDiscoveryCapturePacket({
           action,
@@ -1661,10 +1858,72 @@ export async function runBrowserWorker(options = loadOptions()): Promise<void> {
   }
 }
 
+export async function runControlledWorkerLoop(input: ControlledWorkerRunOptions = {}): Promise<ControlledWorkerRunSummary> {
+  const maxActions = Math.max(1, input.maxActions ?? 2);
+  const allowedActionTypes = new Set(input.allowedActionTypes ?? ["capture_job_from_url"]);
+  const summary: ControlledWorkerRunSummary = {
+    actionsProcessed: 0,
+    actionsCompleted: 0,
+    actionsPaused: 0,
+    actionsSkipped: 0,
+    stoppedReason: "unknown",
+    remainingPendingCount: 0,
+  };
+
+  const session = getBrowserSessionStatus();
+  if (session.blocked) {
+    summary.stoppedReason = "browser_session_blocked";
+    summary.remainingPendingCount = listBrowserActions("pending", 500).length;
+    return summary;
+  }
+
+  const options = loadOptions();
+  const workerOptions = { ...options, dryRun: input.dryRun ?? options.dryRun, limit: 1 };
+  const pending = listBrowserActions("pending", 500);
+  if (pending.length === 0) {
+    summary.stoppedReason = "queue_empty";
+    summary.remainingPendingCount = 0;
+    return summary;
+  }
+
+  for (const action of pending) {
+    if (summary.actionsProcessed >= maxActions) {
+      summary.stoppedReason = "max_actions_reached";
+      break;
+    }
+    if (!allowedActionTypes.has(action.actionType)) {
+      summary.actionsSkipped += 1;
+      continue;
+    }
+    summary.actionsProcessed += 1;
+    await processAction(action, workerOptions);
+    const refreshed = getBrowserActionById(action.id);
+    if (refreshed?.status === "completed") summary.actionsCompleted += 1;
+    if (refreshed?.status === "paused") {
+      summary.actionsPaused += 1;
+      summary.stoppedReason = "manual_attention_required";
+      break;
+    }
+  }
+
+  if (summary.stoppedReason === "unknown") summary.stoppedReason = "completed_batch";
+  summary.remainingPendingCount = listBrowserActions("pending", 500).length;
+  return summary;
+}
+
 if (require.main === module) {
   const options = loadOptions();
   const command = process.argv[2];
-  const run = command === "--readiness" ? logReadiness(options) : runBrowserWorker(options);
+  const run = command === "--readiness"
+    ? logReadiness(options)
+    : command === "--controlled"
+      ? runControlledWorkerLoop({
+        maxActions: Number.parseInt(process.argv[3] ?? "2", 10),
+        dryRun: process.argv.includes("--live") ? false : true,
+      }).then((summary) => {
+        process.stdout.write(`${JSON.stringify(summary)}\n`);
+      })
+      : runBrowserWorker(options);
   run
     .catch((error: unknown) => {
       logger.error(error instanceof Error ? error.message : String(error));

@@ -1,9 +1,11 @@
-import { HEALTH_ALERT_COOLDOWN_MS, HEARTBEAT_STALE_AFTER_MS } from "./config";
-import { closeDb, getHealthAlertLastSent, listBrowserActions, recordHealthAlertSent } from "./db";
+import { AGENT_ENGINE_QUEUE_CAP, HEALTH_ALERT_COOLDOWN_MS, HEARTBEAT_STALE_AFTER_MS, LLM_NORMALIZATION_ENABLED } from "./config";
+import { closeDb, getHealthAlertLastSent, getSlackQueueStats, listBrowserActions, recordHealthAlertSent } from "./db";
 import { HeartbeatRecord, readHeartbeats, readStaleHeartbeats, writeHeartbeat } from "./heartbeat";
+import { getLlmProviderConfig } from "./llm/provider";
 import { logger } from "./logger";
 import { sendHealthAlert } from "./slack";
 import { formatBrowserSessionStatus, getBrowserSessionStatus } from "./browserSession";
+import { readLatestState } from "./leadEngine";
 
 type HealthSeverity = "ok" | "warning" | "critical";
 
@@ -50,6 +52,66 @@ function browserStateFindings(): HealthFinding[] {
   ];
 }
 
+function queueFindings(): HealthFinding[] {
+  const pending = listBrowserActions("pending", 1000);
+  const slackQueue = getSlackQueueStats();
+  const findings: HealthFinding[] = [];
+  if (pending.length >= AGENT_ENGINE_QUEUE_CAP) {
+    findings.push({
+      key: "browser-action-backpressure",
+      severity: "warning",
+      message: `Browser action queue is backed up (${pending.length} pending). Let the worker drain or inspect stuck actions before discovery adds more.`,
+    });
+  }
+  if (slackQueue.count > 0) {
+    findings.push({
+      key: "slack-posting-backed-up",
+      severity: slackQueue.maxAttempts >= 3 ? "critical" : "warning",
+      message: `Slack posting is backed up (${slackQueue.count} queued message(s), max attempts ${slackQueue.maxAttempts}). Check Slack webhook credentials/network, then run the Slack queue flush.`,
+    });
+  }
+  return findings;
+}
+
+function llmProviderFindings(): HealthFinding[] {
+  if (!LLM_NORMALIZATION_ENABLED) return [];
+  const config = getLlmProviderConfig();
+  if (config.apiKey.trim() && config.model.trim() && config.baseUrl.trim()) return [];
+  return [{
+    key: "llm-provider-unavailable",
+    severity: "warning",
+    message: `LLM provider ${config.provider} is enabled but unavailable. Set the provider key/model/base URL or disable LLM normalization until credentials are ready.`,
+  }];
+}
+
+function leadEngineFindings(): HealthFinding[] {
+  const state = readLatestState();
+  if (!state) return [];
+  const findings: HealthFinding[] = [];
+  if (state.status === "paused" && state.stoppedReason !== "agent_engine_disabled") {
+    findings.push({
+      key: "lead-engine-paused",
+      severity: "warning",
+      message: `Lead engine is paused: ${state.stoppedReason}. Check browser/session state and rerun npm run agent:run-once:dry after fixing it.`,
+    });
+  }
+  if (state.status === "degraded") {
+    findings.push({
+      key: "lead-engine-degraded",
+      severity: "warning",
+      message: `Lead engine is degraded: ${state.stoppedReason}${state.discoveryError ? ` (${state.discoveryError})` : ""}.`,
+    });
+  }
+  if (state.queueBackpressure) {
+    findings.push({
+      key: "lead-engine-backpressure",
+      severity: "warning",
+      message: `Lead engine skipped discovery because the queue is backed up (${state.queuePendingBefore} pending before cycle).`,
+    });
+  }
+  return findings;
+}
+
 export function buildHealthReport(now = new Date()): HealthReport {
   const heartbeats = readHeartbeats();
   const staleHeartbeats = readStaleHeartbeats(HEARTBEAT_STALE_AFTER_MS, now);
@@ -59,7 +121,17 @@ export function buildHealthReport(now = new Date()): HealthReport {
       severity: "critical" as const,
       message: `Worker ${heartbeat.worker} is stale. Last update: ${heartbeat.updatedAt}`,
     })),
+    ...heartbeats
+      .filter((heartbeat) => heartbeat.status === "error")
+      .map((heartbeat) => ({
+        key: `worker-error-${heartbeat.worker}`,
+        severity: "critical" as const,
+        message: `Worker ${heartbeat.worker} last errored: ${heartbeat.lastError ?? "unknown error"}`,
+      })),
     ...browserStateFindings(),
+    ...queueFindings(),
+    ...llmProviderFindings(),
+    ...leadEngineFindings(),
   ];
 
   return {

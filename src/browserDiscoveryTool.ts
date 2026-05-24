@@ -1,10 +1,15 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { canonicalizeUpworkJobUrl, deriveCaptureThreadJobId, extractUpworkJobIdFromUrl } from "./browserCapture";
+import { SAVED_SEARCHES_CONFIG_PATH } from "./config";
 import { enqueueBrowserActionDeduped, getApplicationStatus, listBrowserActions } from "./db";
 import { BrowserSessionInspection, InspectorLocatorLike, inspectBrowserSession, selectRelevantBrowserPage } from "./browserSessionInspector";
 import { BrowserAction } from "./types";
 
 export const BEST_MATCHES_URL = "https://www.upwork.com/nx/find-work/best-matches/";
 export const DISCOVERY_BEST_MATCHES_TOOL = "discovery.best-matches";
+export const RECENT_JOBS_URL = "https://www.upwork.com/nx/search/jobs/?sort=recency";
+export const DISCOVERY_MULTI_SOURCE_TOOL = "discovery.multi-source";
 
 export interface DiscoveryBestMatchesOptions {
   maxJobs: number;
@@ -12,19 +17,27 @@ export interface DiscoveryBestMatchesOptions {
   now?: Date;
 }
 
-export type DiscoverySourceType = "best_matches";
+export type DiscoverySourceType = "best_matches" | "recent_jobs" | "keyword_search" | "category_search" | "saved_search";
 
 export interface DiscoverySourceConfig {
   sourceType: DiscoverySourceType;
-  sourceLabel: "Best Matches";
+  sourceLabel: string;
   url: string;
+  purpose?: string;
+  query?: string;
 }
 
-export const DISCOVERY_SOURCES: Record<DiscoverySourceType, DiscoverySourceConfig> = {
+export const DISCOVERY_SOURCES: Record<"best_matches" | "recent_jobs", DiscoverySourceConfig> = {
   best_matches: {
     sourceType: "best_matches",
     sourceLabel: "Best Matches",
     url: BEST_MATCHES_URL,
+  },
+  recent_jobs: {
+    sourceType: "recent_jobs",
+    sourceLabel: "Recent Jobs",
+    url: RECENT_JOBS_URL,
+    purpose: "Most recent Upwork jobs across relevant feeds.",
   },
 };
 
@@ -33,15 +46,18 @@ export interface DiscoveryJobLink {
   canonicalJobUrl: string;
   originalUrl: string;
   sourceType: DiscoverySourceType;
-  sourceLabel: "Best Matches";
+  sourceLabel: string;
   discoveredAt: string;
   postedAtText?: string;
   recencyRank: number;
+  sourcePurpose?: string;
+  sourceQuery?: string;
+  sourceUrl?: string;
 }
 
 export interface DiscoveryBestMatchesResult {
   ok: boolean;
-  tool: typeof DISCOVERY_BEST_MATCHES_TOOL;
+  tool: typeof DISCOVERY_BEST_MATCHES_TOOL | typeof DISCOVERY_MULTI_SOURCE_TOOL;
   sessionState: string;
   manualAttentionReason?: string;
   manualAttentionRequired: boolean;
@@ -56,7 +72,19 @@ export interface DiscoveryBestMatchesResult {
   oldestQueuedPostedAtText?: string;
   retryAllowedAfterManualFix?: boolean;
   queuedActionIds?: number[];
+  sourcesChecked?: string[];
   error?: string;
+}
+
+export interface SavedDiscoverySearchConfig {
+  id: string;
+  name: string;
+  purpose: string;
+  sourceType?: "saved_search" | "keyword_search" | "category_search";
+  url?: string;
+  query?: string;
+  category?: string;
+  enabled?: boolean;
 }
 
 export interface DiscoveryPageLike {
@@ -70,6 +98,72 @@ export interface DiscoveryPageLike {
 
 export interface DiscoveryContextLike {
   pages?(): DiscoveryPageLike[];
+}
+
+function readSavedSearchConfig(configPath: string): SavedDiscoverySearchConfig[] {
+  if (!fs.existsSync(configPath)) return [];
+  const raw = fs.readFileSync(configPath, "utf8");
+  const parsed = JSON.parse(raw) as { searches?: SavedDiscoverySearchConfig[] };
+  if (!Array.isArray(parsed.searches)) return [];
+  return parsed.searches;
+}
+
+export function loadSavedDiscoverySearches(configPath = SAVED_SEARCHES_CONFIG_PATH): SavedDiscoverySearchConfig[] {
+  const resolvedPath = path.resolve(process.cwd(), configPath);
+  return readSavedSearchConfig(resolvedPath)
+    .filter((search) =>
+      typeof search.id === "string" &&
+      typeof search.name === "string" &&
+      typeof search.purpose === "string"
+    )
+    .map((search) => ({
+      ...search,
+      url: typeof search.url === "string" ? search.url : undefined,
+      query: typeof search.query === "string" ? search.query : undefined,
+      category: typeof search.category === "string" ? search.category : undefined,
+    }))
+    .filter((search) => search.enabled !== false)
+    .filter((search) => search.id.trim() && search.name.trim() && search.purpose.trim())
+    .filter((search) => Boolean(search.url?.trim() || search.query?.trim() || search.category?.trim()));
+}
+
+function sourceTypeForSavedSearch(search: SavedDiscoverySearchConfig): DiscoverySourceType {
+  if (search.sourceType === "keyword_search" || search.sourceType === "category_search" || search.sourceType === "saved_search") {
+    return search.sourceType;
+  }
+  return search.url?.trim() ? "saved_search" : "keyword_search";
+}
+
+function buildSearchUrl(search: SavedDiscoverySearchConfig): string {
+  if (search.url?.trim()) return search.url.trim();
+  const params = new URLSearchParams();
+  if (search.query?.trim()) params.set("q", search.query.trim());
+  if (search.category?.trim()) params.set("category2_uid", search.category.trim());
+  params.set("sort", "recency");
+  return `https://www.upwork.com/nx/search/jobs/?${params.toString()}`;
+}
+
+function sourceLabelForSavedSearch(search: SavedDiscoverySearchConfig, sourceType: DiscoverySourceType): string {
+  if (sourceType === "saved_search") return `Saved Search - ${search.name}`;
+  if (sourceType === "category_search") return `Category Search - ${search.name}`;
+  return `Keyword Search - ${search.name}`;
+}
+
+export function buildConfiguredDiscoverySources(searches = loadSavedDiscoverySearches()): DiscoverySourceConfig[] {
+  return [
+    DISCOVERY_SOURCES.best_matches,
+    DISCOVERY_SOURCES.recent_jobs,
+    ...searches.map((search) => {
+      const sourceType = sourceTypeForSavedSearch(search);
+      return {
+        sourceType,
+        sourceLabel: sourceLabelForSavedSearch(search, sourceType),
+        url: buildSearchUrl(search),
+        purpose: search.purpose,
+        query: search.query ?? search.category,
+      };
+    }),
+  ];
 }
 
 function absoluteUpworkUrl(value: string): string | null {
@@ -154,9 +248,13 @@ function recencyRankFromText(value: string | undefined): number {
   return Number.POSITIVE_INFINITY;
 }
 
-export function extractBestMatchesJobLinksWithStats(html: string, options: DiscoveryBestMatchesOptions): DiscoveryExtractionResult {
+export function extractDiscoveryJobLinksWithStats(
+  html: string,
+  options: DiscoveryBestMatchesOptions & { source?: DiscoverySourceConfig },
+): DiscoveryExtractionResult {
   const maxJobs = Math.max(0, Math.floor(options.maxJobs));
   const discoveredAt = (options.now ?? new Date()).toISOString();
+  const source = options.source ?? DISCOVERY_SOURCES.best_matches;
   const candidates: Array<{ value: string; index: number }> = [];
   const hrefPattern = /href\s*=\s*["']([^"']+)["']/gi;
   let hrefMatch: RegExpExecArray | null;
@@ -192,16 +290,23 @@ export function extractBestMatchesJobLinksWithStats(html: string, options: Disco
         jobId,
         canonicalJobUrl,
         originalUrl: absolute,
-        sourceType: DISCOVERY_SOURCES.best_matches.sourceType,
-        sourceLabel: DISCOVERY_SOURCES.best_matches.sourceLabel,
+        sourceType: source.sourceType,
+        sourceLabel: source.sourceLabel,
         discoveredAt,
         postedAtText,
         recencyRank: recencyRankFromText(postedAtText),
+        sourcePurpose: source.purpose,
+        sourceQuery: source.query,
+        sourceUrl: source.url,
       });
     }
     if (byCanonical.size >= maxJobs) break;
   }
   return { links: [...byCanonical.values()].slice(0, maxJobs), invalidSkipped, alreadyHandledSkipped };
+}
+
+export function extractBestMatchesJobLinksWithStats(html: string, options: DiscoveryBestMatchesOptions): DiscoveryExtractionResult {
+  return extractDiscoveryJobLinksWithStats(html, { ...options, source: DISCOVERY_SOURCES.best_matches });
 }
 
 export function extractBestMatchesJobLinksFromHtml(html: string, options: DiscoveryBestMatchesOptions): DiscoveryJobLink[] {
@@ -227,7 +332,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function scrollBestMatchesPage(page: DiscoveryPageLike): Promise<boolean> {
+async function scrollDiscoveryPage(page: DiscoveryPageLike): Promise<boolean> {
   try {
     const result = await page.evaluate(() => {
       const scrollingElement = document.scrollingElement ?? document.documentElement;
@@ -247,10 +352,17 @@ async function scrollBestMatchesPage(page: DiscoveryPageLike): Promise<boolean> 
   }
 }
 
-function blockedResult(inspection: BrowserSessionInspection): DiscoveryBestMatchesResult {
+function toolForSource(source: DiscoverySourceConfig): typeof DISCOVERY_BEST_MATCHES_TOOL | typeof DISCOVERY_MULTI_SOURCE_TOOL {
+  return source.sourceType === "best_matches" ? DISCOVERY_BEST_MATCHES_TOOL : DISCOVERY_MULTI_SOURCE_TOOL;
+}
+
+function blockedResult(
+  inspection: BrowserSessionInspection,
+  tool: typeof DISCOVERY_BEST_MATCHES_TOOL | typeof DISCOVERY_MULTI_SOURCE_TOOL = DISCOVERY_BEST_MATCHES_TOOL,
+): DiscoveryBestMatchesResult {
   return {
     ok: false,
-    tool: DISCOVERY_BEST_MATCHES_TOOL,
+    tool,
     sessionState: inspection.sessionState,
     manualAttentionReason: inspection.manualAttentionReason,
     manualAttentionRequired: inspection.manualAttentionRequired,
@@ -265,18 +377,35 @@ function blockedResult(inspection: BrowserSessionInspection): DiscoveryBestMatch
   };
 }
 
-export async function runDiscoveryBestMatches(context: DiscoveryContextLike, options: DiscoveryBestMatchesOptions): Promise<DiscoveryBestMatchesResult> {
+function isCurrentDiscoverySourceUrl(currentUrl: string, sourceUrl: string): boolean {
+  try {
+    const current = new URL(currentUrl);
+    const target = new URL(sourceUrl);
+    const samePath = current.origin === target.origin && current.pathname.replace(/\/+$/, "") === target.pathname.replace(/\/+$/, "");
+    if (!samePath) return false;
+    return target.search ? current.search === target.search : true;
+  } catch {
+    return false;
+  }
+}
+
+export async function runDiscoverySource(
+  context: DiscoveryContextLike,
+  source: DiscoverySourceConfig,
+  options: DiscoveryBestMatchesOptions,
+): Promise<DiscoveryBestMatchesResult> {
   const maxJobs = Math.max(1, Math.floor(options.maxJobs));
+  const tool = toolForSource(source);
   const inspection = await inspectBrowserSession(context);
   if (inspection.blocked || inspection.manualAttentionRequired || inspection.sessionState === "browser_session_unhealthy") {
-    return blockedResult(inspection);
+    return blockedResult(inspection, tool);
   }
 
   const selected = selectRelevantBrowserPage(context.pages?.() ?? []);
   if (!selected.page) {
     return {
       ok: false,
-      tool: DISCOVERY_BEST_MATCHES_TOOL,
+      tool,
       sessionState: inspection.sessionState,
       manualAttentionRequired: false,
       blocked: false,
@@ -290,8 +419,8 @@ export async function runDiscoveryBestMatches(context: DiscoveryContextLike, opt
     };
   }
   const page = selected.page as unknown as DiscoveryPageLike;
-  if (!/\/nx\/find-work\/best-matches/i.test(page.url()) && page.goto) {
-    await page.goto(BEST_MATCHES_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
+  if (!isCurrentDiscoverySourceUrl(page.url(), source.url) && page.goto) {
+    await page.goto(source.url, { waitUntil: "domcontentloaded", timeout: 30000 });
   }
 
   const maxScrolls = Math.max(0, Math.floor(options.maxScrolls ?? 3));
@@ -310,11 +439,11 @@ export async function runDiscoveryBestMatches(context: DiscoveryContextLike, opt
   for (let pass = 0; pass <= maxScrolls; pass += 1) {
     const inspectionAfterScroll = pass === 0 ? inspection : await inspectBrowserSession(context);
     if (inspectionAfterScroll.blocked || inspectionAfterScroll.manualAttentionRequired || inspectionAfterScroll.sessionState === "browser_session_unhealthy") {
-      return blockedResult(inspectionAfterScroll);
+      return blockedResult(inspectionAfterScroll, tool);
     }
 
     const html = await page.evaluate(() => (globalThis as unknown as { document: { documentElement: { outerHTML: string } } }).document.documentElement.outerHTML);
-    const extraction = extractBestMatchesJobLinksWithStats(html, { maxJobs: Math.max(maxJobs * 5, 25), now: options.now });
+    const extraction = extractDiscoveryJobLinksWithStats(html, { maxJobs: Math.max(maxJobs * 5, 25), now: options.now, source });
     invalidSkipped += extraction.invalidSkipped;
     alreadyHandledSkipped += extraction.alreadyHandledSkipped;
 
@@ -336,7 +465,7 @@ export async function runDiscoveryBestMatches(context: DiscoveryContextLike, opt
 
     if (queueableLinks.size >= maxJobs || pass >= maxScrolls) break;
     const currentSeenCount = seenLinks.size + invalidSkipped + alreadyHandledSkipped;
-    const scrolled = await scrollBestMatchesPage(page);
+    const scrolled = await scrollDiscoveryPage(page);
     if (scrolled) scrollsPerformed += 1;
     if (!scrolled || currentSeenCount <= previousSeenCount) {
       staleScrolls += 1;
@@ -360,16 +489,19 @@ export async function runDiscoveryBestMatches(context: DiscoveryContextLike, opt
       jobId,
       actionType: "capture_job_from_url",
       payload: {
-        source: "discovery.best_matches",
+        source: `discovery.${source.sourceType}`,
         url: link.canonicalJobUrl,
         originalUrl: link.originalUrl,
         canonicalJobUrl: link.canonicalJobUrl,
-        notes: "Discovered from Upwork Best Matches; browser capture required before scoring and draft prep.",
+        notes: `Discovered from Upwork ${source.sourceLabel}; browser capture required before scoring and draft prep.`,
         discovery: {
           sourceType: link.sourceType,
           sourceLabel: link.sourceLabel,
           discoveredAt: link.discoveredAt,
           canonicalJobUrl: link.canonicalJobUrl,
+          sourceUrl: link.sourceUrl ?? source.url,
+          ...(link.sourcePurpose ? { purpose: link.sourcePurpose } : {}),
+          ...(link.sourceQuery ? { query: link.sourceQuery } : {}),
           ...(link.postedAtText ? { postedAtText: link.postedAtText, recencyRank: link.recencyRank } : {}),
         },
       },
@@ -395,7 +527,7 @@ export async function runDiscoveryBestMatches(context: DiscoveryContextLike, opt
 
   return {
     ok: true,
-    tool: DISCOVERY_BEST_MATCHES_TOOL,
+    tool,
     sessionState: inspection.sessionState,
     manualAttentionRequired: false,
     blocked: false,
@@ -408,5 +540,65 @@ export async function runDiscoveryBestMatches(context: DiscoveryContextLike, opt
     newestQueuedPostedAtText: queuedPostedAtTexts[0],
     oldestQueuedPostedAtText: queuedPostedAtTexts[queuedPostedAtTexts.length - 1],
     queuedActionIds,
+    sourcesChecked: [source.sourceLabel],
   };
+}
+
+export async function runDiscoveryBestMatches(context: DiscoveryContextLike, options: DiscoveryBestMatchesOptions): Promise<DiscoveryBestMatchesResult> {
+  return runDiscoverySource(context, DISCOVERY_SOURCES.best_matches, options);
+}
+
+export async function runDiscoveryConfiguredSources(
+  context: DiscoveryContextLike,
+  options: DiscoveryBestMatchesOptions,
+  sources = buildConfiguredDiscoverySources(),
+): Promise<DiscoveryBestMatchesResult> {
+  const activeSources = sources.length > 0 ? sources : [DISCOVERY_SOURCES.best_matches];
+  const maxJobs = Math.max(1, Math.floor(options.maxJobs));
+  const aggregate: DiscoveryBestMatchesResult = {
+    ok: true,
+    tool: DISCOVERY_MULTI_SOURCE_TOOL,
+    sessionState: "unknown",
+    manualAttentionRequired: false,
+    blocked: false,
+    jobsFound: 0,
+    jobsQueued: 0,
+    duplicatesSkipped: 0,
+    alreadyHandledSkipped: 0,
+    invalidSkipped: 0,
+    scrollsPerformed: 0,
+    queuedActionIds: [],
+    sourcesChecked: [],
+  };
+
+  for (const source of activeSources) {
+    if (aggregate.jobsQueued >= maxJobs) break;
+    const remainingJobs = maxJobs - aggregate.jobsQueued;
+    const result = await runDiscoverySource(context, source, { ...options, maxJobs: remainingJobs });
+    aggregate.sessionState = result.sessionState;
+    aggregate.manualAttentionRequired = aggregate.manualAttentionRequired || result.manualAttentionRequired;
+    aggregate.blocked = aggregate.blocked || result.blocked;
+    aggregate.jobsFound += result.jobsFound;
+    aggregate.jobsQueued += result.jobsQueued;
+    aggregate.duplicatesSkipped += result.duplicatesSkipped;
+    aggregate.alreadyHandledSkipped += result.alreadyHandledSkipped;
+    aggregate.invalidSkipped += result.invalidSkipped;
+    aggregate.scrollsPerformed += result.scrollsPerformed;
+    aggregate.sourcesChecked?.push(source.sourceLabel);
+    aggregate.queuedActionIds?.push(...(result.queuedActionIds ?? []));
+    aggregate.newestQueuedPostedAtText ??= result.newestQueuedPostedAtText;
+    aggregate.oldestQueuedPostedAtText = result.oldestQueuedPostedAtText ?? aggregate.oldestQueuedPostedAtText;
+
+    if (!result.ok) {
+      return {
+        ...aggregate,
+        ok: false,
+        manualAttentionReason: result.manualAttentionReason,
+        retryAllowedAfterManualFix: result.retryAllowedAfterManualFix,
+        error: result.error,
+      };
+    }
+  }
+
+  return aggregate;
 }

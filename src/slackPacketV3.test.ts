@@ -1,4 +1,4 @@
-import { buildV3CapturePacket } from "./slackPacketV3";
+import { buildV3CapturePacket, shouldPostLeadPacket } from "./slackPacketV3";
 import { buildApplicationDraft } from "./agent";
 import { scoreJob } from "./filter";
 import { buildDeterministicOpportunityPacket, normalizedPacketToJobPosting } from "./normalization";
@@ -73,6 +73,10 @@ function assertNotIncludes(haystack: string, needle: string, label: string): voi
   assert(!haystack.toLowerCase().includes(needle.toLowerCase()), `${label}: unexpected ${JSON.stringify(needle)} in output`);
 }
 
+function assertEqual<T>(actual: T, expected: T, label: string): void {
+  assert(actual === expected, `${label}: expected ${JSON.stringify(expected)} but received ${JSON.stringify(actual)}`);
+}
+
 function countOccurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
@@ -104,7 +108,7 @@ function runTests(): void {
   assertIncludes(beautyText, beautyJob.url, "job url");
   assertIncludes(beautyText, "*Fit:* 🟢 High — 89/100", "fit score");
   assertIncludes(beautyText, "*Source:* Manual Slack URL", "manual source label");
-  assertIncludes(beautyText, "*Recommended action:* Review lead", "recommended action");
+  assertIncludes(beautyText, "*Recommended action:* Manual platform review before draft prep", "recommended action");
   assertIncludes(beautyText, "🧭 *Lead context*", "lead context section");
   assertIncludes(beautyText, "• Platform: Klaviyo", "lead context platform");
   assertIncludes(beautyText, "• Platform tier: Core", "lead context tier");
@@ -119,7 +123,8 @@ function runTests(): void {
   assertIncludes(beautyText, "A: I would start with segmentation quality", "screening answer");
   assertIncludes(beautyText, "📎 *Suggested proof/assets*", "proof/assets section");
   assertIncludes(beautyText, "Truly Beauty", "selected proof rendering");
-  assertIncludes(beautyText, "Truly Beauty Case Study", "selected assets rendering");
+  assertIncludes(beautyText, "Truly Beauty case study", "selected assets rendering");
+  assertIncludes(beautyText, "Status: File missing locally - manual upload needed", "missing proof availability status");
   assertNotIncludes(beautyText, "profile/attachments/truly-beauty-case-study.pdf", "raw asset path should be hidden");
   assertIncludes(beautyText, "💬 *Available replies*", "commands heading");
   for (const cmd of ["prepare draft", "revise: <instruction>", "skip", "status", "mark submitted"]) {
@@ -149,6 +154,15 @@ function runTests(): void {
   assertIncludes(discoveryText, "*Posted:* 27 minutes ago", "postedAtText rendering");
   assertNotIncludes(discoveryText, "Best Matches (best_matches)", "source type should not be prominent");
   assertNotIncludes(discoveryText, "recencyRank", "recency rank hidden");
+
+  const recentSourceText = buildV3CapturePacket(beautyJob, {
+    upworkUrl: beautyJob.url,
+    captureStatus: "packet_sent",
+    sourceType: "recent_jobs",
+    sourceLabel: "Recent Jobs",
+    applicationQuestions: [],
+  }).text;
+  assertIncludes(recentSourceText, "*Source:* Recent Jobs — discovered automatically", "recent source wording");
 
   const queuedDraftText = buildV3CapturePacket(beautyJob, {
     upworkUrl: beautyJob.url,
@@ -264,13 +278,18 @@ function runTests(): void {
     captureStatus: "packet_sent",
     applicationQuestions: [],
   }).text;
-  assertIncludes(brevoText, "• Platform: Brevo", "job intelligence primary platform");
-  assertIncludes(brevoText, "• Platform tier: Non-core / review carefully", "job intelligence tier humanized");
-  assertIncludes(brevoText, "• Business: DTC ecommerce", "job intelligence business");
-  assertIncludes(brevoText, "• Vertical: Beauty", "job intelligence vertical");
-  assertIncludes(brevoText, "• Work type: Email marketing / Email flows / retention strategy", "job intelligence work type");
-  assertIncludes(brevoText, "Platform mismatch: job primary platform is Brevo, but draft mentions Klaviyo.", "platform mismatch watch-out");
-  assertIncludes(brevoText, "Needs manual review before draft prep.", "manual review watch-out");
+  assertIncludes(brevoText, "🚀 *New Upwork Lead*", "packet rendering remains normal when called directly");
+  assertEqual(shouldPostLeadPacket(createScoredJob({
+    applicationDraft: {
+      ...beautyJob.applicationDraft!,
+      jobIntelligence: {
+        ...beautyJob.applicationDraft!.jobIntelligence!,
+        primaryPlatform: "Brevo",
+        platformsMentioned: ["Brevo"],
+        platformPreferenceTier: "non_core_review",
+      },
+    },
+  }), { upworkUrl: beautyJob.url, captureStatus: "packet_sent" }), false, "ineligible platform should not post");
 
   const qaGeneratedWarningText = buildV3CapturePacket(createScoredJob({
     title: "HubSpot lifecycle email specialist for ecommerce brand",
@@ -307,7 +326,35 @@ function runTests(): void {
     captureStatus: "packet_sent",
     applicationQuestions: [],
   }).text;
-  assertIncludes(qaGeneratedWarningText, "Platform mismatch: job primary platform is HubSpot, but draft mentions Klaviyo.", "Slack should surface QA-generated platform mismatch warning");
+  assertEqual(shouldPostLeadPacket(createScoredJob({
+    applicationDraft: {
+      ...beautyJob.applicationDraft!,
+      jobIntelligence: {
+        ...beautyJob.applicationDraft!.jobIntelligence!,
+        primaryPlatform: "HubSpot",
+        platformsMentioned: ["HubSpot"],
+        platformPreferenceTier: "non_core_review",
+      },
+    },
+  }), { upworkUrl: beautyJob.url, captureStatus: "packet_sent" }), false, "HubSpot should not post");
+
+  const ineligibleText = buildV3CapturePacket(createScoredJob({
+    title: "HubSpot lifecycle admin support",
+    applicationDraft: {
+      ...beautyJob.applicationDraft!,
+      jobIntelligence: {
+        ...beautyJob.applicationDraft!.jobIntelligence!,
+        primaryPlatform: "HubSpot",
+        platformsMentioned: ["HubSpot"],
+        platformPreferenceTier: "non_core_review",
+      },
+    },
+  }), {
+    upworkUrl: beautyJob.url,
+    captureStatus: "packet_sent",
+    applicationQuestions: [],
+  }).text;
+  assertNotIncludes(ineligibleText, "⏭️ *Platform skipped:*", "no per-job skip Slack message should be rendered");
 
   const capturedNormalized = buildDeterministicOpportunityPacket(
     "Beauty Shopify Klaviyo retention role. Need help with quiz segmentation, zero-party data, campaigns, flows, and repeat purchase strategy.",
@@ -335,7 +382,7 @@ function runTests(): void {
     questionAnswers: ["I would start with list source quality, segmentation logic, and what happens after first purchase."],
   }).text;
   assertIncludes(capturedText, "Truly Beauty", "captured/scored pipeline lead should include profile brain proof");
-  assertIncludes(capturedText, "Truly Beauty Case Study", "captured/scored pipeline lead should include selected asset label");
+  assertIncludes(capturedText, "Truly Beauty case study", "captured/scored pipeline lead should include selected asset label");
   assertNotIncludes(capturedText, "profile/attachments/truly-beauty-case-study.pdf", "captured/scored pipeline lead should hide selected asset path");
   assertIncludes(capturedText, "prepare draft", "captured/scored pipeline lead should include prepare draft workflow");
   assertNotIncludes(capturedText, "copy/paste", "captured/scored pipeline lead should not introduce copy/paste workflow");

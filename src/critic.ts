@@ -23,6 +23,17 @@ const GENERIC_CLAIMS = [
   "help you grow your business",
 ];
 
+const VAGUE_CLAIMS = [
+  "optimize your marketing",
+  "improve your strategy",
+  "increase engagement",
+  "drive results",
+  "maximize roi",
+  "best practices",
+];
+
+const FLUFF_MARKERS = ["seamless", "robust", "cutting-edge", "game-changer", "unlock", "elevate", "supercharge"];
+
 const WEAK_OPENINGS = [
   "hi there",
   "hello",
@@ -51,6 +62,7 @@ const PAIN_MARKERS = [
 const CTA_MARKERS = ["send me", "share", "store url", "quick sense", "what is working", "what is not working", "where i would start"];
 
 const PROOF_MARKERS = ["relevant background", "proof", "audit", "klaviyo", "email", "sms", "flow", "campaign", "retention", "lifecycle", "dtc"];
+const PLATFORM_MARKERS = ["klaviyo", "hubspot", "brevo", "omnisend", "mailchimp", "postscript", "attentive", "shopify"];
 
 function normalize(text: string): string {
   return text.toLowerCase().replace(/[’]/g, "'");
@@ -82,6 +94,11 @@ function jobTerms(job: JobPosting): string[] {
     "flow",
     "campaign",
   ]).filter((term) => term.length > 2);
+}
+
+function jobPlatformTerms(job: JobPosting): string[] {
+  const haystack = `${job.title} ${job.description} ${job.skills.join(" ")}`.toLowerCase();
+  return PLATFORM_MARKERS.filter((platform) => haystack.includes(platform));
 }
 
 function addIssue(issues: ProposalQualityIssue[], issue: ProposalQualityIssue): void {
@@ -144,6 +161,42 @@ export function critiqueProposal(proposalText: string, job: JobPosting, profile?
     }
   }
 
+  for (const claim of VAGUE_CLAIMS) {
+    if (lower.includes(claim)) {
+      addIssue(issues, {
+        category: "vague_claim",
+        severity: "warning",
+        message: "Proposal makes a vague claim without saying what Steve would actually inspect or fix.",
+        evidence: claim,
+        suggestion: "Replace the claim with a concrete lifecycle, segmentation, flow, campaign, or reporting move.",
+      });
+    }
+  }
+
+  const fluffHits = FLUFF_MARKERS.filter((marker) => lower.includes(marker));
+  if (fluffHits.length > 0) {
+    addIssue(issues, {
+      category: "fluff",
+      severity: "warning",
+      message: "Proposal includes polished filler that weakens Steve's voice.",
+      evidence: fluffHits.slice(0, 3).join(", "),
+      suggestion: "Cut the filler and use plainer, sharper diagnostic language.",
+    });
+  }
+
+  const platformsInJob = jobPlatformTerms(job).filter((platform) => platform !== "shopify");
+  const platformsInDraft = PLATFORM_MARKERS.filter((platform) => lower.includes(platform));
+  const wrongPlatforms = platformsInDraft.filter((platform) => !platformsInJob.includes(platform));
+  if (platformsInJob.length > 0 && wrongPlatforms.length > 0 && !platformsInJob.some((platform) => platformsInDraft.includes(platform))) {
+    addIssue(issues, {
+      category: "platform_mismatch",
+      severity: "critical",
+      message: "Proposal appears to lead with the wrong platform language.",
+      evidence: `draft: ${wrongPlatforms.join(", ")}; job: ${platformsInJob.join(", ")}`,
+      suggestion: "Ground the proposal in the platform named in the job, or stay platform-neutral if migration is not explicit.",
+    });
+  }
+
   if (wordCount < 90 || wordCount > 220) {
     addIssue(issues, {
       category: "length",
@@ -154,6 +207,16 @@ export function critiqueProposal(proposalText: string, job: JobPosting, profile?
   } else if (wordCount >= 120 && wordCount <= 190) {
     positiveSignals.push("Length matches the preferred 120-190 word range.");
   }
+  const paragraphCount = text.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean).length;
+  if (paragraphCount > 4) {
+    addIssue(issues, {
+      category: "over_explaining",
+      severity: "warning",
+      message: "Proposal uses too many blocks and starts to over-explain.",
+      evidence: `${paragraphCount} paragraphs`,
+      suggestion: "Compress to opening pain, diagnostic plan, proof, and CTA.",
+    });
+  }
 
   if (!CTA_MARKERS.some((marker) => lower.includes(marker)) || !/[?]|send me|share|quick sense/i.test(text)) {
     addIssue(issues, {
@@ -161,6 +224,13 @@ export function critiqueProposal(proposalText: string, job: JobPosting, profile?
       severity: "warning",
       message: "CTA is missing or too vague.",
       suggestion: "End with a specific low-friction next step, such as asking for the store URL or current Klaviyo problem.",
+    });
+  } else if (/let me know|happy to discuss|schedule a call/i.test(text) && !/store url|account|klaviyo|shopify|current/i.test(text)) {
+    addIssue(issues, {
+      category: "cta",
+      severity: "warning",
+      message: "CTA is polite but too generic.",
+      suggestion: "Ask for the exact asset Steve needs next, such as the store URL, account access after hire, or the current retention problem.",
     });
   } else {
     positiveSignals.push("Ends with a specific, low-friction CTA.");

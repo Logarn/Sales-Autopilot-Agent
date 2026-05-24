@@ -4,6 +4,7 @@ import {
   getApplicationAnalytics,
   getApplicationNotes,
   getApplicationSummary,
+  getOutcomeLearningSummary,
   listRecentApplications,
   recordApplicationSubmission,
   updateApplicationStatus,
@@ -15,6 +16,7 @@ const VALID_STATUSES: ApplicationStatus[] = [
   "found",
   "draft",
   "sent_to_slack",
+  "draft_prepared",
   "approved",
   "rejected",
   "applied",
@@ -82,6 +84,7 @@ function formatPercent(value: number): string {
 
 function printAnalytics(): void {
   const analytics = getApplicationAnalytics();
+  const learning = getOutcomeLearningSummary();
   console.log("\nApplication Analytics");
   console.log("=====================");
   console.log(`Tracked opportunities: ${analytics.total}`);
@@ -103,6 +106,24 @@ function printAnalytics(): void {
   console.log("======================");
   if (analytics.topHighlights.length === 0) console.log("No profile highlight data yet.");
   for (const item of analytics.topHighlights) console.log(`- ${item.name}: ${item.count}`);
+
+  console.log("\nOutcome Learning");
+  console.log("================");
+  console.log(`Tracked for learning: ${learning.totalTracked}`);
+  for (const section of [
+    ["Source/query", learning.bySourceQuery],
+    ["Budget band", learning.byBudgetBand],
+    ["Client spend band", learning.byClientSpendBand],
+  ] as const) {
+    console.log(`\n${section[0]}`);
+    if (section[1].length === 0) {
+      console.log("- No data yet.");
+      continue;
+    }
+    for (const item of section[1].slice(0, 5)) {
+      console.log(`- ${item.name}: total=${item.total} submitted=${item.submitted} replies=${formatPercent(item.replyRate)} hires=${formatPercent(item.hireRate)}`);
+    }
+  }
 }
 
 function setStatus(): void {

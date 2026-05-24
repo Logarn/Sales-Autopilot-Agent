@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "searches": [
+    {
+      "id": "klaviyo-dtc",
+      "name": "Klaviyo DTC",
+      "purpose": "Focused Klaviyo lifecycle work for ecommerce and DTC brands.",
+      "sourceType": "saved_search",
+      "query": "Klaviyo Shopify ecommerce retention email marketing"
+    },
+    {
+      "id": "email-marketing-shopify",
+      "name": "Email Marketing Shopify",
+      "purpose": "Shopify email marketing, lifecycle, and campaign roles.",
+      "sourceType": "keyword_search",
+      "query": "Shopify email marketing Klaviyo flows campaigns"
+    },
+    {
+      "id": "postscript-sms",
+      "name": "Postscript SMS",
+      "purpose": "SMS lifecycle and Postscript implementation opportunities.",
+      "sourceType": "keyword_search",
+      "query": "Postscript SMS Shopify Klaviyo retention"
+    },
+    {
+      "id": "omnisend-automation",
+      "name": "Omnisend Automation",
+      "purpose": "Omnisend automation and email/SMS migration work.",
+      "sourceType": "keyword_search",
+      "query": "Omnisend automation email SMS ecommerce"
+    },
+    {
+      "id": "dtc-retention",
+      "name": "DTC Retention",
+      "purpose": "DTC retention strategy, lifecycle, segmentation, and automation.",
+      "sourceType": "keyword_search",
+      "query": "DTC retention lifecycle segmentation automation"
+    }
+  ]
+}

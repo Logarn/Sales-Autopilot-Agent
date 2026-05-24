@@ -4,6 +4,30 @@ Node.js + TypeScript background worker that monitors Upwork jobs, scores fit, ge
 
 The product direction is a Slack-first Upwork revenue assistant, not an auto-apply bot or web UI: find better jobs, write better proposals, protect Connects, and keep the human in control from Slack/local CLI handoffs.
 
+## Current operating model
+
+The current preferred flow is:
+
+1. discover jobs from configured sources
+2. normalize and score them locally, with optional LLM-assisted structure cleanup
+3. route qualified leads into Slack
+4. let a human approve, reject, or revise in Slack or local CLI flows
+5. optionally prepare browser-side draft application work
+6. stop before final submit
+
+Important boundaries:
+
+- Slack outbound via webhook is the baseline
+- Slack Socket Mode is optional for inbound thread commands
+- the lead engine is the preferred always-on control loop
+- browser automation should run against a persistent CDP session on a server
+- final Upwork submit remains manual
+
+Deployment references:
+
+- general runtime notes: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+- Contabo-specific setup: [docs/CONTABO_RUNBOOK.md](docs/CONTABO_RUNBOOK.md)
+
 ## Features
 
 - Polls Upwork opportunities via pluggable sources every 5 minutes (configurable with cron)
@@ -56,6 +80,8 @@ upwork-agent/
 - Node.js 18+
 - Slack Incoming Webhook URL
 - Apify API token
+- optional Slack app credentials for Socket Mode
+- optional LLM provider credentials for normalization/intelligence
 
 ## Setup
 
@@ -77,16 +103,22 @@ upwork-agent/
    npm run build
    ```
 
-4. Run once (pipeline test):
+4. Run one safe local dry run:
 
    ```bash
-   npm run test:run-once
+   npm run agent:run-once:dry
    ```
 
-5. Run continuously:
+5. Run promotion validation before packaging or deployment:
 
    ```bash
-   npm start
+   npm run validate:promotion
+   ```
+
+6. For Contabo deployment planning, use the runbook instead of the older VM notes:
+
+   ```text
+   docs/CONTABO_RUNBOOK.md
    ```
 
 ## Scoring Model

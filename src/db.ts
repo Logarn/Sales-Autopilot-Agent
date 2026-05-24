@@ -12,11 +12,14 @@ import {
   BrowserActionPayload,
   BrowserActionStatus,
   BrowserActionType,
+  ConnectsStrategySnapshot,
   DailySummary,
+  JobIntelligence,
   JobPosting,
   MatchLevel,
   PortfolioItem,
   ScoredJob,
+  StructuredProposalDraft,
 } from "./types";
 
 interface SeenStats {
@@ -49,6 +52,8 @@ interface SeenFingerprintRow {
   skills: string | null;
   experience_level: string | null;
   connects_cost: number | null;
+  proposal_count?: number | null;
+  competition_level?: string | null;
   fingerprint: string | null;
 }
 
@@ -79,6 +84,8 @@ interface SlackPreviewJobRow {
   skills: string | null;
   experience_level: string | null;
   connects_cost: number | null;
+  proposal_count: number | null;
+  competition_level: string | null;
   posted_at: string | null;
   status: ApplicationStatus | null;
   fit_score: number | null;
@@ -90,7 +97,10 @@ interface SlackPreviewJobRow {
   connects_warnings: string | null;
   selected_portfolio_items: string | null;
   proposal_text: string | null;
+  structured_proposal: string | null;
   generated_at: string | null;
+  job_intelligence: string | null;
+  connects_strategy: string | null;
 }
 
 export interface ApplicationJobLink {
@@ -136,6 +146,33 @@ export interface ApplicationAnalytics {
   hireRate: number;
   topAttachments: Array<{ name: string; count: number }>;
   topHighlights: Array<{ name: string; count: number }>;
+}
+
+export interface OutcomeLearningSegment {
+  name: string;
+  total: number;
+  submitted: number;
+  replied: number;
+  interviews: number;
+  hired: number;
+  lost: number;
+  replyRate: number;
+  hireRate: number;
+}
+
+export interface OutcomeLearningSummary {
+  generatedAt: string;
+  totalTracked: number;
+  bySourceQuery: OutcomeLearningSegment[];
+  byBudgetBand: OutcomeLearningSegment[];
+  byClientSpendBand: OutcomeLearningSegment[];
+}
+
+interface OutcomeLearningRow {
+  status: ApplicationStatus;
+  source_query: string | null;
+  budget: string | null;
+  client_spend: number | null;
 }
 
 export interface ApplicationNoteRow {
@@ -201,6 +238,11 @@ export interface SlackQueueItem {
   attempts: number;
 }
 
+export interface SlackQueueStats {
+  count: number;
+  maxAttempts: number;
+}
+
 export type SlackThreadStatus =
   | "capture_pending"
   | "capture_recorded"
@@ -255,9 +297,12 @@ interface ApplicationDraftRow {
   connects_warnings: string | null;
   selected_portfolio_items: string | null;
   proposal_text: string;
+  structured_proposal: string | null;
   generated_at: string;
   proposal_version: number | null;
   revision_requests: string | null;
+  job_intelligence: string | null;
+  connects_strategy: string | null;
 }
 
 export interface ApplicationRevisionResult {
@@ -303,6 +348,9 @@ CREATE TABLE IF NOT EXISTS seen_jobs (
   skills TEXT,
   experience_level TEXT,
   connects_cost INTEGER,
+  source_query TEXT,
+  proposal_count INTEGER,
+  competition_level TEXT,
   posted_at TEXT,
   fingerprint TEXT,
   seen_at TEXT DEFAULT (datetime('now')),
@@ -346,9 +394,12 @@ CREATE TABLE IF NOT EXISTS applications (
   connects_warnings TEXT NOT NULL DEFAULT '[]',
   selected_portfolio_items TEXT NOT NULL DEFAULT '[]',
   proposal_text TEXT NOT NULL,
+  structured_proposal TEXT,
   generated_at TEXT NOT NULL,
   proposal_version INTEGER NOT NULL DEFAULT 1,
   revision_requests TEXT NOT NULL DEFAULT '[]',
+  job_intelligence TEXT,
+  connects_strategy TEXT,
   reviewed_at TEXT,
   submitted_at TEXT,
   created_at TEXT DEFAULT (datetime('now')),
@@ -426,6 +477,9 @@ ensureSeenJobsColumn("client_hire_rate", "REAL");
 ensureSeenJobsColumn("skills", "TEXT");
 ensureSeenJobsColumn("experience_level", "TEXT");
 ensureSeenJobsColumn("connects_cost", "INTEGER");
+ensureSeenJobsColumn("source_query", "TEXT");
+ensureSeenJobsColumn("proposal_count", "INTEGER");
+ensureSeenJobsColumn("competition_level", "TEXT");
 
 function ensureApplicationsColumn(name: string, definition: string): void {
   const columns = db.prepare<[], { name: string }>("PRAGMA table_info(applications)").all();
@@ -447,6 +501,9 @@ ensureApplicationsColumn("profile_highlights_used", "TEXT DEFAULT '[]'");
 ensureApplicationsColumn("submitted_proposal_text", "TEXT");
 ensureApplicationsColumn("proposal_version", "INTEGER NOT NULL DEFAULT 1");
 ensureApplicationsColumn("revision_requests", "TEXT NOT NULL DEFAULT '[]'");
+ensureApplicationsColumn("job_intelligence", "TEXT");
+ensureApplicationsColumn("connects_strategy", "TEXT");
+ensureApplicationsColumn("structured_proposal", "TEXT");
 ensureSeenJobsColumn("fingerprint", "TEXT");
 db.exec("CREATE INDEX IF NOT EXISTS idx_seen_jobs_fingerprint ON seen_jobs(fingerprint)");
 
@@ -470,11 +527,14 @@ const upsertSeenStmt = db.prepare(
     skills,
     experience_level,
     connects_cost,
+    source_query,
+    proposal_count,
+    competition_level,
     posted_at,
     fingerprint,
     notified
   )
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
    ON CONFLICT(id) DO UPDATE SET
      title = excluded.title,
      url = excluded.url,
@@ -489,6 +549,9 @@ const upsertSeenStmt = db.prepare(
      skills = excluded.skills,
      experience_level = excluded.experience_level,
      connects_cost = excluded.connects_cost,
+     source_query = excluded.source_query,
+     proposal_count = excluded.proposal_count,
+     competition_level = excluded.competition_level,
      posted_at = excluded.posted_at,
      fingerprint = excluded.fingerprint,
      notified = CASE WHEN seen_jobs.notified = 1 OR excluded.notified = 1 THEN 1 ELSE 0 END,
@@ -499,7 +562,7 @@ const seenFingerprintStmt = db.prepare<[string], SeenRow>(
 );
 const recentSeenFingerprintsStmt = db.prepare<[], SeenFingerprintRow>(
   `SELECT id, title, url, description, posted_at, budget, client_country, client_rating, client_spend,
-          client_hire_rate, skills, experience_level, connects_cost, fingerprint
+          client_hire_rate, skills, experience_level, connects_cost, proposal_count, competition_level, fingerprint
    FROM seen_jobs
    WHERE fingerprint IS NOT NULL
    ORDER BY seen_at DESC
@@ -513,6 +576,9 @@ const queueSelectStmt = db.prepare<[], SlackQueueItem>(
 const queueDeleteStmt = db.prepare("DELETE FROM slack_queue WHERE id = ?");
 const queueAttemptStmt = db.prepare(
   "UPDATE slack_queue SET attempts = attempts + 1 WHERE id = ?"
+);
+const queueStatsStmt = db.prepare<[], SlackQueueStats>(
+  "SELECT COUNT(*) as count, COALESCE(MAX(attempts), 0) as maxAttempts FROM slack_queue"
 );
 const insertSlackThreadStateStmt = db.prepare(
   `INSERT INTO slack_thread_state (
@@ -705,9 +771,12 @@ const upsertApplicationStmt = db.prepare(
     connects_warnings,
     selected_portfolio_items,
     proposal_text,
+    structured_proposal,
     generated_at,
+    job_intelligence,
+    connects_strategy,
     updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
   ON CONFLICT(job_id) DO UPDATE SET
     status = excluded.status,
     fit_score = excluded.fit_score,
@@ -719,7 +788,10 @@ const upsertApplicationStmt = db.prepare(
     connects_warnings = excluded.connects_warnings,
     selected_portfolio_items = excluded.selected_portfolio_items,
     proposal_text = excluded.proposal_text,
+    structured_proposal = excluded.structured_proposal,
     generated_at = excluded.generated_at,
+    job_intelligence = excluded.job_intelligence,
+    connects_strategy = excluded.connects_strategy,
     updated_at = datetime('now')`
 );
 const getApplicationStatusStmt = db.prepare<[string], { status: ApplicationStatus }>(
@@ -735,7 +807,7 @@ const getApplicationJobLinkStmt = db.prepare<[string], ApplicationJobLink>(
 const getApplicationDraftStmt = db.prepare<[string], ApplicationDraftRow>(
   `SELECT job_id, status, fit_score, fit_reasons, red_flags, suggested_bid, suggested_connects,
           suggested_boost_connects, connects_warnings, selected_portfolio_items, proposal_text,
-          generated_at, proposal_version, revision_requests
+          structured_proposal, generated_at, proposal_version, revision_requests, job_intelligence, connects_strategy
    FROM applications
    WHERE job_id = ?
    LIMIT 1`
@@ -773,12 +845,17 @@ const applicationListStmt = db.prepare<[number], ApplicationListRow>(
 const applicationNotesStmt = db.prepare<[string], ApplicationNoteRow>(
   "SELECT id, job_id, note, created_at FROM application_events WHERE job_id = ? AND event_type = 'note' ORDER BY id DESC"
 );
+const outcomeLearningRowsStmt = db.prepare<[], OutcomeLearningRow>(
+  `SELECT a.status, s.source_query, s.budget, s.client_spend
+   FROM applications a
+   LEFT JOIN seen_jobs s ON s.id = a.job_id`
+);
 const slackPreviewJobStmt = db.prepare<[string], SlackPreviewJobRow>(
   `SELECT s.id, s.title, s.url, s.description, s.score, s.match_level, s.budget, s.client_country,
           s.client_rating, s.client_spend, s.client_hire_rate, s.skills, s.experience_level,
-          s.connects_cost, s.posted_at, a.status, a.fit_score, a.fit_reasons, a.red_flags,
+          s.connects_cost, s.proposal_count, s.competition_level, s.posted_at, a.status, a.fit_score, a.fit_reasons, a.red_flags,
           a.suggested_bid, a.suggested_connects, a.suggested_boost_connects, a.connects_warnings,
-          a.selected_portfolio_items, a.proposal_text, a.generated_at
+          a.selected_portfolio_items, a.proposal_text, a.structured_proposal, a.generated_at, a.job_intelligence, a.connects_strategy
    FROM seen_jobs s
    LEFT JOIN applications a ON a.job_id = s.id
    WHERE s.id = ?
@@ -857,6 +934,10 @@ function rowToJobPosting(row: SeenFingerprintRow): JobPosting {
     connectsCost: row.connects_cost ?? 0,
     skills,
     sourceQuery: "seen_jobs",
+    proposalCount: row.proposal_count ?? null,
+    competitionLevel: row.competition_level === "low" || row.competition_level === "medium" || row.competition_level === "high"
+      ? row.competition_level
+      : "unknown",
   };
 }
 
@@ -876,6 +957,9 @@ export function markJobSeen(job: ScoredJob, notified: boolean): void {
     JSON.stringify(job.skills),
     job.experienceLevel,
     job.connectsCost,
+    job.sourceQuery,
+    job.proposalCount ?? null,
+    job.competitionLevel ?? "unknown",
     job.postedAt,
     buildJobFingerprint(job),
     notified ? 1 : 0
@@ -899,7 +983,10 @@ export function saveApplicationDraft(draft: ApplicationDraft): void {
     JSON.stringify(draft.connectsWarnings),
     JSON.stringify(draft.selectedPortfolioItems),
     draft.proposalText,
-    draft.generatedAt
+    draft.structuredProposal ? JSON.stringify(draft.structuredProposal) : null,
+    draft.generatedAt,
+    draft.jobIntelligence ? JSON.stringify(draft.jobIntelligence) : null,
+    draft.connectsStrategy ? JSON.stringify(draft.connectsStrategy) : null
   );
   if (!previousStatus) {
     insertApplicationEventStmt.run(draft.jobId, "created", null, draft.status, "Application draft created.");
@@ -933,7 +1020,10 @@ function rowToApplicationDraft(row: ApplicationDraftRow): ApplicationDraft {
       wordCount: proposalText.trim().split(/\s+/).filter(Boolean).length,
     },
     proposalText,
+    structuredProposal: parseJsonObject<StructuredProposalDraft>(row.structured_proposal),
     generatedAt: row.generated_at,
+    jobIntelligence: parseJsonObject<JobIntelligence>(row.job_intelligence),
+    connectsStrategy: parseJsonObject<ConnectsStrategySnapshot>(row.connects_strategy),
   };
 }
 
@@ -1074,6 +1164,16 @@ function parseJsonArray<T>(value: string | null | undefined): T[] {
   }
 }
 
+function parseJsonObject<T>(value: string | null | undefined): T | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as T) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function getScoredJobForSlackPreview(jobId: string): ScoredJob | null {
   const row = slackPreviewJobStmt.get(jobId);
   if (!row) {
@@ -1109,7 +1209,10 @@ export function getScoredJobForSlackPreview(jobId: string): ScoredJob | null {
           wordCount: row.proposal_text.trim().split(/\s+/).filter(Boolean).length,
         },
         proposalText: row.proposal_text,
+        structuredProposal: parseJsonObject<StructuredProposalDraft>(row.structured_proposal),
         generatedAt: row.generated_at ?? new Date().toISOString(),
+        jobIntelligence: parseJsonObject<JobIntelligence>(row.job_intelligence),
+        connectsStrategy: parseJsonObject<ConnectsStrategySnapshot>(row.connects_strategy),
       }
     : undefined;
 
@@ -1131,6 +1234,10 @@ export function getScoredJobForSlackPreview(jobId: string): ScoredJob | null {
     connectsCost: row.connects_cost ?? 0,
     skills: parseJsonStringArray(row.skills),
     sourceQuery: "stored-preview",
+    proposalCount: row.proposal_count ?? null,
+    competitionLevel: row.competition_level === "low" || row.competition_level === "medium" || row.competition_level === "high"
+      ? row.competition_level
+      : "unknown",
     score: row.score ?? row.fit_score ?? 0,
     matchLevel: row.match_level ?? "medium",
     matchedKeywords: [],
@@ -1158,6 +1265,65 @@ function topCounts(values: string[]): Array<{ name: string; count: number }> {
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
     .slice(0, 10);
+}
+
+function budgetBand(value: string | null): string {
+  const max = Math.max(0, ...(value?.match(/\d+(?:,\d{3})*/g)?.map((item) => Number(item.replace(/,/g, ""))) ?? []));
+  if (max >= 3000) return "budget >= $3k";
+  if (max >= 1000) return "budget $1k-$3k";
+  if (max >= 300) return "budget $300-$999";
+  if (max > 0) return "budget < $300";
+  return "budget unknown";
+}
+
+function clientSpendBand(value: number | null): string {
+  const spend = value ?? 0;
+  if (spend >= 100000) return "client spend >= $100k";
+  if (spend >= 10000) return "client spend $10k-$100k";
+  if (spend >= 1000) return "client spend $1k-$10k";
+  if (spend > 0) return "client spend <$1k";
+  return "client spend unknown";
+}
+
+function buildOutcomeSegments(rows: OutcomeLearningRow[], keyForRow: (row: OutcomeLearningRow) => string): OutcomeLearningSegment[] {
+  const grouped = new Map<string, OutcomeLearningRow[]>();
+  for (const row of rows) {
+    const key = keyForRow(row);
+    grouped.set(key, [...(grouped.get(key) ?? []), row]);
+  }
+  const repliedStatuses: ApplicationStatus[] = ["replied", "interview", "hired"];
+  return [...grouped.entries()]
+    .map(([name, segmentRows]) => {
+      const submitted = segmentRows.filter((row) => ["applied", "submitted", "replied", "interview", "hired", "lost"].includes(row.status)).length;
+      const replied = segmentRows.filter((row) => repliedStatuses.includes(row.status)).length;
+      const interviews = segmentRows.filter((row) => ["interview", "hired"].includes(row.status)).length;
+      const hired = segmentRows.filter((row) => row.status === "hired").length;
+      const lost = segmentRows.filter((row) => row.status === "lost").length;
+      return {
+        name,
+        total: segmentRows.length,
+        submitted,
+        replied,
+        interviews,
+        hired,
+        lost,
+        replyRate: submitted ? replied / submitted : 0,
+        hireRate: submitted ? hired / submitted : 0,
+      };
+    })
+    .sort((a, b) => b.replyRate - a.replyRate || b.total - a.total || a.name.localeCompare(b.name))
+    .slice(0, 10);
+}
+
+export function getOutcomeLearningSummary(now = new Date()): OutcomeLearningSummary {
+  const rows = outcomeLearningRowsStmt.all();
+  return {
+    generatedAt: now.toISOString(),
+    totalTracked: rows.length,
+    bySourceQuery: buildOutcomeSegments(rows, (row) => row.source_query?.trim() || "unknown source"),
+    byBudgetBand: buildOutcomeSegments(rows, (row) => budgetBand(row.budget)),
+    byClientSpendBand: buildOutcomeSegments(rows, (row) => clientSpendBand(row.client_spend)),
+  };
 }
 
 export function getApplicationAnalytics(): ApplicationAnalytics {
@@ -1404,6 +1570,10 @@ export function queueSlackMessage(payload: string): void {
 
 export function getQueuedSlackMessages(): SlackQueueItem[] {
   return queueSelectStmt.all();
+}
+
+export function getSlackQueueStats(): SlackQueueStats {
+  return queueStatsStmt.get() ?? { count: 0, maxAttempts: 0 };
 }
 
 export function markQueuedMessageSent(id: number): void {
