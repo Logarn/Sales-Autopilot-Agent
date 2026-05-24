@@ -8,6 +8,15 @@ data/*.sqlite3
 *.log
 .env
 .env
+.DS_Store
+
+# Local repo prep / audit artifacts
+*.patch
+TEST_PROJECT_AUDIT_*.md
+CONTABO_DEPLOYMENT_PLAN.md
+CONTABO_DEPLOYMENT_TASK_BRIEF.md
+COMMIT_STACK_PLAN.md
+TESTING_NOTES.md
 
 # Taskplane/Pi runtime artifacts (machine-specific, do not commit)
 .pi/batch-state.json
@@ -33,6 +42,9 @@ pi-session*.html
 .env.*
 !.env.example
 .pi/
+.codex/
+.gc/
+.runtime/
 data/
 data/browser-profile/
 data/personal-cdp-profile/
@@ -52,3 +64,6 @@ TemporaryItems/
 .dolt/
 *.db
 .beads-credential-key
+
+# Gas City
+.beads/
