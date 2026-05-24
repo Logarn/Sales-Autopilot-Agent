@@ -2,11 +2,9 @@ import {
   JOB_INTELLIGENCE_ENABLED,
   JOB_INTELLIGENCE_MODEL,
   JOB_INTELLIGENCE_TEMPERATURE,
-  LLM_BASE_URL,
   LLM_PROVIDER,
-  OPENAI_API_KEY,
 } from "./config";
-import { OpenAiCompatibleProvider, type LlmJsonResult } from "./llm/provider";
+import { OpenAiCompatibleProvider, getLlmProviderConfig, type LlmJsonResult } from "./llm/provider";
 import type { ApplicationDraft, JobIntelligence, JobPosting, PlatformPreferenceTier } from "./types";
 
 export interface JobIntelligenceInput {
@@ -183,6 +181,77 @@ export function createUnavailableJobIntelligence(reason: string): JobIntelligenc
   return { ok: false, intelligence: null, usedLlm: false, unavailableReason: reason };
 }
 
+function inferVertical(text: string): JobIntelligence["ecommerceVertical"] {
+  if (/beauty|skincare|cosmetic/i.test(text)) return "beauty";
+  if (/supplement|wellness|health/i.test(text)) return "supplements";
+  if (/fashion|apparel|clothing/i.test(text)) return "fashion";
+  if (/food|beverage/i.test(text)) return "food";
+  if (/home|furniture|decor/i.test(text)) return "home";
+  if (/saas|b2b/i.test(text)) return "SaaS";
+  return "unknown";
+}
+
+export function buildDeterministicJobIntelligence(job: JobIntelligenceInput["job"], draftText = ""): JobIntelligence {
+  const text = `${job.title} ${job.description} ${job.skills.join(" ")} ${job.category}`.toLowerCase();
+  const platformsMentioned = detectPlatformsInText(text);
+  const primaryPlatform = platformsMentioned.find((platform) => !NON_COMPETING_CONTEXT_PLATFORMS.has(platform.toLowerCase())) ?? platformsMentioned[0] ?? "unknown";
+  const platformPreferenceTier = inferPlatformPreferenceTier(primaryPlatform, undefined);
+  const ecommerceVertical = inferVertical(text);
+  const lifecycleFit = /(retention|lifecycle|email|sms|flow|flows|automation|campaign|segmentation|klaviyo|attentive|postscript|omnisend|mailchimp)/i.test(text);
+  const ecommerceFit = /(dtc|d2c|ecommerce|e-commerce|shopify|woocommerce|bigcommerce|beauty|skincare|fashion|supplement|home)/i.test(text) && ecommerceVertical !== "SaaS";
+  const needsManualReview = platformPreferenceTier === "unknown" || platformPreferenceTier === "non_core_review";
+  const shouldSkipForPlatform = platformPreferenceTier === "non_core_review" && !(ecommerceFit && lifecycleFit);
+  const raw = {
+    primaryPlatform,
+    platformsMentioned,
+    platformCategory: primaryPlatform === "unknown" ? "unknown" : CORE_PLATFORMS.has(primaryPlatform.toLowerCase()) || SECONDARY_PLATFORMS.has(primaryPlatform.toLowerCase()) ? "ESP" : "CRM",
+    platformPreferenceTier,
+    platformFitReason: primaryPlatform === "unknown"
+      ? "No primary platform was detected from deterministic job text."
+      : `${primaryPlatform} detected from deterministic job text.`,
+    shouldSkipForPlatform,
+    skipReason: shouldSkipForPlatform ? "Non-core platform without strong ecommerce lifecycle fit." : "",
+    businessType: ecommerceFit ? "DTC ecommerce" : ecommerceVertical === "SaaS" ? "B2B SaaS" : "unknown",
+    ecommerceVertical,
+    jobCategory: job.category || "unknown",
+    taskType: lifecycleFit ? "Lifecycle/email/SMS retention work" : "unknown",
+    requiredSkills: job.skills,
+    clientGoal: lifecycleFit ? "Improve lifecycle retention performance" : "unknown",
+    redFlags: [],
+    fitScoreReasoning: ecommerceFit && lifecycleFit ? "Deterministic parser found ecommerce lifecycle fit." : "Deterministic parser needs manual review for fit.",
+    proposalAngle: lifecycleFit ? "Lead with retention audit and priority lifecycle fixes." : "Keep proposal specific and avoid unsupported platform claims.",
+    proofRecommendations: [],
+    draftConstraints: primaryPlatform === "unknown" ? ["Stay platform-neutral until the client confirms tooling."] : [],
+    platformMismatchWarnings: detectPlatformMismatchWarnings(primaryPlatform, platformsMentioned, draftText),
+    needsManualReview,
+    confidence: primaryPlatform === "unknown" ? "low" : "medium",
+  };
+  return validateJobIntelligence(raw, draftText).intelligence ?? {
+    schemaVersion: "1.0",
+    primaryPlatform: "unknown",
+    platformsMentioned: [],
+    platformCategory: "unknown",
+    platformPreferenceTier: "unknown",
+    platformFitReason: "Deterministic parser could not validate platform context.",
+    shouldSkipForPlatform: false,
+    skipReason: "",
+    businessType: "unknown",
+    ecommerceVertical: "unknown",
+    jobCategory: "unknown",
+    taskType: "unknown",
+    requiredSkills: [],
+    clientGoal: "unknown",
+    redFlags: [],
+    fitScoreReasoning: "Needs manual review.",
+    proposalAngle: "Stay specific and platform-neutral.",
+    proofRecommendations: [],
+    draftConstraints: ["Stay platform-neutral until tooling is confirmed."],
+    platformMismatchWarnings: [],
+    needsManualReview: true,
+    confidence: "low",
+  };
+}
+
 export function validateJobIntelligence(raw: unknown, draftText = ""): { valid: boolean; intelligence?: JobIntelligence; errors: string[] } {
   if (!raw || typeof raw !== "object") return { valid: false, errors: ["LLM response was not an object"] };
   const input = raw as Record<string, unknown>;
@@ -231,6 +300,7 @@ export function validateJobIntelligence(raw: unknown, draftText = ""): { valid: 
 
   const errors: string[] = [];
   for (const field of JOB_INTELLIGENCE_SCHEMA.required) {
+    if (field === "needsManualReview") continue;
     if (!(field in input)) errors.push(`Missing field: ${field}`);
   }
   if (errors.length > 0) return { valid: false, intelligence, errors };
@@ -277,18 +347,26 @@ function buildJobIntelligenceMessages(input: JobIntelligenceInput) {
 }
 
 function defaultJobIntelligenceClient(): JobIntelligenceClient {
+  const providerConfig = getLlmProviderConfig();
   return new OpenAiCompatibleProvider({
     enabled: JOB_INTELLIGENCE_ENABLED,
     provider: LLM_PROVIDER,
-    apiKey: OPENAI_API_KEY,
+    apiKey: providerConfig.apiKey,
     model: JOB_INTELLIGENCE_MODEL,
-    baseUrl: LLM_BASE_URL.replace(/\/$/, ""),
+    baseUrl: providerConfig.baseUrl,
   });
 }
 
 export async function parseJobIntelligence(input: JobIntelligenceInput, client: JobIntelligenceClient = defaultJobIntelligenceClient()): Promise<JobIntelligenceResult> {
+  const deterministicFallback = (reason: string): JobIntelligenceResult => ({
+    ok: true,
+    intelligence: buildDeterministicJobIntelligence(input.job, input.draftText),
+    usedLlm: false,
+    unavailableReason: reason,
+  });
+
   if (!client.isAvailable()) {
-    return createUnavailableJobIntelligence("Job intelligence LLM unavailable or not configured");
+    return deterministicFallback("Job intelligence LLM unavailable or not configured; used deterministic parser");
   }
 
   const result = await client.completeJson<unknown>({
@@ -297,12 +375,12 @@ export async function parseJobIntelligence(input: JobIntelligenceInput, client: 
     maxTokens: 1800,
   });
   if (!result.ok || !result.data) {
-    return { ok: false, intelligence: null, usedLlm: false, error: result.skippedReason ?? result.error ?? "Job intelligence LLM failed" };
+    return deterministicFallback(result.skippedReason ?? result.error ?? "Job intelligence LLM failed; used deterministic parser");
   }
 
   const validated = validateJobIntelligence(result.data, input.draftText);
   if (!validated.valid || !validated.intelligence) {
-    return { ok: false, intelligence: null, usedLlm: false, error: `Invalid job intelligence JSON: ${validated.errors.join("; ")}` };
+    return deterministicFallback(`Invalid job intelligence JSON: ${validated.errors.join("; ")}; used deterministic parser`);
   }
   return { ok: true, intelligence: validated.intelligence, usedLlm: true };
 }

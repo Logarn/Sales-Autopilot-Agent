@@ -267,18 +267,23 @@ async function run(): Promise<void> {
   assert.equal(validateJobIntelligence(intelligence({ ecommerceVertical: "wellness" })).intelligence?.ecommerceVertical, "unknown");
 
   const unavailable = await parseJobIntelligence({ job: job({}) }, new MockClient(intelligence(), false));
-  assert.equal(unavailable.ok, false);
+  assert.equal(unavailable.ok, true);
   assert.equal(unavailable.usedLlm, false);
-  assert.equal(unavailable.intelligence, null);
+  assert.equal(unavailable.intelligence?.primaryPlatform, "unknown");
+  assert.equal(unavailable.intelligence?.needsManualReview, true);
+  assert.match(unavailable.unavailableReason ?? "", /deterministic parser/);
 
   const invalid = await parseJobIntelligence({ job: job({}) }, new MockClient({ primaryPlatform: "HubSpot" }));
-  assert.equal(invalid.ok, false);
-  assert.equal(invalid.intelligence, null);
-  assert.match(invalid.error ?? "", /Invalid job intelligence JSON/);
+  assert.equal(invalid.ok, true);
+  assert.equal(invalid.usedLlm, false);
+  assert.equal(invalid.intelligence?.primaryPlatform, "unknown");
+  assert.match(invalid.unavailableReason ?? "", /Invalid job intelligence JSON/);
 
   const llmError = await parseJobIntelligence({ job: job({}) }, new MockClient(new Error("network down")));
-  assert.equal(llmError.ok, false);
+  assert.equal(llmError.ok, true);
   assert.equal(llmError.usedLlm, false);
+  assert.equal(llmError.intelligence?.primaryPlatform, "unknown");
+  assert.match(llmError.unavailableReason ?? "", /network down/);
 
   console.log("job intelligence parser tests passed");
 }

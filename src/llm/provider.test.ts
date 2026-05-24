@@ -1,0 +1,156 @@
+import assert from "node:assert/strict";
+
+async function loadProvider() {
+  const resolved = await import("./provider");
+  return resolved;
+}
+
+function withEnv(values: Record<string, string | undefined>, fn: () => Promise<void> | void): Promise<void> | void {
+  const previous: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(values)) {
+    previous[key] = process.env[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  const restore = () => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  };
+  try {
+    const result = fn();
+    if (result && typeof (result as Promise<void>).then === "function") {
+      return (result as Promise<void>).finally(restore);
+    }
+    restore();
+  } catch (error) {
+    restore();
+    throw error;
+  }
+}
+
+async function run(): Promise<void> {
+  const { getLlmProviderConfig, OpenAiCompatibleProvider } = await loadProvider();
+
+  withEnv({
+    LLM_PROVIDER: "openai",
+    OPENAI_API_KEY: "openai-key",
+    LLM_MODEL: "gpt-4o-mini",
+    LLM_BASE_URL: "https://api.openai.com/v1",
+  }, () => {
+    const config = getLlmProviderConfig();
+    assert.equal(config.provider, "openai");
+    assert.equal(config.apiKey, "openai-key");
+    assert.equal(config.model, "gpt-4o-mini");
+  });
+
+  withEnv({
+    LLM_PROVIDER: "openrouter",
+    OPENROUTER_API_KEY: "or-key",
+    OPENROUTER_MODEL: "openai/gpt-4.1-mini",
+    OPENROUTER_BASE_URL: "https://openrouter.ai/api/v1",
+  }, () => {
+    const config = getLlmProviderConfig();
+    assert.equal(config.provider, "openrouter");
+    assert.equal(config.apiKey, "or-key");
+    assert.equal(config.model, "openai/gpt-4.1-mini");
+    assert.equal(config.baseUrl, "https://openrouter.ai/api/v1");
+  });
+
+  withEnv({
+    LLM_PROVIDER: "lmstudio",
+    LMSTUDIO_BASE_URL: "http://localhost:1234/v1",
+    LMSTUDIO_MODEL: "qwen/qwen3.5-9b",
+    LMSTUDIO_API_KEY: "",
+    LLM_API_KEY: "",
+  }, () => {
+    const config = getLlmProviderConfig();
+    assert.equal(config.provider, "lmstudio");
+    assert.equal(config.apiKey, "lm-studio");
+    assert.equal(config.model, "qwen/qwen3.5-9b");
+    assert.equal(config.baseUrl, "http://localhost:1234/v1");
+  });
+
+  withEnv({ LLM_PROVIDER: "lm-studio", LMSTUDIO_BASE_URL: "http://localhost:1234/v1" }, () => {
+    const config = getLlmProviderConfig();
+    assert.equal(config.provider, "lmstudio");
+  });
+
+  const originalFetch = globalThis.fetch;
+  try {
+    let requestBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      return new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ ok: true, source: "message-content" }) }, reasoning_content: "ignore this" }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+
+    const provider = new OpenAiCompatibleProvider({
+      enabled: true,
+      provider: "lmstudio",
+      apiKey: "lm-studio",
+      model: "qwen/qwen3.5-9b",
+      baseUrl: "http://localhost:1234/v1",
+    });
+    const result = await provider.completeJson<{ ok: boolean; source: string }>({ messages: [{ role: "user", content: "hi" }] });
+    assert.equal(result.ok, true);
+    assert.equal(result.data?.ok, true);
+    assert.equal(result.data?.source, "message-content");
+    assert.deepEqual(requestBodies.map((body) => Boolean(body.response_format)), [true]);
+
+    requestBodies = [];
+    globalThis.fetch = async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      if (requestBodies.length === 1) {
+        return new Response(JSON.stringify({ error: { message: "response_format unsupported" } }), { status: 400 });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({ ok: true, source: "fallback-no-response-format" }) } }],
+      }), { status: 200 });
+    };
+    const fallback = await provider.completeJson<{ ok: boolean; source: string }>({ messages: [{ role: "user", content: "hi" }] });
+    assert.equal(fallback.ok, true);
+    assert.equal(fallback.data?.source, "fallback-no-response-format");
+    assert.deepEqual(requestBodies.map((body) => Boolean(body.response_format)), [true, false]);
+    assert.equal((requestBodies[0].messages as Array<{ content: string }>)[0].content.includes("/no_think"), true);
+
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      choices: [{ message: { content: "Sure:\n```json\n{\"ok\":true,\"source\":\"fenced-json\"}\n```" } }],
+    }), { status: 200 });
+    const fenced = await provider.completeJson<{ ok: boolean; source: string }>({ messages: [{ role: "user", content: "hi" }] });
+    assert.equal(fenced.ok, true);
+    assert.equal(fenced.data?.source, "fenced-json");
+
+    globalThis.fetch = async () => { throw new Error("connect ECONNREFUSED 127.0.0.1:1234"); };
+    const offline = await provider.completeJson({ messages: [{ role: "user", content: "hi" }] });
+    assert.equal(offline.ok, false);
+
+    globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: "not-json" } }] }), { status: 200 });
+    const invalid = await provider.completeJson({ messages: [{ role: "user", content: "hi" }] });
+    assert.equal(invalid.ok, false);
+    assert.match(invalid.error ?? "", /Unexpected token|JSON/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  withEnv({
+    LLM_PROVIDER: "openrouter",
+    OPENROUTER_API_KEY: "",
+    OPENROUTER_MODEL: "openai/gpt-4.1-mini",
+  }, () => {
+    const provider = new OpenAiCompatibleProvider({ enabled: true, provider: "openrouter", apiKey: "", model: "x", baseUrl: "https://openrouter.ai/api/v1" });
+    assert.equal(provider.isAvailable(), false);
+  });
+
+  console.log("llm provider tests passed");
+}
+
+run().catch((error) => {
+  console.error(`llm provider tests failed: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+});

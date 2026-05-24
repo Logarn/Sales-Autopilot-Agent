@@ -18,6 +18,8 @@ export interface JobPosting {
   connectsCost: number;
   skills: string[];
   sourceQuery: string;
+  proposalCount?: number | null;
+  competitionLevel?: "low" | "medium" | "high" | "unknown";
 }
 
 export type NormalizationSource = "deterministic" | "llm";
@@ -108,6 +110,7 @@ export interface ScoreBreakdown {
   finalScore: number;
   reasons: string[];
   risks: string[];
+  connectsStrategy?: ConnectsStrategySnapshot;
 }
 
 export interface ScoredJob extends JobPosting {
@@ -123,6 +126,7 @@ export type ApplicationStatus =
   | "found"
   | "draft"
   | "sent_to_slack"
+  | "draft_prepared"
   | "approved"
   | "rejected"
   | "applied"
@@ -224,12 +228,28 @@ export interface ConnectsRules {
   skipIfTopBidAbove: number;
 }
 
+export type ConnectsStrategyDecision = "safe_apply" | "manual_review" | "skip";
+
+export interface ConnectsStrategySnapshot {
+  decision: ConnectsStrategyDecision;
+  requiredConnects: number;
+  suggestedBoostConnects: number;
+  totalConnects: number;
+  expectedValueScore: number;
+  reasons: string[];
+  risks: string[];
+}
+
 export type ProposalQualitySeverity = "info" | "warning" | "critical";
 
 export type ProposalQualityCategory =
   | "banned_phrase"
   | "weak_opening"
   | "generic_claim"
+  | "platform_mismatch"
+  | "vague_claim"
+  | "fluff"
+  | "over_explaining"
   | "length"
   | "cta"
   | "proof_relevance"
@@ -312,6 +332,7 @@ export interface ApplicationDraft {
   suggestedConnects: number;
   suggestedBoostConnects: number;
   connectsWarnings: string[];
+  connectsStrategy?: ConnectsStrategySnapshot;
   selectedPortfolioItems: PortfolioItem[];
   proposalQuality: ProposalQualityResult;
   proposalText: string;
@@ -444,11 +465,14 @@ export interface BrowserApplyFillPlan {
   skippedAttachments: BrowserApplySkippedAttachment[];
   manualReviewAssets: string[];
   mentionOnlyProof: string[];
+  proofAvailability: string[];
   figmaRecommendations: string[];
   videoRecommendations: string[];
   manualReviewWarnings: string[];
+  missingLocalAssets: string[];
   highlights: string[];
   connects: BrowserApplyConnectsPlan;
+  connectsStrategy: ConnectsStrategySnapshot;
   stopBeforeSubmit: true;
   dryRunSafe: true;
   validationIssues: BrowserApplyValidationIssue[];
