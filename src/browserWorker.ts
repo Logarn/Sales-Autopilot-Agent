@@ -16,6 +16,7 @@ import {
   BROWSER_USER_DATA_DIR,
   BROWSER_WORKER_ENABLED,
   DISCOVERY_SLACK_CHANNEL_ID,
+  SLACK_CHANNEL_WEBHOOK_URL,
 } from "./config";
 import { buildBrowserApplyPlan } from "./browserApply";
 import {
@@ -47,7 +48,9 @@ import {
 import { buildV3CapturePacket, shouldPostLeadPacket, SlackPacketV3Context } from "./slackPacketV3";
 import { evaluatePlatformEligibility } from "./platformEligibility";
 import { decideLeadHandling } from "./leadDecision";
+import { sendSlackMessage } from "./slack";
 import { postSlackChannelMessage, postSlackThreadMessage } from "./slackThread";
+import type { IncomingWebhookSendArguments } from "@slack/webhook";
 import {
   BrowserSessionStatus,
   formatBrowserSessionStatus,
@@ -133,6 +136,8 @@ export interface ControlledWorkerRunSummary {
   actionsCompleted: number;
   actionsPaused: number;
   actionsSkipped: number;
+  slackPostsSucceeded: number;
+  slackPostFailures: number;
   stoppedReason: string;
   remainingPendingCount: number;
 }
@@ -1406,6 +1411,17 @@ function stateStatusMessage(state: DetectedBrowserState): string {
 }
 
 export type DiscoverySlackNotificationStatus = "not_discovery" | "missing_channel" | "post_failed" | "posted";
+type DiscoveryLeadPostOutcome = "not_needed" | "posted" | "failed";
+interface DiscoveryLeadPostResult {
+  status: DiscoverySlackNotificationStatus;
+  thread?: SlackThreadContext;
+  outcome: DiscoveryLeadPostOutcome;
+}
+
+interface ProcessActionResult {
+  slackPostsSucceeded: number;
+  slackPostFailures: number;
+}
 
 export function buildCaptureCompletionStatus(input: { hasThreadContext: boolean; packetPosted: boolean; discoverySlackStatus?: DiscoverySlackNotificationStatus }): string {
   if (input.packetPosted) {
@@ -1437,17 +1453,22 @@ export function getDiscoverySourceMetadata(action: BrowserAction): { sourceType:
   };
 }
 
-async function postDiscoveryCapturePacket(input: {
+export async function postDiscoveryCapturePacket(input: {
   action: BrowserAction;
   scored: ScoredJob;
   upworkUrl: string;
   applicationQuestions: string[];
   questionAnswers: string[];
   autoPrepareDecision: AutoPrepareDraftDecision;
-}): Promise<{ status: DiscoverySlackNotificationStatus; thread?: SlackThreadContext }> {
+}, deps: {
+  postChannelMessage?: typeof postSlackChannelMessage;
+  postWebhookMessage?: typeof sendSlackMessage;
+} = {}): Promise<DiscoveryLeadPostResult> {
+  const postChannelMessage = deps.postChannelMessage ?? postSlackChannelMessage;
+  const postWebhookMessage = deps.postWebhookMessage ?? sendSlackMessage;
+  const canUseWebhook = Boolean(deps.postWebhookMessage) || Boolean(SLACK_CHANNEL_WEBHOOK_URL.trim());
   const discovery = getDiscoverySourceMetadata(input.action);
-  if (!discovery) return { status: "not_discovery" };
-  if (!DISCOVERY_SLACK_CHANNEL_ID.trim()) return { status: "missing_channel" };
+  if (!discovery) return { status: "not_discovery", outcome: "not_needed" };
   if (!shouldPostLeadPacket(input.scored, {
     upworkUrl: input.upworkUrl,
     captureStatus: "packet_sent",
@@ -1460,7 +1481,7 @@ async function postDiscoveryCapturePacket(input: {
       `platformEligibility=${eligibility.platformEligibility} skippedBecausePlatform=${eligibility.skippedBecausePlatform} ` +
       `eligibilityReason=${eligibility.eligibilityReason}`
     );
-    return { status: "not_discovery" };
+    return { status: "not_discovery", outcome: "not_needed" };
   }
 
   const packet = buildV3CapturePacket(input.scored, {
@@ -1480,27 +1501,50 @@ async function postDiscoveryCapturePacket(input: {
     sourceLabel: discovery.sourceLabel,
     postedAtText: discovery.postedAtText,
   });
-  const result = await postSlackChannelMessage({
-    channel: DISCOVERY_SLACK_CHANNEL_ID,
-    text: packet.text,
-    blocks: packet.blocks,
-  });
-  if (!result.ok || !result.ts) return { status: "post_failed" };
-  updateApplicationStatus(input.scored.id, "sent_to_slack", "Discovery lead packet posted to Slack channel.");
+  const discoveryChannelId = DISCOVERY_SLACK_CHANNEL_ID.trim();
+  if (discoveryChannelId) {
+    const result = await postChannelMessage({
+      channel: discoveryChannelId,
+      text: packet.text,
+      blocks: packet.blocks,
+    });
+    if (result.ok && result.ts) {
+      updateApplicationStatus(input.scored.id, "sent_to_slack", "Discovery lead packet posted to Slack channel.");
 
-  const channelId = result.channel ?? DISCOVERY_SLACK_CHANNEL_ID;
-  upsertSlackThreadState({
-    channelId,
-    messageTs: result.ts,
-    threadTs: result.ts,
-    upworkUrl: input.scored.url || input.upworkUrl,
-    jobId: input.scored.id,
-    status: "packet_sent",
+      const channelId = result.channel ?? discoveryChannelId;
+      upsertSlackThreadState({
+        channelId,
+        messageTs: result.ts,
+        threadTs: result.ts,
+        upworkUrl: input.scored.url || input.upworkUrl,
+        jobId: input.scored.id,
+        status: "packet_sent",
+      });
+      return { status: "posted", thread: { channelId, messageTs: result.ts, threadTs: result.ts }, outcome: "posted" };
+    }
+  }
+
+  if (!canUseWebhook) {
+    return { status: discoveryChannelId ? "post_failed" : "missing_channel", outcome: "failed" };
+  }
+
+  const sent = await postWebhookMessage({
+    text: packet.text,
+    blocks: packet.blocks as unknown as IncomingWebhookSendArguments["blocks"],
   });
-  return { status: "posted", thread: { channelId, messageTs: result.ts, threadTs: result.ts } };
+  if (!sent) {
+    return { status: "post_failed", outcome: "failed" };
+  }
+
+  updateApplicationStatus(input.scored.id, "sent_to_slack", "Discovery lead packet posted to Slack webhook channel.");
+  return { status: "posted", outcome: "posted" };
 }
 
-async function processAction(action: BrowserAction, options: BrowserWorkerOptions): Promise<void> {
+async function processAction(action: BrowserAction, options: BrowserWorkerOptions): Promise<ProcessActionResult> {
+  const result: ProcessActionResult = {
+    slackPostsSucceeded: 0,
+    slackPostFailures: 0,
+  };
   updateBrowserActionStatus(action.id, "in_progress");
   incrementBrowserActionAttempts(action.id);
 
@@ -1525,7 +1569,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       nextCommand: `retry ${action.id}`,
     });
     updateBrowserActionStatus(action.id, "paused", `Apply preparation validation failed: ${issues.map((item) => item.code).join(", ")}`);
-    return;
+    return result;
   }
 
   if (!url) {
@@ -1533,7 +1577,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
     if (thread) {
       updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "capture_failed");
     }
-    return;
+    return result;
   }
 
   if (action.actionType === "prepare_application_review") {
@@ -1543,7 +1587,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       const message = error instanceof Error ? error.message : String(error);
       saveApplyDiagnostics(options, action, buildApplyDiagnostics(action, plan, applyPlanResult?.issues ?? [], "submit_guard_failed"));
       updateBrowserActionStatus(action.id, "paused", message);
-      return;
+      return result;
     }
   }
 
@@ -1594,14 +1638,17 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           autoPrepareNote: autoPrepareDecision.note,
         });
         if (threadPostStatus === "posted") {
+          result.slackPostsSucceeded += 1;
           updateSlackThreadStateStatus(thread.channelId, thread.threadTs, autoPrepareDecision.actionId && !autoPrepareDecision.duplicate ? "prepare_draft_requested" : "packet_sent", { jobId: scored.id });
+        } else if (threadPostStatus === "failed") {
+          result.slackPostFailures += 1;
         } else {
           logger.info(`Dry-run Slack thread lead message was not posted for jobId=${scored.id}; status=${threadPostStatus}`);
         }
       }
       updateBrowserActionStatus(action.id, "paused", "Dry run: browser capture simulated from URL. Set BROWSER_DRY_RUN=false for real extraction.");
       logger.info(`[dry-run] Browser capture action #${action.id} simulated for ${url}`);
-      return;
+      return result;
     }
 
     const diagnostics = buildApplyDiagnostics(action, plan, applyPlanResult?.issues ?? [], state);
@@ -1618,7 +1665,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         diagnostics,
       });
     }
-    return;
+    return result;
   }
 
   try {
@@ -1652,7 +1699,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         nextCommand: state === "apply_page_loaded" ? "status" : `retry ${action.id}`,
       });
       logger.info(`Browser action #${action.id} detected state: ${state}`);
-      return;
+      return result;
     }
 
     if (action.actionType === "capture_job_from_url") {
@@ -1692,7 +1739,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         }
         updateBrowserActionStatus(action.id, "paused", stateStatusMessage(state));
         logger.warn(`Browser action #${action.id} blocked: ${threadStatus} url=${snapshot?.url ?? url} title=${snapshot?.title ?? "n/a"} detector=${inspectionDiagnostics?.finalDetection.source ?? "n/a"}`);
-        return;
+        return result;
       }
 
       if (extractionDiagnostics && (extractionDiagnostics as { lowConfidence?: boolean }).lowConfidence) {
@@ -1723,7 +1770,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         }
         updateBrowserActionStatus(action.id, "failed", "Capture extraction was low-confidence; lead message not posted.");
         logger.warn(`Browser action #${action.id} low-confidence capture blocked lead message posting.`);
-        return;
+        return result;
       }
 
       const normalized = buildDeterministicOpportunityPacket(extractionBodyText ?? bodyText, {
@@ -1798,7 +1845,10 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         });
         packetPosted = threadPostStatus === "posted";
         if (packetPosted) {
+          result.slackPostsSucceeded += 1;
           updateSlackThreadStateStatus(thread.channelId, thread.threadTs, autoPrepareDecision.actionId && !autoPrepareDecision.duplicate ? "prepare_draft_requested" : "packet_sent", { jobId: scored.id });
+        } else if (threadPostStatus === "failed") {
+          result.slackPostFailures += 1;
         } else {
           logger.info(`Slack thread lead message was not posted for jobId=${scored.id}; status=${threadPostStatus}`);
         }
@@ -1812,10 +1862,15 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           autoPrepareDecision,
         });
         discoverySlackStatus = discoveryNotification.status === "not_discovery" ? undefined : discoveryNotification.status;
-        packetPosted = discoveryNotification.status === "posted";
+        packetPosted = discoveryNotification.outcome === "posted";
+        if (discoveryNotification.outcome === "posted") {
+          result.slackPostsSucceeded += 1;
+        } else if (discoveryNotification.outcome === "failed") {
+          result.slackPostFailures += 1;
+        }
       }
       updateBrowserActionStatus(action.id, "completed", buildCaptureCompletionStatus({ hasThreadContext: Boolean(thread), packetPosted, discoverySlackStatus }));
-      return;
+      return result;
     }
 
     updateBrowserActionStatus(action.id, terminalStatusForState(state), stateStatusMessage(state));
@@ -1828,6 +1883,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
     }
     logger.error(`Browser action #${action.id} failed: ${message}`);
   }
+  return result;
 }
 
 export async function runBrowserWorker(options = loadOptions()): Promise<void> {
@@ -1866,6 +1922,8 @@ export async function runControlledWorkerLoop(input: ControlledWorkerRunOptions 
     actionsCompleted: 0,
     actionsPaused: 0,
     actionsSkipped: 0,
+    slackPostsSucceeded: 0,
+    slackPostFailures: 0,
     stoppedReason: "unknown",
     remainingPendingCount: 0,
   };
@@ -1896,7 +1954,9 @@ export async function runControlledWorkerLoop(input: ControlledWorkerRunOptions 
       continue;
     }
     summary.actionsProcessed += 1;
-    await processAction(action, workerOptions);
+    const actionResult = await processAction(action, workerOptions);
+    summary.slackPostsSucceeded += actionResult.slackPostsSucceeded;
+    summary.slackPostFailures += actionResult.slackPostFailures;
     const refreshed = getBrowserActionById(action.id);
     if (refreshed?.status === "completed") summary.actionsCompleted += 1;
     if (refreshed?.status === "paused") {

@@ -177,6 +177,8 @@ export async function runLeadEngineCycle(
           actionsCompleted: 0,
           actionsPaused: 0,
           actionsSkipped: 0,
+          slackPostsSucceeded: 0,
+          slackPostFailures: 0,
           stoppedReason: "dry_run_preview",
           remainingPendingCount: listActions("pending", 1000).length,
         }
@@ -190,10 +192,14 @@ export async function runLeadEngineCycle(
     summary.actionsCompleted = worker.actionsCompleted;
     summary.actionsPaused = worker.actionsPaused;
     summary.actionsSkipped = worker.actionsSkipped;
+    summary.slackPostFailures = worker.slackPostFailures;
     summary.queuePendingAfter = worker.remainingPendingCount;
     if (worker.stoppedReason === "manual_attention_required") {
       summary.status = "paused";
       summary.stoppedReason = "manual_attention_required";
+    } else if (worker.slackPostFailures > 0 && summary.status === "ok") {
+      summary.status = "degraded";
+      summary.stoppedReason = "slack_post_failed";
     }
 
     summary.nextSleepMs = computeJitteredDelay(AGENT_ENGINE_INTERVAL_MS, AGENT_ENGINE_JITTER_PCT, random);
