@@ -45,7 +45,7 @@ import {
   BrowserApplyValidationIssue,
   ScoredJob,
 } from "./types";
-import { buildV3CapturePacket, shouldPostLeadPacket, SlackPacketV3Context } from "./slackPacketV3";
+import { buildV3CapturePacket, getSlackLeadPostingDecision, SlackPacketV3Context } from "./slackPacketV3";
 import { evaluatePlatformEligibility } from "./platformEligibility";
 import { decideLeadHandling } from "./leadDecision";
 import { sendSlackMessage } from "./slack";
@@ -756,13 +756,13 @@ export async function postV3CapturePacketToThread(
   context: SlackPacketV3Context,
   postThreadMessage: typeof postSlackThreadMessage = postSlackThreadMessage,
 ): Promise<"posted" | "skipped" | "failed"> {
-  if (!shouldPostLeadPacket(job, context)) {
+  const postingDecision = getSlackLeadPostingDecision(job, context);
+  if (!postingDecision.shouldPost) {
     const intelligence = context.jobIntelligence ?? job.applicationDraft?.jobIntelligence;
-    const eligibility = evaluatePlatformEligibility(intelligence);
     logger.info(
-      `Lead skipped for platform eligibility: jobId=${job.id} primaryPlatform=${intelligence?.primaryPlatform ?? "unknown"} ` +
-      `platformEligibility=${eligibility.platformEligibility} skippedBecausePlatform=${eligibility.skippedBecausePlatform} ` +
-      `eligibilityReason=${eligibility.eligibilityReason}`
+      `Lead not posted to Slack: jobId=${job.id} primaryPlatform=${intelligence?.primaryPlatform ?? "unknown"} ` +
+      `platformEligibility=${postingDecision.platformEligibility} skippedBecausePlatform=${postingDecision.skippedBecausePlatform} ` +
+      `reason=${postingDecision.reason} internalSkipReason=${postingDecision.internalSkipReason ?? "none"}`
     );
     return "skipped";
   }
@@ -1469,17 +1469,17 @@ export async function postDiscoveryCapturePacket(input: {
   const canUseWebhook = Boolean(deps.postWebhookMessage) || Boolean(SLACK_CHANNEL_WEBHOOK_URL.trim());
   const discovery = getDiscoverySourceMetadata(input.action);
   if (!discovery) return { status: "not_discovery", outcome: "not_needed" };
-  if (!shouldPostLeadPacket(input.scored, {
+  const postingDecision = getSlackLeadPostingDecision(input.scored, {
     upworkUrl: input.upworkUrl,
     captureStatus: "packet_sent",
     jobIntelligence: input.scored.applicationDraft?.jobIntelligence,
-  })) {
+  });
+  if (!postingDecision.shouldPost) {
     const intelligence = input.scored.applicationDraft?.jobIntelligence;
-    const eligibility = evaluatePlatformEligibility(intelligence);
     logger.info(
-      `Discovery lead skipped for platform eligibility: jobId=${input.scored.id} primaryPlatform=${intelligence?.primaryPlatform ?? "unknown"} ` +
-      `platformEligibility=${eligibility.platformEligibility} skippedBecausePlatform=${eligibility.skippedBecausePlatform} ` +
-      `eligibilityReason=${eligibility.eligibilityReason}`
+      `Discovery lead not posted to Slack: jobId=${input.scored.id} primaryPlatform=${intelligence?.primaryPlatform ?? "unknown"} ` +
+      `platformEligibility=${postingDecision.platformEligibility} skippedBecausePlatform=${postingDecision.skippedBecausePlatform} ` +
+      `reason=${postingDecision.reason} internalSkipReason=${postingDecision.internalSkipReason ?? "none"}`
     );
     return { status: "not_discovery", outcome: "not_needed" };
   }
