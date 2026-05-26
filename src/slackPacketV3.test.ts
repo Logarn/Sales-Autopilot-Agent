@@ -356,6 +356,46 @@ function runTests(): void {
   }).text;
   assertNotIncludes(ineligibleText, "⏭️ *Platform skipped:*", "no per-job skip Slack message should be rendered");
 
+  const connectsManualReviewJob = createScoredJob({
+    score: 84,
+    scoreBreakdown: {
+      ...beautyJob.scoreBreakdown,
+      clientQualityScore: { score: 46, reasons: ["Thin client history"], risks: ["Limited spend"] },
+      finalScore: 84,
+    },
+    applicationDraft: {
+      ...beautyJob.applicationDraft!,
+      connectsStrategy: {
+        decision: "manual_review",
+        requiredConnects: 16,
+        suggestedBoostConnects: 0,
+        totalConnects: 16,
+        expectedValueScore: 62,
+        reasons: ["Client quality supports some spend."],
+        risks: ["Total Connects require review before applying."],
+      },
+      jobIntelligence: {
+        ...beautyJob.applicationDraft!.jobIntelligence!,
+        primaryPlatform: "Mailchimp",
+        platformsMentioned: ["Mailchimp"],
+        platformPreferenceTier: "secondary",
+        platformFitReason: "Mailchimp is approved but spend needs review.",
+      },
+    },
+  });
+  assertEqual(
+    shouldPostLeadPacket(connectsManualReviewJob, { upworkUrl: connectsManualReviewJob.url, captureStatus: "packet_sent" }),
+    true,
+    "eligible connects manual-review lead should still post",
+  );
+  const connectsManualReviewText = buildV3CapturePacket(connectsManualReviewJob, {
+    upworkUrl: connectsManualReviewJob.url,
+    captureStatus: "packet_sent",
+    applicationQuestions: [],
+  }).text;
+  assertIncludes(connectsManualReviewText, "*Recommended action:* Manual platform review before draft prep", "connects manual-review lead should render manual review wording");
+  assertIncludes(connectsManualReviewText, "Connects strategy: manual review", "connects manual-review lead should show spend review context");
+
   const capturedNormalized = buildDeterministicOpportunityPacket(
     "Beauty Shopify Klaviyo retention role. Need help with quiz segmentation, zero-party data, campaigns, flows, and repeat purchase strategy.",
     {

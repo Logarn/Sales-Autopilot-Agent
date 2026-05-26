@@ -297,6 +297,74 @@ async function runTests(): Promise<void> {
     assert(normalDiscovery.status === "posted", "Eligible discovery lead should post");
     assert(webhookPostedText.includes("*Recommended action:* Review lead"), "Post-to-Slack lead should keep standard review wording");
 
+    webhookPostedText = "";
+    const connectsManualReviewDiscovery = await postDiscoveryCapturePacket(
+      {
+        action: {
+          id: 5021,
+          jobId: beautyJob.id,
+          actionType: "capture_job_from_url",
+          status: "pending",
+          attempts: 0,
+          payload: {
+            url: beautyJob.url,
+            discovery: {
+              sourceType: "best_matches",
+              sourceLabel: "Best Matches",
+            },
+          },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        scored: {
+          ...beautyJob,
+          score: 84,
+          scoreBreakdown: {
+            ...beautyJob.scoreBreakdown,
+            clientQualityScore: { score: 46, reasons: ["Thin client history"], risks: ["Limited spend"] },
+            finalScore: 84,
+          },
+          applicationDraft: {
+            ...beautyJob.applicationDraft,
+            connectsStrategy: {
+              decision: "manual_review",
+              requiredConnects: 16,
+              suggestedBoostConnects: 0,
+              totalConnects: 16,
+              expectedValueScore: 62,
+              reasons: ["Client quality supports some spend."],
+              risks: ["Total Connects require review before applying."],
+            },
+            jobIntelligence: klaviyoIntel({
+              primaryPlatform: "Mailchimp",
+              platformsMentioned: ["Mailchimp"],
+              platformPreferenceTier: "secondary",
+              platformFitReason: "Mailchimp is approved but spend needs review.",
+            }),
+          },
+        },
+        upworkUrl: beautyJob.url,
+        applicationQuestions: [],
+        questionAnswers: [],
+        autoPrepareDecision: {
+          shouldQueue: false,
+          category: "blocked_no_manual_override",
+          reason: "no thread context",
+          note: "Not auto-preparing because no Slack thread context was available for browser staging.",
+        },
+      },
+      {
+        postChannelMessage: async () => ({ ok: false }),
+        postWebhookMessage: async (payload) => {
+          webhookPostedText = String(payload.text ?? "");
+          return true;
+        },
+      },
+    );
+    assert(connectsManualReviewDiscovery.status === "posted", "Eligible connects-manual-review discovery lead should post");
+    assert(connectsManualReviewDiscovery.outcome === "posted", "Eligible connects-manual-review discovery lead should count as posted");
+    assert(webhookPostedText.includes("*Recommended action:* Manual platform review before draft prep"), "Connects manual-review lead should keep manual review wording in Slack");
+
     let skippedWebhookCalled = false;
     const ineligibleDiscovery = await postDiscoveryCapturePacket(
       {

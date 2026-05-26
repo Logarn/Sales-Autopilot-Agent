@@ -4,6 +4,7 @@ import { buildProofAvailabilityReport, formatProofAvailabilityLines } from "./pr
 import { formatConnectsStrategy } from "./connectsStrategy";
 import { qaProposalPlatformGrounding } from "./proposalQa";
 import { decideLeadHandling } from "./leadDecision";
+import { evaluatePlatformEligibility, type PlatformEligibility } from "./platformEligibility";
 import { JobIntelligence, ScoredJob } from "./types";
 import { truncateText } from "./utils";
 
@@ -37,9 +38,72 @@ export interface SlackPacketV3Message {
   blocks: Array<Record<string, unknown>>;
 }
 
-export function shouldPostLeadPacket(job: ScoredJob, context: SlackPacketV3Context): boolean {
+export interface SlackLeadPostingDecision {
+  shouldPost: boolean;
+  classification: "skip" | "manual_review" | "post_to_slack";
+  reason: string;
+  internalSkipReason?: string;
+  platformEligibility: PlatformEligibility;
+  skippedBecausePlatform: boolean;
+  source: "lead_decision" | "connects_strategy_manual_review";
+}
+
+const CONNECTS_MANUAL_REVIEW_POST_SCORE_FLOOR = 58;
+const NON_POSTABLE_SKIP_REASONS = new Set([
+  "major_red_flags",
+  "low_score",
+  "stale_weak_lead",
+  "connects_strategy_skip",
+]);
+
+export function getSlackLeadPostingDecision(job: ScoredJob, context: SlackPacketV3Context): SlackLeadPostingDecision {
   const intelligence = context.jobIntelligence ?? job.applicationDraft?.jobIntelligence;
-  return decideLeadHandling(job, intelligence).shouldPostToSlack;
+  const leadDecision = decideLeadHandling(job, intelligence);
+  const eligibility = evaluatePlatformEligibility(intelligence);
+  if (leadDecision.shouldPostToSlack) {
+    return {
+      shouldPost: true,
+      classification: leadDecision.decision,
+      reason: leadDecision.reason,
+      internalSkipReason: leadDecision.internalSkipReason,
+      platformEligibility: eligibility.platformEligibility,
+      skippedBecausePlatform: eligibility.skippedBecausePlatform,
+      source: "lead_decision",
+    };
+  }
+
+  const connectsStrategy = job.applicationDraft?.connectsStrategy ?? job.scoreBreakdown?.connectsStrategy;
+  const qualifiesForConnectsManualReview =
+    connectsStrategy?.decision === "manual_review" &&
+    eligibility.platformEligibility !== "ineligible" &&
+    job.score >= CONNECTS_MANUAL_REVIEW_POST_SCORE_FLOOR &&
+    !NON_POSTABLE_SKIP_REASONS.has(leadDecision.internalSkipReason ?? "");
+
+  if (qualifiesForConnectsManualReview) {
+    return {
+      shouldPost: true,
+      classification: "manual_review",
+      reason: "Connects spend needs manual review before applying.",
+      internalSkipReason: leadDecision.internalSkipReason,
+      platformEligibility: eligibility.platformEligibility,
+      skippedBecausePlatform: eligibility.skippedBecausePlatform,
+      source: "connects_strategy_manual_review",
+    };
+  }
+
+  return {
+    shouldPost: false,
+    classification: "skip",
+    reason: leadDecision.reason,
+    internalSkipReason: leadDecision.internalSkipReason,
+    platformEligibility: eligibility.platformEligibility,
+    skippedBecausePlatform: eligibility.skippedBecausePlatform,
+    source: "lead_decision",
+  };
+}
+
+export function shouldPostLeadPacket(job: ScoredJob, context: SlackPacketV3Context): boolean {
+  return getSlackLeadPostingDecision(job, context).shouldPost;
 }
 
 const DEFAULT_COMMAND_HINTS = [
@@ -239,6 +303,7 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
   const draft = job.applicationDraft;
   const intelligence = context.jobIntelligence ?? draft?.jobIntelligence;
   const leadDecision = decideLeadHandling(job, intelligence);
+  const postingDecision = getSlackLeadPostingDecision(job, context);
 
   const commands = context.commandHints?.length ? context.commandHints : DEFAULT_COMMAND_HINTS;
   const required = context.requiredConnects ?? draft?.suggestedConnects ?? job.connectsCost ?? 0;
@@ -265,7 +330,7 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
   const autoPrepareQueued = isAutoPrepareQueued(context);
   const recommendedAction = autoPrepareQueued
     ? "Draft is being staged for manual review"
-    : leadDecision.decision === "manual_review"
+    : postingDecision.classification === "manual_review"
       ? "Manual platform review before draft prep"
       : "Review lead";
   const workflowLine = autoPrepareQueued
