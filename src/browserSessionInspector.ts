@@ -18,6 +18,7 @@ export interface BrowserSessionPageSnapshot {
   currentUrl: string;
   title: string;
   textExcerpt: string;
+  jobLinkCount?: number;
 }
 
 export interface BrowserSessionInspection {
@@ -62,6 +63,7 @@ const RISK_RULES: PatternRule[] = [
     category: "challenge",
     patterns: [
       { pattern: /__cf_chl|__cf_chl_rt_tk|\/cdn-cgi\/challenge|just\s+a\s+moment|security\s+check|attention\s+required|captcha|cloudflare|i['’]?m\s+not\s+a\s+robot|verify\s+you\s+are\s+human|checking\s+your\s+browser|checking\s+if\s+the\s+site\s+connection\s+is\s+secure|unusual\s+traffic/i, label: "restricted_or_unreadable" },
+      { pattern: /access\s+denied|security\s+challenge|something\s+went\s+wrong/i, label: "restricted_or_unreadable" },
     ],
   },
   {
@@ -170,18 +172,32 @@ function isGoogleAccountsUrl(value: string): boolean {
   return host === "accounts.google.com" || host.endsWith(".accounts.google.com");
 }
 
+function isUpworkFindWorkFeedUrl(value: string): boolean {
+  try {
+    const pathname = new URL(value).pathname.toLowerCase();
+    return /^\/nx\/find-work\/(?:best-matches|most-recent|saved-search(?:es)?|search(?:\/jobs)?|search-jobs)(?:\/|$)/.test(pathname);
+  } catch {
+    return false;
+  }
+}
+
+function hasLoginMarkers(value: string): boolean {
+  return /\blog\s*in\b|\bsign\s*in\b|\bjoin\b|continue\s+with\s+google|upwork\s+login|hire\s+top\s+freelance\s+talent|find\s+talent|post\s+a\s+job/i.test(value);
+}
+
+function hasUsableFeedSignals(value: string): boolean {
+  return /jobs\s+you\s+might\s+like|best\s+matches|most\s+recent|search\s+jobs|job\s+postings?|recommended\s+for\s+you/i.test(value);
+}
+
+function hasAuthenticatedUiSignals(value: string): boolean {
+  return /best\s+matches|find\s+work|my\s+jobs|messages|proposals|profile|search\s+jobs|saved\s+search/i.test(value);
+}
+
 export function classifyBrowserSessionSnapshot(snapshot: BrowserSessionPageSnapshot, sessionStatus?: Pick<BrowserSessionStatus, "state" | "blocked" | "reason">): BrowserSessionInspection {
   const currentUrl = snapshot.currentUrl || "";
   const title = snapshot.title || "";
   const text = compact(snapshot.textExcerpt || "");
   const haystack = `${currentUrl}\n${title}\n${text}`;
-
-  if (sessionStatus?.state === "browser_session_unhealthy") {
-    return externalize({ internalState: "browser_session_unhealthy", currentUrl, title, summary: sessionStatus.reason ?? "Existing browser session state is unhealthy.", category: "session" });
-  }
-  if (sessionStatus?.blocked && sessionStatus.state !== "healthy") {
-    return externalize({ internalState: "manual_attention_required", currentUrl, title, summary: sessionStatus.reason ?? `Existing browser session state is ${sessionStatus.state}.`, category: "session" });
-  }
 
   for (const rule of RISK_RULES) {
     for (const entry of rule.patterns) {
@@ -195,12 +211,23 @@ export function classifyBrowserSessionSnapshot(snapshot: BrowserSessionPageSnaps
     return externalize({ internalState: "login_in_progress", currentUrl, title, matchedText: "google_login", summary: "Detected safe Google login-in-progress page." });
   }
 
-  if (/\blog\s*in\b|\bsign\s*in\b|\bjoin\b|continue\s+with\s+google|upwork\s+login|hire\s+top\s+freelance\s+talent|find\s+talent|post\s+a\s+job/i.test(haystack) && isUpworkUrl(currentUrl)) {
+  if (hasLoginMarkers(haystack) && isUpworkUrl(currentUrl)) {
     return externalize({ internalState: "logged_out", currentUrl, title, matchedText: "upwork_logged_out_or_public_home", summary: "Detected Upwork logged-out/public homepage context." });
   }
 
-  if (isUpworkUrl(currentUrl) && /best\s+matches|find\s+work|my\s+jobs|messages|proposals|profile|search\s+jobs|saved\s+search/i.test(haystack) && !/\blog\s*in\b|\bsign\s*in\b|\bjoin\b/i.test(haystack)) {
+  if (isUpworkUrl(currentUrl) && isUpworkFindWorkFeedUrl(currentUrl) && hasUsableFeedSignals(haystack) && (snapshot.jobLinkCount ?? 0) > 0 && !hasLoginMarkers(haystack)) {
+    return externalize({ internalState: "logged_in", currentUrl, title, matchedText: "upwork_usable_feed", summary: "Detected usable Upwork find-work feed." });
+  }
+
+  if (isUpworkUrl(currentUrl) && hasAuthenticatedUiSignals(haystack) && !/\blog\s*in\b|\bsign\s*in\b|\bjoin\b/i.test(haystack)) {
     return externalize({ internalState: "logged_in", currentUrl, title, matchedText: "upwork_authenticated_ui", summary: "Detected authenticated Upwork UI." });
+  }
+
+  if (sessionStatus?.state === "browser_session_unhealthy") {
+    return externalize({ internalState: "browser_session_unhealthy", currentUrl, title, summary: sessionStatus.reason ?? "Existing browser session state is unhealthy.", category: "session" });
+  }
+  if (sessionStatus?.blocked && sessionStatus.state !== "healthy") {
+    return externalize({ internalState: "manual_attention_required", currentUrl, title, summary: sessionStatus.reason ?? `Existing browser session state is ${sessionStatus.state}.`, category: "session" });
   }
 
   return externalize({ internalState: "unknown", currentUrl, title, summary: "Could not confidently classify the browser session." });
@@ -210,12 +237,18 @@ export async function buildSessionPageSnapshot(page: InspectorPageLike): Promise
   const currentUrl = page.url();
   const title = await page.title();
   let textExcerpt = "";
+  let jobLinkCount = 0;
   try {
     textExcerpt = compact((await page.locator("body").first().textContent({ timeout: 2500 })) ?? "");
   } catch {
     textExcerpt = "";
   }
-  return { currentUrl, title, textExcerpt };
+  try {
+    jobLinkCount = await page.locator("a[href*='/jobs/~'], a[href*='/nx/find-work/'][href*='/details/~']").count();
+  } catch {
+    jobLinkCount = 0;
+  }
+  return { currentUrl, title, textExcerpt, jobLinkCount };
 }
 
 export function selectRelevantBrowserPage(pages: InspectorPageLike[]): { page: InspectorPageLike | null; ambiguous: boolean; reason: string } {

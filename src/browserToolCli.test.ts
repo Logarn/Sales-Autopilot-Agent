@@ -11,6 +11,7 @@ async function runTests(): Promise<void> {
     currentUrl: "https://www.upwork.com/nx/find-work/best-matches",
     title: "Best Matches - Upwork",
     textExcerpt: "Find work Best Matches My Jobs Messages Profile",
+    jobLinkCount: 12,
   }, { state: "healthy", blocked: false });
   const sessionCheck = {
     ok: !loggedIn.blocked,
@@ -64,6 +65,25 @@ async function runTests(): Promise<void> {
   assert.equal(blockedJson.sessionState, "manual_attention_required");
   assert.equal(blockedJson.manualAttentionReason, "captcha_or_security_challenge");
   assert.ok(compactJsonString(blockedJson).length < 1000, "blocked JSON should be compact");
+
+  const staleBlockedButUsableFeed = classifyBrowserSessionSnapshot({
+    currentUrl: "https://www.upwork.com/nx/find-work/best-matches/",
+    title: "Upwork",
+    textExcerpt: "Jobs you might like Best Matches Most Recent Klaviyo retention strategist Shopify lifecycle marketer",
+    jobLinkCount: 217,
+  }, { state: "manual_attention_required", blocked: true, reason: "captcha_or_security_challenge" });
+  assert.equal(staleBlockedButUsableFeed.blocked, false, "usable find-work feed should override stale stored manual-attention state");
+  assert.equal(staleBlockedButUsableFeed.sessionState, "logged_in");
+  assert.equal(staleBlockedButUsableFeed.matchedText, "upwork_usable_feed");
+
+  const blockedFeedChallenge = classifyBrowserSessionSnapshot({
+    currentUrl: "https://www.upwork.com/nx/find-work/best-matches/",
+    title: "Upwork",
+    textExcerpt: "Jobs you might like Best Matches Verify you are human Checking your browser",
+    jobLinkCount: 217,
+  }, { state: "manual_attention_required", blocked: true, reason: "captcha_or_security_challenge" });
+  assert.equal(blockedFeedChallenge.blocked, true, "challenge markers on the feed should still block the session");
+  assert.equal(blockedFeedChallenge.manualAttentionReason, "captcha_or_security_challenge");
 
   const loginStart = {
     ok: true,
