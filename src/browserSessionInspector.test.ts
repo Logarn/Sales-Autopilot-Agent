@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { classifyBrowserSessionSnapshot } from "./browserSessionInspector";
+import { buildSessionPageSnapshot, classifyBrowserSessionSnapshot } from "./browserSessionInspector";
 
 function inspect(url: string, title: string, text: string, sessionStatus?: any) {
   return classifyBrowserSessionSnapshot({ currentUrl: url, title, textExcerpt: text }, sessionStatus ?? { state: "healthy", blocked: false });
@@ -7,6 +7,81 @@ function inspect(url: string, title: string, text: string, sessionStatus?: any) 
 
 function assertState(actual: string, expected: string): void {
   assert.equal(actual, expected, `expected ${expected}, got ${actual}`);
+}
+
+class FakeLocator {
+  constructor(
+    private readonly countValue = 0,
+    private readonly textValue: string | null = null,
+  ) {}
+
+  async count(): Promise<number> {
+    return this.countValue;
+  }
+
+  first(): FakeLocator {
+    return this;
+  }
+
+  async textContent(): Promise<string | null> {
+    return this.textValue;
+  }
+}
+
+class FakePage {
+  public waitCalls = 0;
+
+  constructor(
+    private readonly currentUrl: string,
+    private readonly pageTitle: string,
+    private readonly bodyText: string,
+    private readonly linkCount: number,
+    private readonly evaluatedBodyText: string,
+    private readonly evaluatedLinkCount: number,
+  ) {}
+
+  url(): string {
+    return this.currentUrl;
+  }
+
+  async title(): Promise<string> {
+    return this.pageTitle;
+  }
+
+  locator(selector: string): FakeLocator {
+    if (selector === "body") {
+      return new FakeLocator(1, this.bodyText);
+    }
+    return new FakeLocator(this.linkCount, null);
+  }
+
+  async waitForTimeout(): Promise<void> {
+    this.waitCalls += 1;
+  }
+
+  async evaluate<R>(fn: () => R): Promise<R> {
+    const documentStub = {
+      body: { innerText: this.evaluatedBodyText },
+      querySelectorAll: (selector: string) => {
+        if (selector === "a[href]") {
+          return Array.from({ length: this.evaluatedLinkCount }, () => ({
+            getAttribute: () => "/jobs/~12345678901234567890",
+          }));
+        }
+        if (selector === "[data-test='job-tile-title-link']") {
+          return Array.from({ length: this.evaluatedLinkCount }, () => ({}));
+        }
+        return [];
+      },
+    };
+    const previousDocument = (globalThis as { document?: unknown }).document;
+    (globalThis as { document?: unknown }).document = documentStub;
+    try {
+      return fn();
+    } finally {
+      (globalThis as { document?: unknown }).document = previousDocument;
+    }
+  }
 }
 
 async function runTests(): Promise<void> {
@@ -61,6 +136,24 @@ async function runTests(): Promise<void> {
   }, { state: "manual_attention_required", blocked: true, reason: "captcha_or_security_challenge" });
   assertState(staleBlockedButUsableFeedWithoutReliableLinkCount.internalState, "logged_in");
   assert.equal(staleBlockedButUsableFeedWithoutReliableLinkCount.blocked, false);
+
+  const fallbackSnapshot = await buildSessionPageSnapshot(new FakePage(
+    "https://www.upwork.com/nx/find-work/best-matches",
+    "Upwork",
+    "Find work",
+    0,
+    "Jobs you might like Best Matches Most Recent Klaviyo retention strategist Payment verified Proposals: 10 to 15 Hourly Posted 3 hours ago",
+    215,
+  ));
+  assert.equal(fallbackSnapshot.jobLinkCount, 215);
+  assert.equal(fallbackSnapshot.feedSignalCount, 3);
+  assert.equal(fallbackSnapshot.hasLikelyJobCardText, true);
+  const fallbackInspection = classifyBrowserSessionSnapshot(
+    fallbackSnapshot,
+    { state: "manual_attention_required", blocked: true, reason: "captcha_or_security_challenge" },
+  );
+  assertState(fallbackInspection.internalState, "logged_in");
+  assert.equal(fallbackInspection.blocked, false);
 
   const unhealthy = inspect("https://www.upwork.com", "Upwork", "Find work", { state: "browser_session_unhealthy", blocked: true, reason: "too many challenges" });
   assertState(unhealthy.internalState, "browser_session_unhealthy");
