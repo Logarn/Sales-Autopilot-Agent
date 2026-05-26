@@ -40,12 +40,16 @@ async function runTests(): Promise<void> {
   const { buildBrowserApplyPlan } = require("./browserApply") as {
     buildBrowserApplyPlan: (jobId: string) => { plan: any; valid: boolean; issues: Array<{ severity: string; code: string; message: string }> };
   };
-  const { autoPrepareDraftForThread, buildCaptureCompletionStatus, decideAutoPrepareDraft, detectStateWithDiagnostics, isCaptureBlockedState, postV3CapturePacketToThread, selectPageForBrowserAction, settlePageAndDetect } = require("./browserWorker") as {
+  const { autoPrepareDraftForThread, buildCaptureCompletionStatus, decideAutoPrepareDraft, detectStateWithDiagnostics, isCaptureBlockedState, postDiscoveryCapturePacket, postV3CapturePacketToThread, selectPageForBrowserAction, settlePageAndDetect } = require("./browserWorker") as {
     autoPrepareDraftForThread: (job: any, thread: { channelId: string; messageTs: string; threadTs: string }, options?: any) => { shouldQueue: boolean; category: string; note: string; actionId?: number; duplicate?: boolean };
     buildCaptureCompletionStatus: (input: { hasThreadContext: boolean; packetPosted: boolean; discoverySlackStatus?: "not_discovery" | "missing_channel" | "post_failed" | "posted" }) => string;
     decideAutoPrepareDraft: (job: any, options?: any) => { shouldQueue: boolean; category: string; note: string; reason: string };
     detectStateWithDiagnostics: (snapshot: { url: string; title: string; textExcerpt: string }, action: any) => { state: string; source: string; matchedText?: string; summary: string };
     isCaptureBlockedState: (state: string) => boolean;
+    postDiscoveryCapturePacket: (input: any, deps?: {
+      postChannelMessage?: (params: any) => Promise<{ ok: boolean; ts?: string; channel?: string }>;
+      postWebhookMessage?: (params: any) => Promise<boolean>;
+    }) => Promise<{ status: "not_discovery" | "missing_channel" | "post_failed" | "posted"; outcome: "not_needed" | "posted" | "failed"; thread?: { channelId: string; messageTs: string; threadTs: string } }>;
     postV3CapturePacketToThread: (job: any, thread: { channelId: string; messageTs: string; threadTs: string }, context: any, postThreadMessage?: (params: any) => Promise<boolean>) => Promise<"posted" | "skipped" | "failed">;
     selectPageForBrowserAction: (context: { pages?: () => Array<{ url: () => string }>; newPage: () => Promise<any> }, targetUrl: string) => Promise<{ page: any; reusedExistingPage: boolean; reason: string }>;
     settlePageAndDetect: (page: any, action: any) => Promise<{ snapshot: any; bodyText: string; detection: { state: string; source: string; matchedText?: string }; samples: Array<any> }>;
@@ -99,6 +103,19 @@ async function runTests(): Promise<void> {
     platformMismatchWarnings: [],
     needsManualReview: false,
     confidence: "high",
+    ...overrides,
+  });
+
+  const manualReviewIntel = (overrides: Record<string, unknown> = {}) => klaviyoIntel({
+    primaryPlatform: "unknown",
+    platformsMentioned: [],
+    platformPreferenceTier: "unknown",
+    platformFitReason: "Platform needs manual review, but DTC lifecycle fit is strong.",
+    businessType: "DTC ecommerce",
+    ecommerceVertical: "beauty",
+    taskType: "Lifecycle email and SMS retention strategy",
+    clientGoal: "Increase repeat purchase and retention revenue",
+    confidence: "medium",
     ...overrides,
   });
 
@@ -183,6 +200,203 @@ async function runTests(): Promise<void> {
     );
     assert(skippedThreadStatus === "skipped", "Thread packet helper should report skipped when lead decision rejects posting");
     assert(!threadPostCalled, "Skipped thread packet must not call Slack post helper");
+
+    let webhookPostedText = "";
+    const manualReviewJob = {
+      ...beautyJob,
+      applicationDraft: {
+        ...beautyJob.applicationDraft,
+        jobIntelligence: manualReviewIntel(),
+      },
+    };
+    const manualReviewDiscovery = await postDiscoveryCapturePacket(
+      {
+        action: {
+          id: 501,
+          jobId: manualReviewJob.id,
+          actionType: "capture_job_from_url",
+          status: "pending",
+          attempts: 0,
+          payload: {
+            url: manualReviewJob.url,
+            discovery: {
+              sourceType: "best_matches",
+              sourceLabel: "Best Matches",
+            },
+          },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        scored: manualReviewJob,
+        upworkUrl: manualReviewJob.url,
+        applicationQuestions: [],
+        questionAnswers: [],
+        autoPrepareDecision: {
+          shouldQueue: false,
+          category: "blocked_no_manual_override",
+          reason: "no thread context",
+          note: "Not auto-preparing because no Slack thread context was available for browser staging.",
+        },
+      },
+      {
+        postChannelMessage: async () => ({ ok: false }),
+        postWebhookMessage: async (payload) => {
+          webhookPostedText = String(payload.text ?? "");
+          return true;
+        },
+      },
+    );
+    assert(manualReviewDiscovery.status === "posted", "Manual-review discovery lead should post via webhook fallback");
+    assert(manualReviewDiscovery.outcome === "posted", "Manual-review discovery lead should report posted outcome");
+    assert(webhookPostedText.includes("*Recommended action:* Manual platform review before draft prep"), "Manual-review lead should keep manual review wording in Slack");
+
+    webhookPostedText = "";
+    const normalDiscovery = await postDiscoveryCapturePacket(
+      {
+        action: {
+          id: 502,
+          jobId: beautyJob.id,
+          actionType: "capture_job_from_url",
+          status: "pending",
+          attempts: 0,
+          payload: {
+            url: beautyJob.url,
+            discovery: {
+              sourceType: "recent_jobs",
+              sourceLabel: "Recent Jobs",
+            },
+          },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        scored: {
+          ...beautyJob,
+          applicationDraft: {
+            ...beautyJob.applicationDraft,
+            jobIntelligence: klaviyoIntel(),
+          },
+        },
+        upworkUrl: beautyJob.url,
+        applicationQuestions: [],
+        questionAnswers: [],
+        autoPrepareDecision: {
+          shouldQueue: false,
+          category: "blocked_no_manual_override",
+          reason: "no thread context",
+          note: "Not auto-preparing because no Slack thread context was available for browser staging.",
+        },
+      },
+      {
+        postChannelMessage: async () => ({ ok: false }),
+        postWebhookMessage: async (payload) => {
+          webhookPostedText = String(payload.text ?? "");
+          return true;
+        },
+      },
+    );
+    assert(normalDiscovery.status === "posted", "Eligible discovery lead should post");
+    assert(webhookPostedText.includes("*Recommended action:* Review lead"), "Post-to-Slack lead should keep standard review wording");
+
+    let skippedWebhookCalled = false;
+    const ineligibleDiscovery = await postDiscoveryCapturePacket(
+      {
+        action: {
+          id: 503,
+          jobId: beautyJob.id,
+          actionType: "capture_job_from_url",
+          status: "pending",
+          attempts: 0,
+          payload: {
+            url: beautyJob.url,
+            discovery: {
+              sourceType: "best_matches",
+              sourceLabel: "Best Matches",
+            },
+          },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        scored: {
+          ...beautyJob,
+          applicationDraft: {
+            ...beautyJob.applicationDraft,
+            jobIntelligence: klaviyoIntel({
+              primaryPlatform: "HubSpot",
+              platformsMentioned: ["HubSpot"],
+              platformPreferenceTier: "non_core_review",
+              shouldSkipForPlatform: true,
+              skipReason: "HubSpot CRM admin without ecommerce lifecycle scope.",
+              businessType: "B2B SaaS",
+              ecommerceVertical: "SaaS",
+              taskType: "CRM cleanup",
+              clientGoal: "Organize contacts",
+            }),
+          },
+        },
+        upworkUrl: beautyJob.url,
+        applicationQuestions: [],
+        questionAnswers: [],
+        autoPrepareDecision: {
+          shouldQueue: false,
+          category: "blocked_no_manual_override",
+          reason: "no thread context",
+          note: "Not auto-preparing because no Slack thread context was available for browser staging.",
+        },
+      },
+      {
+        postChannelMessage: async () => ({ ok: false }),
+        postWebhookMessage: async () => {
+          skippedWebhookCalled = true;
+          return true;
+        },
+      },
+    );
+    assert(ineligibleDiscovery.status === "not_discovery", "Ineligible discovery lead should stay silent");
+    assert(ineligibleDiscovery.outcome === "not_needed", "Ineligible discovery lead should not count as a posting failure");
+    assert(!skippedWebhookCalled, "Ineligible discovery lead must not attempt Slack posting");
+
+    const failedDiscovery = await postDiscoveryCapturePacket(
+      {
+        action: {
+          id: 504,
+          jobId: beautyJob.id,
+          actionType: "capture_job_from_url",
+          status: "pending",
+          attempts: 0,
+          payload: {
+            url: beautyJob.url,
+            discovery: {
+              sourceType: "best_matches",
+              sourceLabel: "Best Matches",
+            },
+          },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        scored: {
+          ...beautyJob,
+          applicationDraft: {
+            ...beautyJob.applicationDraft,
+            jobIntelligence: klaviyoIntel(),
+          },
+        },
+        upworkUrl: beautyJob.url,
+        applicationQuestions: [],
+        questionAnswers: [],
+        autoPrepareDecision: {
+          shouldQueue: false,
+          category: "blocked_no_manual_override",
+          reason: "no thread context",
+          note: "Not auto-preparing because no Slack thread context was available for browser staging.",
+        },
+      },
+      {
+        postChannelMessage: async () => ({ ok: false }),
+        postWebhookMessage: async () => false,
+      },
+    );
+    assert(failedDiscovery.status === "post_failed", "Failed discovery Slack post should be reported");
+    assert(failedDiscovery.outcome === "failed", "Failed discovery Slack post should count as a failure");
 
     const beautyPlanResult = buildBrowserApplyPlan(beautyJob.id);
     assert(Boolean(beautyPlanResult.plan), "Beauty job should produce an apply plan");

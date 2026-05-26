@@ -36,6 +36,8 @@ async function run(): Promise<void> {
         actionsCompleted: 0,
         actionsPaused: 0,
         actionsSkipped: 0,
+        slackPostsSucceeded: 0,
+        slackPostFailures: 0,
         stoppedReason: "queue_empty",
         remainingPendingCount: 0,
       }),
@@ -59,6 +61,42 @@ async function run(): Promise<void> {
   assert.equal(blocked.status, "paused", "scheduler cycle should pause when browser session is blocked");
   assert.equal(blocked.discoveryRan, false, "blocked scheduler cycle should not run discovery");
   assert.equal(blocked.actionsProcessed, 0, "blocked scheduler cycle should not process queue");
+
+  const slackFailure = await runLeadEngineCycle(
+    { mode: "run_once", dryRun: false },
+    {
+      getSessionStatus: () => ({ state: "healthy", updatedAt: new Date().toISOString(), challengeEvents: [], blocked: false, alertCooldownRemainingMs: 0 }),
+      listActions: () => [],
+      runDiscovery: async () => ({
+        ok: true,
+        runType: "discovery.run_once",
+        sessionState: "healthy",
+        jobsFound: 1,
+        jobsQueued: 1,
+        duplicatesSkipped: 0,
+        alreadyHandledSkipped: 0,
+        invalidSkipped: 0,
+        scrollsPerformed: 0,
+        nextRunInMs: null,
+        lockAcquired: true,
+      }),
+      runWorker: async () => ({
+        actionsProcessed: 1,
+        actionsCompleted: 1,
+        actionsPaused: 0,
+        actionsSkipped: 0,
+        slackPostsSucceeded: 0,
+        slackPostFailures: 1,
+        stoppedReason: "completed_batch",
+        remainingPendingCount: 0,
+      }),
+      writeState: () => undefined,
+      random: () => 0,
+    },
+  );
+  assert.equal(slackFailure.slackPostFailures, 1, "lead engine should report Slack post failures from the worker summary");
+  assert.equal(slackFailure.status, "degraded", "Slack post failures should degrade the cycle summary");
+  assert.equal(slackFailure.stoppedReason, "slack_post_failed");
 
   const latest = readLatestState();
   assert(latest && latest.cycleId.length > 0, "latest state should persist");
