@@ -19,6 +19,8 @@ export interface BrowserSessionPageSnapshot {
   title: string;
   textExcerpt: string;
   jobLinkCount?: number;
+  feedSignalCount?: number;
+  hasLikelyJobCardText?: boolean;
 }
 
 export interface BrowserSessionInspection {
@@ -189,8 +191,17 @@ function hasUsableFeedSignals(value: string): boolean {
   return /jobs\s+you\s+might\s+like|best\s+matches|most\s+recent|search\s+jobs|job\s+postings?|recommended\s+for\s+you/i.test(value);
 }
 
+function countFeedSignals(value: string): number {
+  const matches = value.match(/jobs\s+you\s+might\s+like|best\s+matches|most\s+recent|search\s+jobs|job\s+postings?|recommended\s+for\s+you/gi);
+  return matches?.length ?? 0;
+}
+
+function hasLikelyUpworkJobCardText(value: string): boolean {
+  return /\bpayment\s+verified\b|\bproposals?\b|\bconnects?\s+to\s+apply\b|\bhourly\b|\bfixed-price\b|\bintermediate\b|\bexpert\b|\bentry\s+level\b|\bposted\b|\b(est\.?|estimated)\s+budget\b/i.test(value);
+}
+
 function hasAuthenticatedUiSignals(value: string): boolean {
-  return /best\s+matches|find\s+work|my\s+jobs|messages|proposals|profile|search\s+jobs|saved\s+search/i.test(value);
+  return /best\s+matches|my\s+jobs|messages|proposals|profile|saved\s+search|connects\s+(?:balance|available)/i.test(value);
 }
 
 export function classifyBrowserSessionSnapshot(snapshot: BrowserSessionPageSnapshot, sessionStatus?: Pick<BrowserSessionStatus, "state" | "blocked" | "reason">): BrowserSessionInspection {
@@ -198,6 +209,9 @@ export function classifyBrowserSessionSnapshot(snapshot: BrowserSessionPageSnaps
   const title = snapshot.title || "";
   const text = compact(snapshot.textExcerpt || "");
   const haystack = `${currentUrl}\n${title}\n${text}`;
+  const feedSignalCount = snapshot.feedSignalCount ?? countFeedSignals(haystack);
+  const hasLikelyJobCardText = snapshot.hasLikelyJobCardText ?? hasLikelyUpworkJobCardText(haystack);
+  const strongUsableFeedEvidence = (snapshot.jobLinkCount ?? 0) >= 10 || (feedSignalCount >= 2 && hasLikelyJobCardText);
 
   for (const rule of RISK_RULES) {
     for (const entry of rule.patterns) {
@@ -215,7 +229,7 @@ export function classifyBrowserSessionSnapshot(snapshot: BrowserSessionPageSnaps
     return externalize({ internalState: "logged_out", currentUrl, title, matchedText: "upwork_logged_out_or_public_home", summary: "Detected Upwork logged-out/public homepage context." });
   }
 
-  if (isUpworkUrl(currentUrl) && isUpworkFindWorkFeedUrl(currentUrl) && hasUsableFeedSignals(haystack) && (snapshot.jobLinkCount ?? 0) > 0 && !hasLoginMarkers(haystack)) {
+  if (isUpworkUrl(currentUrl) && isUpworkFindWorkFeedUrl(currentUrl) && hasUsableFeedSignals(haystack) && strongUsableFeedEvidence && !hasLoginMarkers(haystack)) {
     return externalize({ internalState: "logged_in", currentUrl, title, matchedText: "upwork_usable_feed", summary: "Detected usable Upwork find-work feed." });
   }
 
@@ -244,11 +258,18 @@ export async function buildSessionPageSnapshot(page: InspectorPageLike): Promise
     textExcerpt = "";
   }
   try {
-    jobLinkCount = await page.locator("a[href*='/jobs/~'], a[href*='/nx/find-work/'][href*='/details/~']").count();
+    jobLinkCount = await page.locator("a[href*='/jobs/~'], a[href*='/nx/search/jobs/details/~'], a[href*='/nx/find-work/'][href*='/details/~'], a[data-test='job-tile-title-link']").count();
   } catch {
     jobLinkCount = 0;
   }
-  return { currentUrl, title, textExcerpt, jobLinkCount };
+  return {
+    currentUrl,
+    title,
+    textExcerpt,
+    jobLinkCount,
+    feedSignalCount: countFeedSignals(textExcerpt),
+    hasLikelyJobCardText: hasLikelyUpworkJobCardText(textExcerpt),
+  };
 }
 
 export function selectRelevantBrowserPage(pages: InspectorPageLike[]): { page: InspectorPageLike | null; ambiguous: boolean; reason: string } {

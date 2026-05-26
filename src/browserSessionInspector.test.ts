@@ -43,6 +43,25 @@ async function runTests(): Promise<void> {
   const blockedSession = inspect("https://www.upwork.com", "Upwork", "Find work", { state: "manual_attention_required", blocked: true, reason: "captcha_or_security_challenge" });
   assertState(blockedSession.internalState, "manual_attention_required");
 
+  const staleBlockedButUsableFeed = classifyBrowserSessionSnapshot({
+    currentUrl: "https://www.upwork.com/nx/find-work/best-matches",
+    title: "Upwork",
+    textExcerpt: "Jobs you might like Best Matches Klaviyo Email Marketing Specialist Payment verified Proposals: Less than 5 Hourly Posted 2 hours ago",
+    jobLinkCount: 215,
+  }, { state: "manual_attention_required", blocked: true, reason: "captcha_or_security_challenge" });
+  assertState(staleBlockedButUsableFeed.internalState, "logged_in");
+  assert.equal(staleBlockedButUsableFeed.blocked, false);
+  assert.equal(staleBlockedButUsableFeed.manualAttentionRequired, false);
+
+  const staleBlockedButUsableFeedWithoutReliableLinkCount = classifyBrowserSessionSnapshot({
+    currentUrl: "https://www.upwork.com/nx/find-work/best-matches",
+    title: "Upwork",
+    textExcerpt: "Jobs you might like Best Matches Most Recent Klaviyo Email Marketing Specialist Payment verified Proposals: Less than 5 Hourly Posted 2 hours ago",
+    jobLinkCount: 0,
+  }, { state: "manual_attention_required", blocked: true, reason: "captcha_or_security_challenge" });
+  assertState(staleBlockedButUsableFeedWithoutReliableLinkCount.internalState, "logged_in");
+  assert.equal(staleBlockedButUsableFeedWithoutReliableLinkCount.blocked, false);
+
   const unhealthy = inspect("https://www.upwork.com", "Upwork", "Find work", { state: "browser_session_unhealthy", blocked: true, reason: "too many challenges" });
   assertState(unhealthy.internalState, "browser_session_unhealthy");
 

@@ -67,14 +67,23 @@ async function runTests(): Promise<void> {
   assert.ok(compactJsonString(blockedJson).length < 1000, "blocked JSON should be compact");
 
   const staleBlockedButUsableFeed = classifyBrowserSessionSnapshot({
-    currentUrl: "https://www.upwork.com/nx/find-work/best-matches/",
+    currentUrl: "https://www.upwork.com/nx/find-work/best-matches",
     title: "Upwork",
-    textExcerpt: "Jobs you might like Best Matches Most Recent Klaviyo retention strategist Shopify lifecycle marketer",
-    jobLinkCount: 217,
+    textExcerpt: "Jobs you might like Best Matches Most Recent Klaviyo retention strategist Shopify lifecycle marketer Payment verified Proposals: 10 to 15 Hourly Posted 3 hours ago",
+    jobLinkCount: 215,
   }, { state: "manual_attention_required", blocked: true, reason: "captcha_or_security_challenge" });
   assert.equal(staleBlockedButUsableFeed.blocked, false, "usable find-work feed should override stale stored manual-attention state");
   assert.equal(staleBlockedButUsableFeed.sessionState, "logged_in");
   assert.equal(staleBlockedButUsableFeed.matchedText, "upwork_usable_feed");
+
+  const staleBlockedButTextProvenFeed = classifyBrowserSessionSnapshot({
+    currentUrl: "https://www.upwork.com/nx/find-work/best-matches",
+    title: "Upwork",
+    textExcerpt: "Jobs you might like Best Matches Most Recent Klaviyo retention strategist Shopify lifecycle marketer Payment verified Proposals: 10 to 15 Hourly Posted 3 hours ago",
+    jobLinkCount: 0,
+  }, { state: "manual_attention_required", blocked: true, reason: "captcha_or_security_challenge" });
+  assert.equal(staleBlockedButTextProvenFeed.blocked, false, "strong feed text should override stale stored manual-attention state even when job-link counting is unreliable");
+  assert.equal(staleBlockedButTextProvenFeed.sessionState, "logged_in");
 
   const blockedFeedChallenge = classifyBrowserSessionSnapshot({
     currentUrl: "https://www.upwork.com/nx/find-work/best-matches/",
