@@ -179,7 +179,7 @@ function isGoogleAccountsUrl(value: string): boolean {
 function isUpworkFindWorkFeedUrl(value: string): boolean {
   try {
     const pathname = new URL(value).pathname.toLowerCase();
-    return /^\/nx\/find-work\/(?:best-matches|most-recent|saved-search(?:es)?|search(?:\/jobs)?|search-jobs)(?:\/|$)/.test(pathname);
+    return pathname === "/nx/find-work" || pathname === "/nx/find-work/" || /^\/nx\/find-work\/(?:best-matches|most-recent|saved-search(?:es)?|search(?:\/jobs)?|search-jobs)(?:\/|$)/.test(pathname);
   } catch {
     return false;
   }
@@ -202,11 +202,17 @@ function hasLikelyUpworkJobCardText(value: string): boolean {
   return /\bpayment\s+verified\b|\bproposals?\b|\bconnects?\s+to\s+apply\b|\bhourly\b|\bfixed-price\b|\bintermediate\b|\bexpert\b|\bentry\s+level\b|\bposted\b|\b(est\.?|estimated)\s+budget\b/i.test(value);
 }
 
+function hasRiskMarkers(value: string): boolean {
+  return RISK_RULES.some((rule) => rule.patterns.some((entry) => entry.pattern.test(value)));
+}
+
 function shouldPreferTextCandidate(current: string, candidate: string): boolean {
   if (!candidate) return false;
   if (!current) return true;
   const currentFeedSignals = countFeedSignals(current);
   const candidateFeedSignals = countFeedSignals(candidate);
+  const candidateLooksLikeVisibleFeed = hasLikelyUpworkJobCardText(candidate) && (candidateFeedSignals >= 1 || currentFeedSignals >= 1);
+  if (candidateLooksLikeVisibleFeed && !hasRiskMarkers(candidate) && (hasRiskMarkers(current) || hasLoginMarkers(current))) return true;
   if (candidateFeedSignals > currentFeedSignals) return true;
   if (hasLikelyUpworkJobCardText(candidate) && !hasLikelyUpworkJobCardText(current)) return true;
   return candidate.length > current.length * 1.5;
@@ -221,9 +227,9 @@ export function classifyBrowserSessionSnapshot(snapshot: BrowserSessionPageSnaps
   const title = snapshot.title || "";
   const text = compact(snapshot.textExcerpt || "");
   const haystack = `${currentUrl}\n${title}\n${text}`;
-  const feedSignalCount = snapshot.feedSignalCount ?? countFeedSignals(haystack);
+  const feedSignalCount = Math.max(snapshot.feedSignalCount ?? 0, countFeedSignals(haystack));
   const hasLikelyJobCardText = snapshot.hasLikelyJobCardText ?? hasLikelyUpworkJobCardText(haystack);
-  const strongUsableFeedEvidence = (snapshot.jobLinkCount ?? 0) >= 10 || (feedSignalCount >= 2 && hasLikelyJobCardText);
+  const strongUsableFeedEvidence = (snapshot.jobLinkCount ?? 0) >= 10 || (feedSignalCount >= 1 && hasLikelyJobCardText);
 
   for (const rule of RISK_RULES) {
     for (const entry of rule.patterns) {
@@ -307,7 +313,7 @@ export async function buildSessionPageSnapshot(page: InspectorPageLike): Promise
     title,
     textExcerpt,
     jobLinkCount,
-    feedSignalCount: countFeedSignals(textExcerpt),
+    feedSignalCount: countFeedSignals(`${currentUrl}\n${title}\n${textExcerpt}`),
     hasLikelyJobCardText: hasLikelyUpworkJobCardText(textExcerpt),
   };
 }

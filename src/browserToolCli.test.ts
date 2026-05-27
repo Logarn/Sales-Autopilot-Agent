@@ -85,6 +85,15 @@ async function runTests(): Promise<void> {
   assert.equal(staleBlockedButTextProvenFeed.blocked, false, "strong feed text should override stale stored manual-attention state even when job-link counting is unreliable");
   assert.equal(staleBlockedButTextProvenFeed.sessionState, "logged_in");
 
+  const bareFindWorkFeed = classifyBrowserSessionSnapshot({
+    currentUrl: "https://www.upwork.com/nx/find-work/",
+    title: "Best Matches - Upwork",
+    textExcerpt: "Shopify email marketer Payment verified Proposals: Less than 5 Hourly Posted 1 hour ago",
+    jobLinkCount: 0,
+  }, { state: "manual_attention_required", blocked: true, reason: "captcha_or_security_challenge" });
+  assert.equal(bareFindWorkFeed.blocked, false, "bare find-work Best Matches feed should override stale stored manual-attention state");
+  assert.equal(bareFindWorkFeed.sessionState, "logged_in");
+
   const blockedFeedChallenge = classifyBrowserSessionSnapshot({
     currentUrl: "https://www.upwork.com/nx/find-work/best-matches/",
     title: "Upwork",

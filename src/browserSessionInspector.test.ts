@@ -137,6 +137,16 @@ async function runTests(): Promise<void> {
   assertState(staleBlockedButUsableFeedWithoutReliableLinkCount.internalState, "logged_in");
   assert.equal(staleBlockedButUsableFeedWithoutReliableLinkCount.blocked, false);
 
+  const bareFindWorkBestMatchesFeed = classifyBrowserSessionSnapshot({
+    currentUrl: "https://www.upwork.com/nx/find-work/",
+    title: "Best Matches - Upwork",
+    textExcerpt: "Klaviyo Email Marketing Specialist Payment verified Proposals: Less than 5 Hourly Posted 2 hours ago",
+    jobLinkCount: 0,
+  }, { state: "manual_attention_required", blocked: true, reason: "captcha_or_security_challenge" });
+  assertState(bareFindWorkBestMatchesFeed.internalState, "logged_in");
+  assert.equal(bareFindWorkBestMatchesFeed.blocked, false);
+  assert.equal(bareFindWorkBestMatchesFeed.manualAttentionRequired, false);
+
   const fallbackSnapshot = await buildSessionPageSnapshot(new FakePage(
     "https://www.upwork.com/nx/find-work/best-matches",
     "Upwork",
@@ -154,6 +164,22 @@ async function runTests(): Promise<void> {
   );
   assertState(fallbackInspection.internalState, "logged_in");
   assert.equal(fallbackInspection.blocked, false);
+
+  const hiddenChallengeSnapshot = await buildSessionPageSnapshot(new FakePage(
+    "https://www.upwork.com/nx/find-work/",
+    "Best Matches - Upwork",
+    "Checking your browser Cloudflare CAPTCHA Log in Sign up Jobs you might like Best Matches Payment verified Proposals: Less than 5",
+    0,
+    "Klaviyo retention strategist Payment verified Proposals: 10 to 15 Hourly Posted 3 hours ago",
+    0,
+  ));
+  assert.doesNotMatch(hiddenChallengeSnapshot.textExcerpt, /Cloudflare|CAPTCHA|Log in/i);
+  const hiddenChallengeInspection = classifyBrowserSessionSnapshot(
+    hiddenChallengeSnapshot,
+    { state: "manual_attention_required", blocked: true, reason: "captcha_or_security_challenge" },
+  );
+  assertState(hiddenChallengeInspection.internalState, "logged_in");
+  assert.equal(hiddenChallengeInspection.blocked, false);
 
   const unhealthy = inspect("https://www.upwork.com", "Upwork", "Find work", { state: "browser_session_unhealthy", blocked: true, reason: "too many challenges" });
   assertState(unhealthy.internalState, "browser_session_unhealthy");
