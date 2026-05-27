@@ -16,6 +16,8 @@ import { inspectLiveBrowserSessionFromCdp } from "./browserLiveSession";
 import { BrowserSessionInspection } from "./browserSessionInspector";
 import { writeHeartbeat } from "./heartbeat";
 
+const LEAD_ENGINE_ACTION_TYPES = ["capture_job_from_url", "prepare_application_review"] as const;
+
 export interface LeadEngineCycleSummary {
   ts: string;
   cycleId: string;
@@ -225,7 +227,7 @@ export async function runLeadEngineCycle(
 
     const worker = input.dryRun
       ? {
-          actionsProcessed: Math.min(AGENT_ENGINE_MAX_WORKER_ACTIONS, listActions("pending", 1000).filter((a) => a.actionType === "capture_job_from_url").length),
+          actionsProcessed: Math.min(AGENT_ENGINE_MAX_WORKER_ACTIONS, listActions("pending", 1000).filter((a) => LEAD_ENGINE_ACTION_TYPES.includes(a.actionType as typeof LEAD_ENGINE_ACTION_TYPES[number])).length),
           actionsCompleted: 0,
           actionsPaused: 0,
           actionsSkipped: 0,
@@ -237,7 +239,7 @@ export async function runLeadEngineCycle(
       : await runWorker({
           maxActions: AGENT_ENGINE_MAX_WORKER_ACTIONS,
           dryRun: false,
-          allowedActionTypes: ["capture_job_from_url"],
+          allowedActionTypes: [...LEAD_ENGINE_ACTION_TYPES],
         });
 
     summary.actionsProcessed = worker.actionsProcessed;

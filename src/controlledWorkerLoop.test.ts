@@ -38,6 +38,14 @@ async function run(): Promise<void> {
   assert.equal(onlyOpenJob.actionsPaused, 1);
   assert.equal(getBrowserActionById(id3)?.status, "paused");
 
+  updateBrowserActionStatus(id3, "cancelled", "continue test");
+  const prepareId = enqueueBrowserAction({ jobId: "cw:test:prepare", actionType: "prepare_application_review", payload: { url: "https://www.upwork.com/jobs/~prepare" } });
+  const prepare = await runControlledWorkerLoop({ maxActions: 1, dryRun: true, allowedActionTypes: ["prepare_application_review"] });
+  assert.equal(prepare.actionsProcessed, 1, "controlled worker should process explicitly allowed prepare actions");
+  assert.equal(prepare.actionsPaused, 1, "invalid test prepare action should pause safely instead of being skipped");
+  assert.equal(getBrowserActionById(prepareId)?.status, "paused");
+  updateBrowserActionStatus(prepareId, "cancelled", "test cleanup");
+
   console.log("controlled worker loop tests passed");
 }
 

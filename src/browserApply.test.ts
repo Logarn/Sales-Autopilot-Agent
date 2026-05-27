@@ -31,25 +31,35 @@ async function runTests(): Promise<void> {
   const {
     markJobSeen,
     closeDb,
+    getBrowserActionById,
+    listBrowserActions,
     upsertSlackThreadState,
   } = require("./db") as {
     markJobSeen: (job: any, notified: boolean) => void;
     closeDb: () => void;
+    getBrowserActionById: (id: number) => any;
+    listBrowserActions: (status?: any, limit?: number) => any[];
     upsertSlackThreadState: (input: any) => unknown;
   };
   const { buildBrowserApplyPlan } = require("./browserApply") as {
     buildBrowserApplyPlan: (jobId: string) => { plan: any; valid: boolean; issues: Array<{ severity: string; code: string; message: string }> };
   };
-  const { autoPrepareDraftForThread, buildCaptureCompletionStatus, decideAutoPrepareDraft, detectStateWithDiagnostics, isCaptureBlockedState, postDiscoveryCapturePacket, postV3CapturePacketToThread, selectPageForBrowserAction, settlePageAndDetect } = require("./browserWorker") as {
+  const { autoPrepareDraftForThread, autoQueuePrepareDraft, buildCaptureCompletionStatus, decideAutoPrepareDraft, detectStateWithDiagnostics, isCaptureBlockedState, postDiscoveryCapturePacket, postPrepareDraftStatus, postV3CapturePacketToThread, selectPageForBrowserAction, settlePageAndDetect } = require("./browserWorker") as {
     autoPrepareDraftForThread: (job: any, thread: { channelId: string; messageTs: string; threadTs: string }, options?: any) => { shouldQueue: boolean; category: string; note: string; actionId?: number; duplicate?: boolean };
-    buildCaptureCompletionStatus: (input: { hasThreadContext: boolean; packetPosted: boolean; discoverySlackStatus?: "not_discovery" | "missing_channel" | "post_failed" | "posted" }) => string;
+    autoQueuePrepareDraft: (job: any, options?: any, thread?: { channelId: string; messageTs: string; threadTs: string } | null) => { shouldQueue: boolean; category: string; note: string; actionId?: number; duplicate?: boolean; duplicateStatus?: string | null };
+    buildCaptureCompletionStatus: (input: { hasThreadContext: boolean; packetPosted: boolean; discoverySlackStatus?: "not_discovery" | "missing_channel" | "post_failed" | "posted" | "suppressed_for_auto_prepare" }) => string;
     decideAutoPrepareDraft: (job: any, options?: any) => { shouldQueue: boolean; category: string; note: string; reason: string };
     detectStateWithDiagnostics: (snapshot: { url: string; title: string; textExcerpt: string }, action: any) => { state: string; source: string; matchedText?: string; summary: string };
     isCaptureBlockedState: (state: string) => boolean;
     postDiscoveryCapturePacket: (input: any, deps?: {
       postChannelMessage?: (params: any) => Promise<{ ok: boolean; ts?: string; channel?: string }>;
       postWebhookMessage?: (params: any) => Promise<boolean>;
-    }) => Promise<{ status: "not_discovery" | "missing_channel" | "post_failed" | "posted"; outcome: "not_needed" | "posted" | "failed"; thread?: { channelId: string; messageTs: string; threadTs: string } }>;
+    }) => Promise<{ status: "not_discovery" | "missing_channel" | "post_failed" | "posted" | "suppressed_for_auto_prepare"; outcome: "not_needed" | "posted" | "failed"; thread?: { channelId: string; messageTs: string; threadTs: string } }>;
+    postPrepareDraftStatus: (input: any, deps?: {
+      postThreadMessage?: (params: any) => Promise<boolean>;
+      postChannelMessage?: (params: any) => Promise<{ ok: boolean; ts?: string; channel?: string }>;
+      postWebhookMessage?: (params: any) => Promise<boolean>;
+    }) => Promise<"posted" | "skipped" | "failed">;
     postV3CapturePacketToThread: (job: any, thread: { channelId: string; messageTs: string; threadTs: string }, context: any, postThreadMessage?: (params: any) => Promise<boolean>) => Promise<"posted" | "skipped" | "failed">;
     selectPageForBrowserAction: (context: { pages?: () => Array<{ url: () => string }>; newPage: () => Promise<any> }, targetUrl: string) => Promise<{ page: any; reusedExistingPage: boolean; reason: string }>;
     settlePageAndDetect: (page: any, action: any) => Promise<{ snapshot: any; bodyText: string; detection: { state: string; source: string; matchedText?: string }; samples: Array<any> }>;
@@ -69,6 +79,7 @@ async function runTests(): Promise<void> {
   assert(buildCaptureCompletionStatus({ hasThreadContext: true, packetPosted: false }) === "Capture completed; Slack lead message was not posted.", "Unposted lead message with thread context should not claim Slack lead message was posted");
   assert(buildCaptureCompletionStatus({ hasThreadContext: false, packetPosted: false, discoverySlackStatus: "missing_channel" }) === "Capture completed; no discovery Slack channel configured, lead message not posted.", "Discovery capture should report missing discovery channel accurately");
   assert(buildCaptureCompletionStatus({ hasThreadContext: false, packetPosted: true, discoverySlackStatus: "posted" }) === "Capture completed and discovery lead message posted to Slack channel.", "Discovery capture should report channel lead message when posted");
+  assert(buildCaptureCompletionStatus({ hasThreadContext: false, packetPosted: false, discoverySlackStatus: "suppressed_for_auto_prepare" }) === "Capture completed; discovery lead message deferred until browser preparation finishes.", "Auto-prepared discovery capture should report deferred Slack lead message");
 
   const {
     acquireBrowserSession,
@@ -297,6 +308,59 @@ async function runTests(): Promise<void> {
     assert(normalDiscovery.status === "posted", "Eligible discovery lead should post");
     assert(webhookPostedText.includes("*Recommended action:* Review lead"), "Post-to-Slack lead should keep standard review wording");
 
+    let suppressedPostAttempted = false;
+    const suppressedDiscovery = await postDiscoveryCapturePacket(
+      {
+        action: {
+          id: 5022,
+          jobId: beautyJob.id,
+          actionType: "capture_job_from_url",
+          status: "pending",
+          attempts: 0,
+          payload: {
+            url: beautyJob.url,
+            discovery: {
+              sourceType: "best_matches",
+              sourceLabel: "Best Matches",
+            },
+          },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        scored: {
+          ...beautyJob,
+          applicationDraft: {
+            ...beautyJob.applicationDraft,
+            jobIntelligence: klaviyoIntel(),
+          },
+        },
+        upworkUrl: beautyJob.url,
+        applicationQuestions: [],
+        questionAnswers: [],
+        autoPrepareDecision: {
+          shouldQueue: true,
+          category: "eligible_auto_prepare",
+          reason: "eligible",
+          note: "Strong fit. I’m preparing the Upwork draft now. Final submit remains manual.",
+          actionId: 777,
+          duplicate: false,
+        },
+      },
+      {
+        postChannelMessage: async () => {
+          suppressedPostAttempted = true;
+          return { ok: true, ts: "999.111", channel: "C123" };
+        },
+        postWebhookMessage: async () => {
+          suppressedPostAttempted = true;
+          return true;
+        },
+      },
+    );
+    assert(suppressedDiscovery.status === "suppressed_for_auto_prepare", "Discovery lead Slack packet should be deferred when prep was queued");
+    assert(suppressedDiscovery.outcome === "not_needed", "Deferred discovery packet should not count as a post failure");
+    assert(!suppressedPostAttempted, "Deferred discovery packet must not call Slack at capture time");
+
     webhookPostedText = "";
     const connectsManualReviewDiscovery = await postDiscoveryCapturePacket(
       {
@@ -506,6 +570,63 @@ async function runTests(): Promise<void> {
     assert(prepareReply.includes("Final submit remains manual"), "Prepare reply should keep manual submit reminder");
     assert(!prepareReply.toLowerCase().includes("copy/paste"), "Prepare reply must not introduce copy/paste workflow");
 
+    let prepCompletionText = "";
+    const prepCompletionPost = await postPrepareDraftStatus(
+      {
+        thread: null,
+        heading: "✅ Upwork application page prepared for final manual submit for browser action #707.",
+        diagnostics: {
+          actionId: 707,
+          jobId: beautyJob.id,
+          jobTitle: beautyJob.title,
+          actionType: "prepare_application_review",
+          sourceUrl: beautyJob.url,
+          applyUrl: `${beautyJob.url}/apply`,
+          intendedAction: "Open Upwork apply page, prepare fields for human review, and stop before submit.",
+          state: "apply_page_loaded",
+          stopBeforeSubmit: true,
+          validationIssues: [],
+          coverLetterPresent: true,
+          coverLetterLength: 220,
+          screeningAnswersCount: 2,
+          rate: "$72/hr",
+          requiredConnects: 4,
+          boostConnects: 0,
+          totalConnects: 4,
+          connectsDecision: "safe_apply",
+          connectsExpectedValue: 88,
+          selectedAttachments: ["Truly Beauty case study"],
+          manualReviewAssets: [],
+          mentionOnlyProof: [],
+          proofAvailability: ["Truly Beauty case study: ready"],
+          figmaRecommendations: [],
+          videoRecommendations: [],
+          manualReviewWarnings: [],
+          missingLocalAssets: [],
+          skippedAttachments: [],
+          selectedHighlights: [],
+          warnings: [],
+          attemptedFields: ["cover letter", "screening answers", "rate"],
+          skippedFields: [],
+          manualFields: [],
+        },
+      },
+      {
+        postWebhookMessage: async (payload) => {
+          prepCompletionText = String(payload.text ?? "");
+          return true;
+        },
+      },
+    );
+    assert(prepCompletionPost === "posted", "Prepared browser application should post final-review Slack alert");
+    assert(prepCompletionText.includes("Upwork application page prepared for final manual submit"), "Prep completion alert should use final manual submit wording");
+    assert(prepCompletionText.includes(`Job: ${beautyJob.title}`), "Prep completion alert should include job title");
+    assert(prepCompletionText.includes(`${beautyJob.url}/apply`), "Prep completion alert should include apply URL");
+    assert(prepCompletionText.includes("Fields filled: cover letter, screening answers, rate"), "Prep completion alert should list filled fields");
+    assert(prepCompletionText.includes("Auto-attach assets: Truly Beauty case study"), "Prep completion alert should list selected attachments");
+    assert(prepCompletionText.includes("Ready for final manual submit: yes"), "Prep completion alert should explicitly mark safe final manual review");
+    assert(prepCompletionText.includes("Final submit remains manual and was not clicked."), "Prep completion alert should preserve final submit safety");
+
     const designJob = scoreJob({
       id: "design-job-1",
       title: "Email design + Figma specialist for DTC brand",
@@ -562,6 +683,32 @@ async function runTests(): Promise<void> {
     assert(duplicateAutoPrepare.category === "duplicate_existing_action", "Duplicate auto-prepare should point to the existing action");
     assert(duplicateAutoPrepare.duplicate === true, "Duplicate auto-prepare should not queue a second action");
     assert(duplicateAutoPrepare.note.includes("No duplicate was created"), "Duplicate note should explain that no duplicate was created");
+
+    const autonomousBeautyJob = {
+      ...beautyJob,
+      id: "beauty-job-autonomous-v1",
+      applicationDraft: {
+        ...beautyJob.applicationDraft,
+        jobId: "beauty-job-autonomous-v1",
+        jobIntelligence: klaviyoIntel(),
+      },
+    };
+    const autonomousAutoPrepare = autoQueuePrepareDraft(
+      autonomousBeautyJob,
+      {
+        enabled: true,
+        minScore: 80,
+        maxConnects: 30,
+        requireBrowserHealthy: true,
+        sessionStatus: { state: "healthy", updatedAt: new Date().toISOString(), challengeEvents: [], blocked: false, alertCooldownRemainingMs: 0 },
+      },
+      null,
+    );
+    assert(typeof autonomousAutoPrepare.actionId === "number", "Qualified discovery capture should auto-queue prepare action without Slack thread context");
+    const autonomousAction = getBrowserActionById(autonomousAutoPrepare.actionId!);
+    assert(autonomousAction?.actionType === "prepare_application_review", "Autonomous auto-prep should queue prepare_application_review");
+    assert(autonomousAction?.payload.autoPrepareSource === "autonomous_discovery_capture", "Autonomous auto-prep action should record its source");
+    assert(!autonomousAction?.payload.channelId, "Autonomous auto-prep should not require Slack thread context");
 
     const missingIntelligenceDecision = decideAutoPrepareDraft(
       { ...beautyJob, applicationDraft: { ...beautyJob.applicationDraft, jobIntelligence: undefined } },
@@ -639,6 +786,37 @@ async function runTests(): Promise<void> {
       ineligiblePlatformDecision.note.includes("lead decision is skip"),
       "Ineligible platform note should explain block"
     );
+    const ineligibleQueued = autoQueuePrepareDraft(
+      {
+        ...beautyJob,
+        id: "beauty-job-ineligible-v1",
+        applicationDraft: {
+          ...beautyJob.applicationDraft,
+          jobId: "beauty-job-ineligible-v1",
+          jobIntelligence: {
+            ...beautyJob.applicationDraft.jobIntelligence,
+            primaryPlatform: "HubSpot",
+            platformsMentioned: ["HubSpot"],
+            platformPreferenceTier: "non_core_review",
+            shouldSkipForPlatform: true,
+            skipReason: "HubSpot CRM admin without ecommerce lifecycle scope.",
+            businessType: "B2B SaaS",
+            ecommerceVertical: "SaaS",
+            taskType: "CRM cleanup",
+            clientGoal: "Organize contacts",
+          },
+        },
+      },
+      {
+        enabled: true,
+        minScore: 80,
+        maxConnects: 30,
+        requireBrowserHealthy: true,
+        sessionStatus: { state: "healthy", updatedAt: new Date().toISOString(), challengeEvents: [], blocked: false, alertCooldownRemainingMs: 0 },
+      },
+      null,
+    );
+    assert(!ineligibleQueued.actionId, "Ineligible discovery lead should not queue prepare action");
 
     const manualReviewDecision = decideAutoPrepareDraft(
       {
@@ -666,6 +844,34 @@ async function runTests(): Promise<void> {
     assert(!manualReviewDecision.shouldQueue, "Manual-review lead should not auto-queue");
     assert(manualReviewDecision.category === "skipped_manual_override_available", "Manual-review lead should allow manual override only");
     assert(manualReviewDecision.note.includes("manual review"), "Manual-review decision should explain review gating");
+    const manualReviewQueued = autoQueuePrepareDraft(
+      {
+        ...beautyJob,
+        id: "beauty-job-manual-review-v1",
+        title: "DTC retention strategist (platform not specified)",
+        description: "Need ecommerce lifecycle retention support across email and SMS.",
+        applicationDraft: {
+          ...beautyJob.applicationDraft,
+          jobId: "beauty-job-manual-review-v1",
+          jobIntelligence: {
+            ...beautyJob.applicationDraft.jobIntelligence,
+            primaryPlatform: "unknown",
+            platformsMentioned: [],
+            platformPreferenceTier: "unknown",
+          },
+        },
+      },
+      {
+        enabled: true,
+        minScore: 80,
+        maxConnects: 30,
+        requireBrowserHealthy: true,
+        sessionStatus: { state: "healthy", updatedAt: new Date().toISOString(), challengeEvents: [], blocked: false, alertCooldownRemainingMs: 0 },
+      },
+      null,
+    );
+    assert(!manualReviewQueued.actionId, "Manual-review discovery lead should not queue prepare action in v1");
+    assert(!listBrowserActions(null, 500).some((action) => action.jobId === "beauty-job-manual-review-v1" && action.actionType === "prepare_application_review"), "Manual-review lead should not create a prepare action");
 
     const missingDraftDecision = decideAutoPrepareDraft(
       { ...beautyJob, applicationDraft: undefined },
@@ -718,6 +924,27 @@ async function runTests(): Promise<void> {
     assert(!redFlagDecision.shouldQueue, "Hard red flag should not auto-queue");
     assert(redFlagDecision.category === "blocked_no_manual_override", "Hard red flag should be a hard block");
     assert(!redFlagDecision.note.includes("prepare draft"), "Hard red flag should not suggest manual override");
+    const redFlagQueued = autoQueuePrepareDraft(
+      {
+        ...beautyJob,
+        id: "beauty-job-red-flag-v1",
+        applicationDraft: { ...beautyJob.applicationDraft, jobId: "beauty-job-red-flag-v1", redFlags: ["Needs account verification before work can start"] },
+        scoreBreakdown: {
+          ...beautyJob.scoreBreakdown,
+          redFlagScore: { ...beautyJob.scoreBreakdown.redFlagScore, score: 20 },
+          risks: ["Needs account verification before work can start"],
+        },
+      },
+      {
+        enabled: true,
+        minScore: 80,
+        maxConnects: 30,
+        requireBrowserHealthy: true,
+        sessionStatus: { state: "healthy", updatedAt: new Date().toISOString(), challengeEvents: [], blocked: false, alertCooldownRemainingMs: 0 },
+      },
+      null,
+    );
+    assert(!redFlagQueued.actionId, "Hard-red-flag discovery lead should not queue prepare action");
 
     const duplicateReply = buildPrepareDraftQueueReply({
       jobId: beautyJob.id,

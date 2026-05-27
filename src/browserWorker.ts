@@ -790,9 +790,11 @@ function buildPrepareDraftStatusMessage(input: {
     diagnostics.missingLocalAssets.length > 0 ||
     diagnostics.manualFields.length > 0 ||
     diagnostics.connectsDecision !== "safe_apply";
+  const readyForFinalManualSubmit = diagnostics.state === "apply_page_loaded" && diagnostics.stopBeforeSubmit && !needsManualReview;
   return [
     input.heading,
     `Review state: ${readyState ? "draft prepared for human review" : "paused before final review"}`,
+    `Ready for final manual submit: ${readyForFinalManualSubmit ? "yes - Upwork page is prepared; Steve must review and click final submit manually." : "no - review diagnostics before submitting."}`,
     `Job: ${diagnostics.jobTitle ?? diagnostics.jobId}`,
     `Job ID: ${diagnostics.jobId}`,
     `Apply URL: ${diagnostics.applyUrl ?? diagnostics.sourceUrl ?? "n/a"}`,
@@ -817,16 +819,54 @@ function buildPrepareDraftStatusMessage(input: {
   ].join("\n");
 }
 
-async function postPrepareDraftStatusToThread(
-  thread: SlackThreadContext | null,
-  input: { heading: string; diagnostics: ApplyPreparationDiagnostics; nextCommand?: string },
-): Promise<void> {
-  if (!thread) return;
-  await postSlackThreadMessage({
-    channel: thread.channelId,
-    threadTs: thread.threadTs,
-    text: buildPrepareDraftStatusMessage(input),
-  });
+export async function postPrepareDraftStatus(
+  input: {
+    thread?: SlackThreadContext | null;
+    heading: string;
+    diagnostics: ApplyPreparationDiagnostics;
+    nextCommand?: string;
+  },
+  deps: {
+    postThreadMessage?: typeof postSlackThreadMessage;
+    postChannelMessage?: typeof postSlackChannelMessage;
+    postWebhookMessage?: typeof sendSlackMessage;
+  } = {},
+): Promise<"posted" | "skipped" | "failed"> {
+  const text = buildPrepareDraftStatusMessage(input);
+  if (input.thread) {
+    const posted = await (deps.postThreadMessage ?? postSlackThreadMessage)({
+      channel: input.thread.channelId,
+      threadTs: input.thread.threadTs,
+      text,
+    });
+    return posted ? "posted" : "failed";
+  }
+
+  const discoveryChannelId = DISCOVERY_SLACK_CHANNEL_ID.trim();
+  if (discoveryChannelId) {
+    const result = await (deps.postChannelMessage ?? postSlackChannelMessage)({
+      channel: discoveryChannelId,
+      text,
+    });
+    if (result.ok) return "posted";
+  }
+
+  const postWebhookMessage = deps.postWebhookMessage ?? sendSlackMessage;
+  const canUseWebhook = Boolean(deps.postWebhookMessage) || Boolean(SLACK_CHANNEL_WEBHOOK_URL.trim());
+  if (!canUseWebhook) {
+    return "skipped";
+  }
+
+  const sent = await postWebhookMessage({ text });
+  return sent ? "posted" : "failed";
+}
+
+function countPrepareDraftStatusPost(result: ProcessActionResult, postStatus: "posted" | "skipped" | "failed"): void {
+  if (postStatus === "posted") {
+    result.slackPostsSucceeded += 1;
+  } else if (postStatus === "failed") {
+    result.slackPostFailures += 1;
+  }
 }
 
 function hasHardRedFlags(job: ScoredJob): boolean {
@@ -966,20 +1006,25 @@ export function decideAutoPrepareDraft(
   };
 }
 
-function queuePrepareDraftActionForThread(
+function queuePrepareDraftAction(
   job: ScoredJob,
-  thread: SlackThreadContext,
+  thread: SlackThreadContext | null,
 ): AutoPrepareDraftDecision {
   const action = enqueueBrowserActionDeduped({
     jobId: job.id,
     actionType: "prepare_application_review",
     payload: {
       url: job.url,
-      channelId: thread.channelId,
-      threadTs: thread.threadTs,
-      messageTs: thread.messageTs,
+      ...(thread ? {
+        channelId: thread.channelId,
+        threadTs: thread.threadTs,
+        messageTs: thread.messageTs,
+      } : {}),
       applicationId: job.id,
-      notes: "Auto-prepare browser draft from browser capture worker. Prepare review only; do not submit.",
+      autoPrepareSource: thread ? "slack_thread_capture" : "autonomous_discovery_capture",
+      notes: thread
+        ? "Auto-prepare browser draft from browser capture worker. Prepare review only; do not submit."
+        : "Auto-prepare browser draft from autonomous discovery capture. Prepare review only; do not submit.",
     },
   });
   const duplicateAction = action.duplicate ? getBrowserActionById(action.id) : null;
@@ -996,16 +1041,24 @@ function queuePrepareDraftActionForThread(
   };
 }
 
-export function autoPrepareDraftForThread(
+export function autoQueuePrepareDraft(
   job: ScoredJob,
-  thread: SlackThreadContext,
   options: AutoPrepareDraftOptions = {},
+  thread: SlackThreadContext | null = null,
 ): AutoPrepareDraftDecision {
   const decision = decideAutoPrepareDraft(job, options);
   if (!decision.shouldQueue) {
     return decision;
   }
-  return queuePrepareDraftActionForThread(job, thread);
+  return queuePrepareDraftAction(job, thread);
+}
+
+export function autoPrepareDraftForThread(
+  job: ScoredJob,
+  thread: SlackThreadContext,
+  options: AutoPrepareDraftOptions = {},
+): AutoPrepareDraftDecision {
+  return autoQueuePrepareDraft(job, options, thread);
 }
 
 async function loadChromium(): Promise<PlaywrightChromiumLike | null> {
@@ -1410,7 +1463,7 @@ function stateStatusMessage(state: DetectedBrowserState): string {
   return `Detected state: ${state}; stop-before-submit enforced.`;
 }
 
-export type DiscoverySlackNotificationStatus = "not_discovery" | "missing_channel" | "post_failed" | "posted";
+export type DiscoverySlackNotificationStatus = "not_discovery" | "missing_channel" | "post_failed" | "posted" | "suppressed_for_auto_prepare";
 type DiscoveryLeadPostOutcome = "not_needed" | "posted" | "failed";
 interface DiscoveryLeadPostResult {
   status: DiscoverySlackNotificationStatus;
@@ -1436,10 +1489,19 @@ export function buildCaptureCompletionStatus(input: { hasThreadContext: boolean;
   if (input.discoverySlackStatus === "post_failed") {
     return "Capture completed; discovery Slack lead message was not posted.";
   }
+  if (input.discoverySlackStatus === "suppressed_for_auto_prepare") {
+    return "Capture completed; discovery lead message deferred until browser preparation finishes.";
+  }
   if (!input.hasThreadContext) {
     return "Capture completed; no Slack thread context available, lead message not posted.";
   }
   return "Capture completed; Slack lead message was not posted.";
+}
+
+function shouldDeferDiscoveryLeadAlertForPreparation(decision: AutoPrepareDraftDecision): boolean {
+  if (!decision.actionId) return false;
+  if (decision.category === "eligible_auto_prepare") return true;
+  return decision.category === "duplicate_existing_action" && ["pending", "in_progress"].includes(decision.duplicateStatus ?? "");
 }
 
 export function getDiscoverySourceMetadata(action: BrowserAction): { sourceType: string; sourceLabel: string; canonicalJobUrl?: string; postedAtText?: string } | null {
@@ -1482,6 +1544,10 @@ export async function postDiscoveryCapturePacket(input: {
       `reason=${postingDecision.reason} internalSkipReason=${postingDecision.internalSkipReason ?? "none"}`
     );
     return { status: "not_discovery", outcome: "not_needed" };
+  }
+  if (shouldDeferDiscoveryLeadAlertForPreparation(input.autoPrepareDecision)) {
+    logger.info(`Discovery lead Slack packet deferred until browser preparation completes: jobId=${input.scored.id} prepareActionId=${input.autoPrepareDecision.actionId}`);
+    return { status: "suppressed_for_auto_prepare", outcome: "not_needed" };
   }
 
   const packet = buildV3CapturePacket(input.scored, {
@@ -1563,11 +1629,13 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
     const issues = [...(applyPlanResult?.issues ?? []), ...stalePayloadErrors];
     const diagnostics = buildApplyDiagnostics(action, plan, issues, "validation_failed");
     saveApplyDiagnostics(options, action, diagnostics);
-    await postPrepareDraftStatusToThread(thread, {
+    const postStatus = await postPrepareDraftStatus({
+      thread,
       heading: `⚠️ Draft preparation paused for browser action #${action.id}.`,
       diagnostics,
       nextCommand: `retry ${action.id}`,
     });
+    countPrepareDraftStatusPost(result, postStatus);
     updateBrowserActionStatus(action.id, "paused", `Apply preparation validation failed: ${issues.map((item) => item.code).join(", ")}`);
     return result;
   }
@@ -1577,6 +1645,17 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
     if (thread) {
       updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "capture_failed");
     }
+    if (action.actionType === "prepare_application_review") {
+      const diagnostics = buildApplyDiagnostics(action, plan, applyPlanResult?.issues ?? [], "no_url");
+      saveApplyDiagnostics(options, action, diagnostics);
+      const postStatus = await postPrepareDraftStatus({
+        thread,
+        heading: `⚠️ Draft preparation paused for browser action #${action.id}.`,
+        diagnostics,
+        nextCommand: `retry ${action.id}`,
+      });
+      countPrepareDraftStatusPost(result, postStatus);
+    }
     return result;
   }
 
@@ -1585,7 +1664,15 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       assertSubmitGuard(plan);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      saveApplyDiagnostics(options, action, buildApplyDiagnostics(action, plan, applyPlanResult?.issues ?? [], "submit_guard_failed"));
+      const diagnostics = buildApplyDiagnostics(action, plan, applyPlanResult?.issues ?? [], "submit_guard_failed");
+      saveApplyDiagnostics(options, action, diagnostics);
+      const postStatus = await postPrepareDraftStatus({
+        thread,
+        heading: `⚠️ Draft preparation paused for browser action #${action.id}.`,
+        diagnostics,
+        nextCommand: `retry ${action.id}`,
+      });
+      countPrepareDraftStatusPost(result, postStatus);
       updateBrowserActionStatus(action.id, "paused", message);
       return result;
     }
@@ -1613,14 +1700,11 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       let autoPrepareDecision: AutoPrepareDraftDecision = {
         shouldQueue: false,
         category: "blocked_no_manual_override",
-        reason: "no thread context",
-        note: "Not auto-preparing because no Slack thread context was available for browser staging.",
+        reason: "auto-prepare not evaluated",
+        note: "Not auto-preparing because the dry-run capture preview does not include verified live job intelligence.",
       };
+      autoPrepareDecision = autoQueuePrepareDraft(scored, {}, thread);
       if (thread) {
-        autoPrepareDecision = decideAutoPrepareDraft(scored);
-        if (autoPrepareDecision.shouldQueue) {
-          autoPrepareDecision = queuePrepareDraftActionForThread(scored, thread);
-        }
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "captured", { jobId: scored.id });
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "scored", { jobId: scored.id });
         const threadPostStatus = await postV3CapturePacketToThread(scored, thread, {
@@ -1660,10 +1744,12 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "status_checked");
     }
     if (action.actionType === "prepare_application_review") {
-      await postPrepareDraftStatusToThread(thread, {
+      const postStatus = await postPrepareDraftStatus({
+        thread,
         heading: `🧪 Draft preparation dry-run ready for browser action #${action.id}.`,
         diagnostics,
       });
+      countPrepareDraftStatusPost(result, postStatus);
     }
     return result;
   }
@@ -1693,11 +1779,13 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "prepared_draft", { jobId: action.jobId });
         }
       }
-      await postPrepareDraftStatusToThread(thread, {
-        heading: state === "apply_page_loaded" ? `✅ Draft preparation ready for review for browser action #${action.id}.` : `⚠️ Draft preparation paused for browser action #${action.id}.`,
+      const postStatus = await postPrepareDraftStatus({
+        thread,
+        heading: state === "apply_page_loaded" ? `✅ Upwork application page prepared for final manual submit for browser action #${action.id}.` : `⚠️ Draft preparation paused for browser action #${action.id}.`,
         diagnostics,
         nextCommand: state === "apply_page_loaded" ? "status" : `retry ${action.id}`,
       });
+      countPrepareDraftStatusPost(result, postStatus);
       logger.info(`Browser action #${action.id} detected state: ${state}`);
       return result;
     }
@@ -1818,15 +1906,12 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       let autoPrepareDecision: AutoPrepareDraftDecision = {
         shouldQueue: false,
         category: "blocked_no_manual_override",
-        reason: "no thread context",
-        note: "Not auto-preparing because no Slack thread context was available for browser staging.",
+        reason: "auto-prepare not evaluated",
+        note: "Not auto-preparing because browser draft preparation was not evaluated.",
       };
       let discoverySlackStatus: DiscoverySlackNotificationStatus | undefined;
+      autoPrepareDecision = autoQueuePrepareDraft(scored, {}, thread);
       if (thread) {
-        autoPrepareDecision = decideAutoPrepareDraft(scored);
-        if (autoPrepareDecision.shouldQueue) {
-          autoPrepareDecision = queuePrepareDraftActionForThread(scored, thread);
-        }
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "captured", { jobId: scored.id });
         updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "scored", { jobId: scored.id });
         const threadPostStatus = await postV3CapturePacketToThread(scored, thread, {
