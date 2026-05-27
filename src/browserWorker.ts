@@ -129,6 +129,7 @@ export interface ControlledWorkerRunOptions {
   maxActions?: number;
   dryRun?: boolean;
   allowedActionTypes?: Array<"capture_job_from_url" | "open_job" | "open_apply_page" | "prepare_application_review">;
+  processActionOverride?: (action: BrowserAction) => Promise<ProcessActionResult>;
 }
 
 export interface ControlledWorkerRunSummary {
@@ -349,6 +350,10 @@ export function isCaptureBlockedState(state: DetectedBrowserState): boolean {
   return ["login_required", "two_factor_required", "captcha_or_security_challenge", "browser_unavailable", "browser_profile_in_use", "cdp_unavailable", "source_context_unavailable", "no_url"].includes(state);
 }
 
+export function isCaptureManualAttentionState(state: DetectedBrowserState): boolean {
+  return ["login_required", "two_factor_required", "captcha_or_security_challenge", "browser_unavailable", "browser_profile_in_use", "cdp_unavailable"].includes(state);
+}
+
 export function detectStateWithDiagnostics(snapshot: PageSnapshot, action: BrowserAction): BrowserStateDetection {
   if (!snapshot.url) {
     return { state: "no_url", source: "none", summary: "No URL was available for the current page." };
@@ -391,7 +396,6 @@ export function detectStateWithDiagnostics(snapshot: PageSnapshot, action: Brows
     { source: "body_text" as const, value: "captcha" },
     { source: "body_text" as const, value: "cloudflare" },
     { source: "body_text" as const, value: "unusual traffic" },
-    { source: "body_text" as const, value: "challenge" },
   ];
   for (const signal of challengeSignals) {
     const haystack = signal.source === "url" ? urlValue : signal.source === "title" ? titleValue : bodyValue;
@@ -1355,7 +1359,7 @@ async function inspectWithBrowser(
       );
       saveTextArtifact(options, action, sourceContextCapture ? "capture-source-context-extraction.json" : "capture-extraction.json", JSON.stringify(extracted, null, 2));
       if (extracted.diagnostics.lowConfidence) {
-        state = "captcha_or_security_challenge";
+        state = "source_context_unavailable";
       }
     }
     const fields =
@@ -1455,7 +1459,10 @@ function stateStatusMessage(state: DetectedBrowserState): string {
     return "Persistent Chrome session is not running. Start it with npm run browser:session.";
   }
   if (state === "source_context_unavailable") {
-    return "source_context_unavailable: Discovery source context did not contain readable target job content; direct fallback was not attempted.";
+    return "source_context_unavailable: Discovery source context did not contain readable target job content; action failed without blocking the browser session.";
+  }
+  if (state === "no_url") {
+    return "no_url: Browser capture did not produce a usable URL; action failed without blocking the browser session.";
   }
   if (state === "captcha_or_security_challenge" || state === "login_required" || state === "two_factor_required") {
     return `Detected state: ${state}. Resolve the browser page in the visible Chrome session, then retry.`;
@@ -1471,7 +1478,7 @@ interface DiscoveryLeadPostResult {
   outcome: DiscoveryLeadPostOutcome;
 }
 
-interface ProcessActionResult {
+export interface ProcessActionResult {
   slackPostsSucceeded: number;
   slackPostFailures: number;
 }
@@ -1791,7 +1798,25 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
     }
 
     if (action.actionType === "capture_job_from_url") {
-      if (isCaptureBlockedState(state)) {
+      if (state === "source_context_unavailable" || state === "no_url") {
+        saveTextArtifact(options, action, "capture-unavailable.json", JSON.stringify({
+          actionId: action.id,
+          jobId: action.jobId,
+          url: snapshot?.url ?? url,
+          title: snapshot?.title ?? null,
+          state,
+          inspectionDiagnostics,
+          extractionDiagnostics,
+        }, null, 2));
+        if (thread) {
+          updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "capture_failed", { jobId: action.jobId });
+        }
+        updateBrowserActionStatus(action.id, "failed", stateStatusMessage(state));
+        logger.warn(`Browser action #${action.id} capture unavailable; marked failed without manual attention: url=${snapshot?.url ?? url} title=${snapshot?.title ?? "n/a"} detector=${inspectionDiagnostics?.finalDetection.source ?? "n/a"}`);
+        return result;
+      }
+
+      if (isCaptureManualAttentionState(state)) {
         const threadStatus = String(state);
         const alreadyManual = thread ? getSlackThreadStateByThreadTs(thread.channelId, thread.threadTs)?.status === "manual_attention_required" : false;
         if (thread) {
@@ -1846,8 +1871,8 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
               channel: thread.channelId,
               threadTs: thread.threadTs,
               text: [
-                "⚠️ Browser capture is paused.",
-                "I paused because the current page still appears to require manual browser attention.",
+                "⚠️ Browser capture failed for this job.",
+                "I could not read enough job content to score or draft safely. The browser session was not marked blocked.",
                 `Current URL: ${snapshot?.url ?? url}`,
                 `Current title: ${snapshot?.title ?? "n/a"}`,
                 `Extraction diagnostics: ${JSON.stringify(extractionDiagnostics)}`,
@@ -1857,7 +1882,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           }
         }
         updateBrowserActionStatus(action.id, "failed", "Capture extraction was low-confidence; lead message not posted.");
-        logger.warn(`Browser action #${action.id} low-confidence capture blocked lead message posting.`);
+        logger.warn(`Browser action #${action.id} low-confidence capture failed lead message posting without manual attention.`);
         return result;
       }
 
@@ -2039,7 +2064,9 @@ export async function runControlledWorkerLoop(input: ControlledWorkerRunOptions 
       continue;
     }
     summary.actionsProcessed += 1;
-    const actionResult = await processAction(action, workerOptions);
+    const actionResult = input.processActionOverride
+      ? await input.processActionOverride(action)
+      : await processAction(action, workerOptions);
     summary.slackPostsSucceeded += actionResult.slackPostsSucceeded;
     summary.slackPostFailures += actionResult.slackPostFailures;
     const refreshed = getBrowserActionById(action.id);

@@ -3,9 +3,10 @@ import { enqueueBrowserAction, getBrowserActionById, listBrowserActions, updateB
 import { runControlledWorkerLoop } from "./browserWorker";
 
 function clearPending(): void {
-  const pending = listBrowserActions("pending", 500);
-  for (const action of pending) {
-    updateBrowserActionStatus(action.id, "cancelled", "test cleanup");
+  for (const status of ["pending", "paused", "failed"] as const) {
+    for (const action of listBrowserActions(status, 500)) {
+      updateBrowserActionStatus(action.id, "cancelled", "test cleanup");
+    }
   }
 }
 
@@ -45,6 +46,47 @@ async function run(): Promise<void> {
   assert.equal(prepare.actionsPaused, 1, "invalid test prepare action should pause safely instead of being skipped");
   assert.equal(getBrowserActionById(prepareId)?.status, "paused");
   updateBrowserActionStatus(prepareId, "cancelled", "test cleanup");
+
+  const unavailableId = enqueueBrowserAction({ jobId: "cw:test:unavailable", actionType: "capture_job_from_url", payload: { url: "https://www.upwork.com/jobs/~unavailable" } });
+  const laterId = enqueueBrowserAction({ jobId: "cw:test:later", actionType: "capture_job_from_url", payload: { url: "https://www.upwork.com/jobs/~later" } });
+  const nonCritical = await runControlledWorkerLoop({
+    maxActions: 2,
+    dryRun: true,
+    allowedActionTypes: ["capture_job_from_url"],
+    processActionOverride: async (action) => {
+      if (action.id === unavailableId) {
+        updateBrowserActionStatus(action.id, "failed", "source_context_unavailable: unreadable job card");
+      } else {
+        updateBrowserActionStatus(action.id, "completed", "test completed");
+      }
+      return { slackPostsSucceeded: 0, slackPostFailures: 0 };
+    },
+  });
+  assert.equal(nonCritical.actionsProcessed, 2, "worker should continue after non-critical capture failure");
+  assert.equal(nonCritical.actionsCompleted, 1);
+  assert.equal(nonCritical.actionsPaused, 0);
+  assert.equal(nonCritical.stoppedReason, "completed_batch");
+  assert.equal(getBrowserActionById(unavailableId)?.status, "failed");
+  assert.equal(getBrowserActionById(laterId)?.status, "completed");
+
+  const challengeId = enqueueBrowserAction({ jobId: "cw:test:challenge", actionType: "capture_job_from_url", payload: { url: "https://www.upwork.com/jobs/~challenge" } });
+  const afterChallengeId = enqueueBrowserAction({ jobId: "cw:test:after-challenge", actionType: "capture_job_from_url", payload: { url: "https://www.upwork.com/jobs/~afterchallenge" } });
+  const trueChallenge = await runControlledWorkerLoop({
+    maxActions: 2,
+    dryRun: true,
+    allowedActionTypes: ["capture_job_from_url"],
+    processActionOverride: async (action) => {
+      updateBrowserActionStatus(action.id, "paused", "Detected state: captcha_or_security_challenge.");
+      return { slackPostsSucceeded: 0, slackPostFailures: 0 };
+    },
+  });
+  assert.equal(trueChallenge.actionsProcessed, 1, "worker should stop on true manual-attention pause");
+  assert.equal(trueChallenge.actionsPaused, 1);
+  assert.equal(trueChallenge.stoppedReason, "manual_attention_required");
+  assert.equal(getBrowserActionById(challengeId)?.status, "paused");
+  assert.equal(getBrowserActionById(afterChallengeId)?.status, "pending", "later action should remain pending after true challenge pause");
+  updateBrowserActionStatus(challengeId, "cancelled", "test cleanup");
+  updateBrowserActionStatus(afterChallengeId, "cancelled", "test cleanup");
 
   console.log("controlled worker loop tests passed");
 }

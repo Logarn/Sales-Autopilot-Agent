@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { extractUpworkSourceContextJobContent } from "./browserCapture";
-import { getDiscoverySourceMetadata, isCaptureBlockedState, isDirectUpworkJobPage, isDiscoveryBestMatchesCaptureAction, isDiscoverySourceContextPage, shouldUseDirectFallbackForCaptureAction, tryCaptureDiscoverySourceContext } from "./browserWorker";
+import { getDiscoverySourceMetadata, isCaptureBlockedState, isCaptureManualAttentionState, isDirectUpworkJobPage, isDiscoveryBestMatchesCaptureAction, isDiscoverySourceContextPage, shouldUseDirectFallbackForCaptureAction, tryCaptureDiscoverySourceContext } from "./browserWorker";
 import type { BrowserAction } from "./types";
 
 const targetJobId = "022054851116146838271";
@@ -155,6 +155,8 @@ async function runTests(): Promise<void> {
   assert.equal(isDiscoveryBestMatchesCaptureAction(manualCapture), false, "manual/non-discovery captures keep existing direct behavior");
   assert.equal(shouldUseDirectFallbackForCaptureAction(manualCapture), true, "manual Slack URL captures may still use direct capture behavior");
   assert.equal(isCaptureBlockedState("source_context_unavailable" as never), true, "source_context_unavailable should suppress scoring/packet/auto-prepare");
+  assert.equal(isCaptureManualAttentionState("source_context_unavailable" as never), false, "source_context_unavailable should fail one capture without marking global browser manual attention");
+  assert.equal(isCaptureManualAttentionState("captcha_or_security_challenge" as never), true, "true security challenges should still require manual attention");
   assert.equal(isDirectUpworkJobPage(canonicalJobUrl), true, "canonical /jobs/~id URL is a direct job page");
   assert.equal(isDirectUpworkJobPage(`https://www.upwork.com/jobs/Email-Marketing_~${targetJobId}/`), true, "slug_~id URL is a direct job page");
   assert.equal(isDiscoverySourceContextPage(`https://www.upwork.com/nx/find-work/best-matches/details/~${targetJobId}?modal=1`), true, "Best Matches details/modal URL is a source context page");
@@ -182,7 +184,7 @@ async function runTests(): Promise<void> {
   const unavailable = await tryCaptureDiscoverySourceContext(
     {
       pages: () => [page({ url: "https://www.upwork.com/nx/find-work/best-matches", html: `<a href="/jobs/~022054664830593225996">Other job</a>` })],
-      // This property is intentionally ignored by source-context capture. Discovery-origin worker handling pauses instead of direct fallback.
+      // This property is intentionally ignored by source-context capture. Discovery-origin worker handling fails the action instead of direct fallback.
       newPage: async () => {
         newPageCalls += 1;
         return page({ url: "about:blank", html: "" });
@@ -191,7 +193,7 @@ async function runTests(): Promise<void> {
     discoveryAction,
     canonicalJobUrl
   );
-  assert.equal(unavailable, null, "unavailable source context should return null so discovery-origin worker can pause as source_context_unavailable");
+  assert.equal(unavailable, null, "unavailable source context should return null so discovery-origin worker can fail the action as source_context_unavailable");
   assert.equal(newPageCalls, 0, "source-context attempt must not perform direct navigation itself");
 
   const hiddenBlockerSource = await tryCaptureDiscoverySourceContext(
