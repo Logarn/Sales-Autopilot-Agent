@@ -49,6 +49,16 @@ async function runTests(): Promise<void> {
   assert.equal(loggedInResult.ok, true);
   assert.equal(loggedInResult.actionTaken, "already_logged_in");
 
+  const loggedInFeed = new FakePage({
+    url: "https://www.upwork.com/nx/find-work/best-matches",
+    title: "Upwork",
+    body: "Jobs you might like Best Matches Most Recent Klaviyo Email Marketing Specialist Payment verified Proposals: Less than 5 Hourly Posted 2 hours ago",
+  });
+  const loggedInFeedResult = await startGoogleLoginOnPage(loggedInFeed as any, "user@example.com");
+  assert.equal(loggedInFeedResult.ok, true);
+  assert.equal(loggedInFeedResult.sessionState, "logged_in");
+  assert.equal(loggedInFeedResult.actionTaken, "already_logged_in");
+
   const loggedOut = new FakePage({
     url: "https://www.upwork.com/ab/account-security/login",
     title: "Log In - Upwork",

@@ -127,6 +127,7 @@ async function runTests(): Promise<void> {
   assertState(staleBlockedButUsableFeed.internalState, "logged_in");
   assert.equal(staleBlockedButUsableFeed.blocked, false);
   assert.equal(staleBlockedButUsableFeed.manualAttentionRequired, false);
+  assert.equal(staleBlockedButUsableFeed.matchedText, "upwork_usable_feed");
 
   const staleBlockedButUsableFeedWithoutReliableLinkCount = classifyBrowserSessionSnapshot({
     currentUrl: "https://www.upwork.com/nx/find-work/best-matches",
@@ -164,6 +165,7 @@ async function runTests(): Promise<void> {
   );
   assertState(fallbackInspection.internalState, "logged_in");
   assert.equal(fallbackInspection.blocked, false);
+  assert.equal(fallbackInspection.matchedText, "upwork_usable_feed");
 
   const hiddenChallengeSnapshot = await buildSessionPageSnapshot(new FakePage(
     "https://www.upwork.com/nx/find-work/",

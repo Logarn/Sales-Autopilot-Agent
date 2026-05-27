@@ -11,7 +11,9 @@ import {
 import { closeDb, listBrowserActions } from "./db";
 import { runDiscoveryOnceFromCdp } from "./discoveryScheduler";
 import { runControlledWorkerLoop } from "./browserWorker";
-import { getBrowserSessionStatus } from "./browserSession";
+import { BrowserSessionStatus, clearBrowserManualAttention, getBrowserSessionStatus } from "./browserSession";
+import { inspectLiveBrowserSessionFromCdp } from "./browserLiveSession";
+import { BrowserSessionInspection } from "./browserSessionInspector";
 import { writeHeartbeat } from "./heartbeat";
 
 export interface LeadEngineCycleSummary {
@@ -43,6 +45,8 @@ let cycleLock = false;
 
 interface LeadEngineDeps {
   getSessionStatus?: typeof getBrowserSessionStatus;
+  inspectLiveSession?: () => Promise<BrowserSessionInspection>;
+  clearManualAttention?: () => unknown;
   listActions?: typeof listBrowserActions;
   runDiscovery?: typeof runDiscoveryOnceFromCdp;
   runWorker?: typeof runControlledWorkerLoop;
@@ -61,6 +65,53 @@ function writeLatestState(summary: LeadEngineCycleSummary): void {
   const absolute = path.resolve(process.cwd(), AGENT_ENGINE_STATE_PATH);
   fs.mkdirSync(path.dirname(absolute), { recursive: true });
   fs.writeFileSync(absolute, JSON.stringify(summary, null, 2));
+}
+
+function liveInspectionBlocksLeadEngine(inspection: BrowserSessionInspection): boolean {
+  return inspection.blocked || inspection.manualAttentionRequired || inspection.sessionState === "browser_session_unhealthy";
+}
+
+function liveInspectionIsUsableFeed(inspection: BrowserSessionInspection): boolean {
+  if (liveInspectionBlocksLeadEngine(inspection) || inspection.sessionState !== "logged_in") return false;
+  try {
+    const url = new URL(inspection.currentUrl);
+    const host = url.hostname.toLowerCase();
+    const pathName = url.pathname.toLowerCase();
+    return (host === "upwork.com" || host.endsWith(".upwork.com")) && (pathName === "/nx/find-work" || pathName.startsWith("/nx/find-work/"));
+  } catch {
+    return false;
+  }
+}
+
+async function resolveLeadEngineBrowserSession(
+  input: { dryRun: boolean },
+  storedSession: BrowserSessionStatus,
+  deps: LeadEngineDeps,
+): Promise<{ state: string; blocked: boolean }> {
+  const shouldInspectLive = storedSession.blocked || !input.dryRun;
+  if (!shouldInspectLive) {
+    return { state: storedSession.state, blocked: storedSession.blocked };
+  }
+
+  const inspectLiveSession = deps.inspectLiveSession ?? (() => inspectLiveBrowserSessionFromCdp({ includeStoredSessionState: false }));
+  try {
+    const liveSession = await inspectLiveSession();
+    if (liveInspectionBlocksLeadEngine(liveSession)) {
+      return { state: liveSession.sessionState, blocked: true };
+    }
+    if (storedSession.blocked && liveInspectionIsUsableFeed(liveSession)) {
+      if (!input.dryRun) {
+        (deps.clearManualAttention ?? clearBrowserManualAttention)();
+      }
+      return { state: liveSession.sessionState, blocked: false };
+    }
+    if (storedSession.blocked) {
+      return { state: storedSession.state, blocked: true };
+    }
+    return { state: liveSession.sessionState, blocked: false };
+  } catch {
+    return { state: storedSession.state, blocked: storedSession.blocked };
+  }
 }
 
 export function readLatestState(): LeadEngineCycleSummary | null {
@@ -124,7 +175,8 @@ export async function runLeadEngineCycle(
     const listActions = deps.listActions ?? listBrowserActions;
     const runDiscovery = deps.runDiscovery ?? runDiscoveryOnceFromCdp;
     const runWorker = deps.runWorker ?? runControlledWorkerLoop;
-    const session = getSessionStatus();
+    const storedSession = getSessionStatus();
+    const session = await resolveLeadEngineBrowserSession(input, storedSession, deps);
     const pendingBefore = listActions("pending", 1000).length;
     const summary: LeadEngineCycleSummary = makeSummary(input, {
       browserSessionState: session.state,
