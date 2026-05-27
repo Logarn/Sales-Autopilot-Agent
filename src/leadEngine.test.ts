@@ -3,6 +3,7 @@ import { enqueueBrowserAction, listBrowserActions, updateBrowserActionStatus } f
 import { readLatestState, runLeadEngineCycle } from "./leadEngine";
 import { BrowserSessionStatus } from "./browserSession";
 import { BrowserSessionInspection, classifyBrowserSessionSnapshot } from "./browserSessionInspector";
+import { readHeartbeat } from "./heartbeat";
 
 function cleanup(): void {
   for (const a of listBrowserActions("pending", 1000)) updateBrowserActionStatus(a.id, "cancelled", "cleanup");
@@ -44,6 +45,22 @@ function discoveryOk() {
     alreadyHandledSkipped: 0,
     invalidSkipped: 0,
     scrollsPerformed: 0,
+    nextRunInMs: null,
+    lockAcquired: true,
+  };
+}
+
+function duplicateOnlyDiscovery() {
+  return {
+    ok: false,
+    runType: "discovery.run_once" as const,
+    sessionState: "logged_in",
+    jobsFound: 25,
+    jobsQueued: 0,
+    duplicatesSkipped: 25,
+    alreadyHandledSkipped: 0,
+    invalidSkipped: 0,
+    scrollsPerformed: 1,
     nextRunInMs: null,
     lockAcquired: true,
   };
@@ -112,6 +129,58 @@ async function run(): Promise<void> {
   assert.equal(discoveryFailure.status, "degraded", "one-cycle validation should degrade instead of crashing when discovery is unavailable");
   assert.equal(discoveryFailure.stoppedReason, "discovery_failed");
   assert.match(discoveryFailure.discoveryError ?? "", /cdp unavailable/);
+
+  const duplicateOnly = await runLeadEngineCycle(
+    { mode: "run_once", dryRun: false },
+    {
+      getSessionStatus: () => sessionStatus(),
+      inspectLiveSession: async () => usableFeedInspection(),
+      listActions: () => [],
+      runDiscovery: async () => duplicateOnlyDiscovery(),
+      runWorker: async () => workerEmpty(),
+      writeState: () => undefined,
+      random: () => 0,
+    },
+  );
+  assert.equal(duplicateOnly.status, "ok", "duplicate-only discovery should be an idle success, not degraded");
+  assert.equal(duplicateOnly.stoppedReason, "all_duplicates");
+  assert.equal(duplicateOnly.discoveryRan, true);
+  assert.equal(duplicateOnly.jobsFound, 25);
+  assert.equal(duplicateOnly.jobsQueued, 0);
+  assert.equal(duplicateOnly.duplicatesSkipped, 25);
+  assert.equal(duplicateOnly.actionsProcessed, 0);
+  const duplicateOnlyHeartbeat = readHeartbeat("lead-engine");
+  assert.equal(duplicateOnlyHeartbeat?.status, "success", "duplicate-only discovery should record a successful heartbeat");
+  assert.equal(duplicateOnlyHeartbeat?.lastError, null, "duplicate-only discovery should clear the previous lead-engine heartbeat error");
+  assert.equal(duplicateOnlyHeartbeat?.metadata.status, "ok", "duplicate-only heartbeat metadata should reflect ok status");
+  assert.equal(duplicateOnlyHeartbeat?.metadata.stoppedReason, "all_duplicates", "duplicate-only heartbeat metadata should preserve idle reason");
+
+  let backpressureDiscoveryCalls = 0;
+  let backpressureWorkerCalls = 0;
+  const backpressure = await runLeadEngineCycle(
+    { mode: "run_once", dryRun: false },
+    {
+      getSessionStatus: () => sessionStatus(),
+      inspectLiveSession: async () => usableFeedInspection(),
+      listActions: () => Array.from({ length: 10_000 }, () => ({}) as never),
+      runDiscovery: async () => {
+        backpressureDiscoveryCalls += 1;
+        return discoveryOk();
+      },
+      runWorker: async () => {
+        backpressureWorkerCalls += 1;
+        return workerEmpty();
+      },
+      writeState: () => undefined,
+      random: () => 0,
+    },
+  );
+  assert.equal(backpressure.status, "degraded", "queue backpressure should remain degraded");
+  assert.equal(backpressure.stoppedReason, "backpressure_discovery_skipped");
+  assert.equal(backpressure.queueBackpressure, true);
+  assert.equal(backpressure.discoveryRan, false, "backpressure should skip discovery");
+  assert.equal(backpressureDiscoveryCalls, 0);
+  assert.equal(backpressureWorkerCalls, 1, "lead engine should still allow the worker to drain existing queue during backpressure");
 
   let staleDiscoveryCalls = 0;
   let staleWorkerCalls = 0;
