@@ -56,6 +56,8 @@ interface LeadEngineDeps {
   writeState?: (summary: LeadEngineCycleSummary) => void;
 }
 
+type DiscoveryOutcome = Awaited<ReturnType<typeof runDiscoveryOnceFromCdp>>;
+
 function computeJitteredDelay(baseMs: number, jitterPct: number, random = Math.random): number {
   const delta = Math.floor(baseMs * jitterPct);
   const min = Math.max(1000, baseMs - delta);
@@ -83,6 +85,19 @@ function liveInspectionIsUsableFeed(inspection: BrowserSessionInspection): boole
   } catch {
     return false;
   }
+}
+
+function getIdleDiscoveryReason(discovery: DiscoveryOutcome): "all_duplicates" | "no_new_jobs" | null {
+  if (discovery.error || discovery.blocked || discovery.manualAttentionRequired || discovery.sessionState === "browser_session_unhealthy") {
+    return null;
+  }
+  if (discovery.jobsFound > 0 && discovery.jobsQueued === 0 && discovery.duplicatesSkipped >= discovery.jobsFound) {
+    return "all_duplicates";
+  }
+  if (discovery.ok && !discovery.skipped && discovery.jobsFound === 0 && discovery.jobsQueued === 0) {
+    return "no_new_jobs";
+  }
+  return null;
 }
 
 async function resolveLeadEngineBrowserSession(
@@ -210,7 +225,10 @@ export async function runLeadEngineCycle(
         summary.jobsFound = discovery.jobsFound;
         summary.jobsQueued = discovery.jobsQueued;
         summary.duplicatesSkipped = discovery.duplicatesSkipped;
-        if (!discovery.ok || discovery.skipped) {
+        const idleReason = getIdleDiscoveryReason(discovery);
+        if (idleReason) {
+          summary.stoppedReason = idleReason;
+        } else if (!discovery.ok || discovery.skipped) {
           summary.status = "degraded";
           summary.stoppedReason = discovery.skippedReason ?? discovery.error ?? "discovery_degraded";
           if (discovery.error) summary.discoveryError = discovery.error;
