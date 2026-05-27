@@ -83,7 +83,7 @@ async function run(): Promise<void> {
   const dry = await runLeadEngineCycle({ mode: "run_once", dryRun: true }, {
     getSessionStatus: () => sessionStatus(),
   });
-  assert(dry.actionsProcessed >= 1, "dry run should preview capture actions");
+  assert.equal(dry.actionsProcessed, 2, "dry run should preview both capture and prepare actions");
   assert.equal(dry.discoveryRan, false, "dry run should not run discovery");
 
   const discoveryFailure = await runLeadEngineCycle(
@@ -116,6 +116,7 @@ async function run(): Promise<void> {
   let staleDiscoveryCalls = 0;
   let staleWorkerCalls = 0;
   let clearCalls = 0;
+  let staleWorkerAllowedActionTypes: unknown;
   const staleStoredSession = sessionStatus({
     state: "manual_attention_required",
     blocked: true,
@@ -141,8 +142,9 @@ async function run(): Promise<void> {
         staleDiscoveryCalls += 1;
         return discoveryOk();
       },
-      runWorker: async () => {
+      runWorker: async (workerInput) => {
         staleWorkerCalls += 1;
+        staleWorkerAllowedActionTypes = workerInput?.allowedActionTypes;
         return workerEmpty();
       },
       writeState: () => undefined,
@@ -157,6 +159,11 @@ async function run(): Promise<void> {
   assert.equal(staleDiscoveryCalls, 1);
   assert.equal(staleWorkerCalls, 1);
   assert.equal(clearCalls, 1, "real run should clear stale stored manual-attention state after a usable live feed");
+  assert.deepEqual(
+    staleWorkerAllowedActionTypes,
+    ["capture_job_from_url", "prepare_application_review"],
+    "lead engine worker gate should process capture and prepare actions",
+  );
 
   let challengeDiscoveryCalls = 0;
   let challengeWorkerCalls = 0;
