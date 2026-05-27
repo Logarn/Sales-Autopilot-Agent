@@ -1,16 +1,9 @@
-import {
-  BROWSER_CDP_URL,
-  BROWSER_CHROME_EXECUTABLE_PATH,
-  BROWSER_HEADLESS,
-  BROWSER_USER_DATA_DIR,
-} from "./config";
 import { recordBrowserManualAttention } from "./browserSession";
-import { acquireBrowserSession, findChromeExecutable, PlaywrightChromiumLike } from "./browserSessionControl";
-import { inspectBrowserSession, selectRelevantBrowserPage } from "./browserSessionInspector";
+import { withBrowserCdpContext } from "./browserLiveSession";
+import { selectRelevantBrowserPage, inspectBrowserSession } from "./browserSessionInspector";
 import { runDiscoveryBestMatches } from "./browserDiscoveryTool";
 import { startGoogleLoginOnPage } from "./upworkLoginDriver";
 import { closeDb } from "./db";
-import * as path from "node:path";
 
 export type BrowserToolName = "session.check" | "login.start-google" | "discovery.best-matches";
 
@@ -67,30 +60,6 @@ function parseArgs(argv: string[]): CliOptions {
     }
   }
   return options;
-}
-
-async function loadChromium(): Promise<PlaywrightChromiumLike> {
-  const mod = (await import("playwright")) as { chromium?: PlaywrightChromiumLike };
-  if (!mod.chromium) {
-    throw new Error("Playwright chromium is unavailable.");
-  }
-  return mod.chromium;
-}
-
-async function withCdpContext<T>(run: (context: Awaited<ReturnType<typeof acquireBrowserSession>>["context"]) => Promise<T>): Promise<T> {
-  const chromium = await loadChromium();
-  const handle = await acquireBrowserSession(chromium, {
-    mode: "cdp",
-    cdpUrl: BROWSER_CDP_URL,
-    userDataDir: path.resolve(process.cwd(), BROWSER_USER_DATA_DIR),
-    chromeExecutablePath: BROWSER_CHROME_EXECUTABLE_PATH ? path.resolve(process.cwd(), BROWSER_CHROME_EXECUTABLE_PATH) : findChromeExecutable(),
-    headless: BROWSER_HEADLESS,
-  });
-  try {
-    return await run(handle.context);
-  } finally {
-    await handle.close();
-  }
 }
 
 function compactResult(result: ToolJsonResult): ToolJsonResult {
@@ -150,7 +119,7 @@ export async function runBrowserTool(options: CliOptions): Promise<{ result: Too
   }
 
   if (options.tool === "session.check") {
-    const result = await withCdpContext(async (context) => {
+    const result = await withBrowserCdpContext(async (context) => {
       const inspection = await inspectBrowserSession(context);
       return compactResult({
         ok: !inspection.blocked,
@@ -170,7 +139,7 @@ export async function runBrowserTool(options: CliOptions): Promise<{ result: Too
   }
 
   if (options.tool === "discovery.best-matches") {
-    const result = await withCdpContext(async (context) => compactResult(await runDiscoveryBestMatches(context as never, { maxJobs: options.maxJobs ?? 5, maxScrolls: options.maxScrolls })));
+    const result = await withBrowserCdpContext(async (context) => compactResult(await runDiscoveryBestMatches(context as never, { maxJobs: options.maxJobs ?? 5, maxScrolls: options.maxScrolls })));
     await recordManualAttentionIfNeeded(result);
     return { result, exitCode: result.blocked ? 2 : result.ok ? 0 : 1 };
   }
@@ -180,7 +149,7 @@ export async function runBrowserTool(options: CliOptions): Promise<{ result: Too
     return { result: { ok: false, tool: "login.start-google", error: "Missing required --email value." }, exitCode: 1 };
   }
 
-  const result = await withCdpContext(async (context) => {
+  const result = await withBrowserCdpContext(async (context) => {
     const pages = context.pages?.() ?? [];
     const selected = selectRelevantBrowserPage(pages);
     if (!selected.page) {

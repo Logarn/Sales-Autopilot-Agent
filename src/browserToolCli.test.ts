@@ -75,6 +75,7 @@ async function runTests(): Promise<void> {
   assert.equal(staleBlockedButUsableFeed.blocked, false, "usable find-work feed should override stale stored manual-attention state");
   assert.equal(staleBlockedButUsableFeed.sessionState, "logged_in");
   assert.equal(staleBlockedButUsableFeed.matchedText, "upwork_usable_feed");
+  assert.equal(staleBlockedButUsableFeed.manualAttentionRequired, false);
 
   const staleBlockedButTextProvenFeed = classifyBrowserSessionSnapshot({
     currentUrl: "https://www.upwork.com/nx/find-work/best-matches",
@@ -84,6 +85,7 @@ async function runTests(): Promise<void> {
   }, { state: "manual_attention_required", blocked: true, reason: "captcha_or_security_challenge" });
   assert.equal(staleBlockedButTextProvenFeed.blocked, false, "strong feed text should override stale stored manual-attention state even when job-link counting is unreliable");
   assert.equal(staleBlockedButTextProvenFeed.sessionState, "logged_in");
+  assert.equal(staleBlockedButTextProvenFeed.manualAttentionRequired, false);
 
   const bareFindWorkFeed = classifyBrowserSessionSnapshot({
     currentUrl: "https://www.upwork.com/nx/find-work/",
