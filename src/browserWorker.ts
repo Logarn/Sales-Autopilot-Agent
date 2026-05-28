@@ -234,17 +234,24 @@ interface ApplyPreparationDiagnostics {
   validationIssues: Array<Pick<BrowserApplyValidationIssue, "severity" | "code" | "message">>;
   coverLetterPresent: boolean;
   coverLetterLength: number;
+  coverLetterPreview: string | null;
   screeningAnswersCount: number;
+  screeningAnswers: string[];
   rate: string | null;
   requiredConnects: number | null;
   boostConnects: number | null;
   totalConnects: number | null;
   connectsDecision: string | null;
   connectsExpectedValue: number | null;
+  connectsConfidence: string | null;
+  connectsSource: string | null;
   selectedAttachments: string[];
+  filesAttached: string[];
   manualReviewAssets: string[];
   mentionOnlyProof: string[];
   proofAvailability: string[];
+  portfolioHighlights: string[];
+  profileHighlights: string[];
   figmaRecommendations: string[];
   videoRecommendations: string[];
   manualReviewWarnings: string[];
@@ -458,6 +465,17 @@ function buildApplyDiagnostics(
   state: ApplyPreparationDiagnostics["state"],
   fields: Partial<Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields">> = {}
 ): ApplyPreparationDiagnostics {
+  const extendedPlan = plan as (BrowserApplyFillPlan & Partial<{
+    filesAttached: string[];
+    portfolioHighlights: string[];
+    profileHighlights: string[];
+  }>) | null;
+  const sourceBackedConnects = plan?.connectsStrategy.sourceBackedConnects;
+  const connectsSource = sourceBackedConnects
+    ? sourceBackedConnects.sourceText
+      ? `${sourceBackedConnects.sourceLocation ?? "visible text"}: ${sourceBackedConnects.sourceText}`
+      : sourceBackedConnects.extractionMethod
+    : null;
   return {
     actionId: action.id,
     jobId: action.jobId,
@@ -471,17 +489,24 @@ function buildApplyDiagnostics(
     validationIssues: minimizedIssues(issues),
     coverLetterPresent: Boolean(plan?.coverLetter.trim()),
     coverLetterLength: plan?.coverLetter.length ?? 0,
+    coverLetterPreview: plan?.coverLetter ? boundedExcerpt(plan.coverLetter, 1800) : null,
     screeningAnswersCount: plan?.screeningAnswers.length ?? 0,
+    screeningAnswers: plan?.screeningAnswers ?? [],
     rate: plan?.rate ?? null,
     requiredConnects: plan?.connects.required ?? null,
     boostConnects: plan?.connects.boost ?? null,
     totalConnects: plan?.connects.total ?? null,
     connectsDecision: plan?.connectsStrategy.decision ?? null,
     connectsExpectedValue: plan?.connectsStrategy.expectedValueScore ?? null,
+    connectsConfidence: sourceBackedConnects?.confidence ?? null,
+    connectsSource,
     selectedAttachments: plan?.attachments.map((attachment) => attachment.name) ?? [],
+    filesAttached: extendedPlan?.filesAttached ?? plan?.attachments.map((attachment) => attachment.filePath) ?? [],
     manualReviewAssets: plan?.manualReviewAssets ?? [],
     mentionOnlyProof: plan?.mentionOnlyProof ?? [],
     proofAvailability: plan?.proofAvailability ?? [],
+    portfolioHighlights: extendedPlan?.portfolioHighlights ?? [],
+    profileHighlights: extendedPlan?.profileHighlights ?? [],
     figmaRecommendations: plan?.figmaRecommendations ?? [],
     videoRecommendations: plan?.videoRecommendations ?? [],
     manualReviewWarnings: plan?.manualReviewWarnings ?? [],
@@ -790,27 +815,41 @@ function buildPrepareDraftStatusMessage(input: {
 }): string {
   const { diagnostics } = input;
   const readyState = diagnostics.state === "apply_page_loaded" || diagnostics.state === "dry_run" || diagnostics.state === "prepared";
+  const screeningAnswers = diagnostics.screeningAnswers ?? [];
+  const filesAttached = diagnostics.filesAttached ?? [];
+  const portfolioHighlights = diagnostics.portfolioHighlights ?? [];
+  const profileHighlights = diagnostics.profileHighlights ?? [];
   const needsManualReview = diagnostics.validationIssues.some((issue) => issue.severity === "warning" || issue.severity === "error") ||
     diagnostics.missingLocalAssets.length > 0 ||
     diagnostics.manualFields.length > 0 ||
     diagnostics.connectsDecision !== "safe_apply";
   const readyForFinalManualSubmit = diagnostics.state === "apply_page_loaded" && diagnostics.stopBeforeSubmit && !needsManualReview;
+  const qaInstruction = readyState
+    ? "Hey Logan and Natalie, I prepared this application. The draft proposal is filled in. Please QA and manually press submit if satisfied."
+    : "Hey Logan and Natalie, application preparation paused. Please review the diagnostics before any manual submit.";
   return [
     input.heading,
+    qaInstruction,
     `Review state: ${readyState ? "draft prepared for human review" : "paused before final review"}`,
     `Ready for final manual submit: ${readyForFinalManualSubmit ? "yes - Upwork page is prepared; Steve must review and click final submit manually." : "no - review diagnostics before submitting."}`,
     `Job: ${diagnostics.jobTitle ?? diagnostics.jobId}`,
     `Job ID: ${diagnostics.jobId}`,
     `Apply URL: ${diagnostics.applyUrl ?? diagnostics.sourceUrl ?? "n/a"}`,
     `Cover letter ready: ${diagnostics.coverLetterPresent ? `yes (${diagnostics.coverLetterLength} chars)` : "no"}`,
+    diagnostics.coverLetterPreview ? `Cover letter preview:\n${diagnostics.coverLetterPreview}` : "Cover letter preview: n/a",
     `Screening answers ready: ${diagnostics.screeningAnswersCount > 0 ? `yes (${diagnostics.screeningAnswersCount})` : "none detected"}`,
+    `Screening answers filled: ${screeningAnswers.length > 0 ? screeningAnswers.join(" | ") : "none"}`,
     `Rate/bid: ${diagnostics.rate ?? "n/a"}`,
     `Connects: required=${diagnostics.requiredConnects ?? "n/a"} boost=${diagnostics.boostConnects ?? "n/a"} total=${diagnostics.totalConnects ?? "n/a"}`,
+    `Connects confidence/source: ${diagnostics.connectsConfidence ?? "unknown"} / ${diagnostics.connectsSource ?? "not source-backed"}`,
     `Connects decision: ${diagnostics.connectsDecision ?? "n/a"}${diagnostics.connectsExpectedValue !== null ? ` (EV ${diagnostics.connectsExpectedValue}/100)` : ""}`,
     `Auto-attach assets: ${diagnostics.selectedAttachments.length > 0 ? diagnostics.selectedAttachments.join(", ") : "none"}`,
+    `Files attached/selected: ${filesAttached.length > 0 ? filesAttached.join(", ") : "none"}`,
     `Manual-review assets: ${diagnostics.manualReviewAssets.length > 0 ? diagnostics.manualReviewAssets.join("; ") : "none"}`,
     `Mention-only proof: ${diagnostics.mentionOnlyProof.length > 0 ? diagnostics.mentionOnlyProof.join("; ") : "none"}`,
     `Proof availability: ${diagnostics.proofAvailability.length > 0 ? diagnostics.proofAvailability.join("; ") : "none"}`,
+    `Portfolio highlights: ${portfolioHighlights.length > 0 ? portfolioHighlights.join("; ") : "none"}`,
+    `Profile highlights: ${profileHighlights.length > 0 ? profileHighlights.join("; ") : "none"}`,
     `Missing local assets: ${diagnostics.missingLocalAssets.length > 0 ? diagnostics.missingLocalAssets.join("; ") : "none"}`,
     `Fields filled: ${diagnostics.attemptedFields.length > 0 ? diagnostics.attemptedFields.join(", ") : "none"}`,
     `Fields not filled: ${diagnostics.skippedFields.length > 0 ? diagnostics.skippedFields.join(", ") : "none"}`,
@@ -880,6 +919,20 @@ function hasHardRedFlags(job: ScoredJob): boolean {
     ...(job.applicationDraft?.redFlags ?? []),
   ].map((item) => item.toLowerCase());
   return (job.scoreBreakdown?.redFlagScore?.score ?? 100) < 40 || signals.some((item) => redFlagTerms.some((term) => item.includes(term)));
+}
+
+function requiredConnectsForSlack(job: ScoredJob): number | undefined {
+  const sourceBacked = job.applicationDraft?.connectsStrategy?.sourceBackedConnects ?? job.scoreBreakdown?.connectsStrategy?.sourceBackedConnects ?? job.connects;
+  if (sourceBacked) return sourceBacked.requiredConnects ?? undefined;
+  const draftRequired = job.applicationDraft?.suggestedConnects;
+  if (draftRequired && draftRequired > 0) return draftRequired;
+  return job.connectsCost > 0 ? job.connectsCost : undefined;
+}
+
+function boostConnectsForSlack(job: ScoredJob): number | undefined {
+  const sourceBacked = job.applicationDraft?.connectsStrategy?.sourceBackedConnects ?? job.scoreBreakdown?.connectsStrategy?.sourceBackedConnects ?? job.connects;
+  if (sourceBacked?.requiredConnects === null) return undefined;
+  return job.applicationDraft?.suggestedBoostConnects ?? job.scoreBreakdown?.connectsStrategy?.suggestedBoostConnects ?? undefined;
 }
 
 export function decideAutoPrepareDraft(
@@ -1470,7 +1523,7 @@ function stateStatusMessage(state: DetectedBrowserState): string {
   return `Detected state: ${state}; stop-before-submit enforced.`;
 }
 
-export type DiscoverySlackNotificationStatus = "not_discovery" | "missing_channel" | "post_failed" | "posted" | "suppressed_for_auto_prepare";
+export type DiscoverySlackNotificationStatus = "not_discovery" | "missing_channel" | "post_failed" | "posted";
 type DiscoveryLeadPostOutcome = "not_needed" | "posted" | "failed";
 interface DiscoveryLeadPostResult {
   status: DiscoverySlackNotificationStatus;
@@ -1496,19 +1549,10 @@ export function buildCaptureCompletionStatus(input: { hasThreadContext: boolean;
   if (input.discoverySlackStatus === "post_failed") {
     return "Capture completed; discovery Slack lead message was not posted.";
   }
-  if (input.discoverySlackStatus === "suppressed_for_auto_prepare") {
-    return "Capture completed; discovery lead message deferred until browser preparation finishes.";
-  }
   if (!input.hasThreadContext) {
     return "Capture completed; no Slack thread context available, lead message not posted.";
   }
   return "Capture completed; Slack lead message was not posted.";
-}
-
-function shouldDeferDiscoveryLeadAlertForPreparation(decision: AutoPrepareDraftDecision): boolean {
-  if (!decision.actionId) return false;
-  if (decision.category === "eligible_auto_prepare") return true;
-  return decision.category === "duplicate_existing_action" && ["pending", "in_progress"].includes(decision.duplicateStatus ?? "");
 }
 
 export function getDiscoverySourceMetadata(action: BrowserAction): { sourceType: string; sourceLabel: string; canonicalJobUrl?: string; postedAtText?: string } | null {
@@ -1552,19 +1596,14 @@ export async function postDiscoveryCapturePacket(input: {
     );
     return { status: "not_discovery", outcome: "not_needed" };
   }
-  if (shouldDeferDiscoveryLeadAlertForPreparation(input.autoPrepareDecision)) {
-    logger.info(`Discovery lead Slack packet deferred until browser preparation completes: jobId=${input.scored.id} prepareActionId=${input.autoPrepareDecision.actionId}`);
-    return { status: "suppressed_for_auto_prepare", outcome: "not_needed" };
-  }
-
   const packet = buildV3CapturePacket(input.scored, {
     upworkUrl: input.upworkUrl,
     captureStatus: "packet_sent",
     browserCaptureActionId: input.action.id,
     browserDraftStatus: input.autoPrepareDecision.actionId ? (input.autoPrepareDecision.duplicate ? input.autoPrepareDecision.duplicateStatus ?? "queued" : "queued") : undefined,
     browserDraftActionId: input.autoPrepareDecision.actionId,
-    requiredConnects: input.scored.applicationDraft?.suggestedConnects ?? 0,
-    suggestedBoostConnects: input.scored.applicationDraft?.suggestedBoostConnects ?? 0,
+    requiredConnects: requiredConnectsForSlack(input.scored),
+    suggestedBoostConnects: boostConnectsForSlack(input.scored),
     suggestedBid: input.scored.applicationDraft?.suggestedBid ?? "n/a",
     applicationQuestions: input.applicationQuestions,
     questionAnswers: input.questionAnswers,
@@ -1720,8 +1759,8 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           browserCaptureActionId: action.id,
           browserDraftStatus: autoPrepareDecision.actionId ? (autoPrepareDecision.duplicate ? autoPrepareDecision.duplicateStatus ?? "queued" : "queued") : undefined,
           browserDraftActionId: autoPrepareDecision.actionId,
-          requiredConnects: scored.applicationDraft?.suggestedConnects ?? 0,
-          suggestedBoostConnects: scored.applicationDraft?.suggestedBoostConnects ?? 0,
+          requiredConnects: requiredConnectsForSlack(scored),
+          suggestedBoostConnects: boostConnectsForSlack(scored),
           suggestedBid: scored.applicationDraft?.suggestedBid ?? "n/a",
           applicationQuestions: questions,
           questionAnswers: answers,
@@ -1945,8 +1984,8 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           browserCaptureActionId: action.id,
           browserDraftStatus: autoPrepareDecision.actionId ? (autoPrepareDecision.duplicate ? autoPrepareDecision.duplicateStatus ?? "queued" : "queued") : undefined,
           browserDraftActionId: autoPrepareDecision.actionId,
-          requiredConnects: scored.applicationDraft?.suggestedConnects ?? 0,
-          suggestedBoostConnects: scored.applicationDraft?.suggestedBoostConnects ?? 0,
+          requiredConnects: requiredConnectsForSlack(scored),
+          suggestedBoostConnects: boostConnectsForSlack(scored),
           suggestedBid: scored.applicationDraft?.suggestedBid ?? "n/a",
           applicationQuestions,
           questionAnswers,

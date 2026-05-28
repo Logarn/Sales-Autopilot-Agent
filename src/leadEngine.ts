@@ -11,7 +11,7 @@ import {
 import { closeDb, listBrowserActions } from "./db";
 import { runDiscoveryOnceFromCdp } from "./discoveryScheduler";
 import { runControlledWorkerLoop } from "./browserWorker";
-import { BrowserSessionStatus, clearBrowserManualAttention, getBrowserSessionStatus } from "./browserSession";
+import { BrowserSessionStatus, clearBrowserManualAttention, getBrowserSessionStatus, recordBrowserManualAttention } from "./browserSession";
 import { inspectLiveBrowserSessionFromCdp } from "./browserLiveSession";
 import { BrowserSessionInspection } from "./browserSessionInspector";
 import { writeHeartbeat } from "./heartbeat";
@@ -35,6 +35,8 @@ export interface LeadEngineCycleSummary {
   jobsQueued: number;
   duplicatesSkipped: number;
   discoveryError?: string;
+  workerStoppedReason?: string;
+  workerError?: string;
   actionsProcessed: number;
   actionsCompleted: number;
   actionsPaused: number;
@@ -52,6 +54,7 @@ interface LeadEngineDeps {
   listActions?: typeof listBrowserActions;
   runDiscovery?: typeof runDiscoveryOnceFromCdp;
   runWorker?: typeof runControlledWorkerLoop;
+  recordManualAttention?: typeof recordBrowserManualAttention;
   random?: () => number;
   writeState?: (summary: LeadEngineCycleSummary) => void;
 }
@@ -87,6 +90,19 @@ function liveInspectionIsUsableFeed(inspection: BrowserSessionInspection): boole
   }
 }
 
+async function recordLiveManualAttention(inspection: BrowserSessionInspection, deps: LeadEngineDeps, dryRun: boolean): Promise<void> {
+  if (dryRun || !inspection.manualAttentionRequired) return;
+  try {
+    await (deps.recordManualAttention ?? recordBrowserManualAttention)({
+      url: inspection.currentUrl || null,
+      title: inspection.title || null,
+      reason: String(inspection.manualAttentionReason ?? inspection.sessionState ?? "manual_attention_required"),
+    });
+  } catch {
+    // Preserve the safe pause even if alert persistence or delivery fails.
+  }
+}
+
 function getIdleDiscoveryReason(discovery: DiscoveryOutcome): "all_duplicates" | "no_new_jobs" | null {
   if (discovery.error || discovery.blocked || discovery.manualAttentionRequired || discovery.sessionState === "browser_session_unhealthy") {
     return null;
@@ -114,6 +130,9 @@ async function resolveLeadEngineBrowserSession(
   try {
     const liveSession = await inspectLiveSession();
     if (liveInspectionBlocksLeadEngine(liveSession)) {
+      if (!storedSession.blocked) {
+        await recordLiveManualAttention(liveSession, deps, input.dryRun);
+      }
       return { state: liveSession.sessionState, blocked: true };
     }
     if (storedSession.blocked && liveInspectionIsUsableFeed(liveSession)) {
@@ -258,17 +277,32 @@ export async function runLeadEngineCycle(
           maxActions: AGENT_ENGINE_MAX_WORKER_ACTIONS,
           dryRun: false,
           allowedActionTypes: [...LEAD_ENGINE_ACTION_TYPES],
+        }).catch((error) => {
+          summary.status = "degraded";
+          summary.stoppedReason = "worker_failed";
+          summary.workerError = error instanceof Error ? error.message : String(error);
+          return {
+            actionsProcessed: 0,
+            actionsCompleted: 0,
+            actionsPaused: 0,
+            actionsSkipped: 0,
+            slackPostsSucceeded: 0,
+            slackPostFailures: 0,
+            stoppedReason: "worker_failed",
+            remainingPendingCount: listActions("pending", 1000).length,
+          };
         });
 
+    summary.workerStoppedReason = worker.stoppedReason;
     summary.actionsProcessed = worker.actionsProcessed;
     summary.actionsCompleted = worker.actionsCompleted;
     summary.actionsPaused = worker.actionsPaused;
     summary.actionsSkipped = worker.actionsSkipped;
     summary.slackPostFailures = worker.slackPostFailures;
     summary.queuePendingAfter = worker.remainingPendingCount;
-    if (worker.stoppedReason === "manual_attention_required") {
+    if (worker.stoppedReason === "manual_attention_required" || worker.stoppedReason === "browser_session_blocked") {
       summary.status = "paused";
-      summary.stoppedReason = "manual_attention_required";
+      summary.stoppedReason = worker.stoppedReason;
     } else if (worker.slackPostFailures > 0 && summary.status === "ok") {
       summary.status = "degraded";
       summary.stoppedReason = "slack_post_failed";

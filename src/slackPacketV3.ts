@@ -5,7 +5,7 @@ import { formatConnectsStrategy } from "./connectsStrategy";
 import { qaProposalPlatformGrounding } from "./proposalQa";
 import { decideLeadHandling } from "./leadDecision";
 import { evaluatePlatformEligibility, type PlatformEligibility } from "./platformEligibility";
-import { JobIntelligence, ScoredJob } from "./types";
+import { JobIntelligence, ScoredJob, SourceBackedConnects } from "./types";
 import { truncateText } from "./utils";
 
 export interface SlackPacketV3Context {
@@ -186,7 +186,8 @@ function buildCommandsText(values: string[], options: { includeRetry: boolean })
     ? [...filteredLines, RETRY_COMMAND_HINT]
     : filteredLines;
   return [
-    "💬 *Available replies*",
+    "💬 *Manual overrides (optional)*",
+    "_Use these only to override, inspect, or recover the autonomous flow. Slack is not the workflow controller._",
     ...commandLines.map((line) => {
       const [command, ...description] = line.split(" — ");
       return `• \`${command}\`${description.length > 0 ? ` — ${description.join(" — ")}` : ""}`;
@@ -296,7 +297,116 @@ function formatLeadContext(job: ScoredJob, context: SlackPacketV3Context): { tex
     intelligence?.skipReason ? `Platform review note: ${intelligence.skipReason}` : null,
   ].filter((value): value is string => Boolean(value));
 
-  return { text: `🧭 *Lead context*\n${lines.join("\n")}`, watchOuts };
+  return { text: `🧭 *Platform / business / vertical fit*\n${lines.join("\n")}`, watchOuts };
+}
+
+function formatMoney(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "not available";
+  return `$${Math.round(value).toLocaleString("en-US")}`;
+}
+
+function formatPercent(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "not available";
+  return `${Math.round(value)}%`;
+}
+
+function formatClientQualitySignals(job: ScoredJob): string {
+  const component = job.scoreBreakdown?.clientQualityScore;
+  const reasons = sanitizeLines(component?.reasons ?? []);
+  const risks = sanitizeLines(component?.risks ?? []);
+  const lines = [
+    `• Client quality score: ${component?.score ?? "n/a"}/100`,
+    `• Country: ${job.clientCountry || "not captured"}`,
+    `• Rating: ${job.clientRating > 0 ? job.clientRating.toFixed(1) : "not available"} (${job.clientFeedbackCount || 0} feedback)`,
+    `• Spend: ${formatMoney(job.clientSpend)}`,
+    `• Hire rate: ${formatPercent(job.clientHireRate)}`,
+    `• Hires: ${job.clientTotalHires || 0}`,
+    reasons.length > 0 ? `• Positive signals: ${reasons.slice(0, 3).join("; ")}` : null,
+    risks.length > 0 ? `• Client quality risks: ${risks.slice(0, 3).join("; ")}` : null,
+  ].filter((value): value is string => Boolean(value));
+  return `👤 *Client quality signals*\n${lines.join("\n")}`;
+}
+
+function getConnectsSource(
+  job: ScoredJob,
+  context: SlackPacketV3Context,
+): { confidence: "high" | "medium" | "low" | "unknown"; source: string; sourceBacked?: SourceBackedConnects } {
+  const draft = job.applicationDraft;
+  const sourceBacked = draft?.connectsStrategy?.sourceBackedConnects ?? job.scoreBreakdown?.connectsStrategy?.sourceBackedConnects ?? job.connects;
+  if (context.requiredConnects !== undefined) {
+    return { confidence: "high", source: "explicit Slack context" };
+  }
+  if (sourceBacked) {
+    if (sourceBacked.requiredConnects === null) {
+      return { confidence: "unknown", source: "not visible in captured Upwork source text", sourceBacked };
+    }
+    const source = sourceBacked.sourceText
+      ? `${sourceBacked.sourceLocation ?? "visible text"}: ${sourceBacked.sourceText}`
+      : `${sourceBacked.extractionMethod}${sourceBacked.sourceLocation ? ` (${sourceBacked.sourceLocation})` : ""}`;
+    return { confidence: sourceBacked.confidence, source, sourceBacked };
+  }
+  if (draft?.suggestedConnects !== undefined && draft.suggestedConnects > 0) {
+    return { confidence: "medium", source: "application draft" };
+  }
+  if (job.connectsCost > 0) {
+    return { confidence: "medium", source: "captured Upwork job" };
+  }
+  return { confidence: "unknown", source: "not captured" };
+}
+
+function formatRecommendedBidConnects(job: ScoredJob, context: SlackPacketV3Context): string {
+  const draft = job.applicationDraft;
+  const source = getConnectsSource(job, context);
+  const sourceRequired = source.sourceBacked?.requiredConnects;
+  const requiredValue = context.requiredConnects ??
+    (sourceRequired !== undefined ? sourceRequired : undefined) ??
+    (draft?.suggestedConnects && draft.suggestedConnects > 0 ? draft.suggestedConnects : undefined) ??
+    (job.connectsCost > 0 ? job.connectsCost : null);
+  const required = requiredValue === null ? "unknown" : String(requiredValue);
+  const boostValue = context.suggestedBoostConnects ?? draft?.connectsStrategy?.suggestedBoostConnects ?? draft?.suggestedBoostConnects ?? 0;
+  const boost = sourceRequired === null ? "unknown until required Connects are confirmed" : String(boostValue);
+  const bid = context.suggestedBid ?? draft?.suggestedBid ?? draft?.structuredProposal?.rateRetainerAnswer ?? "Not specified";
+  const strategy = draft?.connectsStrategy ?? job.scoreBreakdown?.connectsStrategy;
+  return [
+    `🔌 *Recommended bid / Connects strategy*`,
+    `• Required Connects: ${required}`,
+    `• Connects confidence/source: ${sentenceCase(source.confidence)} (${source.source})`,
+    `• Suggested boost: ${boost}`,
+    `• Recommended bid: ${bid}`,
+    strategy ? formatConnectsStrategy(strategy) : "Connects strategy: not calculated.",
+  ].join("\n");
+}
+
+function isAutoPrepareBlocked(context: SlackPacketV3Context): boolean {
+  return /not auto-prepar|manual attention|blocked|failed|paused|incomplete|retry/i.test(context.autoPrepareNote ?? "");
+}
+
+function isAutoPrepareProceeding(context: SlackPacketV3Context, autoPrepareQueued: boolean): boolean {
+  if (isAutoPrepareBlocked(context)) return false;
+  if (autoPrepareQueued) return true;
+  return /prepar|staging|queued|draft/i.test(context.autoPrepareNote ?? "");
+}
+
+function formatAutonomousPrepStatus(
+  leadDecision: ReturnType<typeof decideLeadHandling>,
+  context: SlackPacketV3Context,
+  autoPrepareQueued: boolean,
+): string {
+  const note = context.autoPrepareNote?.trim();
+  const proceeding = isAutoPrepareProceeding(context, autoPrepareQueued);
+  const statusLine = isAutoPrepareBlocked(context)
+    ? `Not proceeding: ${note}`
+    : proceeding
+      ? `Proceeding: ${note ?? "draft staging is queued for manual review."}`
+      : leadDecision.shouldAutoPrepare
+        ? "Proceeding: lead passed auto-prep policy; draft staging continues outside Slack. Final submit remains manual."
+        : `Not proceeding: ${leadDecision.reason}`;
+
+  return [
+    `⚙️ *Autonomous prep*`,
+    statusLine,
+    "Slack replies are optional manual overrides only; they are not the workflow controller.",
+  ].join("\n");
 }
 
 export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Context): SlackPacketV3Message {
@@ -306,9 +416,6 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
   const postingDecision = getSlackLeadPostingDecision(job, context);
 
   const commands = context.commandHints?.length ? context.commandHints : DEFAULT_COMMAND_HINTS;
-  const required = context.requiredConnects ?? draft?.suggestedConnects ?? job.connectsCost ?? 0;
-  const boost = context.suggestedBoostConnects ?? draft?.suggestedBoostConnects ?? 0;
-  const bid = context.suggestedBid ?? draft?.suggestedBid ?? draft?.structuredProposal?.rateRetainerAnswer ?? "Not specified";
   const proposalPreview = quoteBlock(
     truncateText(draft?.proposalText ?? "", PROPOSAL_PREVIEW_LENGTH),
     "Proposal draft is not yet available.",
@@ -328,20 +435,27 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
   const url = job.url || context.upworkUrl || "(Upwork URL missing)";
 
   const autoPrepareQueued = isAutoPrepareQueued(context);
-  const recommendedAction = autoPrepareQueued
-    ? "Draft is being staged for manual review"
-    : postingDecision.classification === "manual_review"
+  const autoPrepareBlocked = isAutoPrepareBlocked(context);
+  const autoPrepareProceeding = isAutoPrepareProceeding(context, autoPrepareQueued) || (!autoPrepareBlocked && leadDecision.shouldAutoPrepare);
+  const recommendedAction = autoPrepareBlocked
+    ? "Resolve prep blocker; manual replies are overrides only"
+    : autoPrepareProceeding
+      ? "Autonomous prep is proceeding; watch for the draft-ready touchpoint"
+      : postingDecision.classification === "manual_review"
       ? "Manual platform review before draft prep"
       : "Review lead";
-  const workflowLine = autoPrepareQueued
-    ? "Final submit remains manual. The browser draft may be staged for review, but nothing is submitted automatically."
-    : "Use `prepare draft` when you want the Upwork draft staged. Final submit remains manual.";
+  const workflowLine = [
+    "*Slack policy:* Touchpoint 1 is this lead alert. Touchpoint 2 is the later draft/submission status update.",
+    "Manual replies are overrides only; the lead packet does not wait for Slack to control the workflow. Final submit remains manual.",
+  ].join("\n");
   const includeRetry = isRetryRelevant(context);
   const draftNote = autoPrepareQueued
     ? context.autoPrepareNote
     : includeRetry && context.autoPrepareNote
       ? context.autoPrepareNote
-      : "Strong fit. Reply `prepare draft` when ready.";
+      : autoPrepareProceeding
+        ? "Strong fit. Autonomous draft prep may proceed outside Slack. Final submit remains manual."
+        : "Autonomous draft prep is paused pending review.";
   const leadContext = formatLeadContext(job, context);
   const watchOuts = sanitizeLines([
     ...(job.scoreBreakdown?.risks ?? job.applicationDraft?.redFlags ?? manualWarnings),
@@ -351,6 +465,7 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
   const topSection = [
     `🚀 *New Upwork Lead*`,
     `${LEAD_MENTIONS} — new lead found.`,
+    `📌 *Touchpoint 1 lead alert*`,
     ``,
     `*Job:* ${title}`,
     `*URL:* ${url}`,
@@ -371,12 +486,14 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
   const sections = [
     topSection,
     leadContext.text,
-    `🧠 *Why this might be a fit*\n${bulletList(sanitizeLines(job.scoreBreakdown?.reasons ?? job.applicationDraft?.fitReasons ?? profileContext.selectedPositioning), "No fit reasons captured.")}`,
+    `🧠 *Why worth attention*\n${bulletList(sanitizeLines(job.scoreBreakdown?.reasons ?? job.applicationDraft?.fitReasons ?? profileContext.selectedPositioning), "No fit reasons captured.")}`,
+    formatClientQualitySignals(job),
     `⚠️ *Watch-outs*\n${bulletList(watchOuts, "No major risks detected.")}`,
     `✍️ *Draft angle*\n${quoteBlock(profileContext.proposalAngle, "Draft angle is not available yet.")}\n\n*Proposal preview (review only):*\n${proposalPreview}`,
     hasQuestions ? `📝 *Screening answers*\n${questionText}` : null,
     proofSection,
-    `*Connects / bid:* required ${required} • suggested boost ${boost} • ${bid}\n${draft?.connectsStrategy ? formatConnectsStrategy(draft.connectsStrategy) : "Connects strategy: not calculated."}`,
+    formatRecommendedBidConnects(job, context),
+    formatAutonomousPrepStatus(leadDecision, context, autoPrepareQueued),
     `*Draft note:* ${draftNote}`,
     buildCommandsText(commands, { includeRetry }),
     workflowLine,

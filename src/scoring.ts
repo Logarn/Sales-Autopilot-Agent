@@ -487,25 +487,31 @@ function scoreConnectsRisk(job: JobPosting, rules: ConnectsRules): ScoreComponen
   const reasons: string[] = [];
   const risks: string[] = [];
   let score = 85;
+  const requiredConnects = job.connects
+    ? job.connects.requiredConnects
+    : job.connectsCost > 0
+      ? job.connectsCost
+      : null;
 
-  if (job.connectsCost <= 0) {
-    reasons.push("No Connects cost detected");
-  } else if (job.connectsCost <= rules.idealBoostMin) {
-    reasons.push(`Low Connects cost (${job.connectsCost})`);
-  } else if (job.connectsCost <= rules.maxRequiredPerJob) {
-    score -= Math.max(0, job.connectsCost - rules.idealBoostMin);
-    reasons.push(`Connects cost within configured cap (${job.connectsCost}/${rules.maxRequiredPerJob})`);
+  if (requiredConnects === null) {
+    score -= 18;
+    risks.push("Required Connects are unknown from visible source text; manual review required before spending Connects.");
+  } else if (requiredConnects <= rules.idealBoostMin) {
+    reasons.push(`Low Connects cost (${requiredConnects})`);
+  } else if (requiredConnects <= rules.maxRequiredPerJob) {
+    score -= Math.max(0, requiredConnects - rules.idealBoostMin);
+    reasons.push(`Connects cost within configured cap (${requiredConnects}/${rules.maxRequiredPerJob})`);
   } else {
     score -= 45;
-    risks.push(`Connects cost exceeds cap (${job.connectsCost}/${rules.maxRequiredPerJob})`);
+    risks.push(`Connects cost exceeds cap (${requiredConnects}/${rules.maxRequiredPerJob})`);
   }
 
-  if (job.connectsCost > rules.requireApprovalAbove) {
+  if (requiredConnects !== null && requiredConnects > rules.requireApprovalAbove) {
     score -= 15;
     risks.push(`Requires approval above ${rules.requireApprovalAbove} Connects`);
   }
 
-  if (rules.neverBidMax && job.connectsCost >= rules.maxBoost) {
+  if (requiredConnects !== null && rules.neverBidMax && requiredConnects >= rules.maxBoost) {
     score -= 20;
     risks.push("At or above max boost threshold; do not auto-bid max");
   }

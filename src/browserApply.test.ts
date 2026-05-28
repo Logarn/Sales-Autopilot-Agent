@@ -47,14 +47,14 @@ async function runTests(): Promise<void> {
   const { autoPrepareDraftForThread, autoQueuePrepareDraft, buildCaptureCompletionStatus, decideAutoPrepareDraft, detectStateWithDiagnostics, isCaptureBlockedState, postDiscoveryCapturePacket, postPrepareDraftStatus, postV3CapturePacketToThread, selectPageForBrowserAction, settlePageAndDetect } = require("./browserWorker") as {
     autoPrepareDraftForThread: (job: any, thread: { channelId: string; messageTs: string; threadTs: string }, options?: any) => { shouldQueue: boolean; category: string; note: string; actionId?: number; duplicate?: boolean };
     autoQueuePrepareDraft: (job: any, options?: any, thread?: { channelId: string; messageTs: string; threadTs: string } | null) => { shouldQueue: boolean; category: string; note: string; actionId?: number; duplicate?: boolean; duplicateStatus?: string | null };
-    buildCaptureCompletionStatus: (input: { hasThreadContext: boolean; packetPosted: boolean; discoverySlackStatus?: "not_discovery" | "missing_channel" | "post_failed" | "posted" | "suppressed_for_auto_prepare" }) => string;
+    buildCaptureCompletionStatus: (input: { hasThreadContext: boolean; packetPosted: boolean; discoverySlackStatus?: "not_discovery" | "missing_channel" | "post_failed" | "posted" }) => string;
     decideAutoPrepareDraft: (job: any, options?: any) => { shouldQueue: boolean; category: string; note: string; reason: string };
     detectStateWithDiagnostics: (snapshot: { url: string; title: string; textExcerpt: string }, action: any) => { state: string; source: string; matchedText?: string; summary: string };
     isCaptureBlockedState: (state: string) => boolean;
     postDiscoveryCapturePacket: (input: any, deps?: {
       postChannelMessage?: (params: any) => Promise<{ ok: boolean; ts?: string; channel?: string }>;
       postWebhookMessage?: (params: any) => Promise<boolean>;
-    }) => Promise<{ status: "not_discovery" | "missing_channel" | "post_failed" | "posted" | "suppressed_for_auto_prepare"; outcome: "not_needed" | "posted" | "failed"; thread?: { channelId: string; messageTs: string; threadTs: string } }>;
+    }) => Promise<{ status: "not_discovery" | "missing_channel" | "post_failed" | "posted"; outcome: "not_needed" | "posted" | "failed"; thread?: { channelId: string; messageTs: string; threadTs: string } }>;
     postPrepareDraftStatus: (input: any, deps?: {
       postThreadMessage?: (params: any) => Promise<boolean>;
       postChannelMessage?: (params: any) => Promise<{ ok: boolean; ts?: string; channel?: string }>;
@@ -79,7 +79,6 @@ async function runTests(): Promise<void> {
   assert(buildCaptureCompletionStatus({ hasThreadContext: true, packetPosted: false }) === "Capture completed; Slack lead message was not posted.", "Unposted lead message with thread context should not claim Slack lead message was posted");
   assert(buildCaptureCompletionStatus({ hasThreadContext: false, packetPosted: false, discoverySlackStatus: "missing_channel" }) === "Capture completed; no discovery Slack channel configured, lead message not posted.", "Discovery capture should report missing discovery channel accurately");
   assert(buildCaptureCompletionStatus({ hasThreadContext: false, packetPosted: true, discoverySlackStatus: "posted" }) === "Capture completed and discovery lead message posted to Slack channel.", "Discovery capture should report channel lead message when posted");
-  assert(buildCaptureCompletionStatus({ hasThreadContext: false, packetPosted: false, discoverySlackStatus: "suppressed_for_auto_prepare" }) === "Capture completed; discovery lead message deferred until browser preparation finishes.", "Auto-prepared discovery capture should report deferred Slack lead message");
 
   const {
     acquireBrowserSession,
@@ -126,6 +125,7 @@ async function runTests(): Promise<void> {
     ecommerceVertical: "beauty",
     taskType: "Lifecycle email and SMS retention strategy",
     clientGoal: "Increase repeat purchase and retention revenue",
+    needsManualReview: true,
     confidence: "medium",
     ...overrides,
   });
@@ -151,6 +151,11 @@ async function runTests(): Promise<void> {
       sourceQuery: "manual",
     });
     beautyJob.applicationDraft = buildApplicationDraft(beautyJob);
+    beautyJob.applicationDraft.structuredProposal.clientRequestAnswers = [
+      "Approach: I would audit the account, prioritize the largest lifecycle leaks, then rebuild the flows/campaign process around repeat purchase.",
+      "Availability: I can start with a short diagnostic pass, then move into prioritized execution.",
+    ];
+    beautyJob.applicationDraft.connectsWarnings.push("Connects evidence: captured required Connects from Upwork job detail.");
     beautyJob.applicationDraft.jobIntelligence = klaviyoIntel();
     markJobSeen(beautyJob, false);
     upsertSlackThreadState({
@@ -246,7 +251,7 @@ async function runTests(): Promise<void> {
           shouldQueue: false,
           category: "blocked_no_manual_override",
           reason: "no thread context",
-          note: "Not auto-preparing because no Slack thread context was available for browser staging.",
+          note: "Manual review required before browser work.",
         },
       },
       {
@@ -294,7 +299,7 @@ async function runTests(): Promise<void> {
           shouldQueue: false,
           category: "blocked_no_manual_override",
           reason: "no thread context",
-          note: "Not auto-preparing because no Slack thread context was available for browser staging.",
+          note: "Lead capture ready for review.",
         },
       },
       {
@@ -306,10 +311,10 @@ async function runTests(): Promise<void> {
       },
     );
     assert(normalDiscovery.status === "posted", "Eligible discovery lead should post");
-    assert(webhookPostedText.includes("*Recommended action:* Review lead"), "Post-to-Slack lead should keep standard review wording");
+    assert(webhookPostedText.includes("*Recommended action:* Autonomous prep is proceeding; watch for the draft-ready touchpoint"), "Post-to-Slack lead should use two-touchpoint autonomous prep wording");
 
-    let suppressedPostAttempted = false;
-    const suppressedDiscovery = await postDiscoveryCapturePacket(
+    let queuedPrepPostAttempted = false;
+    const queuedPrepDiscovery = await postDiscoveryCapturePacket(
       {
         action: {
           id: 5022,
@@ -348,18 +353,18 @@ async function runTests(): Promise<void> {
       },
       {
         postChannelMessage: async () => {
-          suppressedPostAttempted = true;
+          queuedPrepPostAttempted = true;
           return { ok: true, ts: "999.111", channel: "C123" };
         },
         postWebhookMessage: async () => {
-          suppressedPostAttempted = true;
+          queuedPrepPostAttempted = true;
           return true;
         },
       },
     );
-    assert(suppressedDiscovery.status === "suppressed_for_auto_prepare", "Discovery lead Slack packet should be deferred when prep was queued");
-    assert(suppressedDiscovery.outcome === "not_needed", "Deferred discovery packet should not count as a post failure");
-    assert(!suppressedPostAttempted, "Deferred discovery packet must not call Slack at capture time");
+    assert(queuedPrepDiscovery.status === "posted", "Discovery lead Slack packet should still post as Touchpoint 1 when prep is queued");
+    assert(queuedPrepDiscovery.outcome === "posted", "Touchpoint 1 lead alert should count as posted");
+    assert(queuedPrepPostAttempted, "Queued autonomous prep must not suppress the capture-time lead alert");
 
     webhookPostedText = "";
     const connectsManualReviewDiscovery = await postDiscoveryCapturePacket(
@@ -414,7 +419,7 @@ async function runTests(): Promise<void> {
           shouldQueue: false,
           category: "blocked_no_manual_override",
           reason: "no thread context",
-          note: "Not auto-preparing because no Slack thread context was available for browser staging.",
+          note: "Connects spend review required.",
         },
       },
       {
@@ -532,23 +537,52 @@ async function runTests(): Promise<void> {
 
     const beautyPlanResult = buildBrowserApplyPlan(beautyJob.id);
     assert(Boolean(beautyPlanResult.plan), "Beauty job should produce an apply plan");
-    assert(beautyPlanResult.valid, `Beauty job plan should be valid, got issues: ${JSON.stringify(beautyPlanResult.issues)}`);
+    assert(!beautyPlanResult.valid, "Beauty job plan should block final prep while a selected required attachment is missing locally");
     assert(beautyPlanResult.plan.stopBeforeSubmit === true, "Apply plan must enforce stopBeforeSubmit=true");
+    assert(beautyPlanResult.plan.finalPreparationDiagnostics.stopBeforeSubmit === true, "Final-prep diagnostics must also enforce stopBeforeSubmit=true");
+    assert(beautyPlanResult.plan.coverLetter === beautyJob.applicationDraft.proposalText, "Apply plan should expose the exact approved cover letter");
+    assert(beautyPlanResult.plan.finalPreparationDiagnostics.coverLetter.present, "Final-prep diagnostics should report cover letter readiness");
+    assert(beautyPlanResult.plan.screeningAnswers.length > 0, "Apply plan should expose screening answers when the draft contains them");
+    assert(beautyPlanResult.plan.finalPreparationDiagnostics.screeningAnswers.count === beautyPlanResult.plan.screeningAnswers.length, "Final-prep diagnostics should count screening answers");
+    assert(beautyPlanResult.plan.rate === beautyJob.applicationDraft.structuredProposal.browserFillNotes.rate, "Apply plan should expose the rate/bid value");
+    assert(beautyPlanResult.plan.connects.required === 4, "Apply plan should expose required Connects");
+    assert(beautyPlanResult.plan.finalPreparationDiagnostics.connects.total === beautyPlanResult.plan.connects.total, "Final-prep diagnostics should expose Connects totals");
+    assert(
+      beautyPlanResult.plan.connectsEvidence.some((line: string) => line.includes("captured required Connects")),
+      "Apply plan should expose Connects evidence when available",
+    );
     assert(
       beautyPlanResult.plan.attachments.some((item: { filePath: string }) => item.filePath === "profile/attachments/truly-beauty-case-study.pdf"),
       "Beauty job should auto-attach Truly Beauty case study",
+    );
+    assert(
+      beautyPlanResult.plan.filesAttached.includes("profile/attachments/truly-beauty-case-study.pdf"),
+      "Apply plan should expose files selected for attachment",
     );
     assert(
       beautyPlanResult.plan.missingLocalAssets.includes("profile/attachments/truly-beauty-case-study.pdf"),
       "Browser draft prep should report selected assets that are missing locally",
     );
     assert(
+      beautyPlanResult.plan.missingFiles.includes("profile/attachments/truly-beauty-case-study.pdf"),
+      "Apply plan should expose missing files in final-prep diagnostics fields",
+    );
+    assert(
       beautyPlanResult.plan.proofAvailability.some((line: string) => line.includes("Status: File missing locally - manual upload needed")),
       "Browser draft prep should include proof availability status lines",
     );
+    assert(beautyPlanResult.plan.proofHighlights.length > 0, "Apply plan should expose proof highlights");
+    assert(beautyPlanResult.plan.portfolioHighlights.some((line: string) => line.includes("truly-beauty")), "Apply plan should expose portfolio highlights");
+    assert(beautyPlanResult.plan.profileHighlights.length > 0, "Apply plan should expose profile highlights");
+    assert(beautyPlanResult.plan.manualFields.includes("attachments"), "Missing selected attachment should add attachments to manual fields");
+    assert(beautyPlanResult.plan.manualFields.includes("finalSubmit"), "Final submit should remain a manual field");
     assert(
-      beautyPlanResult.issues.some((issue) => issue.code === "attachment_missing_locally"),
-      "Missing local assets should be surfaced as warnings",
+      beautyPlanResult.plan.finalPreparationDiagnostics.blockers.some((line: string) => line.includes("required_attachment_missing_locally")),
+      "Missing required attachment should be surfaced as a blocker",
+    );
+    assert(
+      beautyPlanResult.issues.some((issue) => issue.code === "required_attachment_missing_locally" && issue.severity === "error"),
+      "Missing local assets selected for browser prep should be surfaced as blocking diagnostics",
     );
     assert(
       !beautyPlanResult.plan.attachments.some((item: { filePath: string }) => item.filePath.includes("dr-rachael")),
@@ -626,6 +660,68 @@ async function runTests(): Promise<void> {
     assert(prepCompletionText.includes("Auto-attach assets: Truly Beauty case study"), "Prep completion alert should list selected attachments");
     assert(prepCompletionText.includes("Ready for final manual submit: yes"), "Prep completion alert should explicitly mark safe final manual review");
     assert(prepCompletionText.includes("Final submit remains manual and was not clicked."), "Prep completion alert should preserve final submit safety");
+
+    let blockedPrepCompletionText = "";
+    const blockedPrepCompletionPost = await postPrepareDraftStatus(
+      {
+        thread: null,
+        heading: "⚠️ Draft preparation paused for browser action #708.",
+        diagnostics: {
+          actionId: 708,
+          jobId: beautyJob.id,
+          jobTitle: beautyJob.title,
+          actionType: "prepare_application_review",
+          sourceUrl: beautyJob.url,
+          applyUrl: `${beautyJob.url}/apply`,
+          intendedAction: "Open Upwork apply page, prepare fields for human review, and stop before submit.",
+          state: "field_preparation_incomplete",
+          stopBeforeSubmit: true,
+          validationIssues: [
+            {
+              severity: "error",
+              code: "required_attachment_missing_locally",
+              message: "profile/attachments/truly-beauty-case-study.pdf is selected for browser preparation but is missing locally.",
+            },
+          ],
+          coverLetterPresent: true,
+          coverLetterLength: 220,
+          screeningAnswersCount: 2,
+          rate: "$72/hr",
+          requiredConnects: 4,
+          boostConnects: 0,
+          totalConnects: 4,
+          connectsDecision: "safe_apply",
+          connectsExpectedValue: 88,
+          selectedAttachments: ["Truly Beauty case study"],
+          manualReviewAssets: [],
+          mentionOnlyProof: [],
+          proofAvailability: ["Truly Beauty case study: missing locally"],
+          figmaRecommendations: [],
+          videoRecommendations: [],
+          manualReviewWarnings: [],
+          missingLocalAssets: ["profile/attachments/truly-beauty-case-study.pdf"],
+          skippedAttachments: [],
+          selectedHighlights: ["Klaviyo retention proof"],
+          warnings: ["[error] required_attachment_missing_locally: missing selected attachment"],
+          attemptedFields: ["screening answers"],
+          skippedFields: ["coverLetter", "rate"],
+          manualFields: ["attachments", "finalSubmit"],
+        },
+      },
+      {
+        postWebhookMessage: async (payload) => {
+          blockedPrepCompletionText = String(payload.text ?? "");
+          return true;
+        },
+      },
+    );
+    assert(blockedPrepCompletionPost === "posted", "Blocked browser application diagnostics should still post final-review alert");
+    assert(blockedPrepCompletionText.includes("Ready for final manual submit: no - review diagnostics before submitting."), "Blocked prep diagnostics should not report final-submit readiness");
+    assert(blockedPrepCompletionText.includes("Fields not filled: coverLetter, rate"), "Blocked prep diagnostics should list required fields not safely filled");
+    assert(blockedPrepCompletionText.includes("Missing local assets: profile/attachments/truly-beauty-case-study.pdf"), "Blocked prep diagnostics should list missing files");
+    assert(blockedPrepCompletionText.includes("Manual review fields: attachments, finalSubmit"), "Blocked prep diagnostics should list manual fields");
+    assert(blockedPrepCompletionText.includes("Stop before submit: true"), "Blocked prep diagnostics should keep submit guard visible");
+    assert(blockedPrepCompletionText.includes("Final submit remains manual and was not clicked."), "Blocked prep diagnostics should preserve no-submit behavior");
 
     const designJob = scoreJob({
       id: "design-job-1",

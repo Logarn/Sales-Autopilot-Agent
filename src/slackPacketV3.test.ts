@@ -2,7 +2,7 @@ import { buildV3CapturePacket, shouldPostLeadPacket } from "./slackPacketV3";
 import { buildApplicationDraft } from "./agent";
 import { scoreJob } from "./filter";
 import { buildDeterministicOpportunityPacket, normalizedPacketToJobPosting } from "./normalization";
-import { ScoredJob } from "./types";
+import { JobIntelligence, ScoredJob } from "./types";
 
 function createScoredJob(overrides: Partial<ScoredJob> = {}): ScoredJob {
   return {
@@ -47,6 +47,15 @@ function createScoredJob(overrides: Partial<ScoredJob> = {}): ScoredJob {
       suggestedConnects: 4,
       suggestedBoostConnects: 8,
       connectsWarnings: ["Boost only if budget allows"],
+      connectsStrategy: {
+        decision: "safe_apply",
+        requiredConnects: 4,
+        suggestedBoostConnects: 8,
+        totalConnects: 12,
+        expectedValueScore: 88,
+        reasons: ["Required Connects are reasonable.", "Client quality supports spend."],
+        risks: [],
+      },
       selectedPortfolioItems: [],
       proposalQuality: {
         score: 92,
@@ -82,22 +91,51 @@ function countOccurrences(haystack: string, needle: string): number {
 }
 
 function runTests(): void {
+  const beautyIntelligence: JobIntelligence = {
+    schemaVersion: "1.0",
+    primaryPlatform: "Klaviyo",
+    platformsMentioned: ["Klaviyo", "Shopify"],
+    platformCategory: "ESP",
+    platformPreferenceTier: "core",
+    platformFitReason: "Klaviyo is a core platform and the scope is DTC lifecycle retention.",
+    shouldSkipForPlatform: false,
+    skipReason: "",
+    businessType: "DTC ecommerce",
+    ecommerceVertical: "beauty",
+    jobCategory: "Email marketing",
+    taskType: "Retention strategy / email and SMS flows",
+    requiredSkills: ["Klaviyo", "Shopify", "SMS Marketing", "Retention Marketing"],
+    clientGoal: "Improve repeat purchase through segmentation, flows, and lifecycle messaging.",
+    redFlags: [],
+    fitScoreReasoning: "Beauty DTC, Klaviyo, SMS, quiz segmentation, and retention strategy are all strong profile matches.",
+    proposalAngle: "Lead with retention architecture and quick wins across segmentation, flow timing, and post-purchase journeys.",
+    proofRecommendations: ["Truly Beauty case study"],
+    draftConstraints: [],
+    platformMismatchWarnings: [],
+    needsManualReview: false,
+    confidence: "high",
+  };
   const beautyJob = createScoredJob();
   const beautyPacket = buildV3CapturePacket(beautyJob, {
     upworkUrl: beautyJob.url,
     captureStatus: "packet_sent",
     browserCaptureActionId: 11,
     autoPrepareNote: "Strong fit. I’m preparing the Upwork draft now. Final submit remains manual.",
+    requiredConnects: 4,
+    suggestedBoostConnects: 8,
+    suggestedBid: "$72/hr",
     applicationQuestions: ["How would you improve our Klaviyo revenue mix?"],
     questionAnswers: ["I would start with segmentation quality, flow timing, and what is happening between first purchase and second purchase."],
     platform: "Klaviyo",
     businessType: "DTC ecommerce",
     ecommerceVertical: "Beauty",
     platformPreferenceTier: "Core",
+    jobIntelligence: beautyIntelligence,
   });
   const beautyText = beautyPacket.text;
 
   assertIncludes(beautyText, "🚀 *New Upwork Lead*", "lead heading");
+  assertIncludes(beautyText, "📌 *Touchpoint 1 lead alert*", "touchpoint heading");
   assertIncludes(beautyText, "<@U0A2X5BCNKC>", "Steve mention");
   assertIncludes(beautyText, "<@U0AHJFYV42K>", "Natalie mention");
   assert(countOccurrences(beautyText, "<@U0A2X5BCNKC>") === 1, "Steve mention should appear once");
@@ -108,14 +146,25 @@ function runTests(): void {
   assertIncludes(beautyText, beautyJob.url, "job url");
   assertIncludes(beautyText, "*Fit:* 🟢 High — 89/100", "fit score");
   assertIncludes(beautyText, "*Source:* Manual Slack URL", "manual source label");
-  assertIncludes(beautyText, "*Recommended action:* Manual platform review before draft prep", "recommended action");
-  assertIncludes(beautyText, "🧭 *Lead context*", "lead context section");
+  assertIncludes(beautyText, "*Recommended action:* Autonomous prep is proceeding; watch for the draft-ready touchpoint", "recommended action");
+  assertIncludes(beautyText, "🧭 *Platform / business / vertical fit*", "lead context section");
   assertIncludes(beautyText, "• Platform: Klaviyo", "lead context platform");
   assertIncludes(beautyText, "• Platform tier: Core", "lead context tier");
   assertIncludes(beautyText, "• Business: DTC ecommerce", "lead context business");
   assertIncludes(beautyText, "• Vertical: Beauty", "lead context vertical");
-  assertIncludes(beautyText, "🧠 *Why this might be a fit*", "fit section");
+  assertIncludes(beautyText, "🧠 *Why worth attention*", "attention section");
+  assertIncludes(beautyText, "👤 *Client quality signals*", "client quality section");
+  assertIncludes(beautyText, "• Spend: $120,000", "client spend signal");
+  assertIncludes(beautyText, "• Hire rate: 92%", "client hire-rate signal");
   assertIncludes(beautyText, "⚠️ *Watch-outs*", "watch-outs section");
+  assertIncludes(beautyText, "🔌 *Recommended bid / Connects strategy*", "connects section");
+  assertIncludes(beautyText, "• Required Connects: 4", "required connects");
+  assertIncludes(beautyText, "• Connects confidence/source: High (explicit Slack context)", "connects confidence source");
+  assertIncludes(beautyText, "• Recommended bid: $72/hr", "recommended bid");
+  assertIncludes(beautyText, "Connects strategy: safe to apply", "connects strategy");
+  assertIncludes(beautyText, "⚙️ *Autonomous prep*", "autonomous prep section");
+  assertIncludes(beautyText, "Proceeding: Strong fit. I’m preparing the Upwork draft now. Final submit remains manual.", "autonomous prep proceeding");
+  assertIncludes(beautyText, "Slack replies are optional manual overrides only; they are not the workflow controller.", "manual override policy");
   assertIncludes(beautyText, "✍️ *Draft angle*", "draft angle section");
   assertIncludes(beautyText, "Proposal preview (review only)", "proposal preview section");
   assertIncludes(beautyText, "📝 *Screening answers*", "screening section");
@@ -126,20 +175,90 @@ function runTests(): void {
   assertIncludes(beautyText, "Truly Beauty case study", "selected assets rendering");
   assertIncludes(beautyText, "Status: File missing locally - manual upload needed", "missing proof availability status");
   assertNotIncludes(beautyText, "profile/attachments/truly-beauty-case-study.pdf", "raw asset path should be hidden");
-  assertIncludes(beautyText, "💬 *Available replies*", "commands heading");
+  assertIncludes(beautyText, "💬 *Manual overrides (optional)*", "commands heading");
+  assertIncludes(beautyText, "Use these only to override, inspect, or recover the autonomous flow", "override-only command framing");
   for (const cmd of ["prepare draft", "revise: <instruction>", "skip", "status", "mark submitted"]) {
     assertIncludes(beautyText, `\`${cmd}\``, `command ${cmd}`);
   }
   assertNotIncludes(beautyText, "`retry <action-id>`", "normal lead should hide retry command");
-  assertIncludes(beautyText, "*Draft note:* Strong fit. Reply `prepare draft` when ready.", "not queued draft note");
-  assertNotIncludes(beautyText, "I’m preparing the Upwork draft now", "not queued message should not claim draft prep started");
+  assertIncludes(beautyText, "*Draft note:* Strong fit. Autonomous draft prep may proceed outside Slack. Final submit remains manual.", "not queued draft note");
+  assertNotIncludes(beautyText, "Reply `prepare draft` when ready", "lead packet should not make Slack the controller");
   assertIncludes(beautyText, "Final submit remains manual", "manual submit language");
+  assertIncludes(beautyText, "*Slack policy:* Touchpoint 1 is this lead alert. Touchpoint 2 is the later draft/submission status update.", "two-touchpoint policy");
   assertIncludes(beautyText, "_Debug: action #11", "tiny debug footer");
   for (const internal of ["captureStrategy", "selectedPageKind", "directFallbackAttempted", "sourceContextReadable", "recencyRank", "detector diagnostics", "Browser status"]) {
     assertNotIncludes(beautyText, internal, `hidden internal ${internal}`);
   }
   assertNotIncludes(beautyText, "figma.com", "non-design beauty lead should not include Figma links");
   assertNotIncludes(beautyText, "copy/paste", "copy paste workflow");
+  assertEqual(
+    shouldPostLeadPacket(beautyJob, { upworkUrl: beautyJob.url, captureStatus: "packet_sent", jobIntelligence: beautyIntelligence }),
+    true,
+    "high-quality eligible lead should post",
+  );
+
+  const badLead = createScoredJob({
+    title: "Cheap generic email cleanup",
+    description: "Need quick email cleanup. Small test budget.",
+    budget: "$75 fixed",
+    clientSpend: 0,
+    clientHireRate: 0,
+    clientTotalHires: 0,
+    clientFeedbackCount: 0,
+    score: 42,
+    matchLevel: "skip",
+    scoreBreakdown: {
+      fitScore: { score: 42, reasons: [], risks: ["Generic scope"] },
+      clientQualityScore: { score: 20, reasons: [], risks: ["No client history"] },
+      opportunityScore: { score: 25, reasons: [], risks: ["Budget too low"] },
+      redFlagScore: { score: 80, reasons: [], risks: [] },
+      connectsRiskScore: { score: 30, reasons: [], risks: ["Not worth Connects spend"] },
+      finalScore: 42,
+      reasons: [],
+      risks: ["Low score", "No client spend", "Budget too low"],
+    },
+  });
+  assertEqual(
+    shouldPostLeadPacket(badLead, { upworkUrl: badLead.url, captureStatus: "packet_sent", jobIntelligence: beautyIntelligence }),
+    false,
+    "bad lead silence decision should suppress Slack packet",
+  );
+
+  const unknownConnectsJob = createScoredJob({
+    connectsCost: 0,
+    connects: {
+      requiredConnects: null,
+      boostConnects: null,
+      totalConnects: null,
+      confidence: "unknown",
+      sourceText: null,
+      sourceLocation: null,
+      extractionMethod: "not_found",
+    },
+  });
+  unknownConnectsJob.applicationDraft = {
+    ...unknownConnectsJob.applicationDraft!,
+    suggestedConnects: 0,
+    suggestedBoostConnects: 0,
+    connectsStrategy: {
+      ...unknownConnectsJob.applicationDraft!.connectsStrategy!,
+      decision: "manual_review",
+      requiredConnects: 0,
+      suggestedBoostConnects: 0,
+      totalConnects: 0,
+      sourceBackedConnects: unknownConnectsJob.connects,
+      risks: ["Required Connects are unknown from visible source text."],
+    },
+  };
+  const unknownConnectsText = buildV3CapturePacket(unknownConnectsJob, {
+    upworkUrl: unknownConnectsJob.url,
+    captureStatus: "packet_sent",
+    jobIntelligence: beautyIntelligence,
+    autoPrepareNote: "Not auto-preparing because Connects spend needs manual review.",
+  }).text;
+  assertIncludes(unknownConnectsText, "• Required Connects: unknown", "missing required connects should render unknown");
+  assertIncludes(unknownConnectsText, "Connects confidence/source: Unknown (not visible in captured Upwork source text)", "missing required connects should include unknown source");
+  assertNotIncludes(unknownConnectsText, "• Required Connects: 0", "missing required connects must not render as zero");
 
   const discoveryText = buildV3CapturePacket(beautyJob, {
     upworkUrl: beautyJob.url,
@@ -173,7 +292,7 @@ function runTests(): void {
     autoPrepareNote: "Strong fit. I’m preparing the Upwork draft now. Final submit remains manual.",
     applicationQuestions: [],
   }).text;
-  assertIncludes(queuedDraftText, "*Recommended action:* Draft is being staged for manual review", "queued draft recommended action");
+  assertIncludes(queuedDraftText, "*Recommended action:* Autonomous prep is proceeding; watch for the draft-ready touchpoint", "queued draft recommended action");
   assertIncludes(queuedDraftText, "I’m preparing the Upwork draft now", "queued draft note may say prep started");
 
   const healthJob = createScoredJob({

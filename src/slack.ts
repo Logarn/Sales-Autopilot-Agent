@@ -281,7 +281,7 @@ export function buildJobBlocks(job: ScoredJob): IncomingWebhookSendArguments["bl
         { type: "mrkdwn", text: slackText(`*💵 Total Spent:*\n${formatCompactUsd(job.clientSpend)}`, SLACK_FIELD_TEXT_LIMIT) },
         { type: "mrkdwn", text: slackText(`*📊 Hire Rate:*\n${job.clientHireRate}% (${job.clientTotalHires} hires)`, SLACK_FIELD_TEXT_LIMIT) },
         { type: "mrkdwn", text: slackText(`*🎯 Level:*\n${normalizeLevel(job.experienceLevel)}`, SLACK_FIELD_TEXT_LIMIT) },
-        { type: "mrkdwn", text: slackText(`*🎫 Connects:*\n${job.connectsCost || 0}`, SLACK_FIELD_TEXT_LIMIT) },
+        { type: "mrkdwn", text: slackText(`*🎫 Connects:*\n${job.connects?.requiredConnects ?? (job.connectsCost > 0 ? job.connectsCost : "unknown")}`, SLACK_FIELD_TEXT_LIMIT) },
       ],
     },
     {

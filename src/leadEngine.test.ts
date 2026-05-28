@@ -261,11 +261,20 @@ async function run(): Promise<void> {
 
   let challengeDiscoveryCalls = 0;
   let challengeWorkerCalls = 0;
+  const manualAttentionAlerts: Array<{ url?: string | null; title?: string | null; reason: string }> = [];
   const challenge = await runLeadEngineCycle(
     { mode: "run_once", dryRun: false },
     {
       getSessionStatus: () => sessionStatus(),
       inspectLiveSession: async () => challengeInspection(),
+      recordManualAttention: async (input) => {
+        manualAttentionAlerts.push(input);
+        return {
+          state: "manual_attention_required",
+          updatedAt: new Date().toISOString(),
+          challengeEvents: [],
+        };
+      },
       listActions: () => [],
       runDiscovery: async () => {
         challengeDiscoveryCalls += 1;
@@ -287,6 +296,9 @@ async function run(): Promise<void> {
   assert.equal(challenge.actionsProcessed, 0);
   assert.equal(challengeDiscoveryCalls, 0);
   assert.equal(challengeWorkerCalls, 0);
+  assert.equal(manualAttentionAlerts.length, 1, "live challenge should be recorded through the browser session alert path");
+  assert.equal(manualAttentionAlerts[0]?.reason, "captcha_or_security_challenge");
+  assert.match(manualAttentionAlerts[0]?.url ?? "", /__cf_chl/);
 
   const browserToolUsable = usableFeedInspection();
   const browserToolSessionCheck = {
@@ -333,6 +345,76 @@ async function run(): Promise<void> {
   assert.equal(blocked.discoveryRan, false, "blocked scheduler cycle should not run discovery");
   assert.equal(blocked.actionsProcessed, 0, "blocked scheduler cycle should not process queue");
 
+  const workerManualAttention = await runLeadEngineCycle(
+    { mode: "run_once", dryRun: false },
+    {
+      getSessionStatus: () => sessionStatus(),
+      inspectLiveSession: async () => usableFeedInspection(),
+      listActions: () => [],
+      runDiscovery: async () => discoveryOk(),
+      runWorker: async () => ({
+        actionsProcessed: 1,
+        actionsCompleted: 0,
+        actionsPaused: 1,
+        actionsSkipped: 0,
+        slackPostsSucceeded: 0,
+        slackPostFailures: 0,
+        stoppedReason: "manual_attention_required",
+        remainingPendingCount: 1,
+      }),
+      writeState: () => undefined,
+      random: () => 0,
+    },
+  );
+  assert.equal(workerManualAttention.status, "paused", "worker manual-attention stop should pause the lead engine");
+  assert.equal(workerManualAttention.stoppedReason, "manual_attention_required");
+  assert.equal(workerManualAttention.workerStoppedReason, "manual_attention_required");
+  assert.equal(workerManualAttention.actionsPaused, 1);
+
+  const workerBlocked = await runLeadEngineCycle(
+    { mode: "run_once", dryRun: false },
+    {
+      getSessionStatus: () => sessionStatus(),
+      inspectLiveSession: async () => usableFeedInspection(),
+      listActions: () => [],
+      runDiscovery: async () => discoveryOk(),
+      runWorker: async () => ({
+        actionsProcessed: 0,
+        actionsCompleted: 0,
+        actionsPaused: 0,
+        actionsSkipped: 0,
+        slackPostsSucceeded: 0,
+        slackPostFailures: 0,
+        stoppedReason: "browser_session_blocked",
+        remainingPendingCount: 1,
+      }),
+      writeState: () => undefined,
+      random: () => 0,
+    },
+  );
+  assert.equal(workerBlocked.status, "paused", "worker-observed blocked session should pause the lead engine");
+  assert.equal(workerBlocked.stoppedReason, "browser_session_blocked");
+  assert.equal(workerBlocked.workerStoppedReason, "browser_session_blocked");
+
+  const workerFailure = await runLeadEngineCycle(
+    { mode: "run_once", dryRun: false },
+    {
+      getSessionStatus: () => sessionStatus(),
+      inspectLiveSession: async () => usableFeedInspection(),
+      listActions: () => [],
+      runDiscovery: async () => discoveryOk(),
+      runWorker: async () => {
+        throw new Error("worker exploded");
+      },
+      writeState: () => undefined,
+      random: () => 0,
+    },
+  );
+  assert.equal(workerFailure.status, "degraded", "worker exceptions should degrade the cycle summary instead of crashing orchestration");
+  assert.equal(workerFailure.stoppedReason, "worker_failed");
+  assert.equal(workerFailure.workerStoppedReason, "worker_failed");
+  assert.match(workerFailure.workerError ?? "", /worker exploded/);
+
   const slackFailure = await runLeadEngineCycle(
     { mode: "run_once", dryRun: false },
     {
@@ -357,6 +439,7 @@ async function run(): Promise<void> {
   assert.equal(slackFailure.slackPostFailures, 1, "lead engine should report Slack post failures from the worker summary");
   assert.equal(slackFailure.status, "degraded", "Slack post failures should degrade the cycle summary");
   assert.equal(slackFailure.stoppedReason, "slack_post_failed");
+  assert.equal(slackFailure.workerStoppedReason, "completed_batch");
 
   const latest = readLatestState();
   assert(latest && latest.cycleId.length > 0, "latest state should persist");

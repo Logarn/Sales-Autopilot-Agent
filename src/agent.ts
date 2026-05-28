@@ -270,6 +270,11 @@ function evaluateConnects(job: ScoredJob): {
 } {
   const rules = loadConnectsRules();
   const warnings: string[] = [];
+  const requiredConnects = job.connects
+    ? job.connects.requiredConnects
+    : job.connectsCost > 0
+      ? job.connectsCost
+      : null;
   const baseBoost = job.scoreBreakdown.connectsStrategy?.suggestedBoostConnects ?? (job.matchLevel === "high" ? rules.idealBoostMin : 0);
   const strategy = job.scoreBreakdown.connectsStrategy ?? evaluateConnectsStrategy({
     job,
@@ -278,13 +283,15 @@ function evaluateConnects(job: ScoredJob): {
     suggestedBoostConnects: baseBoost,
   });
 
-  if (job.connectsCost > rules.maxRequiredPerJob) {
+  if (requiredConnects === null) {
+    warnings.push("Required Connects are unknown from visible Upwork source text. Inspect the apply page before preparing or submitting.");
+  } else if (requiredConnects > rules.maxRequiredPerJob) {
     warnings.push(
-      `Required Connects (${job.connectsCost}) exceed hard cap (${rules.maxRequiredPerJob}). Skip or require explicit approval.`
+      `Required Connects (${requiredConnects}) exceed hard cap (${rules.maxRequiredPerJob}). Skip or require explicit approval.`
     );
-  } else if (job.connectsCost > rules.requireApprovalAbove) {
+  } else if (requiredConnects > rules.requireApprovalAbove) {
     warnings.push(
-      `Required Connects (${job.connectsCost}) exceed approval threshold (${rules.requireApprovalAbove}). Require approval.`
+      `Required Connects (${requiredConnects}) exceed approval threshold (${rules.requireApprovalAbove}). Require approval.`
     );
   }
 
@@ -305,7 +312,7 @@ function evaluateConnects(job: ScoredJob): {
     warnings.push("Never bid max automatically. Human approval required for expensive boost races.");
   }
 
-  return { suggestedBoostConnects, warnings, strategy: { ...strategy, suggestedBoostConnects, totalConnects: strategy.requiredConnects + suggestedBoostConnects } };
+  return { suggestedBoostConnects, warnings, strategy: { ...strategy, suggestedBoostConnects, totalConnects: strategy.sourceBackedConnects?.requiredConnects === null ? 0 : strategy.requiredConnects + suggestedBoostConnects } };
 }
 
 export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
@@ -368,7 +375,7 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
     fitReasons,
     redFlags,
     suggestedBid: rateRetainerAnswer,
-    suggestedConnects: job.connectsCost,
+    suggestedConnects: job.connects?.requiredConnects ?? job.connectsCost,
     suggestedBoostConnects: connects.suggestedBoostConnects,
     connectsWarnings: connects.warnings,
     connectsStrategy: connects.strategy,
@@ -387,7 +394,7 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
       cta: closingLine,
       portfolioItems,
       proposalText: truncatedProposal,
-      suggestedConnects: job.connectsCost,
+      suggestedConnects: job.connects?.requiredConnects ?? job.connectsCost,
       suggestedBoostConnects: connects.suggestedBoostConnects,
     }),
     generatedAt: new Date().toISOString(),

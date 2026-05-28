@@ -1,5 +1,5 @@
 import { loadConnectsRules } from "./profile";
-import type { ConnectsStrategySnapshot, JobPosting, ScoreBreakdown } from "./types";
+import type { ConnectsStrategySnapshot, JobPosting, ScoreBreakdown, SourceBackedConnects } from "./types";
 
 interface ConnectsStrategyInput {
   job: JobPosting;
@@ -33,6 +33,22 @@ function competitionRisk(job: JobPosting): { level: "low" | "medium" | "high" | 
   return { level: "unknown", penalty: 4 };
 }
 
+function sourceBackedConnectsForJob(job: JobPosting): SourceBackedConnects {
+  if (job.connects) return job.connects;
+  const requiredConnects = Number.isFinite(job.connectsCost) && job.connectsCost > 0
+    ? Math.max(0, Math.floor(job.connectsCost))
+    : null;
+  return {
+    requiredConnects,
+    boostConnects: null,
+    totalConnects: null,
+    confidence: requiredConnects === null ? "unknown" : "low",
+    sourceText: null,
+    sourceLocation: null,
+    extractionMethod: requiredConnects === null ? "not_found" : "legacy_field",
+  };
+}
+
 export function chooseConnectsBoost(input: {
   job: JobPosting;
   score: number;
@@ -40,6 +56,8 @@ export function chooseConnectsBoost(input: {
   opportunityScore: number;
 }): number {
   const rules = loadConnectsRules();
+  const requiredConnects = sourceBackedConnectsForJob(input.job).requiredConnects;
+  if (requiredConnects === null || requiredConnects > rules.requireApprovalAbove) return 0;
   const competition = competitionRisk(input.job);
   if (input.score < 82 || input.clientQualityScore < 60 || input.opportunityScore < 60) return 0;
   if (competition.level === "high" && input.score < 92) return 0;
@@ -48,9 +66,11 @@ export function chooseConnectsBoost(input: {
 
 export function evaluateConnectsStrategy(input: ConnectsStrategyInput): ConnectsStrategySnapshot {
   const rules = loadConnectsRules();
-  const requiredConnects = Math.max(0, Math.floor(input.job.connectsCost || 0));
-  const suggestedBoostConnects = Math.max(0, Math.floor(input.suggestedBoostConnects ?? 0));
-  const totalConnects = requiredConnects + suggestedBoostConnects;
+  const sourceBackedConnects = sourceBackedConnectsForJob(input.job);
+  const requiredConnects = sourceBackedConnects.requiredConnects;
+  const strategyRequiredConnects = requiredConnects ?? 0;
+  const suggestedBoostConnects = requiredConnects === null ? 0 : Math.max(0, Math.floor(input.suggestedBoostConnects ?? 0));
+  const totalConnects = requiredConnects === null ? 0 : requiredConnects + suggestedBoostConnects;
   const clientQuality = input.scoreBreakdown.clientQualityScore.score;
   const opportunity = input.scoreBreakdown.opportunityScore.score;
   const connectsRisk = input.scoreBreakdown.connectsRiskScore.score;
@@ -60,7 +80,7 @@ export function evaluateConnectsStrategy(input: ConnectsStrategyInput): Connects
 
   const reasons: string[] = [];
   const risks: string[] = [];
-  if (requiredConnects <= rules.idealBoostMin) reasons.push(`Required Connects are reasonable (${requiredConnects}).`);
+  if (requiredConnects !== null && requiredConnects <= rules.idealBoostMin) reasons.push(`Required Connects are reasonable (${requiredConnects}).`);
   if (suggestedBoostConnects > 0) reasons.push(`Suggested boost is conservative (${suggestedBoostConnects}).`);
   if (clientQuality >= 70) reasons.push(`Client quality supports spend (${clientQuality}/100).`);
   if (opportunity >= 70) reasons.push(`Opportunity quality supports spend (${opportunity}/100).`);
@@ -69,7 +89,8 @@ export function evaluateConnectsStrategy(input: ConnectsStrategyInput): Connects
   }
   if (competition.reason && competition.level === "low") reasons.push(competition.reason);
 
-  if (requiredConnects > rules.maxRequiredPerJob) risks.push(`Required Connects exceed hard cap (${requiredConnects}/${rules.maxRequiredPerJob}).`);
+  if (requiredConnects === null) risks.push("Required Connects are unknown from visible source text.");
+  if (requiredConnects !== null && requiredConnects > rules.maxRequiredPerJob) risks.push(`Required Connects exceed hard cap (${requiredConnects}/${rules.maxRequiredPerJob}).`);
   if (totalConnects > rules.requireApprovalAbove) risks.push(`Total Connects require approval (${totalConnects}/${rules.requireApprovalAbove}).`);
   if (clientQuality < 55) risks.push(`Client quality is weak (${clientQuality}/100).`);
   if (opportunity < 55) risks.push(`Opportunity quality is weak (${opportunity}/100).`);
@@ -84,8 +105,22 @@ export function evaluateConnectsStrategy(input: ConnectsStrategyInput): Connects
       connectsRisk * 0.14 +
       redFlags * 0.1 -
       competition.penalty -
-      Math.max(0, totalConnects - rules.idealBoostMin) * 0.6,
+      Math.max(0, (requiredConnects === null ? rules.requireApprovalAbove + 1 : totalConnects) - rules.idealBoostMin) * 0.6,
   )));
+
+  if (requiredConnects === null) {
+    const decision = expectedValueScore < 48 || (clientQuality < 40 && input.score < 90) ? "skip" : "manual_review";
+    return {
+      decision,
+      requiredConnects: strategyRequiredConnects,
+      suggestedBoostConnects: 0,
+      totalConnects: strategyRequiredConnects,
+      expectedValueScore,
+      sourceBackedConnects,
+      reasons,
+      risks: decision === "skip" ? [...risks, "Expected value is too weak to spend Connects without a source-backed required cost."] : risks,
+    };
+  }
 
   if (requiredConnects > rules.maxRequiredPerJob || expectedValueScore < 48 || (clientQuality < 40 && input.score < 90)) {
     return {
@@ -94,6 +129,7 @@ export function evaluateConnectsStrategy(input: ConnectsStrategyInput): Connects
       suggestedBoostConnects: 0,
       totalConnects: requiredConnects,
       expectedValueScore,
+      sourceBackedConnects,
       reasons,
       risks: [...risks, "Expected value is too weak to spend Connects."],
     };
@@ -112,6 +148,7 @@ export function evaluateConnectsStrategy(input: ConnectsStrategyInput): Connects
       suggestedBoostConnects,
       totalConnects,
       expectedValueScore,
+      sourceBackedConnects,
       reasons,
       risks,
     };
@@ -123,6 +160,7 @@ export function evaluateConnectsStrategy(input: ConnectsStrategyInput): Connects
     suggestedBoostConnects,
     totalConnects,
     expectedValueScore,
+    sourceBackedConnects,
     reasons,
     risks,
   };
@@ -130,6 +168,8 @@ export function evaluateConnectsStrategy(input: ConnectsStrategyInput): Connects
 
 export function formatConnectsStrategy(strategy: ConnectsStrategySnapshot): string {
   const decision = strategy.decision === "safe_apply" ? "safe to apply" : strategy.decision.replace("_", " ");
+  const required = strategy.sourceBackedConnects?.requiredConnects === null ? "unknown" : String(strategy.requiredConnects);
+  const total = strategy.sourceBackedConnects?.requiredConnects === null ? "unknown" : String(strategy.totalConnects);
   const riskText = strategy.risks.length > 0 ? ` Watch-outs: ${strategy.risks.join("; ")}` : "";
-  return `Connects strategy: ${decision}; required ${strategy.requiredConnects}; boost ${strategy.suggestedBoostConnects}; total ${strategy.totalConnects}; EV ${strategy.expectedValueScore}/100.${riskText}`;
+  return `Connects strategy: ${decision}; required ${required}; boost ${strategy.suggestedBoostConnects}; total ${total}; EV ${strategy.expectedValueScore}/100.${riskText}`;
 }

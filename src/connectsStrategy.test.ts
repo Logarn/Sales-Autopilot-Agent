@@ -3,7 +3,7 @@ import { buildApplicationDraft } from "./agent";
 import { evaluateConnectsStrategy } from "./connectsStrategy";
 import { scoreJob } from "./filter";
 import { decideLeadHandling } from "./leadDecision";
-import type { JobIntelligence, JobPosting } from "./types";
+import type { JobIntelligence, JobPosting, SourceBackedConnects } from "./types";
 
 function job(partial: Partial<JobPosting> = {}): JobPosting {
   return {
@@ -27,6 +27,18 @@ function job(partial: Partial<JobPosting> = {}): JobPosting {
     proposalCount: 8,
     competitionLevel: "low",
     ...partial,
+  };
+}
+
+function sourceBackedConnects(requiredConnects: number | null, sourceText: string | null = null): SourceBackedConnects {
+  return {
+    requiredConnects,
+    boostConnects: null,
+    totalConnects: null,
+    confidence: requiredConnects === null ? "unknown" : "high",
+    sourceText,
+    sourceLocation: sourceText ? "line 1" : null,
+    extractionMethod: requiredConnects === null ? "not_found" : "deterministic_visible_text",
   };
 }
 
@@ -70,6 +82,25 @@ const crowdedStrategy = evaluateConnectsStrategy({
 });
 assert.equal(crowdedStrategy.decision, "manual_review");
 assert(crowdedStrategy.risks.some((risk) => risk.includes("proposals")), "High proposal count should be called out");
+
+const unknownRequired = scoreJob(job({ connectsCost: 0, connects: sourceBackedConnects(null) }));
+assert.equal(unknownRequired.scoreBreakdown.connectsStrategy?.decision, "manual_review");
+assert.equal(unknownRequired.scoreBreakdown.connectsStrategy?.sourceBackedConnects?.requiredConnects, null);
+assert.equal(unknownRequired.scoreBreakdown.connectsStrategy?.suggestedBoostConnects, 0);
+assert(
+  unknownRequired.scoreBreakdown.connectsStrategy?.risks.some((risk) => risk.includes("unknown from visible source text")),
+  "Unknown required Connects should be a fail-closed risk",
+);
+
+const highRequired = scoreJob(job({
+  connectsCost: 32,
+  connects: sourceBackedConnects(32, "This proposal requires 32 Connects"),
+}));
+assert.equal(highRequired.scoreBreakdown.connectsStrategy?.decision, "manual_review");
+assert(
+  highRequired.scoreBreakdown.connectsStrategy?.risks.some((risk) => risk.includes("require approval")),
+  "High required Connects should require manual review",
+);
 
 const weak = scoreJob(job({
   budget: "$1,500",

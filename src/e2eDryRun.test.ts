@@ -26,7 +26,7 @@ async function runTests(): Promise<void> {
   const { scoreJob } = require("./filter") as { scoreJob: (job: any) => any };
   const { buildApplicationDraft } = require("./agent") as { buildApplicationDraft: (job: any) => any };
   const { buildV3CapturePacket } = require("./slackPacketV3") as { buildV3CapturePacket: (job: any, context: any) => { text: string } };
-  const { buildBrowserApplyPlan } = require("./browserApply") as { buildBrowserApplyPlan: (jobId: string) => { plan: any; valid: boolean } };
+  const { buildBrowserApplyPlan } = require("./browserApply") as { buildBrowserApplyPlan: (jobId: string) => { plan: any; valid: boolean; issues: Array<{ code: string; severity: string; message: string }> } };
   const { autoPrepareDraftForThread, decideAutoPrepareDraft, runBrowserWorker } = require("./browserWorker") as {
     autoPrepareDraftForThread: (job: any, thread: { channelId: string; messageTs: string; threadTs: string }, options?: any) => any;
     decideAutoPrepareDraft: (job: any, options?: any) => any;
@@ -150,8 +150,8 @@ async function runTests(): Promise<void> {
       browserDraftStatus: queued.duplicate ? queued.duplicateStatus ?? "queued" : "queued",
       browserDraftActionId: queued.actionId,
       autoPrepareNote: queued.note,
-      requiredConnects: storedJob.applicationDraft?.suggestedConnects ?? 0,
-      suggestedBoostConnects: storedJob.applicationDraft?.suggestedBoostConnects ?? 0,
+      requiredConnects: storedJob.applicationDraft?.connectsStrategy?.sourceBackedConnects?.requiredConnects ?? storedJob.applicationDraft?.suggestedConnects,
+      suggestedBoostConnects: storedJob.applicationDraft?.suggestedBoostConnects,
       suggestedBid: storedJob.applicationDraft?.suggestedBid ?? "n/a",
       applicationQuestions: ["How would you improve our Klaviyo revenue mix?"],
       questionAnswers: ["I would start with segmentation quality, zero-party data capture, and what is happening between first purchase and second purchase."],
@@ -175,7 +175,8 @@ async function runTests(): Promise<void> {
     });
 
     const planResult = buildBrowserApplyPlan(storedJob.id);
-    assert(planResult.valid, "apply plan should be valid for dry-run verification");
+    assert(!planResult.valid, "apply plan should block dry-run verification when a selected attachment is unavailable");
+    assert(planResult.issues.some((issue: any) => issue.code === "required_attachment_missing_locally"), "missing selected attachment should be a blocking apply-plan issue");
     assert(planResult.plan.stopBeforeSubmit === true, "apply plan must include stopBeforeSubmit=true");
     assert(planResult.plan.screeningAnswers.length > 0, "apply plan should persist structured screening answers across the browser queue boundary");
     assert(planResult.plan.connectsStrategy.decision === "safe_apply", "apply plan should preserve the safe Connects strategy after reload");
@@ -184,6 +185,7 @@ async function runTests(): Promise<void> {
     const diagnostics = JSON.parse(readFileSync(diagnosticsPath, "utf8"));
     assert(diagnostics.final_submit_blocked !== false, "final_submit_blocked should remain true in diagnostics");
     assert(diagnostics.connectsDecision === "safe_apply", "diagnostics should report the persisted safe Connects decision");
+    assert(diagnostics.validationIssues.some((issue: any) => issue.code === "required_attachment_missing_locally"), "diagnostics should report unavailable attachment blocker");
 
     console.log(JSON.stringify({
       captureQueued: queuedCapture,
