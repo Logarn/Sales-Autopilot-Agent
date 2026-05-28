@@ -540,12 +540,12 @@ function conciseNextAction(
   proceeding: boolean,
 ): string {
   if (proceeding) {
-    return "I’m going to prep the application and come back here when it’s ready.";
+    return "I’m preparing this now.";
   }
   void leadDecision;
   void postingDecision;
   void context;
-  return "Want me to prep it anyway? Reply “go ahead” and I’ll handle the draft.";
+  return "Reply *“prep it”* if you want me to prepare the draft.";
 }
 
 export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Context): SlackPacketV3Message {
@@ -563,10 +563,20 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
   const connectsUnknown = connectsLabel.toLowerCase().includes("unknown");
 
   const text = [
-    `🚀 New lead: ${compactTitle(title)}`,
+    `🚀 *New lead: ${compactTitle(title)}*`,
+    "",
     `${LEAD_MENTIONS} — ${conciseLeadSentence(job, context, autoPrepareProceeding, connectsUnknown)}`,
-    `Fit: ${fitLabel(job)} · Platform: ${concisePlatform(job, context)} · Budget: ${job.budget || "unknown"} · Connects: ${connectsLabel} · Risk: ${conciseRisk(job, context)}`,
-    `Next: ${conciseNextAction(leadDecision, postingDecision, context, autoPrepareProceeding)}`,
+    "",
+    [
+      `• *Fit:* ${fitLabel(job)}`,
+      `• *Platform:* ${concisePlatform(job, context)}`,
+      `• *Budget:* ${job.budget || "unknown"}`,
+      `• *Connects:* ${connectsLabel}`,
+      `• *Risk:* ${conciseRisk(job, context)}`,
+    ].join("\n"),
+    "",
+    `*Next:* ${conciseNextAction(leadDecision, postingDecision, context, autoPrepareProceeding)}`,
+    "",
     url,
   ].join("\n");
 

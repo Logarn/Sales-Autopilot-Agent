@@ -48,7 +48,7 @@ async function runTests(): Promise<void> {
   const { applySlackThreadRevision, buildSlackSocketStartupError, handleThreadCommand, parseSlackThreadCommand, parseUpworkJobUrlFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread } = require("./slackSocket") as {
     applySlackThreadRevision: (input: { channelId: string; threadTs: string; instruction: string }) => { ok: boolean; text: string; proposalVersion?: number };
     buildSlackSocketStartupError: (input: { socketEnabled: boolean; botToken: string; appToken: string }) => string | null;
-    handleThreadCommand: (input: { channelId: string; threadTs: string; text: string; client: any }) => Promise<void>;
+    handleThreadCommand: (input: { channelId: string; threadTs: string; text: string; client: any; intentProvider?: any }) => Promise<void>;
     parseSlackThreadCommand: (value: string) => {
       type: string;
       rawText: string;
@@ -68,8 +68,15 @@ async function runTests(): Promise<void> {
     listBrowserActions: (status?: string | null, limit?: number) => Array<{ id: number; actionType: string; jobId: string; status: string }>;
     updateBrowserActionStatus: (id: number, status: string, lastError?: string) => boolean;
   };
+  const { recordBrowserManualAttention } = require("./browserSession") as {
+    recordBrowserManualAttention: (input: { reason: string; actionId?: number; jobId?: string; url?: string | null; title?: string | null }) => Promise<unknown>;
+  };
   const { buildApplicationDraft } = require("./agent") as { buildApplicationDraft: (job: any) => any };
   const { scoreJob } = require("./filter") as { scoreJob: (job: any) => any };
+  const fakeIntentProvider = (decision: Record<string, unknown>) => ({
+    isAvailable: () => true,
+    completeJson: async () => ({ ok: true, data: decision }),
+  });
 
   try {
     const urlTests: TestCase[] = [
@@ -143,11 +150,13 @@ async function runTests(): Promise<void> {
       { name: "natural proof swap", input: "Use the Truly Beauty proof instead.", expectType: "revise", instruction: "the Truly Beauty proof instead." },
       { name: "prepare draft", input: "prepare draft", expectType: "prepare_draft" },
       { name: "prepare proposal punctuation", input: "prepare proposal.", expectType: "prepare_draft" },
-      { name: "natural proceed", input: "Please proceed with the draft", expectType: "prepare_draft" },
-      { name: "natural go ahead", input: "go ahead", expectType: "prepare_draft" },
-      { name: "natural prep it", input: "prep it", expectType: "prepare_draft" },
-      { name: "natural looks good proceed", input: "looks good, proceed", expectType: "prepare_draft" },
-      { name: "natural apply", input: "apply", expectType: "prepare_draft" },
+      { name: "natural proceed", input: "Please proceed with the draft", expectType: "approve_prepare" },
+      { name: "natural go ahead", input: "go ahead", expectType: "approve_prepare" },
+      { name: "natural prep it", input: "prep it", expectType: "approve_prepare" },
+      { name: "natural looks good proceed", input: "looks good, proceed", expectType: "approve_prepare" },
+      { name: "natural apply", input: "apply", expectType: "approve_prepare" },
+      { name: "live phrasing", input: "yeah, prep drafts and send link to listing", expectType: "approve_prepare" },
+      { name: "bot mention raises prep confidence", input: "yeah, prep drafts and send link to listing <@UAGENT>", expectType: "approve_prepare" },
       { name: "retry action", input: "retry 123", expectType: "retry_action", actionId: 123 },
       { name: "natural retry preparation", input: "Retry preparation.", expectType: "retry_action" },
       { name: "mark submitted", input: "mark submitted", expectType: "mark_submitted" },
@@ -208,6 +217,63 @@ async function runTests(): Promise<void> {
       status: "packet_sent",
     });
 
+    const llmPrepareJob = {
+      ...prepareJob,
+      id: "prepare-job-llm",
+      applicationDraft: {
+        ...prepareJob.applicationDraft,
+        jobId: "prepare-job-llm",
+      },
+    };
+    markJobSeen(llmPrepareJob, false);
+    upsertSlackThreadState({
+      channelId: "C123",
+      messageTs: "111.333",
+      threadTs: "111.333",
+      upworkUrl: llmPrepareJob.url,
+      jobId: llmPrepareJob.id,
+      status: "packet_sent",
+    });
+    const llmPrepareReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.333",
+      text: "yeah, prep drafts and send link to listing <@UAGENT>",
+      intentProvider: fakeIntentProvider({
+        intent: "approve_prepare",
+        confidence: "high",
+        replyText: "Got it — I’ll prep this now and come back here when it’s ready for QA.",
+      }),
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            llmPrepareReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(llmPrepareReplies.some((reply) => reply.includes("Got it") && reply.includes("ready for QA")), "LLM approve_prepare should immediately acknowledge in-thread.");
+    assert(llmPrepareReplies.some((reply) => reply.includes(llmPrepareJob.url)), "Prepare acknowledgement should include the listing link.");
+    assert(!llmPrepareReplies.join("\n").toLowerCase().includes("final submit"), "Prepare acknowledgement must not imply final submit.");
+    const llmQueuedActions = listBrowserActions(null, 10).filter((action) => action.actionType === "prepare_application_review" && action.jobId === llmPrepareJob.id);
+    assert(llmQueuedActions.length === 1, `LLM approve_prepare should queue exactly one prepare_application_review action, got ${llmQueuedActions.length}`);
+
+    const unmappedReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "CNO",
+      threadTs: "999.000",
+      text: "yeah, prep drafts and send link to listing",
+      intentProvider: fakeIntentProvider({ intent: "approve_prepare", confidence: "high" }),
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            unmappedReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(unmappedReplies.some((reply) => reply.includes("can’t find the job tied to this thread")), "Unmapped approve_prepare should reply with useful mapping guidance.");
+
     const prepareResult = queuePrepareDraftFromSlackThread({ channelId: "C123", threadTs: "111.222" });
     assert(prepareResult.ok, `Expected prepare draft queue to succeed, got: ${prepareResult.text}`);
     assert(typeof prepareResult.actionId === "number", "Prepare draft should return an action id.");
@@ -226,6 +292,23 @@ async function runTests(): Promise<void> {
 
     const queuedActions = listBrowserActions(null, 10).filter((action) => action.actionType === "prepare_application_review" && action.jobId === prepareJob.id);
     assert(queuedActions.length === 1, `Expected exactly one queued prepare_application_review action, got ${queuedActions.length}`);
+
+    await recordBrowserManualAttention({ reason: "captcha_or_security_challenge", actionId: prepareResult.actionId, jobId: prepareJob.id, url: prepareJob.url, title: "Just a moment..." });
+    const blockedReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "please proceed with the draft",
+      intentProvider: fakeIntentProvider({ intent: "approve_prepare", confidence: "high" }),
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            blockedReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(blockedReplies.some((reply) => reply.includes("Quick blocker: Upwork is asking for a human check")), "Blocked prep should explain the browser blocker in-thread.");
 
     const retryReplies: string[] = [];
     updateBrowserActionStatus(prepareResult.actionId!, "failed", "field_preparation_incomplete");
