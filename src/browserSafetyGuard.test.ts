@@ -21,6 +21,7 @@ async function runTests(): Promise<void> {
     { selector: "button:has-text('Continue with Google')", label: "Continue with Google" },
     { selector: "input[type='email']", label: "safe Google email field" },
     { selector: "text=user@example.com", label: "user@example.com" },
+    { selector: "button:has-text('Apply now')", label: "Apply now" },
   ];
   for (const target of allowed) {
     assert.equal(classifySensitiveTarget(target).blocked, false, `should allow ${JSON.stringify(target)}`);
@@ -38,6 +39,12 @@ async function runTests(): Promise<void> {
   let unsafeClicked = false;
   await assert.rejects(() => guardedClick({ click: async () => { unsafeClicked = true; } }, { label: "I'm not a robot" }));
   assert.equal(unsafeClicked, false, "blocked click should not execute");
+
+  for (const label of ["Send for 14 Connects", "Send proposal", "Submit proposal"]) {
+    let finalSubmitClicked = false;
+    await assert.rejects(() => guardedClick({ click: async () => { finalSubmitClicked = true; } }, { label }));
+    assert.equal(finalSubmitClicked, false, `${label} should be blocked as final submit`);
+  }
 
   console.log("browser safety guard tests passed");
 }

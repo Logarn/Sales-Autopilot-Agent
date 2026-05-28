@@ -143,6 +143,11 @@ async function runTests(): Promise<void> {
       { name: "natural proof swap", input: "Use the Truly Beauty proof instead.", expectType: "revise", instruction: "the Truly Beauty proof instead." },
       { name: "prepare draft", input: "prepare draft", expectType: "prepare_draft" },
       { name: "prepare proposal punctuation", input: "prepare proposal.", expectType: "prepare_draft" },
+      { name: "natural proceed", input: "Please proceed with the draft", expectType: "prepare_draft" },
+      { name: "natural go ahead", input: "go ahead", expectType: "prepare_draft" },
+      { name: "natural prep it", input: "prep it", expectType: "prepare_draft" },
+      { name: "natural looks good proceed", input: "looks good, proceed", expectType: "prepare_draft" },
+      { name: "natural apply", input: "apply", expectType: "prepare_draft" },
       { name: "retry action", input: "retry 123", expectType: "retry_action", actionId: 123 },
       { name: "natural retry preparation", input: "Retry preparation.", expectType: "retry_action" },
       { name: "mark submitted", input: "mark submitted", expectType: "mark_submitted" },
@@ -206,15 +211,18 @@ async function runTests(): Promise<void> {
     const prepareResult = queuePrepareDraftFromSlackThread({ channelId: "C123", threadTs: "111.222" });
     assert(prepareResult.ok, `Expected prepare draft queue to succeed, got: ${prepareResult.text}`);
     assert(typeof prepareResult.actionId === "number", "Prepare draft should return an action id.");
-    assert(prepareResult.text.includes("profile/attachments/truly-beauty-case-study.pdf"), "Prepare draft reply should include selected auto-attach asset.");
-    assert(prepareResult.text.includes("Status: File missing locally - manual upload needed"), "Prepare draft reply should report missing local proof assets.");
-    assert(prepareResult.text.includes("Final submit remains manual"), "Prepare draft reply should keep manual submit reminder.");
+    assert(prepareResult.text.includes("Got it"), "Prepare draft reply should acknowledge natural approval concisely.");
+    assert(prepareResult.text.includes("ready for QA"), "Prepare draft reply should promise a QA update.");
+    assert(prepareResult.text.includes("stop before submit"), "Prepare draft reply should keep manual submit boundary.");
     assert(!prepareResult.text.toLowerCase().includes("copy/paste"), "Prepare draft reply must not introduce copy/paste workflow.");
+    assert(!prepareResult.text.includes("Auto-attach assets:"), "Prepare draft reply should not dump proof inventory.");
+    assert(!prepareResult.text.toLowerCase().includes("action:"), "Prepare draft reply should not expose action ids by default.");
 
     const duplicatePrepareResult = queuePrepareDraftFromSlackThread({ channelId: "C123", threadTs: "111.222" });
     assert(duplicatePrepareResult.ok, "Duplicate prepare draft should resolve to existing action rather than fail.");
     assert(duplicatePrepareResult.actionId === prepareResult.actionId, "Duplicate prepare draft should return the existing action id.");
-    assert(duplicatePrepareResult.text.includes("already exists as browser action"), "Duplicate prepare draft should describe the existing action.");
+    assert(duplicatePrepareResult.text.includes("Already on it"), "Duplicate prepare draft should stay concise.");
+    assert(!duplicatePrepareResult.text.toLowerCase().includes("browser action"), "Duplicate prepare draft should not expose action ids by default.");
 
     const queuedActions = listBrowserActions(null, 10).filter((action) => action.actionType === "prepare_application_review" && action.jobId === prepareJob.id);
     assert(queuedActions.length === 1, `Expected exactly one queued prepare_application_review action, got ${queuedActions.length}`);

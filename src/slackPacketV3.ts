@@ -435,6 +435,25 @@ function concisePlatform(job: ScoredJob, context: SlackPacketV3Context): string 
   return compactSentence(intelligence?.primaryPlatform ?? context.platform ?? job.skills?.[0] ?? "unknown", 42);
 }
 
+function humanizeSlackText(value: string, fallback = "it needs a closer look"): string {
+  const cleaned = value
+    .replace(/\bmanual review\b/gi, "a closer look")
+    .replace(/\blead decision\b/gi, "call")
+    .replace(/\bplatformEligibility\b/gi, "platform fit")
+    .replace(/\bsource[_\s-]*context[_\s-]*unavailable\b/gi, "the page was not readable")
+    .replace(/\bpacket[_\s-]*sent\b/gi, "sent")
+    .replace(/\bpacket\b/gi, "message")
+    .replace(/\baction\s*#?\d+\b/gi, "browser step")
+    .replace(/\bnot auto-preparing\b/gi, "I’m not prepping it yet")
+    .replace(/\bauto-prepar(?:e|ing)\b/gi, "prep")
+    .replace(/\bdeterministic parser found\b/gi, "")
+    .replace(/\bdeterministic parser needs\b/gi, "it needs")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^[.;:,\s-]+/, "");
+  return cleaned || fallback;
+}
+
 function conciseClientType(job: ScoredJob, context: SlackPacketV3Context): string {
   const intelligence = context.jobIntelligence ?? job.applicationDraft?.jobIntelligence;
   const vertical = intelligence?.ecommerceVertical ?? context.ecommerceVertical;
@@ -448,7 +467,7 @@ function articleFor(value: string): "a" | "an" {
   return /^[aeiou]/i.test(value.trim()) ? "an" : "a";
 }
 
-function conciseLeadSentence(job: ScoredJob, context: SlackPacketV3Context): string {
+function conciseLeadSentence(job: ScoredJob, context: SlackPacketV3Context, proceeding: boolean, connectsUnknown: boolean): string {
   const intelligence = context.jobIntelligence ?? job.applicationDraft?.jobIntelligence;
   const platform = concisePlatform(job, context);
   const clientType = conciseClientType(job, context).toLowerCase();
@@ -468,7 +487,15 @@ function conciseLeadSentence(job: ScoredJob, context: SlackPacketV3Context): str
     "it matches Steve's profile",
     90,
   );
-  return `${platform} ${task.toLowerCase()} for ${articleFor(clientType)} ${clientType}. ${fitLabel(job)} fit because ${reason.toLowerCase()}.`;
+  const scope = `${platform} ${task.toLowerCase()} for ${articleFor(clientType)} ${clientType}`;
+  const fitReason = humanizeSlackText(reason, "it lines up with Steve’s wheelhouse").toLowerCase();
+  if (proceeding) {
+    const connectsNote = connectsUnknown ? " The Connects aren’t visible yet, so I’ll check them on the apply page before doing anything risky." : "";
+    return `This looks strong enough to prep: ${scope}. ${fitLabel(job)} fit because ${fitReason}.${connectsNote}`;
+  }
+  const risk = conciseRisk(job, context);
+  const riskNote = risk === "none obvious" ? "" : ` The weak part: ${risk.toLowerCase()}.`;
+  return `This one is close, but I’m not fully sold. It’s relevant work (${scope}), but I’d want a quick human call before spending Connects.${riskNote}`;
 }
 
 function conciseRisk(job: ScoredJob, context: SlackPacketV3Context): string {
@@ -478,7 +505,7 @@ function conciseRisk(job: ScoredJob, context: SlackPacketV3Context): string {
     intelligence,
   });
   const leadContext = formatLeadContext(job, context);
-  return firstUsefulLine(
+  const raw = firstUsefulLine(
     [
       job.scoreBreakdown?.risks?.[0],
       job.applicationDraft?.redFlags?.find((risk) => !/no major/i.test(risk)),
@@ -489,6 +516,7 @@ function conciseRisk(job: ScoredJob, context: SlackPacketV3Context): string {
     "none obvious",
     105,
   );
+  return humanizeSlackText(raw, "none obvious");
 }
 
 function conciseRequiredConnects(job: ScoredJob, context: SlackPacketV3Context, proceeding: boolean): string {
@@ -500,7 +528,7 @@ function conciseRequiredConnects(job: ScoredJob, context: SlackPacketV3Context, 
     (draft?.suggestedConnects && draft.suggestedConnects > 0 ? draft.suggestedConnects : undefined) ??
     (job.connectsCost > 0 ? job.connectsCost : undefined);
   if (requiredValue === null || requiredValue === undefined) {
-    return proceeding ? "unknown — I’ll verify on the apply page" : "unknown — needs apply-page verification";
+    return "unknown for now";
   }
   return String(requiredValue);
 }
@@ -512,11 +540,12 @@ function conciseNextAction(
   proceeding: boolean,
 ): string {
   if (proceeding) {
-    return "I’ll prepare and post a draft application for this lead.";
+    return "I’m going to prep the application and come back here when it’s ready.";
   }
-  const note = context.autoPrepareNote?.trim();
-  const reason = compactSentence(note || postingDecision.reason || leadDecision.reason || "manual review is needed", 120);
-  return `Steve/Natalie, this needs manual review because ${reason.toLowerCase()}.`;
+  void leadDecision;
+  void postingDecision;
+  void context;
+  return "Want me to prep it anyway? Reply “go ahead” and I’ll handle the draft.";
 }
 
 export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Context): SlackPacketV3Message {
@@ -530,12 +559,13 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
   const autoPrepareQueued = isAutoPrepareQueued(context);
   const autoPrepareBlocked = isAutoPrepareBlocked(context);
   const autoPrepareProceeding = isAutoPrepareProceeding(context, autoPrepareQueued) || (!autoPrepareBlocked && leadDecision.shouldAutoPrepare);
+  const connectsLabel = conciseRequiredConnects(job, context, autoPrepareProceeding);
+  const connectsUnknown = connectsLabel.toLowerCase().includes("unknown");
 
   const text = [
     `🚀 New lead: ${compactTitle(title)}`,
-    conciseLeadSentence(job, context),
-    `Fit: ${fitLabel(job)} · Platform: ${concisePlatform(job, context)} · Connects: ${conciseRequiredConnects(job, context, autoPrepareProceeding)} · Budget: ${job.budget || "unknown"}`,
-    `Watch-out: ${conciseRisk(job, context)}`,
+    `${LEAD_MENTIONS} — ${conciseLeadSentence(job, context, autoPrepareProceeding, connectsUnknown)}`,
+    `Fit: ${fitLabel(job)} · Platform: ${concisePlatform(job, context)} · Budget: ${job.budget || "unknown"} · Connects: ${connectsLabel} · Risk: ${conciseRisk(job, context)}`,
     `Next: ${conciseNextAction(leadDecision, postingDecision, context, autoPrepareProceeding)}`,
     url,
   ].join("\n");

@@ -223,7 +223,7 @@ function buildConnectsPlan(draft: ApplicationDraft, rules: ConnectsRules, issues
   }
   if (required === null) {
     notes.push("Required Connects are unknown from visible Upwork source text.");
-    issues.push(issue("error", "required_connects_unknown", "Required Connects are not source-backed; inspect the apply page before preparing or submitting."));
+    issues.push(issue("warning", "required_connects_unknown_apply_page_verification", "Required Connects are not source-backed yet; open the apply page and verify before final preparation."));
   } else if (required > rules.maxRequiredPerJob) {
     issues.push(issue("error", "required_connects_cap", `Required Connects ${required} exceeds cap ${rules.maxRequiredPerJob}.`));
   }
@@ -241,7 +241,7 @@ function buildConnectsPlan(draft: ApplicationDraft, rules: ConnectsRules, issues
   const approvalRequired = total === null || total > rules.requireApprovalAbove || boost === null || boost > rules.idealBoostMax;
   if (approvalRequired) {
     notes.push(total === null ? "Human verification required because total Connects are unknown." : `Human approval/verification required for total Connects ${total}.`);
-    issues.push(issue(total === null ? "error" : "warning", "connects_approval_required", total === null ? "Connects total is unknown." : `Connects total ${total} exceeds approval threshold ${rules.requireApprovalAbove}.`));
+    issues.push(issue("warning", "connects_approval_required", total === null ? "Connects total is unknown until the apply page is inspected." : `Connects total ${total} exceeds approval threshold ${rules.requireApprovalAbove}.`));
   }
 
   return { required, boost, total, approvalRequired, notes };
@@ -457,8 +457,12 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
         reasons: [],
         risks: connects.notes,
       });
-  if (connectsStrategy.decision !== "safe_apply") {
+  const sourceRequired = connectsStrategy.sourceBackedConnects?.requiredConnects ?? connects.required;
+  const applyPageVerificationOnly = sourceRequired === null && connectsStrategy.decision === "manual_review";
+  if (connectsStrategy.decision !== "safe_apply" && !applyPageVerificationOnly) {
     issues.push(issue("error", "connects_manual_review_required", "Connects strategy requires human review before autonomous browser preparation."));
+  } else if (applyPageVerificationOnly) {
+    issues.push(issue("warning", "connects_apply_page_verification_required", "Connects are unknown from the job page; browser preparation may open the apply page to verify them, but final submit remains manual."));
   }
   const connectsEvidence = buildConnectsEvidence(draft, connects, connectsStrategy, scoredJob);
   const attachmentDiagnostics = buildAttachmentDiagnostics(attachments);

@@ -30,6 +30,9 @@ interface MatchResult {
 
 const REQUIRED_PATTERNS: Array<{ pattern: RegExp; confidence: Exclude<ConnectsExtractionConfidence, "unknown"> }> = [
   { pattern: /\b(?:this\s+)?proposal\s+requires\s+(\d{1,3})\s+Connects\b/i, confidence: "high" },
+  { pattern: /\brequired\s+for\s+proposal\s*:?\s*(\d{1,3})\s+Connects\b/i, confidence: "high" },
+  { pattern: /\bsend\s+a\s+proposal\s+for\s*:?\s*(\d{1,3})\s+Connects\b/i, confidence: "high" },
+  { pattern: /\bsend\s+for\s+(\d{1,3})\s+Connects\b/i, confidence: "high" },
   { pattern: /\brequires\s+(\d{1,3})\s+Connects\s+to\s+(?:apply|submit)\b/i, confidence: "high" },
   { pattern: /\bConnects\s+to\s+apply\s*:?\s*(\d{1,3})\b/i, confidence: "high" },
   { pattern: /\bRequired\s+Connects\s*:?\s*(\d{1,3})\b/i, confidence: "high" },

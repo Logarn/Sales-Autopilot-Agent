@@ -312,7 +312,17 @@ function evaluateConnects(job: ScoredJob): {
     warnings.push("Never bid max automatically. Human approval required for expensive boost races.");
   }
 
-  return { suggestedBoostConnects, warnings, strategy: { ...strategy, suggestedBoostConnects, totalConnects: strategy.sourceBackedConnects?.requiredConnects === null ? 0 : strategy.requiredConnects + suggestedBoostConnects } };
+  const resolvedRequiredConnects = strategy.sourceBackedConnects?.requiredConnects ?? strategy.requiredConnects;
+  return {
+    suggestedBoostConnects,
+    warnings,
+    strategy: {
+      ...strategy,
+      suggestedBoostConnects,
+      requiredConnects: resolvedRequiredConnects,
+      totalConnects: resolvedRequiredConnects === null ? null : resolvedRequiredConnects + suggestedBoostConnects,
+    },
+  };
 }
 
 export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {

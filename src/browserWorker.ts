@@ -47,6 +47,8 @@ import {
   BrowserApplyValidationIssue,
   ScoredJob,
 } from "./types";
+import { extractConnectsFromVisibleText } from "./connectsExtraction";
+import { guardedClick } from "./browserSafetyGuard";
 import { buildV3CapturePacket, getSlackLeadPostingDecision, SlackPacketV3Context } from "./slackPacketV3";
 import { evaluatePlatformEligibility } from "./platformEligibility";
 import { decideLeadHandling } from "./leadDecision";
@@ -205,6 +207,7 @@ interface PlaywrightLocatorLike {
   first(): PlaywrightLocatorLike;
   nth?(index: number): PlaywrightLocatorLike;
   textContent(options?: { timeout?: number }): Promise<string | null>;
+  click?(options?: { timeout?: number }): Promise<unknown>;
   fill(value: string, options?: { timeout?: number }): Promise<unknown>;
   setInputFiles(files: string[], options?: { timeout?: number }): Promise<unknown>;
   check(options?: { timeout?: number }): Promise<unknown>;
@@ -264,6 +267,25 @@ interface ApplyPreparationDiagnostics {
   attemptedFields: string[];
   skippedFields: string[];
   manualFields: string[];
+}
+
+const QA_MENTIONS = "<@U0A2X5BCNKC> <@U0AHJFYV42K>";
+
+function humanSlackPrepDetail(value: string): string {
+  return value
+    .replace(/\bmanual review\b/gi, "a quick look")
+    .replace(/\bmanual field(s)?\b/gi, "couldn’t safely fill")
+    .replace(/\bfield_preparation_incomplete\b/gi, "something on the apply page needs a human")
+    .replace(/\brequired_attachment_missing_locally\b/gi, "a selected file is missing locally")
+    .replace(/\bconnects_apply_page_manual_review_required\b/gi, "Connects need a quick look")
+    .replace(/\brequired_connects_unverified_on_apply_page\b/gi, "I couldn’t verify the Connects on the apply page")
+    .replace(/\bsource[_\s-]*context[_\s-]*unavailable\b/gi, "the page was not readable")
+    .replace(/\bsubmit_guard_failed\b/gi, "I stopped before submit")
+    .replace(/\bvalidation_failed\b/gi, "the page needs a human check")
+    .replace(/\bselected for browser preparation\b/gi, "needed for this application")
+    .replace(/\bautonomous preparation\b/gi, "prep")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 
@@ -825,44 +847,35 @@ function buildPrepareDraftStatusMessage(input: {
     diagnostics.manualFields.length > 0 ||
     diagnostics.connectsDecision !== "safe_apply";
   const readyForFinalManualSubmit = diagnostics.state === "apply_page_loaded" && diagnostics.stopBeforeSubmit && !needsManualReview;
-  const title = boundedExcerpt(diagnostics.jobTitle ?? diagnostics.jobId, 72);
   const heading = readyState
-    ? `✅ Draft ready for QA: ${title}`
-    : `⚠️ Draft needs review: ${title}`;
+    ? "✅ Draft is ready for QA"
+    : "⚠️ I hit a blocker on the apply page";
   const screeningCount = diagnostics.screeningAnswersCount;
-  const screeningAnswers = diagnostics.screeningAnswers ?? [];
-  const coverLetterPreview = diagnostics.coverLetterPreview ?? null;
   const proofSummary = diagnostics.selectedAttachments.length > 0
-    ? `${diagnostics.selectedAttachments.length} proof item${diagnostics.selectedAttachments.length === 1 ? "" : "s"} selected`
-    : "no proof attached";
+    ? `selected ${diagnostics.selectedAttachments.length} proof item${diagnostics.selectedAttachments.length === 1 ? "" : "s"}`
+    : "didn’t attach proof";
   const connectsSummary = diagnostics.requiredConnects === null
-    ? "Connects are unknown"
-    : `Connects are ${diagnostics.requiredConnects}${diagnostics.boostConnects ? ` + ${diagnostics.boostConnects} boost` : ""}${diagnostics.totalConnects !== null ? ` (${diagnostics.totalConnects} total)` : ""}`;
-  const rateSummary = diagnostics.rate ? `set ${diagnostics.rate}` : "rate not safely set";
+    ? "Connects are still unknown"
+    : `verified it needs ${diagnostics.requiredConnects} Connects${diagnostics.boostConnects ? ` plus ${diagnostics.boostConnects} boost` : ""}`;
+  const rateSummary = diagnostics.rate ? `set ${diagnostics.rate}` : "left the rate alone";
   const missingFiles = diagnostics.missingLocalAssets.map((asset) => path.basename(asset)).slice(0, 2);
   const manualFields = diagnostics.manualFields.filter((field) => field !== "finalSubmit").slice(0, 3);
   const reviewItems = [
     missingFiles.length > 0 ? `${missingFiles.length} missing file${missingFiles.length === 1 ? "" : "s"}: ${missingFiles.join(", ")}` : null,
-    manualFields.length > 0 ? `manual field${manualFields.length === 1 ? "" : "s"}: ${manualFields.join(", ")}` : null,
-    diagnostics.connectsDecision !== "safe_apply" ? `Connects need review (${diagnostics.connectsDecision ?? "unknown"})` : null,
+    manualFields.length > 0 ? `I couldn’t safely fill: ${manualFields.join(", ")}` : null,
+    diagnostics.connectsDecision !== "safe_apply" ? "Connects need a quick look" : null,
     diagnostics.validationIssues.find((issue) => issue.severity === "error")?.message,
   ].filter((item): item is string => Boolean(item));
-  const reviewText = reviewItems.length > 0 ? reviewItems.slice(0, 3).join("; ") : "none";
-  const coverLetterLine = coverLetterPreview && coverLetterPreview.length <= 650
-    ? `Cover letter preview: ${boundedExcerpt(coverLetterPreview, 650)}`
-    : diagnostics.coverLetterPresent
-      ? `Cover letter: ready (${diagnostics.coverLetterLength} chars); full draft is on the application page.`
-      : "Cover letter: not filled.";
-  const screeningLine = screeningCount > 0
-    ? `Screening answers: ${screeningCount} answered${screeningAnswers.length > 0 && screeningAnswers.join(" ").length <= 500 ? ` — ${screeningAnswers.join(" | ")}` : "."}`
-    : "Screening answers: none detected.";
+  const reviewText = reviewItems.length > 0 ? reviewItems.slice(0, 3).map(humanSlackPrepDetail).join("; ") : "none";
+  const submitLabel = diagnostics.requiredConnects === null ? "Submit" : `Send for ${diagnostics.requiredConnects} Connects`;
+  const actionLine = readyForFinalManualSubmit
+    ? `Open it, QA the draft, and manually hit “${submitLabel}” if it looks good.`
+    : "Please check the item above, then reply “retry” when it’s cleared.";
   return [
     heading,
-    `I ${diagnostics.coverLetterPresent ? "filled the cover letter" : "could not fill the cover letter"}, answered ${screeningCount} screening question${screeningCount === 1 ? "" : "s"}, ${rateSummary}, ${connectsSummary}, and ${proofSummary}.`,
-    coverLetterLine,
-    screeningLine,
+    `Hey ${QA_MENTIONS} — I ${diagnostics.coverLetterPresent ? "filled the cover letter" : "couldn’t fill the cover letter"}, answered ${screeningCount} screening question${screeningCount === 1 ? "" : "s"}, ${rateSummary}, ${proofSummary}, and ${connectsSummary}. I did not click submit.`,
     `Needs your review: ${readyForFinalManualSubmit ? "none" : reviewText}`,
-    "Final step for Natalie/Steve: open the Upwork draft, QA it, and manually submit if satisfied.",
+    actionLine,
     diagnostics.applyUrl ?? diagnostics.sourceUrl ?? "Upwork application URL unavailable",
   ].join("\n");
 }
@@ -1216,6 +1229,63 @@ async function tryFillScreeningAnswers(page: PlaywrightPageLike, answers: string
   return { filled, skipped: cleanAnswers.length - filled };
 }
 
+async function tryClickFirst(page: PlaywrightPageLike, targets: Array<{ selector: string; label: string }>): Promise<boolean> {
+  for (const target of targets) {
+    const locator = page.locator(target.selector).first();
+    try {
+      if ((await locator.count()) > 0 && typeof locator.click === "function") {
+        await guardedClick(locator as PlaywrightLocatorLike & { click(options?: { timeout?: number }): Promise<unknown> }, { selector: target.selector, label: target.label }, { timeout: 1500 });
+        return true;
+      }
+    } catch {
+      // Try the next conservative selector. Final submit/send buttons are blocked by guardedClick.
+    }
+  }
+  return false;
+}
+
+async function tryClickApplyNow(page: PlaywrightPageLike): Promise<boolean> {
+  return tryClickFirst(page, [
+    { selector: "a:has-text('Apply now')", label: "Apply now" },
+    { selector: "button:has-text('Apply now')", label: "Apply now" },
+    { selector: "[role='button']:has-text('Apply now')", label: "Apply now" },
+  ]);
+}
+
+function profileNeedsExplicitSelection(profile: string): boolean {
+  return Boolean(profile.trim()) && !/default\s+upwork\s+profile|verify\s+manually/i.test(profile);
+}
+
+async function trySelectProposalSettings(page: PlaywrightPageLike, plan: BrowserApplyFillPlan): Promise<{ attempted: string[]; manual: string[] }> {
+  const attempted: string[] = [];
+  const manual: string[] = [];
+
+  if (await tryClickFirst(page, [
+    { selector: "label:has-text('Freelancer')", label: "Freelancer proposal setting" },
+    { selector: "button:has-text('Freelancer')", label: "Freelancer proposal setting" },
+    { selector: "[role='radio']:has-text('Freelancer')", label: "Freelancer proposal setting" },
+    { selector: "label:has-text('Individual')", label: "Individual proposal setting" },
+  ])) {
+    attempted.push("proposalSettings:freelancer");
+  }
+
+  if (profileNeedsExplicitSelection(plan.profile)) {
+    const escapedProfile = plan.profile.replace(/["\\]/g, "\\$&");
+    if (await tryClickFirst(page, [
+      { selector: `label:has-text("${escapedProfile}")`, label: plan.profile },
+      { selector: `button:has-text("${escapedProfile}")`, label: plan.profile },
+      { selector: `[role='radio']:has-text("${escapedProfile}")`, label: plan.profile },
+      { selector: `[role='option']:has-text("${escapedProfile}")`, label: plan.profile },
+    ])) {
+      attempted.push("profile");
+    } else {
+      manual.push("profile");
+    }
+  }
+
+  return { attempted, manual };
+}
+
 async function trySetFiles(page: PlaywrightPageLike, selectors: string[], files: string[]): Promise<boolean> {
   if (files.length === 0) return false;
   for (const selector of selectors) {
@@ -1259,12 +1329,90 @@ function getRequiredSkippedFields(fields: Pick<ApplyPreparationDiagnostics, "ski
   return fields.skippedFields.filter((field) => ["coverLetter", "rate", "connectsBoost"].includes(field));
 }
 
+function removeConnectsVerificationIssues(issues: BrowserApplyValidationIssue[]): void {
+  const verificationCodes = new Set([
+    "required_connects_unknown_apply_page_verification",
+    "connects_apply_page_verification_required",
+    "connects_approval_required",
+  ]);
+  for (let index = issues.length - 1; index >= 0; index -= 1) {
+    if (verificationCodes.has(issues[index].code)) issues.splice(index, 1);
+  }
+}
+
+function removeUnknownConnectsRisks(risks: string[]): string[] {
+  return risks.filter((risk) => !/required connects are unknown|without a source-backed required cost|connects total is unknown/i.test(risk));
+}
+
+function verifyApplyPageConnects(plan: BrowserApplyFillPlan, bodyText: string): BrowserApplyValidationIssue[] {
+  const issues = plan.validationIssues;
+  const extracted = extractConnectsFromVisibleText(bodyText);
+  if (extracted.requiredConnects === null) {
+    const issue = {
+      severity: "error" as const,
+      code: "required_connects_unverified_on_apply_page",
+      message: "Required Connects were still not visible after opening the apply page; pause for manual review before filling or submitting.",
+    };
+    issues.push(issue);
+    return [issue];
+  }
+
+  removeConnectsVerificationIssues(issues);
+  const plannedBoost = plan.connects.boost ?? 0;
+  const required = extracted.requiredConnects;
+  const total = required + plannedBoost;
+  const requiresManualReview = total > AUTO_PREPARE_MAX_CONNECTS;
+  plan.connects.required = required;
+  plan.connects.boost = plannedBoost;
+  plan.connects.total = total;
+  plan.connects.approvalRequired = requiresManualReview;
+  plan.connects.notes = [
+    `Required Connects verified on the apply page (${required}).`,
+    plannedBoost > 0 ? `Planned boost is conservative (${plannedBoost}).` : "No automatic boost was added.",
+  ];
+  plan.connectsStrategy.requiredConnects = required;
+  plan.connectsStrategy.suggestedBoostConnects = plannedBoost;
+  plan.connectsStrategy.totalConnects = total;
+  plan.connectsStrategy.sourceBackedConnects = {
+    ...extracted,
+    boostConnects: extracted.boostConnects,
+    totalConnects: extracted.totalConnects ?? total,
+  };
+  plan.connectsStrategy.risks = removeUnknownConnectsRisks(plan.connectsStrategy.risks);
+  if (requiresManualReview) {
+    plan.connectsStrategy.decision = "manual_review";
+    const issue = {
+      severity: "error" as const,
+      code: "connects_apply_page_manual_review_required",
+      message: `Verified Connects total ${total} exceeds the autonomous preparation threshold ${AUTO_PREPARE_MAX_CONNECTS}.`,
+    };
+    issues.push(issue);
+    return [issue];
+  }
+  if (plan.connectsStrategy.decision === "manual_review" && plan.connectsStrategy.risks.length === 0 && plan.connectsStrategy.expectedValueScore >= 68) {
+    plan.connectsStrategy.decision = "safe_apply";
+  } else if (plan.connectsStrategy.decision !== "safe_apply") {
+    const issue = {
+      severity: "error" as const,
+      code: "connects_apply_page_manual_review_required",
+      message: "Verified Connects were readable, but the Connects strategy still requires manual review before autonomous preparation.",
+    };
+    issues.push(issue);
+    return [issue];
+  }
+  return [];
+}
+
 async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillPlan): Promise<Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields">> {
   assertSubmitGuard(plan);
   logger.info(`Submit guard before fill: stopBeforeSubmit=${plan.stopBeforeSubmit}; final submit will not be clicked.`);
   const attemptedFields: string[] = [];
   const skippedFields: string[] = [];
   const manualFields: string[] = [];
+
+  const proposalSettings = await trySelectProposalSettings(page, plan);
+  attemptedFields.push(...proposalSettings.attempted);
+  manualFields.push(...proposalSettings.manual);
 
   const coverLetterFilled = await tryFillFirst(page, ["textarea[name*='cover']", "textarea[aria-label*='Cover']", "textarea"], plan.coverLetter);
   if (coverLetterFilled) {
@@ -1291,10 +1439,12 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
     skippedFields.push("rate");
   }
 
-  if (await tryFillFirst(page, ["input[name*='boost']", "input[aria-label*='boost' i]", "input[name*='connect']"], String(plan.connects.boost))) {
-    attemptedFields.push("connectsBoost");
-  } else {
-    skippedFields.push("connectsBoost");
+  if (plan.connects.boost !== null && plan.connects.boost > 0) {
+    if (await tryFillFirst(page, ["input[name*='boost']", "input[aria-label*='boost' i]", "input[name*='connect']"], String(plan.connects.boost))) {
+      attemptedFields.push("connectsBoost");
+    } else {
+      skippedFields.push("connectsBoost");
+    }
   }
 
   const attachmentFiles = plan.attachments.map((attachment) => path.resolve(process.cwd(), attachment.filePath));
@@ -1401,10 +1551,18 @@ async function inspectWithBrowser(
       : !shouldDirectFallback
         ? { snapshot: unavailableSnapshot, bodyText: "", detection: unavailableDetection, samples: [{ step: 1, url: currentPageUrlBeforeCapture, title: "", textExcerpt: "", detection: unavailableDetection }] }
         : await settlePageAndDetect(page!, action);
-    const { snapshot, bodyText, detection, samples } = settled;
+    let { snapshot, bodyText, detection, samples } = settled;
     let state = sourceContextCapture?.state ?? detection.state;
     let extractedRawText = bodyText;
     let extractionDiagnostics: unknown;
+    if (plan && state === "job_page_loaded" && page && await tryClickApplyNow(page)) {
+      const applySettled = await settlePageAndDetect(page, action);
+      snapshot = applySettled.snapshot;
+      bodyText = applySettled.bodyText;
+      detection = applySettled.detection;
+      samples = [...samples, ...applySettled.samples.map((sample) => ({ ...sample, step: samples.length + sample.step }))];
+      state = detection.state;
+    }
     if (action.actionType === "capture_job_from_url" && state === "captured") {
       const extracted = sourceContextCapture?.extracted ?? await extractUpworkJobContent(page!);
       extractedRawText = extracted.rawText;
@@ -1420,10 +1578,16 @@ async function inspectWithBrowser(
         state = "source_context_unavailable";
       }
     }
-    const fields =
-      plan && state === "apply_page_loaded"
-        ? await fillApplyFields(page!, plan)
-        : { attemptedFields: [], skippedFields: [], manualFields: [] };
+    let fields: Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields"> = { attemptedFields: [], skippedFields: [], manualFields: [] };
+    if (plan && state === "apply_page_loaded") {
+      const connectsIssues = verifyApplyPageConnects(plan, bodyText);
+      if (connectsIssues.some((validationIssue) => validationIssue.severity === "error")) {
+        state = "field_preparation_incomplete";
+        fields = { attemptedFields: [], skippedFields: [], manualFields: ["connects", "finalSubmit"] };
+      } else {
+        fields = await fillApplyFields(page!, plan);
+      }
+    }
     if (plan && state === "apply_page_loaded" && getRequiredSkippedFields(fields).length > 0) {
       state = "field_preparation_incomplete";
     }

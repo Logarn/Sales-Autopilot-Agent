@@ -30,9 +30,9 @@ import {
 } from "./config";
 import { logger } from "./logger";
 import { buildProposalContextPack } from "./skills/profileContextSkill";
-import { selectPortfolioAssetsForJob } from "./skills/portfolioSelectionSkill";
-import { buildProofAvailabilityReport, formatProofAvailabilityLines } from "./proofAvailability";
 import { formatConnectsStrategy } from "./connectsStrategy";
+
+const THREAD_MENTIONS = "<@U0A2X5BCNKC> <@U0AHJFYV42K>";
 
 export type SlackSocketParsedCommandType =
   | "status"
@@ -130,7 +130,12 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
     };
   }
 
-  if (/^(prepare\s+draft|prepare\s+application|prepare\s+proposal)$/i.test(commandText)) return { type: "prepare_draft", rawText: normalized };
+  if (
+    /^(prepare\s+draft|prepare\s+application|prepare\s+proposal|prep\s+it|prepare\s+it|write\s+the\s+draft|go\s+ahead|do\s+it|apply)$/i.test(commandText) ||
+    /\b(please\s+proceed\s+with\s+the\s+draft|looks\s+good,\s*proceed|move\s+forward|go\s+ahead\s+and\s+prep|prep\s+the\s+application)\b/i.test(normalized)
+  ) {
+    return { type: "prepare_draft", rawText: normalized };
+  }
 
   const retryMatch = commandText.match(/^retry(?:\s+(?:preparation|prep))?(?:\s+(\d+))?$/i);
   if (retryMatch) {
@@ -319,32 +324,12 @@ export function buildPrepareDraftQueueReply(input: {
   duplicate: boolean;
   duplicateStatus?: string | null;
 }): string {
-  const draft = getApplicationDraft(input.jobId);
-  const scoredJob = getScoredJobForSlackPreview(input.jobId);
-  const profileContext = scoredJob ? buildProposalContextPack(scoredJob) : null;
-  const selection = scoredJob ? selectPortfolioAssetsForJob(scoredJob) : null;
-
-  const autoAttachAssets = profileContext?.selectedAttachments ?? [];
-  const proofAvailabilityLines = selection
-    ? formatProofAvailabilityLines(buildProofAvailabilityReport(selection), { includePath: true, limit: 8 })
-    : [];
-  const warnings = profileContext?.manualReviewWarnings ?? [];
-  const connectsStrategy = draft?.connectsStrategy ?? scoredJob?.scoreBreakdown.connectsStrategy;
-
   return [
     input.duplicate
-      ? `Draft preparation already exists as browser action #${input.actionId}${input.duplicateStatus ? ` (${input.duplicateStatus})` : ""}.`
-      : `Draft preparation queued as browser action #${input.actionId}.`,
-    `Job: ${input.threadTitle}`,
-    `Job ID: ${input.jobId}`,
-    `Upwork URL: ${input.upworkUrl}`,
-    `Stored proposal draft: ${draft?.proposalText ? `present (${draft.proposalText.length} chars)` : "missing"}`,
-    connectsStrategy ? formatConnectsStrategy(connectsStrategy) : "Connects strategy: not calculated.",
-    `Auto-attach assets: ${autoAttachAssets.length > 0 ? autoAttachAssets.join(", ") : "none"}`,
-    `Proof availability: ${proofAvailabilityLines.length > 0 ? proofAvailabilityLines.join(" | ") : "none"}`,
-    `Manual review warnings: ${warnings.length > 0 ? warnings.join("; ") : "none"}`,
-    "Browser draft preparation is for human review only. Final submit remains manual and will not be clicked.",
-    "Next commands: retry <action-id> | status | mark submitted",
+      ? `Already on it, ${THREAD_MENTIONS} — I already have this queued and I’ll come back here when it’s ready.`
+      : `Got it, ${THREAD_MENTIONS} — I’ll prepare the application now and come back here when it’s ready for QA.`,
+    "I’ll fill what’s safe on Upwork and stop before submit.",
+    `Link: ${input.upworkUrl}`,
   ].join("\n");
 }
 

@@ -40,6 +40,31 @@ assert.equal(explicit.extractionMethod, "deterministic_visible_text");
 assert.match(explicit.sourceText ?? "", /proposal requires 16 Connects/i);
 assert.equal(explicit.sourceLocation, "line 3, line 4, line 5");
 
+const jobSidebarConnects = extractConnectsFromVisibleText(`
+Send a proposal for: 14 Connects
+Available Connects: 128
+`);
+assert.equal(jobSidebarConnects.requiredConnects, 14);
+assert.equal(jobSidebarConnects.confidence, "high");
+assert.match(jobSidebarConnects.sourceText ?? "", /Send a proposal for: 14 Connects/i);
+
+const applyPageConnects = extractConnectsFromVisibleText(`
+Proposal settings
+Required for proposal: 14 Connects
+Boost your proposal
+`);
+assert.equal(applyPageConnects.requiredConnects, 14);
+assert.equal(applyPageConnects.confidence, "high");
+assert.match(applyPageConnects.sourceText ?? "", /Required for proposal: 14 Connects/i);
+
+const finalButtonConnects = extractConnectsFromVisibleText(`
+Cover letter
+Send for 14 Connects
+`);
+assert.equal(finalButtonConnects.requiredConnects, 14);
+assert.equal(finalButtonConnects.confidence, "high");
+assert.match(finalButtonConnects.sourceText ?? "", /Send for 14 Connects/i);
+
 class FakeProvider implements ConnectsExtractionProvider {
   isAvailable(): boolean {
     return true;

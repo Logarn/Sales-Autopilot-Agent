@@ -85,6 +85,8 @@ assert(crowdedStrategy.risks.some((risk) => risk.includes("proposals")), "High p
 
 const unknownRequired = scoreJob(job({ connectsCost: 0, connects: sourceBackedConnects(null) }));
 assert.equal(unknownRequired.scoreBreakdown.connectsStrategy?.decision, "manual_review");
+assert.equal(unknownRequired.scoreBreakdown.connectsStrategy?.requiredConnects, null);
+assert.equal(unknownRequired.scoreBreakdown.connectsStrategy?.totalConnects, null);
 assert.equal(unknownRequired.scoreBreakdown.connectsStrategy?.sourceBackedConnects?.requiredConnects, null);
 assert.equal(unknownRequired.scoreBreakdown.connectsStrategy?.suggestedBoostConnects, 0);
 assert(
