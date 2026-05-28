@@ -23,10 +23,12 @@ import {
   closeDb,
   enqueueBrowserActionDeduped,
   getBrowserActionById,
+  getSlackThreadStateByJobId,
   getSlackThreadStateByThreadTs,
   incrementBrowserActionAttempts,
   listBrowserActions,
   markJobSeen,
+  mergeBrowserActionPayload,
   updateApplicationStatus,
   updateBrowserActionStatus,
   updateSlackThreadStateStatus,
@@ -300,14 +302,17 @@ function getSlackThreadContextFromPayload(action: BrowserAction): SlackThreadCon
     threadTs?: string;
     messageTs?: string;
   };
-  if (!payload.channelId || !payload.threadTs || !payload.messageTs) {
-    return null;
+  if (payload.channelId && payload.threadTs && payload.messageTs) {
+    return {
+      channelId: payload.channelId,
+      threadTs: payload.threadTs,
+      messageTs: payload.messageTs,
+    };
   }
-  return {
-    channelId: payload.channelId,
-    threadTs: payload.threadTs,
-    messageTs: payload.messageTs,
-  };
+  const mapped = getSlackThreadStateByJobId(action.jobId);
+  return mapped
+    ? { channelId: mapped.channelId, threadTs: mapped.threadTs, messageTs: mapped.messageTs }
+    : null;
 }
 
 function extractUpworkUrlToken(value: string): string | null {
@@ -1575,9 +1580,11 @@ export async function postDiscoveryCapturePacket(input: {
   autoPrepareDecision: AutoPrepareDraftDecision;
 }, deps: {
   postChannelMessage?: typeof postSlackChannelMessage;
+  postThreadMessage?: typeof postSlackThreadMessage;
   postWebhookMessage?: typeof sendSlackMessage;
 } = {}): Promise<DiscoveryLeadPostResult> {
   const postChannelMessage = deps.postChannelMessage ?? postSlackChannelMessage;
+  const postThreadMessage = deps.postThreadMessage ?? postSlackThreadMessage;
   const postWebhookMessage = deps.postWebhookMessage ?? sendSlackMessage;
   const canUseWebhook = Boolean(deps.postWebhookMessage) || Boolean(SLACK_CHANNEL_WEBHOOK_URL.trim());
   const discovery = getDiscoverySourceMetadata(input.action);
@@ -1613,6 +1620,34 @@ export async function postDiscoveryCapturePacket(input: {
     sourceLabel: discovery.sourceLabel,
     postedAtText: discovery.postedAtText,
   });
+  const existingThread = getSlackThreadStateByJobId(input.scored.id);
+  if (existingThread) {
+    const posted = await postThreadMessage({
+      channel: existingThread.channelId,
+      threadTs: existingThread.threadTs,
+      text: packet.text,
+      blocks: packet.blocks,
+    });
+    if (!posted) return { status: "post_failed", outcome: "failed" };
+    updateApplicationStatus(input.scored.id, "sent_to_slack", "Discovery lead update posted to existing Slack thread.");
+    updateSlackThreadStateStatus(existingThread.channelId, existingThread.threadTs, "packet_sent", {
+      jobId: input.scored.id,
+      upworkUrl: input.scored.url || input.upworkUrl,
+    });
+    if (input.autoPrepareDecision.actionId) {
+      mergeBrowserActionPayload(input.autoPrepareDecision.actionId, {
+        channelId: existingThread.channelId,
+        threadTs: existingThread.threadTs,
+        messageTs: existingThread.messageTs,
+        applicationId: input.scored.id,
+      });
+    }
+    return {
+      status: "posted",
+      thread: { channelId: existingThread.channelId, messageTs: existingThread.messageTs, threadTs: existingThread.threadTs },
+      outcome: "posted",
+    };
+  }
   const discoveryChannelId = DISCOVERY_SLACK_CHANNEL_ID.trim();
   if (discoveryChannelId) {
     const result = await postChannelMessage({
@@ -1632,6 +1667,14 @@ export async function postDiscoveryCapturePacket(input: {
         jobId: input.scored.id,
         status: "packet_sent",
       });
+      if (input.autoPrepareDecision.actionId) {
+        mergeBrowserActionPayload(input.autoPrepareDecision.actionId, {
+          channelId,
+          threadTs: result.ts,
+          messageTs: result.ts,
+          applicationId: input.scored.id,
+        });
+      }
       return { status: "posted", thread: { channelId, messageTs: result.ts, threadTs: result.ts }, outcome: "posted" };
     }
   }

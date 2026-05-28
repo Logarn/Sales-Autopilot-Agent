@@ -380,6 +380,7 @@ CREATE TABLE IF NOT EXISTS slack_thread_state (
   UNIQUE(channel_id, message_ts)
 );
 CREATE INDEX IF NOT EXISTS idx_slack_thread_state_channel_thread ON slack_thread_state(channel_id, thread_ts);
+CREATE INDEX IF NOT EXISTS idx_slack_thread_state_job_id ON slack_thread_state(job_id);
 
 CREATE TABLE IF NOT EXISTS applications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -610,6 +611,13 @@ const getSlackThreadStateByChannelMessageStmt = db.prepare<[string, string], Sla
    WHERE channel_id = ? AND message_ts = ?
    LIMIT 1`
 );
+const getSlackThreadStateByJobIdStmt = db.prepare<[string], SlackThreadStateRow>(
+  `SELECT id, channel_id, message_ts, thread_ts, upwork_url, job_id, status, created_at, updated_at
+   FROM slack_thread_state
+   WHERE job_id = ?
+   ORDER BY updated_at DESC, id DESC
+   LIMIT 1`
+);
 const updateSlackThreadStateStatusStmt = db.prepare(
   `UPDATE slack_thread_state
    SET status = ?, job_id = COALESCE(?, job_id), upwork_url = COALESCE(?, upwork_url), updated_at = datetime('now')
@@ -650,6 +658,11 @@ const activeDuplicateBrowserActionStmt = db.prepare<[string, BrowserActionType],
 const updateBrowserActionStatusStmt = db.prepare(
   `UPDATE browser_actions
    SET status = ?, last_error = ?, updated_at = datetime('now')
+   WHERE id = ?`
+);
+const updateBrowserActionPayloadStmt = db.prepare(
+  `UPDATE browser_actions
+   SET payload = ?, updated_at = datetime('now')
    WHERE id = ?`
 );
 const incrementBrowserActionAttemptStmt = db.prepare(
@@ -1456,6 +1469,13 @@ export function updateBrowserActionStatus(id: number, status: BrowserActionStatu
   return result.changes > 0;
 }
 
+export function mergeBrowserActionPayload(id: number, patch: BrowserActionPayload): BrowserAction | null {
+  const existing = getBrowserActionById(id);
+  if (!existing) return null;
+  updateBrowserActionPayloadStmt.run(JSON.stringify({ ...existing.payload, ...patch }), id);
+  return getBrowserActionById(id);
+}
+
 export function incrementBrowserActionAttempts(id: number, lastError?: string): boolean {
   const result = incrementBrowserActionAttemptStmt.run(lastError ?? null, id);
   return result.changes > 0;
@@ -1487,6 +1507,11 @@ export function upsertSlackThreadState(input: {
 
 export function getSlackThreadStateByThreadTs(channelId: string, threadTs: string): SlackThreadState | null {
   const row = getSlackThreadStateByChannelThreadStmt.get(channelId, threadTs);
+  return row ? rowToSlackThreadState(row) : null;
+}
+
+export function getSlackThreadStateByJobId(jobId: string): SlackThreadState | null {
+  const row = getSlackThreadStateByJobIdStmt.get(jobId);
   return row ? rowToSlackThreadState(row) : null;
 }
 

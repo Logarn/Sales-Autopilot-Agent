@@ -21,6 +21,7 @@ async function runTests(): Promise<void> {
   const tempDb = resolve(process.cwd(), "data/.tmp-browser-apply.db");
   cleanupDatabase(tempDb);
   process.env.DB_PATH = tempDb;
+  process.env.DISCOVERY_SLACK_CHANNEL_ID = "C123";
 
   const { buildApplicationDraft } = require("./agent") as {
     buildApplicationDraft: (job: any) => any;
@@ -53,6 +54,7 @@ async function runTests(): Promise<void> {
     isCaptureBlockedState: (state: string) => boolean;
     postDiscoveryCapturePacket: (input: any, deps?: {
       postChannelMessage?: (params: any) => Promise<{ ok: boolean; ts?: string; channel?: string }>;
+      postThreadMessage?: (params: any) => Promise<boolean>;
       postWebhookMessage?: (params: any) => Promise<boolean>;
     }) => Promise<{ status: "not_discovery" | "missing_channel" | "post_failed" | "posted"; outcome: "not_needed" | "posted" | "failed"; thread?: { channelId: string; messageTs: string; threadTs: string } }>;
     postPrepareDraftStatus: (input: any, deps?: {
@@ -220,8 +222,10 @@ async function runTests(): Promise<void> {
     let webhookPostedText = "";
     const manualReviewJob = {
       ...beautyJob,
+      id: "beauty-job-manual-review-discovery-v1",
       applicationDraft: {
         ...beautyJob.applicationDraft,
+        jobId: "beauty-job-manual-review-discovery-v1",
         jobIntelligence: manualReviewIntel(),
       },
     };
@@ -267,11 +271,20 @@ async function runTests(): Promise<void> {
     assert(webhookPostedText.includes("*Recommended action:* Manual platform review before draft prep"), "Manual-review lead should keep manual review wording in Slack");
 
     webhookPostedText = "";
+    const normalDiscoveryJob = {
+      ...beautyJob,
+      id: "beauty-job-normal-discovery-v1",
+      applicationDraft: {
+        ...beautyJob.applicationDraft,
+        jobId: "beauty-job-normal-discovery-v1",
+        jobIntelligence: klaviyoIntel(),
+      },
+    };
     const normalDiscovery = await postDiscoveryCapturePacket(
       {
         action: {
           id: 502,
-          jobId: beautyJob.id,
+          jobId: normalDiscoveryJob.id,
           actionType: "capture_job_from_url",
           status: "pending",
           attempts: 0,
@@ -285,14 +298,8 @@ async function runTests(): Promise<void> {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         },
-        scored: {
-          ...beautyJob,
-          applicationDraft: {
-            ...beautyJob.applicationDraft,
-            jobIntelligence: klaviyoIntel(),
-          },
-        },
-        upworkUrl: beautyJob.url,
+        scored: normalDiscoveryJob,
+        upworkUrl: normalDiscoveryJob.url,
         applicationQuestions: [],
         questionAnswers: [],
         autoPrepareDecision: {
@@ -314,11 +321,20 @@ async function runTests(): Promise<void> {
     assert(webhookPostedText.includes("*Recommended action:* Autonomous prep is proceeding; watch for the draft-ready touchpoint"), "Post-to-Slack lead should use two-touchpoint autonomous prep wording");
 
     let queuedPrepPostAttempted = false;
+    const queuedPrepJob = {
+      ...beautyJob,
+      id: "beauty-job-queued-prep-discovery-v1",
+      applicationDraft: {
+        ...beautyJob.applicationDraft,
+        jobId: "beauty-job-queued-prep-discovery-v1",
+        jobIntelligence: klaviyoIntel(),
+      },
+    };
     const queuedPrepDiscovery = await postDiscoveryCapturePacket(
       {
         action: {
           id: 5022,
-          jobId: beautyJob.id,
+          jobId: queuedPrepJob.id,
           actionType: "capture_job_from_url",
           status: "pending",
           attempts: 0,
@@ -332,14 +348,8 @@ async function runTests(): Promise<void> {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         },
-        scored: {
-          ...beautyJob,
-          applicationDraft: {
-            ...beautyJob.applicationDraft,
-            jobIntelligence: klaviyoIntel(),
-          },
-        },
-        upworkUrl: beautyJob.url,
+        scored: queuedPrepJob,
+        upworkUrl: queuedPrepJob.url,
         applicationQuestions: [],
         questionAnswers: [],
         autoPrepareDecision: {
@@ -366,12 +376,144 @@ async function runTests(): Promise<void> {
     assert(queuedPrepDiscovery.outcome === "posted", "Touchpoint 1 lead alert should count as posted");
     assert(queuedPrepPostAttempted, "Queued autonomous prep must not suppress the capture-time lead alert");
 
+    const threadJob = {
+      ...beautyJob,
+      id: "beauty-job-thread-v1",
+      applicationDraft: {
+        ...beautyJob.applicationDraft,
+        jobId: "beauty-job-thread-v1",
+        jobIntelligence: klaviyoIntel(),
+      },
+    };
+    markJobSeen(threadJob, false);
+    const threadAutoPrepare = autoQueuePrepareDraft(
+      threadJob,
+      {
+        enabled: true,
+        minScore: 80,
+        maxConnects: 30,
+        requireBrowserHealthy: true,
+        sessionStatus: { state: "healthy", updatedAt: new Date().toISOString(), challengeEvents: [], blocked: false, alertCooldownRemainingMs: 0 },
+      },
+      null,
+    );
+    let parentPostCount = 0;
+    let threadReplyCount = 0;
+    const threadDiscovery = await postDiscoveryCapturePacket(
+      {
+        action: {
+          id: 5023,
+          jobId: threadJob.id,
+          actionType: "capture_job_from_url",
+          status: "pending",
+          attempts: 0,
+          payload: {
+            url: threadJob.url,
+            discovery: { sourceType: "best_matches", sourceLabel: "Best Matches" },
+          },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        scored: threadJob,
+        upworkUrl: threadJob.url,
+        applicationQuestions: [],
+        questionAnswers: [],
+        autoPrepareDecision: threadAutoPrepare,
+      },
+      {
+        postChannelMessage: async () => {
+          parentPostCount += 1;
+          return { ok: true, ts: "999.222", channel: "C123" };
+        },
+        postThreadMessage: async () => {
+          threadReplyCount += 1;
+          return true;
+        },
+      },
+    );
+    assert(threadDiscovery.thread?.threadTs === "999.222", "Touchpoint 1 should create the parent Slack thread for a new job");
+    assert(parentPostCount === 1, "High-quality lead should create one parent Slack message");
+    assert(threadReplyCount === 0, "First lead alert should not be a thread reply");
+    const boundPrepareAction = getBrowserActionById(threadAutoPrepare.actionId!);
+    assert(boundPrepareAction?.payload.threadTs === "999.222", "Auto-prep action should be bound to the parent Slack thread");
+    assert(boundPrepareAction?.payload.channelId === "C123", "Auto-prep action should carry channel context for Touchpoint 2 thread replies");
+
+    const repeatThreadDiscovery = await postDiscoveryCapturePacket(
+      {
+        action: {
+          id: 5024,
+          jobId: threadJob.id,
+          actionType: "capture_job_from_url",
+          status: "pending",
+          attempts: 0,
+          payload: {
+            url: threadJob.url,
+            discovery: { sourceType: "best_matches", sourceLabel: "Best Matches" },
+          },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        scored: threadJob,
+        upworkUrl: threadJob.url,
+        applicationQuestions: [],
+        questionAnswers: [],
+        autoPrepareDecision: {
+          ...threadAutoPrepare,
+          duplicate: true,
+          duplicateStatus: "pending",
+        },
+      },
+      {
+        postChannelMessage: async () => {
+          parentPostCount += 1;
+          return { ok: true, ts: "999.333", channel: "C123" };
+        },
+        postThreadMessage: async (payload) => {
+          threadReplyCount += 1;
+          assert(payload.threadTs === "999.222", "Repeated updates for a job should reuse the original thread");
+          return true;
+        },
+      },
+    );
+    assert(repeatThreadDiscovery.status === "posted", "Repeated lead update should post into existing thread");
+    assert(parentPostCount === 1, "Repeated updates for same job must not create another parent message");
+    assert(threadReplyCount === 1, "Repeated updates for same job should be thread replies");
+
     webhookPostedText = "";
+    const connectsManualReviewJob = {
+      ...beautyJob,
+      id: "beauty-job-connects-manual-review-discovery-v1",
+      score: 84,
+      scoreBreakdown: {
+        ...beautyJob.scoreBreakdown,
+        clientQualityScore: { score: 46, reasons: ["Thin client history"], risks: ["Limited spend"] },
+        finalScore: 84,
+      },
+      applicationDraft: {
+        ...beautyJob.applicationDraft,
+        jobId: "beauty-job-connects-manual-review-discovery-v1",
+        connectsStrategy: {
+          decision: "manual_review",
+          requiredConnects: 16,
+          suggestedBoostConnects: 0,
+          totalConnects: 16,
+          expectedValueScore: 62,
+          reasons: ["Client quality supports some spend."],
+          risks: ["Total Connects require review before applying."],
+        },
+        jobIntelligence: klaviyoIntel({
+          primaryPlatform: "Mailchimp",
+          platformsMentioned: ["Mailchimp"],
+          platformPreferenceTier: "secondary",
+          platformFitReason: "Mailchimp is approved but spend needs review.",
+        }),
+      },
+    };
     const connectsManualReviewDiscovery = await postDiscoveryCapturePacket(
       {
         action: {
           id: 5021,
-          jobId: beautyJob.id,
+          jobId: connectsManualReviewJob.id,
           actionType: "capture_job_from_url",
           status: "pending",
           attempts: 0,
@@ -385,34 +527,8 @@ async function runTests(): Promise<void> {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         },
-        scored: {
-          ...beautyJob,
-          score: 84,
-          scoreBreakdown: {
-            ...beautyJob.scoreBreakdown,
-            clientQualityScore: { score: 46, reasons: ["Thin client history"], risks: ["Limited spend"] },
-            finalScore: 84,
-          },
-          applicationDraft: {
-            ...beautyJob.applicationDraft,
-            connectsStrategy: {
-              decision: "manual_review",
-              requiredConnects: 16,
-              suggestedBoostConnects: 0,
-              totalConnects: 16,
-              expectedValueScore: 62,
-              reasons: ["Client quality supports some spend."],
-              risks: ["Total Connects require review before applying."],
-            },
-            jobIntelligence: klaviyoIntel({
-              primaryPlatform: "Mailchimp",
-              platformsMentioned: ["Mailchimp"],
-              platformPreferenceTier: "secondary",
-              platformFitReason: "Mailchimp is approved but spend needs review.",
-            }),
-          },
-        },
-        upworkUrl: beautyJob.url,
+        scored: connectsManualReviewJob,
+        upworkUrl: connectsManualReviewJob.url,
         applicationQuestions: [],
         questionAnswers: [],
         autoPrepareDecision: {
@@ -607,7 +723,7 @@ async function runTests(): Promise<void> {
     let prepCompletionText = "";
     const prepCompletionPost = await postPrepareDraftStatus(
       {
-        thread: null,
+        thread: { channelId: "C123", messageTs: "999.222", threadTs: "999.222" },
         heading: "✅ Upwork application page prepared for final manual submit for browser action #707.",
         diagnostics: {
           actionId: 707,
@@ -646,13 +762,15 @@ async function runTests(): Promise<void> {
         },
       },
       {
-        postWebhookMessage: async (payload) => {
+        postThreadMessage: async (payload) => {
+          assert(payload.channel === "C123", "Touchpoint 2 should use the original lead channel");
+          assert(payload.threadTs === "999.222", "Touchpoint 2 should post under the original lead thread");
           prepCompletionText = String(payload.text ?? "");
           return true;
         },
       },
     );
-    assert(prepCompletionPost === "posted", "Prepared browser application should post final-review Slack alert");
+    assert(prepCompletionPost === "posted", "Prepared browser application should post final-review Slack thread reply");
     assert(prepCompletionText.includes("Upwork application page prepared for final manual submit"), "Prep completion alert should use final manual submit wording");
     assert(prepCompletionText.includes(`Job: ${beautyJob.title}`), "Prep completion alert should include job title");
     assert(prepCompletionText.includes(`${beautyJob.url}/apply`), "Prep completion alert should include apply URL");
@@ -661,67 +779,88 @@ async function runTests(): Promise<void> {
     assert(prepCompletionText.includes("Ready for final manual submit: yes"), "Prep completion alert should explicitly mark safe final manual review");
     assert(prepCompletionText.includes("Final submit remains manual and was not clicked."), "Prep completion alert should preserve final submit safety");
 
+    const blockedPrepDiagnostics = {
+      actionId: 708,
+      jobId: beautyJob.id,
+      jobTitle: beautyJob.title,
+      actionType: "prepare_application_review",
+      sourceUrl: beautyJob.url,
+      applyUrl: `${beautyJob.url}/apply`,
+      intendedAction: "Open Upwork apply page, prepare fields for human review, and stop before submit.",
+      state: "field_preparation_incomplete",
+      stopBeforeSubmit: true,
+      validationIssues: [
+        {
+          severity: "error",
+          code: "required_attachment_missing_locally",
+          message: "profile/attachments/truly-beauty-case-study.pdf is selected for browser preparation but is missing locally.",
+        },
+      ],
+      coverLetterPresent: true,
+      coverLetterLength: 220,
+      screeningAnswersCount: 2,
+      rate: "$72/hr",
+      requiredConnects: 4,
+      boostConnects: 0,
+      totalConnects: 4,
+      connectsDecision: "safe_apply",
+      connectsExpectedValue: 88,
+      selectedAttachments: ["Truly Beauty case study"],
+      manualReviewAssets: [],
+      mentionOnlyProof: [],
+      proofAvailability: ["Truly Beauty case study: missing locally"],
+      figmaRecommendations: [],
+      videoRecommendations: [],
+      manualReviewWarnings: [],
+      missingLocalAssets: ["profile/attachments/truly-beauty-case-study.pdf"],
+      skippedAttachments: [],
+      selectedHighlights: ["Klaviyo retention proof"],
+      warnings: ["[error] required_attachment_missing_locally: missing selected attachment"],
+      attemptedFields: ["screening answers"],
+      skippedFields: ["coverLetter", "rate"],
+      manualFields: ["attachments", "finalSubmit"],
+    };
+
     let blockedPrepCompletionText = "";
     const blockedPrepCompletionPost = await postPrepareDraftStatus(
       {
-        thread: null,
+        thread: { channelId: "C123", messageTs: "999.222", threadTs: "999.222" },
         heading: "⚠️ Draft preparation paused for browser action #708.",
-        diagnostics: {
-          actionId: 708,
-          jobId: beautyJob.id,
-          jobTitle: beautyJob.title,
-          actionType: "prepare_application_review",
-          sourceUrl: beautyJob.url,
-          applyUrl: `${beautyJob.url}/apply`,
-          intendedAction: "Open Upwork apply page, prepare fields for human review, and stop before submit.",
-          state: "field_preparation_incomplete",
-          stopBeforeSubmit: true,
-          validationIssues: [
-            {
-              severity: "error",
-              code: "required_attachment_missing_locally",
-              message: "profile/attachments/truly-beauty-case-study.pdf is selected for browser preparation but is missing locally.",
-            },
-          ],
-          coverLetterPresent: true,
-          coverLetterLength: 220,
-          screeningAnswersCount: 2,
-          rate: "$72/hr",
-          requiredConnects: 4,
-          boostConnects: 0,
-          totalConnects: 4,
-          connectsDecision: "safe_apply",
-          connectsExpectedValue: 88,
-          selectedAttachments: ["Truly Beauty case study"],
-          manualReviewAssets: [],
-          mentionOnlyProof: [],
-          proofAvailability: ["Truly Beauty case study: missing locally"],
-          figmaRecommendations: [],
-          videoRecommendations: [],
-          manualReviewWarnings: [],
-          missingLocalAssets: ["profile/attachments/truly-beauty-case-study.pdf"],
-          skippedAttachments: [],
-          selectedHighlights: ["Klaviyo retention proof"],
-          warnings: ["[error] required_attachment_missing_locally: missing selected attachment"],
-          attemptedFields: ["screening answers"],
-          skippedFields: ["coverLetter", "rate"],
-          manualFields: ["attachments", "finalSubmit"],
-        },
+        diagnostics: blockedPrepDiagnostics,
       },
       {
-        postWebhookMessage: async (payload) => {
+        postThreadMessage: async (payload) => {
+          assert(payload.channel === "C123", "Job-specific blocker should use the original lead channel");
+          assert(payload.threadTs === "999.222", "Job-specific blocker should post under the original lead thread");
           blockedPrepCompletionText = String(payload.text ?? "");
           return true;
         },
       },
     );
-    assert(blockedPrepCompletionPost === "posted", "Blocked browser application diagnostics should still post final-review alert");
+    assert(blockedPrepCompletionPost === "posted", "Blocked browser application diagnostics should post into the job thread");
     assert(blockedPrepCompletionText.includes("Ready for final manual submit: no - review diagnostics before submitting."), "Blocked prep diagnostics should not report final-submit readiness");
     assert(blockedPrepCompletionText.includes("Fields not filled: coverLetter, rate"), "Blocked prep diagnostics should list required fields not safely filled");
     assert(blockedPrepCompletionText.includes("Missing local assets: profile/attachments/truly-beauty-case-study.pdf"), "Blocked prep diagnostics should list missing files");
     assert(blockedPrepCompletionText.includes("Manual review fields: attachments, finalSubmit"), "Blocked prep diagnostics should list manual fields");
     assert(blockedPrepCompletionText.includes("Stop before submit: true"), "Blocked prep diagnostics should keep submit guard visible");
     assert(blockedPrepCompletionText.includes("Final submit remains manual and was not clicked."), "Blocked prep diagnostics should preserve no-submit behavior");
+
+    let globalBlockerText = "";
+    const globalBlockerPost = await postPrepareDraftStatus(
+      {
+        thread: null,
+        heading: "⚠️ Browser session paused before application preparation.",
+        diagnostics: blockedPrepDiagnostics,
+      },
+      {
+        postWebhookMessage: async (payload) => {
+          globalBlockerText = String(payload.text ?? "");
+          return true;
+        },
+      },
+    );
+    assert(globalBlockerPost === "posted", "Global blocker without job thread may post as a standalone alert");
+    assert(globalBlockerText.includes("Browser session paused before application preparation"), "Standalone global blocker should carry blocker heading");
 
     const designJob = scoreJob({
       id: "design-job-1",
