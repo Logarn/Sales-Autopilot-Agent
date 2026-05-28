@@ -34,6 +34,7 @@ async function runTests(): Promise<void> {
     cdpUrl: "http://127.0.0.1:9222",
   });
   assert.equal(launchCommand.args[launchCommand.args.length - 1], "https://www.upwork.com/nx/find-work/best-matches/", "browser session should bootstrap to Best Matches by default");
+  assert.ok(launchCommand.args.includes("--remote-debugging-address=127.0.0.1"), "CDP should only listen on localhost");
   assert.ok(launchCommand.args.some((arg) => arg.includes("--user-data-dir=")), "browser session should use the dedicated agent profile");
 
   const publicHome = classifyBrowserSessionSnapshot({

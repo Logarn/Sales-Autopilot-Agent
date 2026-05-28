@@ -35,7 +35,7 @@ Install base packages:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y curl git jq sqlite3 unzip xvfb
+sudo apt-get install -y curl git jq sqlite3 unzip tigervnc-standalone-server xauth
 ```
 
 Install Node.js 20:
@@ -120,6 +120,7 @@ Required values to set:
 - state paths:
   - `DB_PATH=/opt/upwork-agent/shared/data/jobs.db`
   - `BROWSER_USER_DATA_DIR=/opt/upwork-agent/shared/browser-profile`
+  - `BROWSER_START_URL=https://www.upwork.com/nx/find-work/best-matches/`
   - `BROWSER_ARTIFACT_DIR=/opt/upwork-agent/shared/data/browser-artifacts`
   - `AGENT_ENGINE_STATE_PATH=/opt/upwork-agent/shared/data/agent-engine-state.json`
 
@@ -130,6 +131,7 @@ TIMEZONE=Africa/Nairobi
 LOG_LEVEL=info
 BROWSER_SESSION_MODE=cdp
 BROWSER_CDP_URL=http://127.0.0.1:9222
+BROWSER_START_URL=https://www.upwork.com/nx/find-work/best-matches/
 BROWSER_SEARCH_ENABLED=true
 BROWSER_WORKER_ENABLED=false
 BROWSER_DRY_RUN=true
@@ -196,22 +198,28 @@ Use one provider at a time in production. Do not turn on multiple providers in t
 
 Upwork login is manual and server-local.
 
-Start the browser session:
+Set a VNC password once for the `upwork-agent` user, then start the browser
+session service. The service uses display `:1`, starts VNC bound to localhost,
+starts visible Chrome with CDP on `127.0.0.1:9222`, and reuses the shared
+browser profile.
 
 ```bash
-sudo -u upwork-agent npm run browser:session
+sudo -u upwork-agent vncpasswd
+sudo cp deploy/systemd/upwork-agent-browser-session.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now upwork-agent-browser-session.service
 ```
 
 Then:
 
-1. open the visible Chrome window on the server
+1. connect to VNC through an SSH tunnel to localhost port `5901`
 2. log into Upwork manually
 3. complete any 2FA manually
 4. confirm the account lands on a normal Upwork page
 5. run:
 
 ```bash
-sudo -u upwork-agent npm run browser:cdp:check
+sudo -u upwork-agent npm run browser:session:check
 ```
 
 If login challenge, CAPTCHA, or auth failure appears:
@@ -221,6 +229,20 @@ If login challenge, CAPTCHA, or auth failure appears:
 - do not script around it
 
 ## 8. Dry-run and safe live-cycle commands
+
+### Production smoke
+
+After installing services and before enabling always-on mode, run:
+
+```bash
+sudo -u upwork-agent npm run production:smoke
+```
+
+The smoke command checks env shape, VNC, local-only CDP, `browser:tool
+session.check`, Slack Socket service status, lead-engine readiness or dry-run,
+health, and the final-submit guard. If Upwork shows CAPTCHA, Cloudflare, login,
+or another security challenge, the smoke fails closed and leaves the browser for
+manual clearing.
 
 ### Dry-run
 
@@ -290,7 +312,13 @@ If browser manual attention is needed:
 sudo systemctl stop upwork-agent-lead-engine.service
 ```
 
-Resolve the browser problem manually, then start it again.
+Resolve the browser problem manually in the `:1` VNC session, then verify and
+start it again:
+
+```bash
+sudo -u upwork-agent npm run browser:session:check
+sudo systemctl start upwork-agent-lead-engine.service
+```
 
 ## 10. Logs and health
 
@@ -325,6 +353,8 @@ If the server rollout goes bad:
 ```bash
 sudo systemctl stop upwork-agent-lead-engine.service
 sudo systemctl stop upwork-agent-health.timer
+sudo systemctl stop upwork-agent-slack-socket.service
+sudo systemctl stop upwork-agent-browser-session.service
 ```
 
 2. revert to safer runtime settings in `.env`
@@ -342,6 +372,7 @@ BROWSER_DRY_RUN=true
 ```bash
 sudo -u upwork-agent npm run build
 sudo -u upwork-agent npm run validate:promotion
+sudo -u upwork-agent npm run preflight:contabo
 ```
 
 ## 12. What remains manual
