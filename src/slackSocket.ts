@@ -31,6 +31,7 @@ import {
 import { logger } from "./logger";
 import { buildProposalContextPack } from "./skills/profileContextSkill";
 import { formatConnectsStrategy } from "./connectsStrategy";
+import { classifySlackThreadWithLlm, type SlackThreadBrainProvider, type SlackThreadBrainDecision } from "./slackThreadBrain";
 
 const THREAD_MENTIONS = "<@U0A2X5BCNKC> <@U0AHJFYV42K>";
 
@@ -39,9 +40,12 @@ export type SlackSocketParsedCommandType =
   | "approve"
   | "reject"
   | "revise"
+  | "approve_prepare"
   | "prepare_draft"
   | "retry_action"
   | "mark_submitted"
+  | "clarify"
+  | "ignore"
   | "unknown";
 
 export interface ParsedSlackSocketCommand {
@@ -49,6 +53,9 @@ export interface ParsedSlackSocketCommand {
   rawText: string;
   instruction?: string;
   actionId?: number;
+  confidence?: "high" | "medium" | "low";
+  replyText?: string;
+  source?: "llm" | "fallback";
 }
 
 export interface ParsedUpworkUrl {
@@ -63,6 +70,28 @@ function normalizeSlackTextInput(value: string): string {
     .replace(/<@[A-Za-z0-9_]+(?:\|[^>]+)?>/g, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function hasSlackMention(value: string): boolean {
+  return /<@[A-Za-z0-9_]+(?:\|[^>]+)?>/.test(value);
+}
+
+function matchesApprovePrepareIntent(value: string, mentioned: boolean): boolean {
+  const text = value.toLowerCase();
+  return (
+    /\b(?:yeah|yes|yep|yup|sure|ok|okay|looks good)\b.*\b(?:prep|prepare|draft|drafts|apply|write|proceed|move forward)\b/.test(text) ||
+    /\b(?:prep|prepare)\s+(?:it|this|draft|drafts|the\s+(?:draft|application|proposal))\b/.test(text) ||
+    /\b(?:please\s+)?proceed(?:\s+with)?(?:\s+the)?\s+(?:draft|application|proposal|prep)\b/.test(text) ||
+    /\b(?:go ahead|move forward|do it)\b(?:\s+and\s+\b(?:prep|prepare|draft|apply|write)\b.*)?$/.test(text) ||
+    /\b(?:write\s+(?:it|the\s+draft)|apply)\b$/.test(text) ||
+    (mentioned && /\b(?:prep|prepare|draft|drafts|apply|write|listing|link)\b/.test(text))
+  );
+}
+
+export function shouldAskClarifyingThreadQuestion(text: string): boolean {
+  const normalized = normalizeSlackTextInput(text).toLowerCase();
+  return hasSlackMention(text) ||
+    /\b(?:prep|prepare|draft|apply|listing|link|connects|rate|proof|file|red flags?|risk|why|status|next|should|can you|please)\b/.test(normalized);
 }
 
 function parseUrlSafely(value: string): ParsedUpworkUrl | null {
@@ -111,6 +140,7 @@ export function parseUpworkJobUrlFromText(text: string): ParsedUpworkUrl | null 
 }
 
 export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand {
+  const mentioned = hasSlackMention(text);
   const normalized = normalizeSlackTextInput(text).trim();
   const commandText = normalized.replace(/[.!?]+$/g, "").trim();
   const statusMatch = /^(status)$/i.test(normalized) ||
@@ -131,10 +161,13 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
   }
 
   if (
-    /^(prepare\s+draft|prepare\s+application|prepare\s+proposal|prep\s+it|prepare\s+it|write\s+the\s+draft|go\s+ahead|do\s+it|apply)$/i.test(commandText) ||
-    /\b(please\s+proceed\s+with\s+the\s+draft|looks\s+good,\s*proceed|move\s+forward|go\s+ahead\s+and\s+prep|prep\s+the\s+application)\b/i.test(normalized)
+    /^(prepare\s+draft|prepare\s+application|prepare\s+proposal)$/i.test(commandText)
   ) {
     return { type: "prepare_draft", rawText: normalized };
+  }
+
+  if (matchesApprovePrepareIntent(commandText, mentioned) || matchesApprovePrepareIntent(normalized, mentioned)) {
+    return { type: "approve_prepare", rawText: normalized, source: "fallback" };
   }
 
   const retryMatch = commandText.match(/^retry(?:\s+(?:preparation|prep))?(?:\s+(\d+))?$/i);
@@ -149,6 +182,46 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
   if (/^mark\s+submitted$/i.test(commandText)) return { type: "mark_submitted", rawText: normalized };
 
   return { type: "unknown", rawText: normalized };
+}
+
+function commandFromBrainDecision(text: string, decision: SlackThreadBrainDecision): ParsedSlackSocketCommand {
+  const type = decision.intent === "approve_prepare" ? "approve_prepare" : decision.intent;
+  return {
+    type,
+    rawText: normalizeSlackTextInput(text),
+    instruction: decision.instruction ?? undefined,
+    actionId: decision.actionId ?? undefined,
+    confidence: decision.confidence,
+    replyText: decision.replyText ?? undefined,
+    source: "llm",
+  };
+}
+
+async function resolveSlackThreadCommand(input: {
+  channelId: string;
+  threadTs: string;
+  text: string;
+  state: ReturnType<typeof getSlackThreadStateByThreadTs>;
+  provider?: SlackThreadBrainProvider;
+}): Promise<ParsedSlackSocketCommand> {
+  const llm = await classifySlackThreadWithLlm({
+    text: input.text,
+    botMentioned: hasSlackMention(input.text),
+    threadMapped: Boolean(input.state),
+    jobId: input.state?.jobId ?? null,
+    upworkUrl: input.state?.upworkUrl ?? null,
+    threadStatus: input.state?.status ?? null,
+  }, input.provider);
+
+  if (llm.ok && llm.decision.intent !== "ignore" && llm.decision.confidence !== "low") {
+    return commandFromBrainDecision(input.text, llm.decision);
+  }
+  if (llm.ok && llm.decision.intent === "ignore") {
+    return commandFromBrainDecision(input.text, llm.decision);
+  }
+
+  const fallback = parseSlackThreadCommand(input.text);
+  return { ...fallback, source: "fallback" };
 }
 
 export interface SlackSocketStartupConfig {
@@ -323,17 +396,19 @@ export function buildPrepareDraftQueueReply(input: {
   actionId: number;
   duplicate: boolean;
   duplicateStatus?: string | null;
+  ackText?: string | null;
 }): string {
+  const ack = input.ackText?.trim() || "Got it — I’ll prep this now and come back here when it’s ready for QA.";
   return [
     input.duplicate
-      ? `Already on it, ${THREAD_MENTIONS} — I already have this queued and I’ll come back here when it’s ready.`
-      : `Got it, ${THREAD_MENTIONS} — I’ll prepare the application now and come back here when it’s ready for QA.`,
+      ? "Already on it — I already have this queued and I’ll come back here when it’s ready for QA."
+      : ack,
     "I’ll fill what’s safe on Upwork and stop before submit.",
-    `Link: ${input.upworkUrl}`,
+    `Listing: ${input.upworkUrl}`,
   ].join("\n");
 }
 
-export function queuePrepareDraftFromSlackThread(input: { channelId: string; threadTs: string }): { ok: boolean; text: string; actionId?: number } {
+export function queuePrepareDraftFromSlackThread(input: { channelId: string; threadTs: string; ackText?: string | null }): { ok: boolean; text: string; actionId?: number } {
   const state = getSlackThreadStateByThreadTs(input.channelId, input.threadTs);
   if (!state?.jobId) {
     return { ok: false, text: "I cannot queue a browser draft without a tracked job id for this thread." };
@@ -342,11 +417,11 @@ export function queuePrepareDraftFromSlackThread(input: { channelId: string; thr
   const draft = getApplicationDraft(state.jobId);
   const scoredJob = getScoredJobForSlackPreview(state.jobId);
   if (!draft || !scoredJob || !draft.proposalText.trim()) {
-    return { ok: false, text: `I cannot prepare a browser draft yet for ${state.jobId}. The stored/generated application draft is missing. Please regenerate or revise the draft first.` };
+    return { ok: false, text: "Quick blocker: I don’t have the generated draft for this lead yet, so I can’t prep the Upwork page. Send the listing link again or retry once capture finishes." };
   }
   const browserSession = getBrowserSessionStatus();
   if (browserSession.blocked) {
-    return { ok: false, text: `I cannot prepare a browser draft right now because browser attention is required (${browserSession.state}). Resolve the browser state first, then retry.` };
+    return { ok: false, text: "Quick blocker: Upwork is asking for a human check, so I paused. Clear the browser and I’ll retry." };
   }
 
   const action = enqueueBrowserActionDeduped({
@@ -358,7 +433,7 @@ export function queuePrepareDraftFromSlackThread(input: { channelId: string; thr
       threadTs: state.threadTs,
       messageTs: state.messageTs,
       applicationId: state.jobId,
-      notes: "Slack socket: prepare draft command from tracked thread. Prepare browser review only; do not submit.",
+      notes: "Slack socket: prepare request from tracked thread. Prepare browser review only; do not submit.",
     },
   });
   const duplicateAction = action.duplicate ? getBrowserActionById(action.id) : null;
@@ -373,6 +448,7 @@ export function queuePrepareDraftFromSlackThread(input: { channelId: string; thr
       actionId: action.id,
       duplicate: action.duplicate,
       duplicateStatus: duplicateAction?.status ?? null,
+      ackText: input.ackText,
     }),
   };
 }
@@ -458,17 +534,40 @@ export async function handleThreadCommand(params: {
   threadTs: string;
   text: string;
   client: App["client"];
+  intentProvider?: SlackThreadBrainProvider;
 }): Promise<void> {
-  const command = parseSlackThreadCommand(params.text);
   const state = getSlackThreadStateByThreadTs(params.channelId, params.threadTs);
+  const command = await resolveSlackThreadCommand({
+    channelId: params.channelId,
+    threadTs: params.threadTs,
+    text: params.text,
+    state,
+    provider: params.intentProvider,
+  });
 
-  if (command.type === "unknown") {
+  if (command.type === "ignore") {
+    return;
+  }
+
+  if (command.type === "clarify") {
     if (state) {
       await postThreadReply(
         params.client,
         params.channelId,
         params.threadTs,
-        `Could not parse command. Available commands:${availableCommandsText()}`,
+        command.replyText ?? "I’m not totally sure what you want me to do. Want me to prep it, revise the draft, skip it, or show details?",
+      );
+    }
+    return;
+  }
+
+  if (command.type === "unknown") {
+    if (state && shouldAskClarifyingThreadQuestion(params.text)) {
+      await postThreadReply(
+        params.client,
+        params.channelId,
+        params.threadTs,
+        "I’m not totally sure what you want me to do. Want me to prep it, revise the draft, skip it, or show details?",
       );
     }
     return;
@@ -479,7 +578,7 @@ export async function handleThreadCommand(params: {
       params.client,
       params.channelId,
       params.threadTs,
-      "No tracked Slack thread mapping found for this thread. Post a Upwork URL first, then use thread commands there."
+      "I heard you, but I can’t find the job tied to this thread. Send the Upwork listing link here and I’ll pick it up."
     );
     return;
   }
@@ -501,9 +600,9 @@ export async function handleThreadCommand(params: {
     return;
   }
 
-  if (!state.jobId && ["approve", "reject", "revise", "prepare_draft", "mark_submitted", "retry_action"].includes(command.type)) {
+  if (!state.jobId && ["approve", "reject", "revise", "approve_prepare", "prepare_draft", "mark_submitted", "retry_action"].includes(command.type)) {
     const response = `This thread tracks ${state.upworkUrl} but no job id was parsed. ${
-      command.type === "prepare_draft" ? "I cannot queue a browser draft without a job id." : "Please share a supported Upwork job URL first."
+      command.type === "approve_prepare" || command.type === "prepare_draft" ? "I can’t prep it until I have the job id. Send the Upwork listing link here and I’ll pick it up." : "Please share a supported Upwork job URL first."
     }`;
     await postThreadReply(params.client, params.channelId, params.threadTs, response);
     updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
@@ -546,8 +645,8 @@ export async function handleThreadCommand(params: {
     return;
   }
 
-  if (command.type === "prepare_draft") {
-    const result = queuePrepareDraftFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs });
+  if (command.type === "approve_prepare" || command.type === "prepare_draft") {
+    const result = queuePrepareDraftFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs, ackText: command.replyText });
     if (!result.ok) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
     }
@@ -641,10 +740,22 @@ export async function runSlackSocket(): Promise<void> {
     }
 
     const text = rawEvent.text.trim();
-    const command = parseSlackThreadCommand(normalizeSlackTextInput(text));
     const threadTs = rawEvent.thread_ts ?? rawEvent.ts;
+    const mappedThread = getSlackThreadStateByThreadTs(channelId, threadTs);
+    const upworkUrl = parseUpworkJobUrlFromText(text);
 
-    if (command.type !== "unknown") {
+    if (!mappedThread && upworkUrl) {
+      await handleUrlMessage({
+        channelId,
+        messageTs: rawEvent.ts,
+        threadTs,
+        text,
+        client,
+      });
+      return;
+    }
+
+    if (mappedThread || rawEvent.thread_ts) {
       await handleThreadCommand({
         channelId,
         threadTs,

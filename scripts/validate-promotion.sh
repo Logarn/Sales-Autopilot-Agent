@@ -13,6 +13,7 @@ run() {
 run npm run build
 run npm run test:capture
 run npm run test:slack-socket
+run npx tsx src/slackThreadBrain.test.ts
 run npx tsx src/leadDecision.test.ts
 run npx tsx src/platformEligibility.test.ts
 run npx tsx src/proofAvailability.test.ts

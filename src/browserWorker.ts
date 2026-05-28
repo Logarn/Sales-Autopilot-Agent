@@ -847,16 +847,13 @@ function buildPrepareDraftStatusMessage(input: {
     diagnostics.manualFields.length > 0 ||
     diagnostics.connectsDecision !== "safe_apply";
   const readyForFinalManualSubmit = diagnostics.state === "apply_page_loaded" && diagnostics.stopBeforeSubmit && !needsManualReview;
-  const heading = readyState
-    ? "✅ Draft is ready for QA"
-    : "⚠️ I hit a blocker on the apply page";
   const screeningCount = diagnostics.screeningAnswersCount;
   const proofSummary = diagnostics.selectedAttachments.length > 0
-    ? `selected ${diagnostics.selectedAttachments.length} proof item${diagnostics.selectedAttachments.length === 1 ? "" : "s"}`
-    : "didn’t attach proof";
+    ? `${diagnostics.selectedAttachments.length} proof item${diagnostics.selectedAttachments.length === 1 ? "" : "s"} selected`
+    : "none attached";
   const connectsSummary = diagnostics.requiredConnects === null
-    ? "Connects are still unknown"
-    : `verified it needs ${diagnostics.requiredConnects} Connects${diagnostics.boostConnects ? ` plus ${diagnostics.boostConnects} boost` : ""}`;
+    ? "unknown"
+    : `${diagnostics.requiredConnects} required${diagnostics.boostConnects ? `, ${diagnostics.boostConnects} boost` : ", no boost recommended"}`;
   const rateSummary = diagnostics.rate ? `set ${diagnostics.rate}` : "left the rate alone";
   const missingFiles = diagnostics.missingLocalAssets.map((asset) => path.basename(asset)).slice(0, 2);
   const manualFields = diagnostics.manualFields.filter((field) => field !== "finalSubmit").slice(0, 3);
@@ -869,13 +866,21 @@ function buildPrepareDraftStatusMessage(input: {
   const reviewText = reviewItems.length > 0 ? reviewItems.slice(0, 3).map(humanSlackPrepDetail).join("; ") : "none";
   const submitLabel = diagnostics.requiredConnects === null ? "Submit" : `Send for ${diagnostics.requiredConnects} Connects`;
   const actionLine = readyForFinalManualSubmit
-    ? `Open it, QA the draft, and manually hit “${submitLabel}” if it looks good.`
+    ? `Open the Upwork draft, QA it, and manually click *${submitLabel}* if it looks good.`
     : "Please check the item above, then reply “retry” when it’s cleared.";
   return [
-    heading,
-    `Hey ${QA_MENTIONS} — I ${diagnostics.coverLetterPresent ? "filled the cover letter" : "couldn’t fill the cover letter"}, answered ${screeningCount} screening question${screeningCount === 1 ? "" : "s"}, ${rateSummary}, ${proofSummary}, and ${connectsSummary}. I did not click submit.`,
-    `Needs your review: ${readyForFinalManualSubmit ? "none" : reviewText}`,
-    actionLine,
+    readyState ? "✅ *Draft ready for QA*" : "⚠️ *I hit a blocker on the apply page*",
+    "",
+    `Hey ${QA_MENTIONS} — I ${diagnostics.coverLetterPresent ? "filled the cover letter" : "couldn’t fill the cover letter"}, answered ${screeningCount} screening question${screeningCount === 1 ? "" : "s"}, ${rateSummary}, and checked the Connects. I did *not* click submit.`,
+    "",
+    [
+      `• *Connects:* ${connectsSummary}`,
+      `• *Proof/files:* ${proofSummary}`,
+      `• *Needs review:* ${readyForFinalManualSubmit ? "none" : reviewText}`,
+    ].join("\n"),
+    "",
+    `*Next:* ${actionLine}`,
+    "",
     diagnostics.applyUrl ?? diagnostics.sourceUrl ?? "Upwork application URL unavailable",
   ].join("\n");
 }

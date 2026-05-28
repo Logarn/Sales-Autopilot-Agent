@@ -123,17 +123,17 @@ function runTests(): void {
   });
   const text = packet.text;
 
-  assert(text.split("\n").length <= 5, "lead alert should be scannable in five lines or fewer");
-  assertIncludes(text, "🚀 New lead: Email Marketing Specialist Needed", "lead heading");
+  assert(text.length < 900, "lead alert should stay short enough for a fast scan");
+  assertIncludes(text, "🚀 *New lead: Email Marketing Specialist Needed*", "lead heading");
   assertIncludes(text, "<@U0A2X5BCNKC> <@U0AHJFYV42K>", "lead alert should tag Steve/Natalie");
   assertIncludes(text, "This looks strong enough to prep", "human lead sentence");
   assertIncludes(text, "Klaviyo email flows and campaign support", "human lead sentence");
-  assertIncludes(text, "Fit: Medium", "fit summary");
-  assertIncludes(text, "Platform: Klaviyo", "platform summary");
-  assertIncludes(text, "Connects: 4", "connects summary");
-  assertIncludes(text, "Budget: $12-$35/hr", "budget summary");
-  assertIncludes(text, "Risk: Client has weak spend history and budget looks low", "single risk");
-  assertIncludes(text, "Next: I’m going to prep the application and come back here when it’s ready.", "autonomous next action");
+  assertIncludes(text, "• *Fit:* Medium", "fit summary");
+  assertIncludes(text, "• *Platform:* Klaviyo", "platform summary");
+  assertIncludes(text, "• *Connects:* 4", "connects summary");
+  assertIncludes(text, "• *Budget:* $12-$35/hr", "budget summary");
+  assertIncludes(text, "• *Risk:* Client has weak spend history and budget looks low", "single risk");
+  assertIncludes(text, "*Next:* I’m preparing this now.", "autonomous next action");
   assertIncludes(text, job.url, "job url");
 
   for (const noisy of [
@@ -200,9 +200,9 @@ function runTests(): void {
     jobIntelligence: intelligence,
     autoPrepareNote: "Not auto-preparing because Connects spend needs manual review.",
   }).text;
-  assertIncludes(unknownText, "Connects: unknown for now", "missing Connects should render unknown");
+  assertIncludes(unknownText, "• *Connects:* unknown for now", "missing Connects should render unknown");
   assertIncludes(unknownText, "This one is close, but I’m not fully sold", "borderline lead should sound conversational");
-  assertIncludes(unknownText, "Want me to prep it anyway?", "borderline lead should ask for a clear next action");
+  assertIncludes(unknownText, "*Next:* Reply *“prep it”* if you want me to prepare the draft.", "borderline lead should ask for a clear next action");
   assertNotIncludes(unknownText, "Connects: 0", "missing Connects must not render as zero");
   for (const noisy of ["manual review", "platformEligibility", "lead decision", "packet", "source context", "action id"]) {
     assertNotIncludes(unknownText, noisy, `borderline lead should hide ${noisy}`);
