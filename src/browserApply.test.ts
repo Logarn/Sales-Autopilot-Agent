@@ -160,6 +160,62 @@ async function runTests(): Promise<void> {
     beautyJob.applicationDraft.connectsWarnings.push("Connects evidence: captured required Connects from Upwork job detail.");
     beautyJob.applicationDraft.jobIntelligence = klaviyoIntel();
     markJobSeen(beautyJob, false);
+
+    const unknownConnectsJob = scoreJob({
+      id: "unknown-connects-job-1",
+      title: "Klaviyo lifecycle strategy for SaaS onboarding emails",
+      url: "https://www.upwork.com/jobs/~unknownconnects123456",
+      description: "Need Klaviyo lifecycle strategy, segmentation, onboarding emails, and retention messaging for a subscription SaaS audience.",
+      postedAt: new Date().toISOString(),
+      budget: "$70-$95/hr",
+      clientCountry: "United States",
+      clientRating: 5,
+      clientSpend: 200000,
+      clientHireRate: 90,
+      clientTotalHires: 40,
+      clientFeedbackCount: 30,
+      category: "Digital Marketing",
+      experienceLevel: "Expert",
+      connectsCost: 0,
+      connects: {
+        requiredConnects: null,
+        boostConnects: null,
+        totalConnects: null,
+        confidence: "unknown",
+        sourceText: null,
+        sourceLocation: null,
+        extractionMethod: "not_found",
+      },
+      skills: ["Klaviyo", "Lifecycle Marketing", "Email Marketing"],
+      sourceQuery: "manual",
+    });
+    unknownConnectsJob.applicationDraft = buildApplicationDraft(unknownConnectsJob);
+    unknownConnectsJob.applicationDraft.connectsStrategy = {
+      decision: "manual_review",
+      requiredConnects: null,
+      suggestedBoostConnects: 0,
+      totalConnects: null,
+      expectedValueScore: 80,
+      sourceBackedConnects: unknownConnectsJob.connects,
+      reasons: ["Strong fit; verify Connects on the apply page."],
+      risks: ["Required Connects are unknown from visible source text."],
+    };
+    unknownConnectsJob.applicationDraft.selectedPortfolioItems = [];
+    unknownConnectsJob.applicationDraft.structuredProposal.browserFillNotes.rate = "$85/hr";
+    unknownConnectsJob.applicationDraft.jobIntelligence = klaviyoIntel();
+    markJobSeen(unknownConnectsJob, false);
+    const unknownConnectsPlan = buildBrowserApplyPlan(unknownConnectsJob.id);
+    assert(Boolean(unknownConnectsPlan.plan), "Unknown-Connects job should still build an apply-page verification plan");
+    assert(unknownConnectsPlan.valid, "Unknown Connects alone should not block opening the apply page for verification");
+    assert(
+      unknownConnectsPlan.issues.some((issue) => issue.code === "connects_apply_page_verification_required" && issue.severity === "warning"),
+      "Unknown Connects should be represented as apply-page verification warning",
+    );
+    assert(
+      unknownConnectsPlan.plan.manualFields.includes("connects"),
+      "Unknown Connects should remain a manual/review field until verified on the apply page",
+    );
+
     upsertSlackThreadState({
       channelId: "C123",
       messageTs: "111.222",
@@ -268,9 +324,13 @@ async function runTests(): Promise<void> {
     );
     assert(manualReviewDiscovery.status === "posted", "Manual-review discovery lead should post via webhook fallback");
     assert(manualReviewDiscovery.outcome === "posted", "Manual-review discovery lead should report posted outcome");
-    assert(webhookPostedText.includes("Next: Steve/Natalie, this needs manual review"), "Manual-review lead should keep concise manual review wording in Slack");
+    assert(webhookPostedText.includes("This one is close, but I’m not fully sold"), "Review-needed lead should sound conversational in Slack");
+    assert(webhookPostedText.includes("Want me to prep it anyway?"), "Review-needed lead should ask for a clear next action");
     assert(!webhookPostedText.includes("Available replies"), "Normal lead alert should not include a command menu");
     assert(!webhookPostedText.includes("Debug:"), "Normal lead alert should not include debug lines");
+    for (const noisy of ["manual review", "platformEligibility", "lead decision", "packet", "source context", "action id"]) {
+      assert(!webhookPostedText.toLowerCase().includes(noisy.toLowerCase()), `Normal lead alert should hide ${noisy}`);
+    }
 
     webhookPostedText = "";
     const normalDiscoveryJob = {
@@ -320,7 +380,7 @@ async function runTests(): Promise<void> {
       },
     );
     assert(normalDiscovery.status === "posted", "Eligible discovery lead should post");
-    assert(webhookPostedText.includes("Next: I’ll prepare and post a draft application for this lead."), "Post-to-Slack lead should use concise autonomous prep wording");
+    assert(webhookPostedText.includes("Next: I’m going to prep the application and come back here when it’s ready."), "Post-to-Slack lead should use concise autonomous prep wording");
     assert(!webhookPostedText.includes("Screening answers"), "Initial lead alert must not include screening answers");
     assert(!webhookPostedText.includes("Proposal preview"), "Initial lead alert must not include proposal preview");
 
@@ -552,7 +612,10 @@ async function runTests(): Promise<void> {
     );
     assert(connectsManualReviewDiscovery.status === "posted", "Eligible connects-manual-review discovery lead should post");
     assert(connectsManualReviewDiscovery.outcome === "posted", "Eligible connects-manual-review discovery lead should count as posted");
-    assert(webhookPostedText.includes("Next: Steve/Natalie, this needs manual review"), "Connects manual-review lead should keep concise manual review wording in Slack");
+    assert(webhookPostedText.includes("Want me to prep it anyway?"), "Connects review-needed lead should ask for a clear next action");
+    for (const noisy of ["manual review", "platformEligibility", "lead decision", "packet", "source context", "action id"]) {
+      assert(!webhookPostedText.toLowerCase().includes(noisy.toLowerCase()), `Connects lead alert should hide ${noisy}`);
+    }
 
     let skippedWebhookCalled = false;
     const ineligibleDiscovery = await postDiscoveryCapturePacket(
@@ -718,11 +781,11 @@ async function runTests(): Promise<void> {
       duplicate: false,
       duplicateStatus: null,
     });
-    assert(prepareReply.includes("browser action #99"), "Prepare reply should include action id");
-    assert(prepareReply.includes("profile/attachments/truly-beauty-case-study.pdf"), "Prepare reply should include selected auto-attach asset");
-    assert(prepareReply.includes("Status: File missing locally - manual upload needed"), "Prepare reply should include clear proof availability status");
-    assert(prepareReply.includes("Final submit remains manual"), "Prepare reply should keep manual submit reminder");
+    assert(prepareReply.includes("ready for QA"), "Prepare reply should be a concise acknowledgement");
+    assert(prepareReply.includes("stop before submit"), "Prepare reply should keep manual submit boundary");
     assert(!prepareReply.toLowerCase().includes("copy/paste"), "Prepare reply must not introduce copy/paste workflow");
+    assert(!prepareReply.includes("Auto-attach assets:"), "Prepare reply should not dump proof inventory");
+    assert(!prepareReply.toLowerCase().includes("action:"), "Prepare reply should not expose action ids by default");
 
     let prepCompletionText = "";
     const prepCompletionPost = await postPrepareDraftStatus(
@@ -775,14 +838,17 @@ async function runTests(): Promise<void> {
       },
     );
     assert(prepCompletionPost === "posted", "Prepared browser application should post final-review Slack thread reply");
-    assert(prepCompletionText.includes("✅ Draft ready for QA"), "Prep completion alert should use concise ready-for-QA wording");
+    assert(prepCompletionText.includes("✅ Draft is ready for QA"), "Prep completion alert should use concise ready-for-QA wording");
     assert(prepCompletionText.includes(`${beautyJob.url}/apply`), "Prep completion alert should include apply URL");
     assert(prepCompletionText.includes("answered 2 screening questions"), "Prep completion alert should summarize screening answers");
-    assert(prepCompletionText.includes("Connects are 4 (4 total)"), "Prep completion alert should summarize Connects");
+    assert(prepCompletionText.includes("verified it needs 4 Connects"), "Prep completion alert should summarize Connects");
     assert(prepCompletionText.includes("Needs your review: none"), "Prep completion alert should explicitly mark no extra manual issues");
-    assert(prepCompletionText.includes("manually submit if satisfied"), "Prep completion alert should preserve final submit safety");
+    assert(prepCompletionText.includes("manually hit “Send for 4 Connects”"), "Prep completion alert should preserve final submit safety");
     assert(!prepCompletionText.includes("Fields filled:"), "Prep completion alert should not include internal field inventory");
     assert(!prepCompletionText.includes("Auto-attach assets:"), "Prep completion alert should not include exhaustive proof inventory");
+    for (const noisy of ["manual review", "platformEligibility", "lead decision", "packet", "source context", "action id"]) {
+      assert(!prepCompletionText.toLowerCase().includes(noisy.toLowerCase()), `Prep completion alert should hide ${noisy}`);
+    }
 
     const blockedPrepDiagnostics = {
       actionId: 708,
@@ -843,12 +909,15 @@ async function runTests(): Promise<void> {
       },
     );
     assert(blockedPrepCompletionPost === "posted", "Blocked browser application diagnostics should post into the job thread");
-    assert(blockedPrepCompletionText.includes("⚠️ Draft needs review"), "Blocked prep diagnostics should use concise review heading");
+    assert(blockedPrepCompletionText.includes("⚠️ I hit a blocker on the apply page"), "Blocked prep diagnostics should use human blocker heading");
     assert(blockedPrepCompletionText.includes("Needs your review:"), "Blocked prep diagnostics should show the actionable review line");
     assert(blockedPrepCompletionText.includes("truly-beauty-case-study.pdf"), "Blocked prep diagnostics should list the missing file name");
-    assert(blockedPrepCompletionText.includes("manual field: attachments"), "Blocked prep diagnostics should list required manual fields without an internal inventory");
-    assert(blockedPrepCompletionText.includes("manually submit if satisfied"), "Blocked prep diagnostics should preserve manual-submit instruction");
+    assert(blockedPrepCompletionText.includes("I couldn’t safely fill: attachments"), "Blocked prep diagnostics should list required manual fields without internal wording");
+    assert(blockedPrepCompletionText.includes("reply “retry”"), "Blocked prep diagnostics should give a concise next step");
     assert(!blockedPrepCompletionText.includes("Stop before submit:"), "Blocked prep diagnostics should not include internal submit-guard debug lines");
+    for (const noisy of ["manual review", "platformEligibility", "lead decision", "packet", "source context", "action id"]) {
+      assert(!blockedPrepCompletionText.toLowerCase().includes(noisy.toLowerCase()), `Blocked prep alert should hide ${noisy}`);
+    }
 
     let globalBlockerText = "";
     const globalBlockerPost = await postPrepareDraftStatus(
@@ -865,7 +934,7 @@ async function runTests(): Promise<void> {
       },
     );
     assert(globalBlockerPost === "posted", "Global blocker without job thread may post as a standalone alert");
-    assert(globalBlockerText.includes("⚠️ Draft needs review"), "Standalone global blocker should stay concise");
+    assert(globalBlockerText.includes("⚠️ I hit a blocker on the apply page"), "Standalone global blocker should stay concise");
 
     const designJob = scoreJob({
       id: "design-job-1",
@@ -1194,7 +1263,8 @@ async function runTests(): Promise<void> {
       duplicate: true,
       duplicateStatus: "paused",
     });
-    assert(duplicateReply.includes("already exists as browser action #99 (paused)"), "Duplicate prepare reply should reference existing action and status");
+    assert(duplicateReply.includes("Already on it"), "Duplicate prepare reply should stay concise");
+    assert(!duplicateReply.toLowerCase().includes("browser action"), "Duplicate prepare reply should not expose action ids by default");
 
     const launchCommand = buildBrowserSessionLaunchCommand({
       chromeExecutablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",

@@ -5,9 +5,10 @@ export type ManualAttentionReason =
   | "passkey_required"
   | "two_factor_required"
   | "captcha_or_security_challenge"
-  | "suspicious_login_check";
+  | "suspicious_login_check"
+  | "final_submit_forbidden";
 
-export type ManualAttentionCategory = "auth_sensitive" | "challenge";
+export type ManualAttentionCategory = "auth_sensitive" | "challenge" | "final_submit";
 
 export interface BrowserInteractionTarget {
   selector?: string;
@@ -47,6 +48,7 @@ const SENSITIVE_PATTERNS: Array<{ pattern: RegExp; reason: ManualAttentionReason
   { pattern: /two[-\s]?factor|2[-\s]?step|verification[\s_-]*code|enter\s+the\s+code|authenticator|one[-\s]?time\s+code|otp/i, reason: "two_factor_required", category: "auth_sensitive", label: "two_factor_or_verification_code" },
   { pattern: /password|current-password|new-password|enter\s+your\s+password/i, reason: "password_required", category: "auth_sensitive", label: "password" },
   { pattern: /suspicious\s+login|unusual\s+activity|verify\s+it['’]?s\s+you|confirm\s+it['’]?s\s+you|identity\s+verification/i, reason: "suspicious_login_check", category: "auth_sensitive", label: "suspicious_login" },
+  { pattern: /\b(send\s+(?:for\s+\d{1,3}\s+connects|proposal)|submit\s+proposal)\b/i, reason: "final_submit_forbidden", category: "final_submit", label: "final_submit" },
 ];
 
 function targetText(target: BrowserInteractionTarget): string {

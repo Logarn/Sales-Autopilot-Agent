@@ -251,9 +251,9 @@ export type ConnectsStrategyDecision = "safe_apply" | "manual_review" | "skip";
 
 export interface ConnectsStrategySnapshot {
   decision: ConnectsStrategyDecision;
-  requiredConnects: number;
+  requiredConnects: number | null;
   suggestedBoostConnects: number;
-  totalConnects: number;
+  totalConnects: number | null;
   expectedValueScore: number;
   sourceBackedConnects?: SourceBackedConnects;
   reasons: string[];

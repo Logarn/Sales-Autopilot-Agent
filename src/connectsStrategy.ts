@@ -68,9 +68,9 @@ export function evaluateConnectsStrategy(input: ConnectsStrategyInput): Connects
   const rules = loadConnectsRules();
   const sourceBackedConnects = sourceBackedConnectsForJob(input.job);
   const requiredConnects = sourceBackedConnects.requiredConnects;
-  const strategyRequiredConnects = requiredConnects ?? 0;
+  const strategyRequiredConnects = requiredConnects;
   const suggestedBoostConnects = requiredConnects === null ? 0 : Math.max(0, Math.floor(input.suggestedBoostConnects ?? 0));
-  const totalConnects = requiredConnects === null ? 0 : requiredConnects + suggestedBoostConnects;
+  const totalConnects = requiredConnects === null ? null : requiredConnects + suggestedBoostConnects;
   const clientQuality = input.scoreBreakdown.clientQualityScore.score;
   const opportunity = input.scoreBreakdown.opportunityScore.score;
   const connectsRisk = input.scoreBreakdown.connectsRiskScore.score;
@@ -91,7 +91,7 @@ export function evaluateConnectsStrategy(input: ConnectsStrategyInput): Connects
 
   if (requiredConnects === null) risks.push("Required Connects are unknown from visible source text.");
   if (requiredConnects !== null && requiredConnects > rules.maxRequiredPerJob) risks.push(`Required Connects exceed hard cap (${requiredConnects}/${rules.maxRequiredPerJob}).`);
-  if (totalConnects > rules.requireApprovalAbove) risks.push(`Total Connects require approval (${totalConnects}/${rules.requireApprovalAbove}).`);
+  if (totalConnects !== null && totalConnects > rules.requireApprovalAbove) risks.push(`Total Connects require approval (${totalConnects}/${rules.requireApprovalAbove}).`);
   if (clientQuality < 55) risks.push(`Client quality is weak (${clientQuality}/100).`);
   if (opportunity < 55) risks.push(`Opportunity quality is weak (${opportunity}/100).`);
   if (redFlags < 55) risks.push(`Red-flag score is weak (${redFlags}/100).`);
@@ -105,7 +105,7 @@ export function evaluateConnectsStrategy(input: ConnectsStrategyInput): Connects
       connectsRisk * 0.14 +
       redFlags * 0.1 -
       competition.penalty -
-      Math.max(0, (requiredConnects === null ? rules.requireApprovalAbove + 1 : totalConnects) - rules.idealBoostMin) * 0.6,
+      Math.max(0, (requiredConnects === null ? rules.requireApprovalAbove + 1 : totalConnects ?? 0) - rules.idealBoostMin) * 0.6,
   )));
 
   if (requiredConnects === null) {
@@ -136,7 +136,7 @@ export function evaluateConnectsStrategy(input: ConnectsStrategyInput): Connects
   }
 
   if (
-    totalConnects > rules.requireApprovalAbove ||
+    totalConnects !== null && totalConnects > rules.requireApprovalAbove ||
     expectedValueScore < 68 ||
     clientQuality < 60 ||
     opportunity < 60 ||

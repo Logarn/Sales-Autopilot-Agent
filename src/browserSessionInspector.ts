@@ -104,7 +104,7 @@ function compact(value: string, maxLength = 1600): string {
   return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
-function isRiskState(state: BrowserToolSessionState): state is ManualAttentionReason {
+function isRiskState(state: BrowserToolSessionState): state is Extract<ManualAttentionReason, BrowserToolSessionState> {
   return state === "password_required" || state === "passkey_required" || state === "two_factor_required" || state === "captcha_or_security_challenge" || state === "suspicious_login_check";
 }
 
