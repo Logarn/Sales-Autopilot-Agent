@@ -1,8 +1,51 @@
 import assert from "node:assert/strict";
-import { enqueueBrowserAction, getBrowserActionById, listBrowserActions, updateBrowserActionStatus } from "./db";
-import { runControlledWorkerLoop } from "./browserWorker";
+import { existsSync, rmSync } from "node:fs";
+import { resolve } from "node:path";
 
-function clearPending(): void {
+function cleanupPath(path: string): void {
+  if (existsSync(path)) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup failures
+    }
+  }
+}
+
+async function run(): Promise<void> {
+  const tempDir = resolve(process.cwd(), "data/.tmp-controlled-worker-loop");
+  const tempDb = resolve(tempDir, "jobs.db");
+  cleanupPath(tempDir);
+  process.env.DB_PATH = tempDb;
+
+  const {
+    closeDb,
+    enqueueBrowserAction,
+    getBrowserActionById,
+    listBrowserActions,
+    updateBrowserActionStatus,
+  } = require("./db") as {
+    closeDb: () => void;
+    enqueueBrowserAction: (input: { jobId: string; actionType: string; payload: Record<string, unknown> }) => number;
+    getBrowserActionById: (id: number) => { status: string } | null;
+    listBrowserActions: (status?: string | null, limit?: number) => Array<{ id: number }>;
+    updateBrowserActionStatus: (id: number, status: string, lastError?: string | null) => void;
+  };
+  const { runControlledWorkerLoop } = require("./browserWorker") as {
+    runControlledWorkerLoop: (input: {
+      maxActions?: number;
+      dryRun?: boolean;
+      allowedActionTypes?: string[];
+      processActionOverride?: (action: { id: number }) => Promise<{ slackPostsSucceeded: number; slackPostFailures: number }>;
+    }) => Promise<{
+      actionsProcessed: number;
+      actionsCompleted: number;
+      actionsPaused: number;
+      stoppedReason: string;
+    }>;
+  };
+
+  function clearPending(): void {
   for (const status of ["pending", "paused", "failed"] as const) {
     for (const action of listBrowserActions(status, 500)) {
       updateBrowserActionStatus(action.id, "cancelled", "test cleanup");
@@ -10,7 +53,7 @@ function clearPending(): void {
   }
 }
 
-async function run(): Promise<void> {
+  try {
   clearPending();
 
   const empty = await runControlledWorkerLoop({ maxActions: 2, dryRun: true });
@@ -89,6 +132,10 @@ async function run(): Promise<void> {
   updateBrowserActionStatus(afterChallengeId, "cancelled", "test cleanup");
 
   console.log("controlled worker loop tests passed");
+  } finally {
+    closeDb();
+    cleanupPath(tempDir);
+  }
 }
 
 run().catch((error) => {
