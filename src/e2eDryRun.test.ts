@@ -157,8 +157,8 @@ async function runTests(): Promise<void> {
       questionAnswers: ["I would start with segmentation quality, zero-party data capture, and what is happening between first purchase and second purchase."],
     });
 
-    assert(packet.text.includes("Truly Beauty"), "selected proof should include Truly Beauty");
-    assert(packet.text.includes("Status: File missing locally - manual upload needed"), "packet should show proof availability without raw local paths");
+    assert(!packet.text.includes("Truly Beauty"), "default lead alert should not include proof inventory");
+    assert(!packet.text.includes("Status: File missing locally - manual upload needed"), "default lead alert should not include proof availability diagnostics");
     assert(!packet.text.toLowerCase().includes("copy/paste"), "packet should not include copy/paste instruction");
 
     const prepareActionsBeforeWorker = listBrowserActions(null, 20).filter((action) => action.actionType === "prepare_application_review" && action.jobId === storedJob.id);

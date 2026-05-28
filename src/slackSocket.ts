@@ -114,7 +114,7 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
   const normalized = normalizeSlackTextInput(text).trim();
   const commandText = normalized.replace(/[.!?]+$/g, "").trim();
   const statusMatch = /^(status)$/i.test(normalized) ||
-    /\b(why did you pick|why pick|what are the red flags|red flags|risks|what still needs manual review|what needs manual review|what is missing|what still needs|manual review)\b/i.test(normalized);
+    /\b(details|show details|show proof|show draft|why\b|why did you pick|why pick|what are the red flags|red flags|risks|what still needs manual review|what needs manual review|what is missing|what still needs|manual review)\b/i.test(normalized);
   if (statusMatch) return { type: "status", rawText: normalized };
 
   if (/^(approve)$/i.test(commandText)) return { type: "approve", rawText: normalized };
@@ -245,6 +245,7 @@ function buildThreadStatusDetails(state: NonNullable<ReturnType<typeof getSlackT
   if (!state.jobId) return [];
   const job = getScoredJobForSlackPreview(state.jobId);
   const draft = getApplicationDraft(state.jobId);
+  const profileContext = job ? buildProposalContextPack(job) : null;
   const latestActions = listBrowserActions(null, 1000)
     .filter((action) => action.jobId === state.jobId)
     .slice(-3)
@@ -256,6 +257,9 @@ function buildThreadStatusDetails(state: NonNullable<ReturnType<typeof getSlackT
     job?.scoreBreakdown.risks.length ? `Red flags/risks: ${job.scoreBreakdown.risks.slice(0, 5).join("; ")}` : "Red flags/risks: none recorded",
     strategy ? `Connects: ${formatConnectsStrategy(strategy)}` : "Connects: not calculated",
     draft ? `Draft: ${draft.status}, v${(draft as { proposalVersion?: number }).proposalVersion ?? "stored"}, ${draft.proposalText.length} chars` : "Draft: missing",
+    draft?.proposalText ? `Draft preview: ${draft.proposalText.replace(/\s+/g, " ").trim().slice(0, 900)}` : null,
+    profileContext?.selectedAttachments.length ? `Proof selected: ${profileContext.selectedAttachments.join(", ")}` : null,
+    profileContext?.selectedProofPoints.length ? `Proof points: ${profileContext.selectedProofPoints.slice(0, 5).join("; ")}` : null,
     draft?.selectedPortfolioItems.length ? `Selected portfolio: ${draft.selectedPortfolioItems.map((item) => item.name).join(", ")}` : "Selected portfolio: none",
     latestActions.length ? `Browser actions: ${latestActions.join(" | ")}` : "Browser actions: none",
   ].filter((line): line is string => Boolean(line));

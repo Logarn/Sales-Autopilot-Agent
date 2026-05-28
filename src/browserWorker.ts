@@ -820,50 +820,50 @@ function buildPrepareDraftStatusMessage(input: {
 }): string {
   const { diagnostics } = input;
   const readyState = diagnostics.state === "apply_page_loaded" || diagnostics.state === "dry_run" || diagnostics.state === "prepared";
-  const screeningAnswers = diagnostics.screeningAnswers ?? [];
-  const filesAttached = diagnostics.filesAttached ?? [];
-  const portfolioHighlights = diagnostics.portfolioHighlights ?? [];
-  const profileHighlights = diagnostics.profileHighlights ?? [];
   const needsManualReview = diagnostics.validationIssues.some((issue) => issue.severity === "warning" || issue.severity === "error") ||
     diagnostics.missingLocalAssets.length > 0 ||
     diagnostics.manualFields.length > 0 ||
     diagnostics.connectsDecision !== "safe_apply";
   const readyForFinalManualSubmit = diagnostics.state === "apply_page_loaded" && diagnostics.stopBeforeSubmit && !needsManualReview;
-  const qaInstruction = readyState
-    ? "Hey Logan and Natalie, I prepared this application. The draft proposal is filled in. Please QA and manually press submit if satisfied."
-    : "Hey Logan and Natalie, application preparation paused. Please review the diagnostics before any manual submit.";
+  const title = boundedExcerpt(diagnostics.jobTitle ?? diagnostics.jobId, 72);
+  const heading = readyState
+    ? `✅ Draft ready for QA: ${title}`
+    : `⚠️ Draft needs review: ${title}`;
+  const screeningCount = diagnostics.screeningAnswersCount;
+  const screeningAnswers = diagnostics.screeningAnswers ?? [];
+  const coverLetterPreview = diagnostics.coverLetterPreview ?? null;
+  const proofSummary = diagnostics.selectedAttachments.length > 0
+    ? `${diagnostics.selectedAttachments.length} proof item${diagnostics.selectedAttachments.length === 1 ? "" : "s"} selected`
+    : "no proof attached";
+  const connectsSummary = diagnostics.requiredConnects === null
+    ? "Connects are unknown"
+    : `Connects are ${diagnostics.requiredConnects}${diagnostics.boostConnects ? ` + ${diagnostics.boostConnects} boost` : ""}${diagnostics.totalConnects !== null ? ` (${diagnostics.totalConnects} total)` : ""}`;
+  const rateSummary = diagnostics.rate ? `set ${diagnostics.rate}` : "rate not safely set";
+  const missingFiles = diagnostics.missingLocalAssets.map((asset) => path.basename(asset)).slice(0, 2);
+  const manualFields = diagnostics.manualFields.filter((field) => field !== "finalSubmit").slice(0, 3);
+  const reviewItems = [
+    missingFiles.length > 0 ? `${missingFiles.length} missing file${missingFiles.length === 1 ? "" : "s"}: ${missingFiles.join(", ")}` : null,
+    manualFields.length > 0 ? `manual field${manualFields.length === 1 ? "" : "s"}: ${manualFields.join(", ")}` : null,
+    diagnostics.connectsDecision !== "safe_apply" ? `Connects need review (${diagnostics.connectsDecision ?? "unknown"})` : null,
+    diagnostics.validationIssues.find((issue) => issue.severity === "error")?.message,
+  ].filter((item): item is string => Boolean(item));
+  const reviewText = reviewItems.length > 0 ? reviewItems.slice(0, 3).join("; ") : "none";
+  const coverLetterLine = coverLetterPreview && coverLetterPreview.length <= 650
+    ? `Cover letter preview: ${boundedExcerpt(coverLetterPreview, 650)}`
+    : diagnostics.coverLetterPresent
+      ? `Cover letter: ready (${diagnostics.coverLetterLength} chars); full draft is on the application page.`
+      : "Cover letter: not filled.";
+  const screeningLine = screeningCount > 0
+    ? `Screening answers: ${screeningCount} answered${screeningAnswers.length > 0 && screeningAnswers.join(" ").length <= 500 ? ` — ${screeningAnswers.join(" | ")}` : "."}`
+    : "Screening answers: none detected.";
   return [
-    input.heading,
-    qaInstruction,
-    `Review state: ${readyState ? "draft prepared for human review" : "paused before final review"}`,
-    `Ready for final manual submit: ${readyForFinalManualSubmit ? "yes - Upwork page is prepared; Steve must review and click final submit manually." : "no - review diagnostics before submitting."}`,
-    `Job: ${diagnostics.jobTitle ?? diagnostics.jobId}`,
-    `Job ID: ${diagnostics.jobId}`,
-    `Apply URL: ${diagnostics.applyUrl ?? diagnostics.sourceUrl ?? "n/a"}`,
-    `Cover letter ready: ${diagnostics.coverLetterPresent ? `yes (${diagnostics.coverLetterLength} chars)` : "no"}`,
-    diagnostics.coverLetterPreview ? `Cover letter preview:\n${diagnostics.coverLetterPreview}` : "Cover letter preview: n/a",
-    `Screening answers ready: ${diagnostics.screeningAnswersCount > 0 ? `yes (${diagnostics.screeningAnswersCount})` : "none detected"}`,
-    `Screening answers filled: ${screeningAnswers.length > 0 ? screeningAnswers.join(" | ") : "none"}`,
-    `Rate/bid: ${diagnostics.rate ?? "n/a"}`,
-    `Connects: required=${diagnostics.requiredConnects ?? "n/a"} boost=${diagnostics.boostConnects ?? "n/a"} total=${diagnostics.totalConnects ?? "n/a"}`,
-    `Connects confidence/source: ${diagnostics.connectsConfidence ?? "unknown"} / ${diagnostics.connectsSource ?? "not source-backed"}`,
-    `Connects decision: ${diagnostics.connectsDecision ?? "n/a"}${diagnostics.connectsExpectedValue !== null ? ` (EV ${diagnostics.connectsExpectedValue}/100)` : ""}`,
-    `Auto-attach assets: ${diagnostics.selectedAttachments.length > 0 ? diagnostics.selectedAttachments.join(", ") : "none"}`,
-    `Files attached/selected: ${filesAttached.length > 0 ? filesAttached.join(", ") : "none"}`,
-    `Manual-review assets: ${diagnostics.manualReviewAssets.length > 0 ? diagnostics.manualReviewAssets.join("; ") : "none"}`,
-    `Mention-only proof: ${diagnostics.mentionOnlyProof.length > 0 ? diagnostics.mentionOnlyProof.join("; ") : "none"}`,
-    `Proof availability: ${diagnostics.proofAvailability.length > 0 ? diagnostics.proofAvailability.join("; ") : "none"}`,
-    `Portfolio highlights: ${portfolioHighlights.length > 0 ? portfolioHighlights.join("; ") : "none"}`,
-    `Profile highlights: ${profileHighlights.length > 0 ? profileHighlights.join("; ") : "none"}`,
-    `Missing local assets: ${diagnostics.missingLocalAssets.length > 0 ? diagnostics.missingLocalAssets.join("; ") : "none"}`,
-    `Fields filled: ${diagnostics.attemptedFields.length > 0 ? diagnostics.attemptedFields.join(", ") : "none"}`,
-    `Fields not filled: ${diagnostics.skippedFields.length > 0 ? diagnostics.skippedFields.join(", ") : "none"}`,
-    `Manual review fields: ${diagnostics.manualFields.length > 0 ? diagnostics.manualFields.join(", ") : "none"}`,
-    `Needs manual action before submit: ${needsManualReview ? "yes" : "no"}`,
-    `Warnings: ${diagnostics.warnings.length > 0 ? diagnostics.warnings.join("; ") : "none"}`,
-    `Stop before submit: ${diagnostics.stopBeforeSubmit}`,
-    "Final submit remains manual and was not clicked.",
-    input.nextCommand ? `Next command: ${input.nextCommand}` : "Next commands: retry <action-id> | status | mark submitted",
+    heading,
+    `I ${diagnostics.coverLetterPresent ? "filled the cover letter" : "could not fill the cover letter"}, answered ${screeningCount} screening question${screeningCount === 1 ? "" : "s"}, ${rateSummary}, ${connectsSummary}, and ${proofSummary}.`,
+    coverLetterLine,
+    screeningLine,
+    `Needs your review: ${readyForFinalManualSubmit ? "none" : reviewText}`,
+    "Final step for Natalie/Steve: open the Upwork draft, QA it, and manually submit if satisfied.",
+    diagnostics.applyUrl ?? diagnostics.sourceUrl ?? "Upwork application URL unavailable",
   ].join("\n");
 }
 

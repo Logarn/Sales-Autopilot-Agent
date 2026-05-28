@@ -268,7 +268,9 @@ async function runTests(): Promise<void> {
     );
     assert(manualReviewDiscovery.status === "posted", "Manual-review discovery lead should post via webhook fallback");
     assert(manualReviewDiscovery.outcome === "posted", "Manual-review discovery lead should report posted outcome");
-    assert(webhookPostedText.includes("*Recommended action:* Manual platform review before draft prep"), "Manual-review lead should keep manual review wording in Slack");
+    assert(webhookPostedText.includes("Next: Steve/Natalie, this needs manual review"), "Manual-review lead should keep concise manual review wording in Slack");
+    assert(!webhookPostedText.includes("Available replies"), "Normal lead alert should not include a command menu");
+    assert(!webhookPostedText.includes("Debug:"), "Normal lead alert should not include debug lines");
 
     webhookPostedText = "";
     const normalDiscoveryJob = {
@@ -318,7 +320,9 @@ async function runTests(): Promise<void> {
       },
     );
     assert(normalDiscovery.status === "posted", "Eligible discovery lead should post");
-    assert(webhookPostedText.includes("*Recommended action:* Autonomous prep is proceeding; watch for the draft-ready touchpoint"), "Post-to-Slack lead should use two-touchpoint autonomous prep wording");
+    assert(webhookPostedText.includes("Next: I’ll prepare and post a draft application for this lead."), "Post-to-Slack lead should use concise autonomous prep wording");
+    assert(!webhookPostedText.includes("Screening answers"), "Initial lead alert must not include screening answers");
+    assert(!webhookPostedText.includes("Proposal preview"), "Initial lead alert must not include proposal preview");
 
     let queuedPrepPostAttempted = false;
     const queuedPrepJob = {
@@ -548,7 +552,7 @@ async function runTests(): Promise<void> {
     );
     assert(connectsManualReviewDiscovery.status === "posted", "Eligible connects-manual-review discovery lead should post");
     assert(connectsManualReviewDiscovery.outcome === "posted", "Eligible connects-manual-review discovery lead should count as posted");
-    assert(webhookPostedText.includes("*Recommended action:* Manual platform review before draft prep"), "Connects manual-review lead should keep manual review wording in Slack");
+    assert(webhookPostedText.includes("Next: Steve/Natalie, this needs manual review"), "Connects manual-review lead should keep concise manual review wording in Slack");
 
     let skippedWebhookCalled = false;
     const ineligibleDiscovery = await postDiscoveryCapturePacket(
@@ -771,13 +775,14 @@ async function runTests(): Promise<void> {
       },
     );
     assert(prepCompletionPost === "posted", "Prepared browser application should post final-review Slack thread reply");
-    assert(prepCompletionText.includes("Upwork application page prepared for final manual submit"), "Prep completion alert should use final manual submit wording");
-    assert(prepCompletionText.includes(`Job: ${beautyJob.title}`), "Prep completion alert should include job title");
+    assert(prepCompletionText.includes("✅ Draft ready for QA"), "Prep completion alert should use concise ready-for-QA wording");
     assert(prepCompletionText.includes(`${beautyJob.url}/apply`), "Prep completion alert should include apply URL");
-    assert(prepCompletionText.includes("Fields filled: cover letter, screening answers, rate"), "Prep completion alert should list filled fields");
-    assert(prepCompletionText.includes("Auto-attach assets: Truly Beauty case study"), "Prep completion alert should list selected attachments");
-    assert(prepCompletionText.includes("Ready for final manual submit: yes"), "Prep completion alert should explicitly mark safe final manual review");
-    assert(prepCompletionText.includes("Final submit remains manual and was not clicked."), "Prep completion alert should preserve final submit safety");
+    assert(prepCompletionText.includes("answered 2 screening questions"), "Prep completion alert should summarize screening answers");
+    assert(prepCompletionText.includes("Connects are 4 (4 total)"), "Prep completion alert should summarize Connects");
+    assert(prepCompletionText.includes("Needs your review: none"), "Prep completion alert should explicitly mark no extra manual issues");
+    assert(prepCompletionText.includes("manually submit if satisfied"), "Prep completion alert should preserve final submit safety");
+    assert(!prepCompletionText.includes("Fields filled:"), "Prep completion alert should not include internal field inventory");
+    assert(!prepCompletionText.includes("Auto-attach assets:"), "Prep completion alert should not include exhaustive proof inventory");
 
     const blockedPrepDiagnostics = {
       actionId: 708,
@@ -838,12 +843,12 @@ async function runTests(): Promise<void> {
       },
     );
     assert(blockedPrepCompletionPost === "posted", "Blocked browser application diagnostics should post into the job thread");
-    assert(blockedPrepCompletionText.includes("Ready for final manual submit: no - review diagnostics before submitting."), "Blocked prep diagnostics should not report final-submit readiness");
-    assert(blockedPrepCompletionText.includes("Fields not filled: coverLetter, rate"), "Blocked prep diagnostics should list required fields not safely filled");
-    assert(blockedPrepCompletionText.includes("Missing local assets: profile/attachments/truly-beauty-case-study.pdf"), "Blocked prep diagnostics should list missing files");
-    assert(blockedPrepCompletionText.includes("Manual review fields: attachments, finalSubmit"), "Blocked prep diagnostics should list manual fields");
-    assert(blockedPrepCompletionText.includes("Stop before submit: true"), "Blocked prep diagnostics should keep submit guard visible");
-    assert(blockedPrepCompletionText.includes("Final submit remains manual and was not clicked."), "Blocked prep diagnostics should preserve no-submit behavior");
+    assert(blockedPrepCompletionText.includes("⚠️ Draft needs review"), "Blocked prep diagnostics should use concise review heading");
+    assert(blockedPrepCompletionText.includes("Needs your review:"), "Blocked prep diagnostics should show the actionable review line");
+    assert(blockedPrepCompletionText.includes("truly-beauty-case-study.pdf"), "Blocked prep diagnostics should list the missing file name");
+    assert(blockedPrepCompletionText.includes("manual field: attachments"), "Blocked prep diagnostics should list required manual fields without an internal inventory");
+    assert(blockedPrepCompletionText.includes("manually submit if satisfied"), "Blocked prep diagnostics should preserve manual-submit instruction");
+    assert(!blockedPrepCompletionText.includes("Stop before submit:"), "Blocked prep diagnostics should not include internal submit-guard debug lines");
 
     let globalBlockerText = "";
     const globalBlockerPost = await postPrepareDraftStatus(
@@ -860,7 +865,7 @@ async function runTests(): Promise<void> {
       },
     );
     assert(globalBlockerPost === "posted", "Global blocker without job thread may post as a standalone alert");
-    assert(globalBlockerText.includes("Browser session paused before application preparation"), "Standalone global blocker should carry blocker heading");
+    assert(globalBlockerText.includes("⚠️ Draft needs review"), "Standalone global blocker should stay concise");
 
     const designJob = scoreJob({
       id: "design-job-1",
