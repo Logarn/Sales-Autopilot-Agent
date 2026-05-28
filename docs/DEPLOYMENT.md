@@ -27,9 +27,11 @@ It is not an uncontrolled auto-apply bot.
 
 ### Slack
 
-- outbound webhook is the required baseline
-- Socket Mode is optional for inbound thread commands
+- Slack Web API is the production outbound path for parent lead messages and thread replies
+- Socket Mode is the production inbound path for opportunity-thread commands
+- incoming webhook is fallback-only and cannot preserve one-job-one-thread state by itself
 - Slack is the primary operator surface
+- run `npm run slack:socket` persistently, or use `deploy/systemd/upwork-agent-slack-socket.service`
 
 ### Lead engine
 
@@ -77,6 +79,7 @@ Systemd templates:
 
 - `deploy/systemd/upwork-agent-browser-session.service`
 - `deploy/systemd/upwork-agent-lead-engine.service`
+- `deploy/systemd/upwork-agent-slack-socket.service`
 - `deploy/systemd/upwork-agent-health.service`
 - `deploy/systemd/upwork-agent-health.timer`
 

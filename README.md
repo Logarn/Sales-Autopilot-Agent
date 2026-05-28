@@ -17,8 +17,9 @@ The current preferred flow is:
 
 Important boundaries:
 
-- Slack outbound via webhook is the baseline
-- Slack Socket Mode is optional for inbound thread commands
+- Slack Web API is the production outbound path for parent lead messages and thread replies
+- Slack Socket Mode is the production inbound path for opportunity-thread commands
+- incoming webhook is fallback-only and cannot preserve one-job-one-thread state by itself
 - the lead engine is the preferred always-on control loop
 - browser automation should run against a persistent CDP session on a server
 - final Upwork submit remains manual
@@ -27,6 +28,7 @@ Deployment references:
 
 - general runtime notes: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 - Contabo-specific setup: [docs/CONTABO_RUNBOOK.md](docs/CONTABO_RUNBOOK.md)
+- Slack Web API + Socket Mode setup: [docs/SLACK_WEB_API_SOCKET_MODE_DEPLOYMENT.md](docs/SLACK_WEB_API_SOCKET_MODE_DEPLOYMENT.md)
 
 ## Features
 
@@ -188,7 +190,7 @@ npm run slack:conversation -- handle --job-id <stored-job-id> --text "approve an
 npm run slack:conversation -- handle --job-id <stored-job-id> --text "revise opening to mention Shopify proof"
 ```
 
-Inbound Slack placeholders are intentionally credential-optional: `SLACK_INBOUND_MODE=local_cli` by default, with future `events`, `socket_mode`, or `polling` options needing `SLACK_SIGNING_SECRET`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, or `SLACK_POLL_CHANNEL_ID` depending on the chosen Slack app pattern. Until one of those patterns is implemented and deployed, use the local CLI/testing path for approve/reject/revise/mark/queue commands. No Slack OAuth or socket-mode token is required for the V0 preview path.
+Production two-way Slack control uses Slack Web API plus Socket Mode. Run `npm run slack:socket` persistently, or use `deploy/systemd/upwork-agent-slack-socket.service` on Contabo. Local CLI conversation handling remains useful for tests and recovery, but the production opportunity thread flow requires `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_SOCKET_MODE_ENABLED=true`, `DISCOVERY_SLACK_CHANNEL_ID`, and `SLACK_ALLOWED_CHANNEL_IDS`.
 
 ## Job Detail Capture Workflow
 
@@ -356,7 +358,12 @@ The list command prints sorted skill names, titles, and markdown paths. The read
 See `.env.example` for full list. Core settings:
 
 ```env
-# Slack V0 uses only this incoming webhook URL; no Slack app/OAuth/socket-mode token is required.
+# Production Slack uses Web API + Socket Mode. Incoming webhook is fallback-only.
+SLACK_BOT_TOKEN=
+SLACK_APP_TOKEN=
+SLACK_SOCKET_MODE_ENABLED=true
+DISCOVERY_SLACK_CHANNEL_ID=
+SLACK_ALLOWED_CHANNEL_IDS=
 SLACK_CHANNEL_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
 APIFY_API_TOKEN=your_apify_token_here
 CRON_SCHEDULE=0 * * * *

@@ -44,6 +44,7 @@ Slack Web API and Socket Mode:
 SLACK_BOT_TOKEN=<bot-token>
 SLACK_APP_TOKEN=<app-level-token>
 SLACK_SOCKET_MODE_ENABLED=true
+SLACK_INBOUND_MODE=socket_mode
 DISCOVERY_SLACK_CHANNEL_ID=C0123456789
 SLACK_ALLOWED_CHANNEL_IDS=C0123456789
 ```
@@ -59,12 +60,19 @@ Not required for Socket Mode:
 ```bash
 SLACK_SIGNING_SECRET=
 SLACK_POLL_CHANNEL_ID=
-SLACK_INBOUND_MODE=
 ```
 
 `SLACK_ALLOWED_CHANNEL_IDS` should include the same channel as `DISCOVERY_SLACK_CHANNEL_ID` in production so inbound replies from other channels are ignored.
 
 Run `npm run slack:socket` as its own supervised process alongside the lead engine/browser worker processes.
+
+PR #14 includes the durable service template:
+
+```bash
+deploy/systemd/upwork-agent-slack-socket.service
+```
+
+The unit runs as `upwork-agent`, uses `/opt/upwork-agent/app` as its working directory, loads `/opt/upwork-agent/app/.env`, starts `npm run slack:socket`, restarts on failure, and relies on `journalctl` for logging. It does not contain secret values.
 
 ## Threaded Posting Smoke Test
 
@@ -128,6 +136,15 @@ SLACK_ALLOWED_CHANNEL_IDS="$SLACK_ALLOWED_CHANNEL_IDS" \
 npm run slack:socket
 ```
 
+Systemd production listener:
+
+```bash
+sudo cp deploy/systemd/upwork-agent-slack-socket.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now upwork-agent-slack-socket.service
+journalctl -u upwork-agent-slack-socket.service -f
+```
+
 Then in the allowed Slack channel:
 
 1. Reply in a tracked opportunity thread with `status`.
@@ -144,7 +161,7 @@ Expected result:
 
 ## Degraded Behavior Without Socket Mode
 
-If `SLACK_SOCKET_MODE_ENABLED`, `SLACK_APP_TOKEN`, or bot message events are not configured:
+If `SLACK_SOCKET_MODE_ENABLED`, `SLACK_APP_TOKEN`, `SLACK_INBOUND_MODE=socket_mode`, or bot message events are not configured:
 
 - outbound Web API parent messages and thread replies can still work if `SLACK_BOT_TOKEN` and `DISCOVERY_SLACK_CHANNEL_ID` are configured
 - inbound natural thread replies do not work
