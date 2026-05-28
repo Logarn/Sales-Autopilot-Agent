@@ -1093,6 +1093,16 @@ async function runTests(): Promise<void> {
     );
     assert(bestMatchesDetection.state === "captured", "Best Matches job detail modal URL should not be classified as a challenge");
 
+    const challengeWordInJobDetection = detectStateWithDiagnostics(
+      {
+        url: "https://www.upwork.com/jobs/Beauty-Klaviyo-Retention_~beautye2e123456",
+        title: "Upwork",
+        textExcerpt: "The challenge is improving repeat purchase and lifecycle email performance for a Shopify beauty brand.",
+      },
+      settlingAction,
+    );
+    assert(challengeWordInJobDetection.state === "captured", "A normal job description using the word challenge should not be classified as a security challenge");
+
     const blockedDetection = detectStateWithDiagnostics(
       {
         url: "https://www.upwork.com/ab/account-security/challenge?__cf_chl_tk=abc",

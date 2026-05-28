@@ -182,6 +182,31 @@ async function run(): Promise<void> {
   assert.equal(backpressureDiscoveryCalls, 0);
   assert.equal(backpressureWorkerCalls, 1, "lead engine should still allow the worker to drain existing queue during backpressure");
 
+  const nonCriticalCaptureFailure = await runLeadEngineCycle(
+    { mode: "run_once", dryRun: false },
+    {
+      getSessionStatus: () => sessionStatus(),
+      inspectLiveSession: async () => usableFeedInspection(),
+      listActions: () => [],
+      runDiscovery: async () => discoveryOk(),
+      runWorker: async () => ({
+        actionsProcessed: 2,
+        actionsCompleted: 1,
+        actionsPaused: 0,
+        actionsSkipped: 0,
+        slackPostsSucceeded: 0,
+        slackPostFailures: 0,
+        stoppedReason: "completed_batch",
+        remainingPendingCount: 0,
+      }),
+      writeState: () => undefined,
+      random: () => 0,
+    },
+  );
+  assert.equal(nonCriticalCaptureFailure.status, "ok", "one failed unreadable capture should not mark lead engine manual_attention_required when the worker continues");
+  assert.notEqual(nonCriticalCaptureFailure.stoppedReason, "manual_attention_required");
+  assert.equal(nonCriticalCaptureFailure.actionsPaused, 0);
+
   let staleDiscoveryCalls = 0;
   let staleWorkerCalls = 0;
   let clearCalls = 0;
