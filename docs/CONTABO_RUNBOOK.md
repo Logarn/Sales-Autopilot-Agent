@@ -17,7 +17,7 @@ Recommended production shape:
 - one Contabo VM
 - one persistent Chrome session on the server
 - one lead-engine process managed by `systemd`
-- optional Slack Socket Mode for inbound commands
+- one Slack Socket Mode listener managed by `systemd`
 - SQLite stored on the server
 - shared browser profile and artifacts stored outside the repo checkout
 
@@ -105,11 +105,13 @@ sudo -u upwork-agent cp /opt/upwork-agent/app/.env.example /opt/upwork-agent/app
 Required values to set:
 
 - Slack:
-  - `SLACK_CHANNEL_WEBHOOK_URL`
-  - `SLACK_SOCKET_MODE_ENABLED`
   - `SLACK_BOT_TOKEN`
   - `SLACK_APP_TOKEN`
+  - `SLACK_SOCKET_MODE_ENABLED`
+  - `SLACK_INBOUND_MODE`
+  - `DISCOVERY_SLACK_CHANNEL_ID`
   - `SLACK_ALLOWED_CHANNEL_IDS`
+  - optional fallback: `SLACK_CHANNEL_WEBHOOK_URL`
 - Upwork discovery:
   - `APIFY_API_TOKEN`
 - LLM:
@@ -269,6 +271,7 @@ Enable browser session, lead engine, and health timer:
 
 ```bash
 sudo systemctl enable --now upwork-agent-browser-session.service
+sudo systemctl enable --now upwork-agent-slack-socket.service
 sudo systemctl enable --now upwork-agent-lead-engine.service
 sudo systemctl enable --now upwork-agent-health.timer
 ```
@@ -277,6 +280,7 @@ Disable always-on mode:
 
 ```bash
 sudo systemctl disable --now upwork-agent-lead-engine.service
+sudo systemctl disable --now upwork-agent-slack-socket.service
 sudo systemctl disable --now upwork-agent-health.timer
 ```
 
@@ -294,6 +298,7 @@ View logs:
 
 ```bash
 journalctl -u upwork-agent-browser-session.service -f
+journalctl -u upwork-agent-slack-socket.service -f
 journalctl -u upwork-agent-lead-engine.service -f
 journalctl -u upwork-agent-health.service -f
 ```

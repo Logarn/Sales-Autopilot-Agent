@@ -1,5 +1,23 @@
 export type MatchLevel = "high" | "medium" | "low" | "skip";
 
+export type ConnectsExtractionConfidence = "high" | "medium" | "low" | "unknown";
+
+export type ConnectsExtractionMethod =
+  | "deterministic_visible_text"
+  | "llm_visible_text"
+  | "legacy_field"
+  | "not_found";
+
+export interface SourceBackedConnects {
+  requiredConnects: number | null;
+  boostConnects: number | null;
+  totalConnects: number | null;
+  confidence: ConnectsExtractionConfidence;
+  sourceText: string | null;
+  sourceLocation: string | null;
+  extractionMethod: ConnectsExtractionMethod;
+}
+
 export interface JobPosting {
   id: string;
   title: string;
@@ -16,6 +34,7 @@ export interface JobPosting {
   category: string;
   experienceLevel: string;
   connectsCost: number;
+  connects?: SourceBackedConnects;
   skills: string[];
   sourceQuery: string;
   proposalCount?: number | null;
@@ -57,9 +76,9 @@ export interface NormalizedRequirementsPacket {
   timeline: string;
 }
 
-export interface NormalizedConnectsPacket {
+export interface NormalizedConnectsPacket extends SourceBackedConnects {
   required: number | null;
-  deterministicRequired: number;
+  deterministicRequired: number | null;
   suggestedBoost: number;
   notes: string[];
 }
@@ -236,6 +255,7 @@ export interface ConnectsStrategySnapshot {
   suggestedBoostConnects: number;
   totalConnects: number;
   expectedValueScore: number;
+  sourceBackedConnects?: SourceBackedConnects;
   reasons: string[];
   risks: string[];
 }
@@ -443,9 +463,9 @@ export interface BrowserApplySkippedAttachment {
 }
 
 export interface BrowserApplyConnectsPlan {
-  required: number;
-  boost: number;
-  total: number;
+  required: number | null;
+  boost: number | null;
+  total: number | null;
   approvalRequired: boolean;
   notes: string[];
 }

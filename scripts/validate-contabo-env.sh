@@ -46,6 +46,15 @@ required_keys=(
   HEALTH_ALERT_COOLDOWN_MS
 )
 
+production_slack_keys=(
+  SLACK_BOT_TOKEN
+  SLACK_APP_TOKEN
+  SLACK_SOCKET_MODE_ENABLED
+  SLACK_INBOUND_MODE
+  DISCOVERY_SLACK_CHANNEL_ID
+  SLACK_ALLOWED_CHANNEL_IDS
+)
+
 path_keys=(
   DB_PATH
   PROFILE_CONFIG_PATH
@@ -79,6 +88,33 @@ if (( ${#missing[@]} > 0 )); then
   printf 'Missing required env keys in %s:\n' "$ENV_FILE" >&2
   printf '  - %s\n' "${missing[@]}" >&2
   exit 1
+fi
+
+if [[ "$MODE" != "template" ]]; then
+  missing_slack=()
+  empty_slack=()
+  for key in "${production_slack_keys[@]}"; do
+    if ! grep -q -E "^${key}=" "$ENV_FILE"; then
+      missing_slack+=("$key")
+      continue
+    fi
+    value="$(value_for "$key")"
+    if [[ -z "$value" ]]; then
+      empty_slack+=("$key")
+    fi
+  done
+
+  if (( ${#missing_slack[@]} > 0 )); then
+    printf 'Missing required Slack Web API / Socket Mode keys in %s:\n' "$ENV_FILE" >&2
+    printf '  - %s\n' "${missing_slack[@]}" >&2
+    exit 1
+  fi
+
+  if (( ${#empty_slack[@]} > 0 )); then
+    printf 'Empty required Slack Web API / Socket Mode values in %s:\n' "$ENV_FILE" >&2
+    printf '  - %s\n' "${empty_slack[@]}" >&2
+    exit 1
+  fi
 fi
 
 session_mode="$(value_for BROWSER_SESSION_MODE)"

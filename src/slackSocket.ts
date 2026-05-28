@@ -112,33 +112,36 @@ export function parseUpworkJobUrlFromText(text: string): ParsedUpworkUrl | null 
 
 export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand {
   const normalized = normalizeSlackTextInput(text).trim();
-  const statusMatch = /^(status)$/i.test(normalized);
+  const commandText = normalized.replace(/[.!?]+$/g, "").trim();
+  const statusMatch = /^(status)$/i.test(normalized) ||
+    /\b(details|show details|show proof|show draft|why\b|why did you pick|why pick|what are the red flags|red flags|risks|what still needs manual review|what needs manual review|what is missing|what still needs|manual review)\b/i.test(normalized);
   if (statusMatch) return { type: "status", rawText: normalized };
 
-  if (/^(approve)$/i.test(normalized)) return { type: "approve", rawText: normalized };
-  if (/^(reject)$/i.test(normalized)) return { type: "reject", rawText: normalized };
+  if (/^(approve)$/i.test(commandText)) return { type: "approve", rawText: normalized };
+  if (/^(reject|skip|skip this one|pass|decline)$/i.test(commandText)) return { type: "reject", rawText: normalized };
 
-  const reviseMatch = normalized.match(/^revise\s*:\s*(.+)$/i);
+  const reviseMatch = normalized.match(/^revise\s*:\s*(.+)$/i) ??
+    normalized.match(/^(make|use|lower|raise|remove|rewrite|change|edit|adjust|update)\b\s*(.+)$/i);
   if (reviseMatch) {
     return {
       type: "revise",
       rawText: normalized,
-      instruction: reviseMatch[1]?.trim() || "",
+      instruction: (reviseMatch[2] ?? reviseMatch[1])?.trim() || "",
     };
   }
 
-  if (/^prepare\s+draft$/i.test(normalized)) return { type: "prepare_draft", rawText: normalized };
+  if (/^(prepare\s+draft|prepare\s+application|prepare\s+proposal)$/i.test(commandText)) return { type: "prepare_draft", rawText: normalized };
 
-  const retryMatch = normalized.match(/^retry\s+(\d+)$/i);
+  const retryMatch = commandText.match(/^retry(?:\s+(?:preparation|prep))?(?:\s+(\d+))?$/i);
   if (retryMatch) {
     return {
       type: "retry_action",
       rawText: normalized,
-      actionId: Number.parseInt(retryMatch[1], 10),
+      actionId: retryMatch[1] ? Number.parseInt(retryMatch[1], 10) : undefined,
     };
   }
 
-  if (/^mark\s+submitted$/i.test(normalized)) return { type: "mark_submitted", rawText: normalized };
+  if (/^mark\s+submitted$/i.test(commandText)) return { type: "mark_submitted", rawText: normalized };
 
   return { type: "unknown", rawText: normalized };
 }
@@ -236,6 +239,30 @@ function describeQueuedBrowserDraft(jobId: string): string {
 
   const latest = activeDraftActions[activeDraftActions.length - 1];
   return `Browser draft needs update: yes - browser action #${latest.id} is ${latest.status}. Re-run prepare draft after reviewing this revision.`;
+}
+
+function buildThreadStatusDetails(state: NonNullable<ReturnType<typeof getSlackThreadStateByThreadTs>>): string[] {
+  if (!state.jobId) return [];
+  const job = getScoredJobForSlackPreview(state.jobId);
+  const draft = getApplicationDraft(state.jobId);
+  const profileContext = job ? buildProposalContextPack(job) : null;
+  const latestActions = listBrowserActions(null, 1000)
+    .filter((action) => action.jobId === state.jobId)
+    .slice(-3)
+    .map((action) => `#${action.id} ${action.actionType} ${action.status}${action.lastError ? ` (${action.lastError})` : ""}`);
+  const strategy = draft?.connectsStrategy ?? job?.scoreBreakdown.connectsStrategy;
+  return [
+    job ? `Fit: ${job.score}/100 (${job.matchLevel})` : null,
+    job?.scoreBreakdown.reasons.length ? `Why picked: ${job.scoreBreakdown.reasons.slice(0, 5).join("; ")}` : null,
+    job?.scoreBreakdown.risks.length ? `Red flags/risks: ${job.scoreBreakdown.risks.slice(0, 5).join("; ")}` : "Red flags/risks: none recorded",
+    strategy ? `Connects: ${formatConnectsStrategy(strategy)}` : "Connects: not calculated",
+    draft ? `Draft: ${draft.status}, v${(draft as { proposalVersion?: number }).proposalVersion ?? "stored"}, ${draft.proposalText.length} chars` : "Draft: missing",
+    draft?.proposalText ? `Draft preview: ${draft.proposalText.replace(/\s+/g, " ").trim().slice(0, 900)}` : null,
+    profileContext?.selectedAttachments.length ? `Proof selected: ${profileContext.selectedAttachments.join(", ")}` : null,
+    profileContext?.selectedProofPoints.length ? `Proof points: ${profileContext.selectedProofPoints.slice(0, 5).join("; ")}` : null,
+    draft?.selectedPortfolioItems.length ? `Selected portfolio: ${draft.selectedPortfolioItems.map((item) => item.name).join(", ")}` : "Selected portfolio: none",
+    latestActions.length ? `Browser actions: ${latestActions.join(" | ")}` : "Browser actions: none",
+  ].filter((line): line is string => Boolean(line));
 }
 
 export function applySlackThreadRevision(input: {
@@ -441,7 +468,7 @@ ${availableCommandsText()}`,
   await postThreadReply(params.client, params.channelId, params.threadTs, details);
 }
 
-async function handleThreadCommand(params: {
+export async function handleThreadCommand(params: {
   channelId: string;
   threadTs: string;
   text: string;
@@ -482,6 +509,7 @@ async function handleThreadCommand(params: {
       `URL: ${state.upworkUrl}`,
       state.jobId ? `Job ID: ${state.jobId}` : "Job ID: unknown",
       state.jobId && maybeJobStatus ? `Application status: ${maybeJobStatus}` : "Application status: not yet created",
+      ...buildThreadStatusDetails(state),
     ].join("\n");
     await postThreadReply(params.client, params.channelId, params.threadTs, statusText);
     updateSlackThreadStateStatus(state.channelId, state.threadTs, "status_checked");
@@ -543,9 +571,22 @@ async function handleThreadCommand(params: {
   }
 
   if (command.type === "retry_action") {
-    const action = command.actionId ? getBrowserActionById(command.actionId) : null;
+    const action = command.actionId
+      ? getBrowserActionById(command.actionId)
+      : state.jobId
+        ? listBrowserActions(null, 1000)
+          .filter((candidate) => {
+            const payload = candidate.payload as { channelId?: string; threadTs?: string; applicationId?: string };
+            const matchesThread = payload.channelId === state.channelId && payload.threadTs === state.threadTs;
+            const matchesJob = candidate.jobId === state.jobId || payload.applicationId === state.jobId;
+            return (matchesJob || matchesThread) &&
+              ["capture_job_from_url", "prepare_application_review"].includes(candidate.actionType) &&
+              ["paused", "failed"].includes(candidate.status);
+          })
+          .slice(-1)[0] ?? null
+        : null;
     if (!action) {
-      await postThreadReply(params.client, params.channelId, params.threadTs, `No browser action found for id=${command.actionId}.`);
+      await postThreadReply(params.client, params.channelId, params.threadTs, command.actionId ? `No browser action found for id=${command.actionId}.` : "No paused or failed browser action found for this thread.");
       return;
     }
     if (action.status !== "paused" && action.status !== "failed") {

@@ -9,6 +9,7 @@ required_files=(
   "docs/CONTABO_RUNBOOK.md"
   "deploy/systemd/upwork-agent-browser-session.service"
   "deploy/systemd/upwork-agent-lead-engine.service"
+  "deploy/systemd/upwork-agent-slack-socket.service"
   "deploy/systemd/upwork-agent-health.service"
   "deploy/systemd/upwork-agent-health.timer"
   "scripts/validate-promotion.sh"
@@ -39,7 +40,7 @@ done
 node <<'NODE'
 const fs = require('node:fs');
 const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-const required = ['validate:promotion', 'validate:contabo-env', 'preflight:contabo'];
+const required = ['validate:promotion', 'validate:contabo-env', 'preflight:contabo', 'slack:socket'];
 const missing = required.filter((name) => !pkg.scripts || !pkg.scripts[name]);
 if (missing.length) {
   console.error('Missing package.json scripts:', missing.join(', '));

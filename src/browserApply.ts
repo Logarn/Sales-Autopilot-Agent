@@ -13,8 +13,10 @@ import {
   BrowserApplyFillPlan,
   BrowserApplySkippedAttachment,
   BrowserApplyValidationIssue,
+  ConnectsStrategySnapshot,
   ConnectsRules,
   PortfolioItem,
+  ScoredJob,
 } from "./types";
 
 const DEFAULT_CONNECTS_RULES: ConnectsRules = {
@@ -35,8 +37,61 @@ export interface BrowserApplyPlanOptions {
   connectsRulesPath?: string;
 }
 
+export interface BrowserApplyAttachmentDiagnostic {
+  id: string;
+  name: string;
+  filePath: string;
+  sensitivity: PortfolioItem["sensitivity"];
+  existsLocally: boolean;
+}
+
+export interface BrowserApplyFinalPreparationDiagnostics {
+  stopBeforeSubmit: true;
+  coverLetter: {
+    present: boolean;
+    length: number;
+  };
+  screeningAnswers: {
+    count: number;
+    answers: string[];
+  };
+  rateBid: string | null;
+  connects: {
+    required: number | null;
+    boost: number | null;
+    total: number | null;
+    approvalRequired: boolean;
+    decision: ConnectsStrategySnapshot["decision"];
+    expectedValueScore: number;
+    evidence: string[];
+    notes: string[];
+  };
+  filesAttached: string[];
+  attachmentDiagnostics: BrowserApplyAttachmentDiagnostic[];
+  missingFiles: string[];
+  skippedAttachments: BrowserApplySkippedAttachment[];
+  proofHighlights: string[];
+  portfolioHighlights: string[];
+  profileHighlights: string[];
+  manualFields: string[];
+  blockers: string[];
+  validationIssues: BrowserApplyValidationIssue[];
+}
+
+export type BrowserApplyPlanWithDiagnostics = BrowserApplyFillPlan & {
+  filesAttached: string[];
+  missingFiles: string[];
+  manualFields: string[];
+  connectsEvidence: string[];
+  attachmentDiagnostics: BrowserApplyAttachmentDiagnostic[];
+  proofHighlights: string[];
+  portfolioHighlights: string[];
+  profileHighlights: string[];
+  finalPreparationDiagnostics: BrowserApplyFinalPreparationDiagnostics;
+};
+
 export interface BrowserApplyPlanResult {
-  plan: BrowserApplyFillPlan | null;
+  plan: BrowserApplyPlanWithDiagnostics | null;
   valid: boolean;
   issues: BrowserApplyValidationIssue[];
 }
@@ -94,6 +149,15 @@ function safeTrim(value: string | undefined): string {
   return value?.trim() ?? "";
 }
 
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return Array.from(new Set(values.map((value) => value?.trim() ?? "").filter(Boolean)));
+}
+
+function isSpecifiedRate(rate: string): boolean {
+  const normalized = rate.trim().toLowerCase();
+  return Boolean(normalized && normalized !== "not specified" && normalized !== "n/a");
+}
+
 function buildAttachmentInstructions(items: PortfolioItem[]): {
   attachments: BrowserApplyAttachmentInstruction[];
   skipped: BrowserApplySkippedAttachment[];
@@ -148,32 +212,36 @@ function parseProfile(draft: ApplicationDraft): string {
 }
 
 function buildConnectsPlan(draft: ApplicationDraft, rules: ConnectsRules, issues: BrowserApplyValidationIssue[]): BrowserApplyConnectsPlan {
-  const required = Math.max(0, draft.suggestedConnects || 0);
-  const requestedBoost = Math.max(0, draft.suggestedBoostConnects || 0);
-  let boost = Math.min(requestedBoost, rules.maxBoost);
+  const sourceBacked = draft.connectsStrategy?.sourceBackedConnects;
+  const required = sourceBacked?.requiredConnects ?? null;
+  const requestedBoost = required === null ? 0 : Math.max(0, draft.suggestedBoostConnects || 0);
+  let boost: number | null = required === null ? null : Math.min(requestedBoost, rules.maxBoost);
   const notes = [...draft.connectsWarnings];
 
   if (draft.suggestedConnects < 0 || draft.suggestedBoostConnects < 0) {
     issues.push(issue("error", "invalid_connects", "Connects values must be non-negative."));
   }
-  if (required > rules.maxRequiredPerJob) {
+  if (required === null) {
+    notes.push("Required Connects are unknown from visible Upwork source text.");
+    issues.push(issue("error", "required_connects_unknown", "Required Connects are not source-backed; inspect the apply page before preparing or submitting."));
+  } else if (required > rules.maxRequiredPerJob) {
     issues.push(issue("error", "required_connects_cap", `Required Connects ${required} exceeds cap ${rules.maxRequiredPerJob}.`));
   }
   if (requestedBoost > rules.maxBoost) {
     notes.push(`Requested boost ${requestedBoost} was clamped to maxBoost ${rules.maxBoost}.`);
     issues.push(issue("warning", "boost_clamped", `Boost Connects clamped from ${requestedBoost} to ${boost}.`));
   }
-  if (rules.neverBidMax && boost >= rules.maxBoost && boost > 0) {
+  if (boost !== null && rules.neverBidMax && boost >= rules.maxBoost && boost > 0) {
     boost = Math.max(0, rules.maxBoost - 1);
     notes.push(`Boost reduced below maxBoost because neverBidMax is enabled.`);
     issues.push(issue("warning", "never_bid_max", "Boost was reduced to avoid automatically bidding the maximum."));
   }
 
-  const total = required + boost;
-  const approvalRequired = total > rules.requireApprovalAbove || boost > rules.idealBoostMax;
+  const total = required === null || boost === null ? null : required + boost;
+  const approvalRequired = total === null || total > rules.requireApprovalAbove || boost === null || boost > rules.idealBoostMax;
   if (approvalRequired) {
-    notes.push(`Human approval/verification required for total Connects ${total}.`);
-    issues.push(issue("warning", "connects_approval_required", `Connects total ${total} exceeds approval threshold ${rules.requireApprovalAbove}.`));
+    notes.push(total === null ? "Human verification required because total Connects are unknown." : `Human approval/verification required for total Connects ${total}.`);
+    issues.push(issue(total === null ? "error" : "warning", "connects_approval_required", total === null ? "Connects total is unknown." : `Connects total ${total} exceeds approval threshold ${rules.requireApprovalAbove}.`));
   }
 
   return { required, boost, total, approvalRequired, notes };
@@ -183,6 +251,125 @@ function findMissingLocalAssets(attachments: BrowserApplyAttachmentInstruction[]
   return attachments
     .map((attachment) => attachment.filePath)
     .filter((filePath) => !fs.existsSync(path.resolve(process.cwd(), filePath)));
+}
+
+function buildAttachmentDiagnostics(attachments: BrowserApplyAttachmentInstruction[]): BrowserApplyAttachmentDiagnostic[] {
+  return attachments.map((attachment) => ({
+    ...attachment,
+    existsLocally: fs.existsSync(path.resolve(process.cwd(), attachment.filePath)),
+  }));
+}
+
+function buildConnectsEvidence(
+  draft: ApplicationDraft,
+  connects: BrowserApplyConnectsPlan,
+  connectsStrategy: ConnectsStrategySnapshot,
+  scoredJob: ScoredJob | null,
+): string[] {
+  return uniqueStrings([
+    `Required Connects: ${connects.required ?? "unknown"}`,
+    `Suggested boost Connects: ${connects.boost ?? "unknown"}`,
+    `Total planned Connects: ${connects.total ?? "unknown"}`,
+    connectsStrategy.sourceBackedConnects?.confidence ? `Connects confidence: ${connectsStrategy.sourceBackedConnects.confidence}` : null,
+    connectsStrategy.sourceBackedConnects?.sourceText ? `Connects source: ${connectsStrategy.sourceBackedConnects.sourceLocation ?? "visible text"}: ${connectsStrategy.sourceBackedConnects.sourceText}` : null,
+    `Connects decision: ${connectsStrategy.decision}`,
+    ...connects.notes,
+    ...draft.connectsWarnings,
+    ...connectsStrategy.reasons.map((reason) => `Connects reason: ${reason}`),
+    ...connectsStrategy.risks.map((risk) => `Connects risk: ${risk}`),
+    ...(scoredJob?.scoreBreakdown.connectsRiskScore.reasons ?? []).map((reason) => `Connects score reason: ${reason}`),
+    ...(scoredJob?.scoreBreakdown.connectsRiskScore.risks ?? []).map((risk) => `Connects score risk: ${risk}`),
+  ]);
+}
+
+function buildManualFields(input: {
+  coverLetter: string;
+  rate: string;
+  connects: BrowserApplyConnectsPlan;
+  connectsStrategy: ConnectsStrategySnapshot;
+  skippedAttachments: BrowserApplySkippedAttachment[];
+  missingLocalAssets: string[];
+  manualReviewAssets: string[];
+  mentionOnlyProof: string[];
+  manualReviewWarnings: string[];
+  issues: BrowserApplyValidationIssue[];
+}): string[] {
+  const fields = ["finalSubmit"];
+  if (!input.coverLetter.trim()) fields.push("coverLetter");
+  if (!isSpecifiedRate(input.rate)) fields.push("rate");
+  if (input.connects.required === null || input.connects.approvalRequired || input.connectsStrategy.decision !== "safe_apply") fields.push("connects");
+  if (input.skippedAttachments.length > 0 || input.missingLocalAssets.length > 0) fields.push("attachments");
+  if (input.manualReviewAssets.length > 0 || input.mentionOnlyProof.length > 0 || input.manualReviewWarnings.length > 0) {
+    fields.push("proofPortfolioProfileReview");
+  }
+  if (input.issues.some((validationIssue) => validationIssue.code === "invalid_upwork_link")) fields.push("applyUrl");
+  return uniqueStrings(fields);
+}
+
+function buildPreparationDiagnostics(input: {
+  coverLetter: string;
+  screeningAnswers: string[];
+  rate: string;
+  connects: BrowserApplyConnectsPlan;
+  connectsStrategy: ConnectsStrategySnapshot;
+  connectsEvidence: string[];
+  attachments: BrowserApplyAttachmentInstruction[];
+  skippedAttachments: BrowserApplySkippedAttachment[];
+  attachmentDiagnostics: BrowserApplyAttachmentDiagnostic[];
+  missingLocalAssets: string[];
+  manualReviewAssets: string[];
+  mentionOnlyProof: string[];
+  proofAvailability: string[];
+  figmaRecommendations: string[];
+  videoRecommendations: string[];
+  manualReviewWarnings: string[];
+  highlights: string[];
+  proofHighlights: string[];
+  profileHighlights: string[];
+  manualFields: string[];
+  issues: BrowserApplyValidationIssue[];
+}): BrowserApplyFinalPreparationDiagnostics {
+  return {
+    stopBeforeSubmit: true,
+    coverLetter: {
+      present: Boolean(input.coverLetter.trim()),
+      length: input.coverLetter.length,
+    },
+    screeningAnswers: {
+      count: input.screeningAnswers.length,
+      answers: input.screeningAnswers,
+    },
+    rateBid: isSpecifiedRate(input.rate) ? input.rate : null,
+    connects: {
+      required: input.connects.required,
+      boost: input.connects.boost,
+      total: input.connects.total,
+      approvalRequired: input.connects.approvalRequired,
+      decision: input.connectsStrategy.decision,
+      expectedValueScore: input.connectsStrategy.expectedValueScore,
+      evidence: input.connectsEvidence,
+      notes: input.connects.notes,
+    },
+    filesAttached: input.attachments.map((attachment) => attachment.filePath),
+    attachmentDiagnostics: input.attachmentDiagnostics,
+    missingFiles: input.missingLocalAssets,
+    skippedAttachments: input.skippedAttachments,
+    proofHighlights: uniqueStrings([...input.proofHighlights, ...input.mentionOnlyProof, ...input.proofAvailability]),
+    portfolioHighlights: uniqueStrings([
+      ...input.attachments.map((attachment) => `${attachment.name}: ${attachment.filePath}`),
+      ...input.manualReviewAssets,
+      ...input.figmaRecommendations,
+      ...input.videoRecommendations,
+    ]),
+    profileHighlights: uniqueStrings([...input.profileHighlights, ...input.highlights, ...input.manualReviewWarnings]),
+    manualFields: input.manualFields,
+    blockers: input.issues.filter((validationIssue) => validationIssue.severity === "error").map((validationIssue) => `${validationIssue.code}: ${validationIssue.message}`),
+    validationIssues: minimizedIssues(input.issues),
+  };
+}
+
+function minimizedIssues(issues: BrowserApplyValidationIssue[]): BrowserApplyValidationIssue[] {
+  return issues.map(({ severity, code, message }) => ({ severity, code, message }));
 }
 
 export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOptions = {}): BrowserApplyPlanResult {
@@ -204,6 +391,10 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
   if (!draft.proposalText.trim()) {
     issues.push(issue("error", "missing_proposal", "Application draft has no proposal text to fill."));
   }
+  const rate = parseRate(draft);
+  if (!isSpecifiedRate(rate)) {
+    issues.push(issue("error", "missing_rate", "Application draft has no rate/bid value to fill safely."));
+  }
 
   const urlInfo = deriveApplyUrl(link?.url);
   if (!urlInfo) {
@@ -224,7 +415,7 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
   }
   const missingLocalAssets = findMissingLocalAssets(attachments);
   for (const missingPath of missingLocalAssets) {
-    issues.push(issue("warning", "attachment_missing_locally", `${missingPath} is selected for review but is missing locally.`));
+    issues.push(issue("error", "required_attachment_missing_locally", `${missingPath} is selected for browser preparation but is missing locally.`));
   }
 
   const manualReviewAssets = portfolioSelection?.recommendOnlyAssets.map((asset) => `${asset.name} — ${asset.path}`) ?? [];
@@ -235,6 +426,10 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
   const figmaRecommendations = profileContext?.selectedFigmaLinks.map((link) => `${link.name}: ${link.url}`) ?? [];
   const videoRecommendations = profileContext?.selectedVideoLinks.map((link) => `${link.name}: ${link.url}`) ?? [];
   const manualReviewWarnings = profileContext?.manualReviewWarnings ?? [];
+  const profileHighlights = profileContext?.selectedPositioning ?? draft.structuredProposal?.browserFillNotes.profileNotes ?? [];
+  const proofHighlights = profileContext?.selectedProofLines ?? [];
+  const screeningAnswers = draft.structuredProposal?.clientRequestAnswers ?? [];
+  const highlights = draft.structuredProposal?.browserFillNotes.highlights ?? (profileAttachments.length > 0 ? profileAttachments : fallbackDraftAttachments);
 
   const connects = buildConnectsPlan(draft, loadConnectsRules(options.connectsRulesPath), issues);
   const connectsStrategy = draft.connectsStrategy ?? (scoredJob
@@ -242,18 +437,67 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
         job: scoredJob,
         score: scoredJob.score,
         scoreBreakdown: scoredJob.scoreBreakdown,
-        suggestedBoostConnects: connects.boost,
+        suggestedBoostConnects: connects.boost ?? 0,
       })
     : {
         decision: connects.approvalRequired ? "manual_review" : "safe_apply",
-        requiredConnects: connects.required,
-        suggestedBoostConnects: connects.boost,
-        totalConnects: connects.total,
+        requiredConnects: connects.required ?? 0,
+        suggestedBoostConnects: connects.boost ?? 0,
+        totalConnects: connects.total ?? 0,
         expectedValueScore: connects.approvalRequired ? 50 : 70,
+        sourceBackedConnects: {
+          requiredConnects: connects.required,
+          boostConnects: connects.boost,
+          totalConnects: connects.total,
+          confidence: connects.required === null ? "unknown" : "low",
+          sourceText: null,
+          sourceLocation: null,
+          extractionMethod: connects.required === null ? "not_found" : "legacy_field",
+        },
         reasons: [],
         risks: connects.notes,
       });
-  const plan: BrowserApplyFillPlan | null = urlInfo
+  if (connectsStrategy.decision !== "safe_apply") {
+    issues.push(issue("error", "connects_manual_review_required", "Connects strategy requires human review before autonomous browser preparation."));
+  }
+  const connectsEvidence = buildConnectsEvidence(draft, connects, connectsStrategy, scoredJob);
+  const attachmentDiagnostics = buildAttachmentDiagnostics(attachments);
+  const manualFields = buildManualFields({
+    coverLetter: draft.proposalText,
+    rate,
+    connects,
+    connectsStrategy,
+    skippedAttachments: skipped,
+    missingLocalAssets,
+    manualReviewAssets,
+    mentionOnlyProof,
+    manualReviewWarnings,
+    issues,
+  });
+  const finalPreparationDiagnostics = buildPreparationDiagnostics({
+    coverLetter: draft.proposalText,
+    screeningAnswers,
+    rate,
+    connects,
+    connectsStrategy,
+    connectsEvidence,
+    attachments,
+    skippedAttachments: skipped,
+    attachmentDiagnostics,
+    missingLocalAssets,
+    manualReviewAssets,
+    mentionOnlyProof,
+    proofAvailability,
+    figmaRecommendations,
+    videoRecommendations,
+    manualReviewWarnings,
+    highlights,
+    proofHighlights,
+    profileHighlights,
+    manualFields,
+    issues,
+  });
+  const plan: BrowserApplyPlanWithDiagnostics | null = urlInfo
     ? {
         schemaVersion: "1.0",
         jobId,
@@ -262,9 +506,9 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
         applyUrl: urlInfo.applyUrl,
         status: draft.status,
         profile: parseProfile(draft),
-        rate: parseRate(draft),
+        rate,
         coverLetter: draft.proposalText,
-        screeningAnswers: draft.structuredProposal?.clientRequestAnswers ?? [],
+        screeningAnswers,
         attachments,
         skippedAttachments: skipped,
         manualReviewAssets,
@@ -274,12 +518,26 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
         videoRecommendations,
         manualReviewWarnings,
         missingLocalAssets,
-        highlights: draft.structuredProposal?.browserFillNotes.highlights ?? (profileAttachments.length > 0 ? profileAttachments : fallbackDraftAttachments),
+        highlights,
         connects,
         connectsStrategy,
         stopBeforeSubmit: true,
         dryRunSafe: true,
         validationIssues: issues,
+        filesAttached: attachments.map((attachment) => attachment.filePath),
+        missingFiles: missingLocalAssets,
+        manualFields,
+        connectsEvidence,
+        attachmentDiagnostics,
+        proofHighlights,
+        portfolioHighlights: uniqueStrings([
+          ...attachments.map((attachment) => `${attachment.name}: ${attachment.filePath}`),
+          ...manualReviewAssets,
+          ...figmaRecommendations,
+          ...videoRecommendations,
+        ]),
+        profileHighlights,
+        finalPreparationDiagnostics,
         createdAt: (options.now ?? new Date()).toISOString(),
       }
     : null;

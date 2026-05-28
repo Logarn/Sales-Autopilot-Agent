@@ -39,15 +39,16 @@ function cleanupDatabase(path: string): void {
   }
 }
 
-function runTests(): void {
+async function runTests(): Promise<void> {
   const tempDb = resolve(process.cwd(), "data/.tmp-slack-socket/jobs.db");
   cleanupDatabase(tempDb);
   mkdirSync(dirname(tempDb), { recursive: true });
   process.env.DB_PATH = tempDb;
 
-  const { applySlackThreadRevision, buildSlackSocketStartupError, parseSlackThreadCommand, parseUpworkJobUrlFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread } = require("./slackSocket") as {
+  const { applySlackThreadRevision, buildSlackSocketStartupError, handleThreadCommand, parseSlackThreadCommand, parseUpworkJobUrlFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread } = require("./slackSocket") as {
     applySlackThreadRevision: (input: { channelId: string; threadTs: string; instruction: string }) => { ok: boolean; text: string; proposalVersion?: number };
     buildSlackSocketStartupError: (input: { socketEnabled: boolean; botToken: string; appToken: string }) => string | null;
+    handleThreadCommand: (input: { channelId: string; threadTs: string; text: string; client: any }) => Promise<void>;
     parseSlackThreadCommand: (value: string) => {
       type: string;
       rawText: string;
@@ -58,13 +59,14 @@ function runTests(): void {
     queueCaptureFromSlackUrl: (input: { channelId: string; messageTs: string; threadTs: string; text: string }) => { parsed: any; state: any; action: any } | null;
     queuePrepareDraftFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string; actionId?: number };
   };
-  const { closeDb, getApplicationDraft, getBrowserActionById, markJobSeen, upsertSlackThreadState, listBrowserActions } = require("./db") as {
+  const { closeDb, getApplicationDraft, getBrowserActionById, markJobSeen, upsertSlackThreadState, listBrowserActions, updateBrowserActionStatus } = require("./db") as {
     closeDb: () => void;
     getApplicationDraft: (jobId: string) => { proposalText: string } | null;
-    getBrowserActionById: (id: number) => { payload: Record<string, unknown> } | null;
+    getBrowserActionById: (id: number) => { payload: Record<string, unknown>; status: string } | null;
     markJobSeen: (job: any, notified: boolean) => void;
     upsertSlackThreadState: (input: any) => unknown;
     listBrowserActions: (status?: string | null, limit?: number) => Array<{ id: number; actionType: string; jobId: string; status: string }>;
+    updateBrowserActionStatus: (id: number, status: string, lastError?: string) => boolean;
   };
   const { buildApplicationDraft } = require("./agent") as { buildApplicationDraft: (job: any) => any };
   const { scoreJob } = require("./filter") as { scoreJob: (job: any) => any };
@@ -132,9 +134,17 @@ function runTests(): void {
       { name: "status", input: "status", expectType: "status" },
       { name: "approve", input: "approve", expectType: "approve" },
       { name: "reject", input: "reject", expectType: "reject" },
+      { name: "natural skip", input: "Skip this one.", expectType: "reject" },
+      { name: "natural why picked", input: "Why did you pick this job?", expectType: "status" },
+      { name: "natural red flags", input: "What are the red flags?", expectType: "status" },
+      { name: "natural manual review status", input: "What still needs manual review?", expectType: "status" },
       { name: "revise with instruction", input: "revise: tighten tone", expectType: "revise", instruction: "tighten tone" },
+      { name: "natural revise", input: "Make the opener sharper.", expectType: "revise", instruction: "the opener sharper." },
+      { name: "natural proof swap", input: "Use the Truly Beauty proof instead.", expectType: "revise", instruction: "the Truly Beauty proof instead." },
       { name: "prepare draft", input: "prepare draft", expectType: "prepare_draft" },
+      { name: "prepare proposal punctuation", input: "prepare proposal.", expectType: "prepare_draft" },
       { name: "retry action", input: "retry 123", expectType: "retry_action", actionId: 123 },
+      { name: "natural retry preparation", input: "Retry preparation.", expectType: "retry_action" },
       { name: "mark submitted", input: "mark submitted", expectType: "mark_submitted" },
       { name: "unknown", input: "something else", expectType: "unknown" },
     ];
@@ -209,6 +219,38 @@ function runTests(): void {
     const queuedActions = listBrowserActions(null, 10).filter((action) => action.actionType === "prepare_application_review" && action.jobId === prepareJob.id);
     assert(queuedActions.length === 1, `Expected exactly one queued prepare_application_review action, got ${queuedActions.length}`);
 
+    const retryReplies: string[] = [];
+    updateBrowserActionStatus(prepareResult.actionId!, "failed", "field_preparation_incomplete");
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "Retry preparation.",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            retryReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(getBrowserActionById(prepareResult.actionId!)?.status === "pending", "Natural retry preparation should route to the latest failed action in the thread.");
+    assert(retryReplies.some((reply) => reply.includes(`Retry requested for browser action #${prepareResult.actionId}`)), "Natural retry should reply in the same tracked thread.");
+
+    const statusReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "What are the red flags?",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            statusReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(statusReplies.some((reply) => reply.includes("Red flags/risks:")), "Natural status question should resolve against the tracked job context.");
+
     const revisionResult = applySlackThreadRevision({
       channelId: "C123",
       threadTs: "111.222",
@@ -236,11 +278,9 @@ function runTests(): void {
 }
 
 if (require.main === module) {
-  try {
-    runTests();
-  } catch (error) {
+  runTests().catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`slack socket parser tests failed: ${message}`);
     process.exitCode = 1;
-  }
+  });
 }

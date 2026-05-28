@@ -1,16 +1,19 @@
 import { createHash } from "node:crypto";
 
+import { extractConnectsFromVisibleText, normalizeLlmConnectsExtraction } from "./connectsExtraction";
 import { parseJobDetailCapture } from "./jobCapture";
 import { OpenAiCompatibleProvider } from "./llm/provider";
 import {
   JobPosting,
   NormalizedClientPacket,
+  NormalizedConnectsPacket,
   NormalizedJobPacket,
   NormalizedOpportunityPacket,
   NormalizedOpportunityRepair,
   NormalizedProposalInstructions,
   NormalizedRequirementsPacket,
   NormalizationSource,
+  SourceBackedConnects,
 } from "./types";
 
 const MISSING = "Not specified";
@@ -69,13 +72,26 @@ function hashRawText(rawText: string): string {
   return createHash("sha256").update(rawText).digest("hex");
 }
 
+function buildConnectsPacket(connects: SourceBackedConnects, suggestedBoost = 0, notes: string[] = []): NormalizedConnectsPacket {
+  return {
+    ...connects,
+    required: connects.requiredConnects,
+    deterministicRequired: connects.extractionMethod === "deterministic_visible_text" ? connects.requiredConnects : null,
+    suggestedBoost,
+    notes,
+  };
+}
+
 export function buildDeterministicOpportunityPacket(rawText: string, options: { url?: string; capturedAt?: Date; source?: NormalizationSource } = {}): NormalizedOpportunityPacket {
   const capture = parseJobDetailCapture(rawText, { url: options.url, capturedAt: options.capturedAt });
   const source = options.source ?? "deterministic";
+  const sourceBackedConnects = extractConnectsFromVisibleText(rawText);
 
   const deterministicJob: JobPosting = {
     ...capture.manualJob,
     id: capture.manualJob.id ?? (capture.jobId ? `manual:upwork-${capture.jobId}` : `manual:${Date.now()}`),
+    connectsCost: sourceBackedConnects.requiredConnects ?? 0,
+    connects: sourceBackedConnects,
   };
 
   return {
@@ -114,12 +130,11 @@ export function buildDeterministicOpportunityPacket(rawText: string, options: { 
       timeline: capture.duration === MISSING ? "" : capture.duration,
     },
     applicationQuestions: [],
-    connects: {
-      required: capture.connectsCost,
-      deterministicRequired: capture.manualJob.connectsCost,
-      suggestedBoost: 0,
-      notes: capture.connectsCost == null ? ["Connects cost not found in capture"] : [],
-    },
+    connects: buildConnectsPacket(
+      sourceBackedConnects,
+      0,
+      sourceBackedConnects.requiredConnects == null ? ["Required Connects not found in visible capture"] : [],
+    ),
     risks: capture.url && !hasSafeDirectJobLink(capture.url) ? ["Capture URL is not a safe direct Upwork job link"] : [],
     proofHints: [],
     proposalInstructions: {
@@ -186,6 +201,7 @@ function normalizeProposalInstructions(input: Partial<NormalizedProposalInstruct
 export function repairNormalizedOpportunityPacket(
   candidate: Partial<NormalizedOpportunityPacket> | null | undefined,
   fallback: NormalizedOpportunityPacket,
+  visibleText = "",
 ): NormalizedOpportunityRepair {
   const warnings: string[] = [];
   const errors: string[] = [];
@@ -202,11 +218,31 @@ export function repairNormalizedOpportunityPacket(
     errors.push("Missing or unsafe deterministic Upwork job link; packet is unsafe for downstream application preparation.");
   }
 
-  const connectsRequired = nullableNumber(input.connects?.required) ?? fallback.connects.required;
-  const deterministicRequired = fallback.connects.deterministicRequired;
-  if (connectsRequired !== deterministicRequired) {
-    warnings.push("LLM connects value ignored; deterministic connects guardrail retained.");
+  const fallbackConnects = fallback.connects;
+  const llmConnects = normalizeLlmConnectsExtraction(input.connects, visibleText);
+  const sourceBackedConnects = fallbackConnects.requiredConnects === null && llmConnects.requiredConnects !== null
+    ? llmConnects
+    : fallbackConnects;
+  const candidateRequired = nullableNumber(input.connects?.requiredConnects ?? input.connects?.required);
+  if (
+    fallbackConnects.requiredConnects !== null &&
+    candidateRequired !== null &&
+    candidateRequired !== fallbackConnects.requiredConnects
+  ) {
+    warnings.push("LLM connects value ignored; deterministic visible-text connects guardrail retained.");
   }
+  if (
+    fallbackConnects.requiredConnects === null &&
+    candidateRequired !== null &&
+    sourceBackedConnects.requiredConnects === null
+  ) {
+    warnings.push("LLM connects value ignored because it lacked visible source text.");
+  }
+  const repairedConnects = buildConnectsPacket(
+    sourceBackedConnects,
+    Math.max(0, sanitizeNumber(input.connects?.suggestedBoost, fallback.connects.suggestedBoost)),
+    [...new Set([...(fallback.connects.notes ?? []), ...sanitizeStringArray(input.connects?.notes)])],
+  );
 
   const packet: NormalizedOpportunityPacket = {
     schemaVersion: "1.0",
@@ -218,10 +254,7 @@ export function repairNormalizedOpportunityPacket(
     requirements: normalizeRequirements(input.requirements, fallback.requirements),
     applicationQuestions: sanitizeStringArray(input.applicationQuestions),
     connects: {
-      required: deterministicRequired,
-      deterministicRequired,
-      suggestedBoost: Math.max(0, sanitizeNumber(input.connects?.suggestedBoost, fallback.connects.suggestedBoost)),
-      notes: sanitizeStringArray(input.connects?.notes),
+      ...repairedConnects,
     },
     risks: [...new Set([...fallback.risks, ...sanitizeStringArray(input.risks), ...errors])],
     proofHints: sanitizeStringArray(input.proofHints),
@@ -255,7 +288,16 @@ export function normalizedPacketToJobPosting(packet: NormalizedOpportunityPacket
     clientFeedbackCount: packet.client.feedbackCount ?? 0,
     category: packet.job.category,
     experienceLevel: packet.job.experienceLevel,
-    connectsCost: packet.connects.deterministicRequired ?? 0,
+    connectsCost: packet.connects.requiredConnects ?? 0,
+    connects: {
+      requiredConnects: packet.connects.requiredConnects,
+      boostConnects: packet.connects.boostConnects,
+      totalConnects: packet.connects.totalConnects,
+      confidence: packet.connects.confidence,
+      sourceText: packet.connects.sourceText,
+      sourceLocation: packet.connects.sourceLocation,
+      extractionMethod: packet.connects.extractionMethod,
+    },
     skills: packet.requirements.skills,
     sourceQuery: packet.job.sourceQuery,
   };
@@ -266,7 +308,7 @@ function buildNormalizationMessages(rawText: string, fallback: NormalizedOpportu
     {
       role: "system" as const,
       content:
-        "You normalize Upwork capture text into JSON only. Preserve facts, use null/empty arrays for unknowns, never invent direct links, connects, client metrics, or proof. Return fields matching the provided packet shape.",
+        "You normalize Upwork capture text into JSON only. Preserve facts, use null/empty arrays for unknowns, never invent direct links, Connects, client metrics, or proof. Connects must cite exact visible sourceText from rawCaptureText; if rawCaptureText lacks required Connects, return requiredConnects/sourceText/sourceLocation as null and confidence unknown. Return fields matching the provided packet shape.",
     },
     {
       role: "user" as const,
@@ -275,7 +317,8 @@ function buildNormalizationMessages(rawText: string, fallback: NormalizedOpportu
         rawCaptureText: rawText,
         instructions: [
           "Improve title, description, requirements, applicationQuestions, risks, proofHints, and proposalInstructions from raw text.",
-          "Do not change deterministic job URL, id, or connects values.",
+          "Do not change deterministic job URL or id.",
+          "For connects, only normalize captured visible text into source-backed JSON. Never infer or default missing Connects to 0.",
           "Return a JSON object shaped like NormalizedOpportunityPacket.",
         ],
       }),
@@ -288,7 +331,7 @@ export async function normalizeOpportunity(rawText: string, options: NormalizeOp
   const provider = options.provider ?? new OpenAiCompatibleProvider();
 
   if (options.useLlm === false || !provider.isAvailable()) {
-    const repaired = repairNormalizedOpportunityPacket(fallback, fallback);
+    const repaired = repairNormalizedOpportunityPacket(fallback, fallback, rawText);
     return { ...repaired, usedLlm: false, fallbackReason: options.useLlm === false ? "LLM disabled by caller" : "LLM provider unavailable" };
   }
 
@@ -299,13 +342,13 @@ export async function normalizeOpportunity(rawText: string, options: NormalizeOp
   });
 
   if (!result.ok || !result.data) {
-    const repaired = repairNormalizedOpportunityPacket(fallback, fallback);
+    const repaired = repairNormalizedOpportunityPacket(fallback, fallback, rawText);
     return { ...repaired, usedLlm: false, fallbackReason: result.skippedReason ?? result.error ?? "LLM normalization failed" };
   }
 
-  const repaired = repairNormalizedOpportunityPacket({ ...result.data, source: "llm" }, fallback);
+  const repaired = repairNormalizedOpportunityPacket({ ...result.data, source: "llm" }, fallback, rawText);
   if (!repaired.valid) {
-    const deterministic = repairNormalizedOpportunityPacket(fallback, fallback);
+    const deterministic = repairNormalizedOpportunityPacket(fallback, fallback, rawText);
     return { ...deterministic, usedLlm: false, fallbackReason: `LLM packet failed repair: ${repaired.errors.join("; ")}` };
   }
 

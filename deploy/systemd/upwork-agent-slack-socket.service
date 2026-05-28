@@ -1,0 +1,21 @@
+[Unit]
+Description=Upwork Agent Slack Socket Mode listener
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=upwork-agent
+WorkingDirectory=/opt/upwork-agent/app
+EnvironmentFile=-/opt/upwork-agent/app/.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/env npm run slack:socket
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ReadWritePaths=/opt/upwork-agent/app /opt/upwork-agent/shared
+
+[Install]
+WantedBy=multi-user.target
