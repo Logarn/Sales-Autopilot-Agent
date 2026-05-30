@@ -27,6 +27,7 @@
     "test:slack-socket": "tsx src/slackSocket.test.ts",
     "test:capture": "tsx src/browserCapture.test.ts",
     "test:e2e-dry-run": "tsx src/e2eDryRun.test.ts",
+    "test:browser-session-scripts": "bash scripts/browser-session-scripts.test.sh",
     "test:run-once": "tsx src/index.ts --run-once",
     "test:health": "tsx src/health.ts",
     "test:slack-flag": "tsx src/index.ts --test-slack",

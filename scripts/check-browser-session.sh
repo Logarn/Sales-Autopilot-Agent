@@ -5,12 +5,18 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-if [[ -f "${ENV_FILE:-.env}" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "${ENV_FILE:-.env}"
-  set +a
-fi
+load_dotenv_if_present() {
+  local env_file="${ENV_FILE:-.env}"
+  if [[ -f "$env_file" ]]; then
+    local exports
+    exports="$(node scripts/dotenv-export.js "$env_file")"
+    if [[ -n "$exports" ]]; then
+      eval "$exports"
+    fi
+  fi
+}
+
+load_dotenv_if_present
 
 export DISPLAY="${DISPLAY:-:1}"
 export BROWSER_CDP_URL="${BROWSER_CDP_URL:-http://127.0.0.1:9222}"
@@ -25,11 +31,61 @@ display_number() {
   printf '%s\n' "${value%%.*}"
 }
 
+assert_localhost_cdp() {
+  node <<'NODE'
+const raw = process.env.BROWSER_CDP_URL || "http://127.0.0.1:9222";
+let parsed;
+try {
+  parsed = new URL(raw);
+} catch (error) {
+  console.error(`Invalid BROWSER_CDP_URL: ${raw}`);
+  process.exit(1);
+}
+const host = parsed.hostname;
+if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(host)) {
+  console.error(`BROWSER_CDP_URL must stay localhost-only; got ${raw}`);
+  process.exit(1);
+}
+NODE
+}
+
+abs_path() {
+  node -e 'const path = require("node:path"); console.log(path.resolve(process.argv[1] || ""));' "$1"
+}
+
+cdp_port() {
+  node -e '
+    try {
+      const url = new URL(process.env.BROWSER_CDP_URL || "http://127.0.0.1:9222");
+      console.log(url.port || "9222");
+    } catch {
+      console.log("9222");
+    }
+  '
+}
+
 cdp_reachable() {
   node -e '
     const url = new URL("/json/version", process.env.BROWSER_CDP_URL || "http://127.0.0.1:9222");
     fetch(url).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));
   ' >/dev/null 2>&1
+}
+
+chrome_session_running() {
+  local user_data_dir port pid args
+  user_data_dir="$(abs_path "$BROWSER_USER_DATA_DIR")"
+  port="$(cdp_port)"
+  if ! command -v pgrep >/dev/null 2>&1; then
+    return 1
+  fi
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+    if [[ "$args" == *"--remote-debugging-port=${port}"* && "$args" == *"--user-data-dir=${user_data_dir}"* ]]; then
+      return 0
+    fi
+  done < <(pgrep -u "$(id -u)" -f -- "--remote-debugging-port=${port}" 2>/dev/null || true)
+  return 1
 }
 
 check_vnc_not_public() {
@@ -45,6 +101,8 @@ check_vnc_not_public() {
     return 1
   fi
 }
+
+assert_localhost_cdp
 
 if [[ "$WAIT_MODE" == "--wait" ]]; then
   deadline=$((SECONDS + WAIT_SECONDS))
@@ -67,7 +125,7 @@ fi
 
 check_vnc_not_public
 
-if pgrep -u "$(id -u)" -f "remote-debugging-port=9222" >/dev/null 2>&1 || cdp_reachable; then
+if chrome_session_running || cdp_reachable; then
   echo "Chrome/CDP process: ok"
 else
   echo "Chrome/CDP process: not detected" >&2

@@ -11,10 +11,10 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+dotenv_exports="$(node scripts/dotenv-export.js "$ENV_FILE")"
+if [[ -n "$dotenv_exports" ]]; then
+  eval "$dotenv_exports"
+fi
 
 run() {
   echo "==> $*"
@@ -29,6 +29,10 @@ require_env() {
   fi
 }
 
+template_only_smoke() {
+  [[ "${PRODUCTION_SMOKE_TEMPLATE_ONLY:-}" == "1" ]] || [[ "$(basename "$ENV_FILE")" == ".env.example" ]]
+}
+
 check_service_active() {
   local service="$1"
   if ! command -v systemctl >/dev/null 2>&1 || [[ ! -d /run/systemd/system ]]; then
@@ -39,12 +43,18 @@ check_service_active() {
   echo "${service}: active"
 }
 
+run bash scripts/validate-contabo-env.sh "$ENV_FILE"
+
+if template_only_smoke; then
+  echo "Production smoke template check passed for $ENV_FILE; live service checks skipped."
+  exit 0
+fi
+
 require_env SLACK_BOT_TOKEN
 require_env SLACK_APP_TOKEN
 require_env DISCOVERY_SLACK_CHANNEL_ID
 require_env SLACK_ALLOWED_CHANNEL_IDS
 
-run bash scripts/validate-contabo-env.sh "$ENV_FILE"
 run check_service_active upwork-agent-browser-session.service
 run bash scripts/check-browser-session.sh --wait
 run check_service_active upwork-agent-slack-socket.service

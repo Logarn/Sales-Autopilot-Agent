@@ -26,6 +26,10 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
+if [[ "$(basename "$ENV_FILE")" == ".env.example" ]]; then
+  MODE="template"
+fi
+
 required_keys=(
   SLACK_CHANNEL_WEBHOOK_URL
   APIFY_API_TOKEN

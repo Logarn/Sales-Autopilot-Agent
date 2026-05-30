@@ -15,9 +15,11 @@ required_files=(
   "scripts/validate-promotion.sh"
   "scripts/validate-contabo-env.sh"
   "scripts/preflight-contabo.sh"
+  "scripts/dotenv-export.js"
   "scripts/start-browser-session.sh"
   "scripts/check-browser-session.sh"
   "scripts/production-smoke.sh"
+  "scripts/browser-session-scripts.test.sh"
 )
 
 missing_files=()
@@ -33,7 +35,7 @@ if (( ${#missing_files[@]} > 0 )); then
   exit 1
 fi
 
-for script in scripts/validate-promotion.sh scripts/validate-contabo-env.sh scripts/preflight-contabo.sh scripts/start-browser-session.sh scripts/check-browser-session.sh scripts/production-smoke.sh; do
+for script in scripts/validate-promotion.sh scripts/validate-contabo-env.sh scripts/preflight-contabo.sh scripts/start-browser-session.sh scripts/check-browser-session.sh scripts/production-smoke.sh scripts/browser-session-scripts.test.sh; do
   if [[ ! -x "$script" ]]; then
     echo "Script is not executable: $script" >&2
     exit 1
@@ -86,7 +88,20 @@ requireText('scripts/start-browser-session.sh', [
   ['starts VNC localhost-only', /-localhost yes/],
   ['defaults to display :1', /DISPLAY="\$\{DISPLAY:-:1\}"/],
   ['checks CDP before launching Chrome', /cdp_reachable/],
+  ['loads env through dotenv helper', /dotenv-export\.js/],
+  ['uses flock duplicate guard', /flock -n/],
+  ['checks existing Chrome by process args', /chrome_session_running/],
+  ['matches Chrome profile arg', /--user-data-dir/],
+  ['matches Chrome CDP port arg', /--remote-debugging-port/],
 ]);
+
+for (const scriptPath of ['scripts/start-browser-session.sh', 'scripts/check-browser-session.sh', 'scripts/production-smoke.sh']) {
+  const text = fs.readFileSync(scriptPath, 'utf8');
+  if (/(^|\n)\s*(source|\.)\s+["']?\$?\{?ENV_FILE|(^|\n)\s*(source|\.)\s+["']?\.env/m.test(text)) {
+    console.error(`${scriptPath} must not source dotenv files directly.`);
+    process.exit(1);
+  }
+}
 
 const secretPattern = new RegExp(['xoxb', 'xapp', 'sk'].map((prefix) => `${prefix}-`).join('|'));
 if (secretPattern.test(browserService + leadService)) {
@@ -124,5 +139,6 @@ if (( ${#tracked_violations[@]} > 0 )); then
 fi
 
 bash scripts/validate-contabo-env.sh
+bash scripts/browser-session-scripts.test.sh
 
 echo "Contabo preflight checks passed."
