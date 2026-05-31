@@ -45,9 +45,10 @@ async function runTests(): Promise<void> {
   mkdirSync(dirname(tempDb), { recursive: true });
   process.env.DB_PATH = tempDb;
 
-  const { applySlackThreadRevision, buildSlackSocketStartupError, handleThreadCommand, parseSlackThreadCommand, parseUpworkJobUrlFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread } = require("./slackSocket") as {
+  const { applySlackThreadRevision, buildSlackSocketStartupError, handleSlackSocketTextEvent, handleThreadCommand, parseSlackThreadCommand, parseUpworkJobUrlFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread } = require("./slackSocket") as {
     applySlackThreadRevision: (input: { channelId: string; threadTs: string; instruction: string }) => { ok: boolean; text: string; proposalVersion?: number };
     buildSlackSocketStartupError: (input: { socketEnabled: boolean; botToken: string; appToken: string }) => string | null;
+    handleSlackSocketTextEvent: (event: { channel: string; ts: string; text?: string; thread_ts?: string; bot_id?: string; subtype?: string }, client: any) => Promise<void>;
     handleThreadCommand: (input: { channelId: string; threadTs: string; text: string; client: any; intentProvider?: any }) => Promise<void>;
     parseSlackThreadCommand: (value: string) => {
       type: string;
@@ -187,6 +188,53 @@ async function runTests(): Promise<void> {
     assert(queuedCaptureAction?.payload.canonicalJobUrl === "https://www.upwork.com/jobs/~022053866890130225260", "Slack intake should keep canonical URL in action payload");
     assert(queuedCaptureAction?.payload.url === "https://www.upwork.com/jobs/~022053866890130225260", "Browser capture action should use canonical URL");
 
+    const unmentionedUrlReplies: string[] = [];
+    const actionCountBeforeUnmentionedUrl = listBrowserActions(null, 1000).length;
+    await handleSlackSocketTextEvent({
+      channel: "C456",
+      ts: "333.555",
+      text: "https://www.upwork.com/jobs/~033053866890130225260",
+    }, {
+      chat: {
+        postMessage: async (payload: { text: string }) => {
+          unmentionedUrlReplies.push(payload.text);
+        },
+      },
+    });
+    assert(listBrowserActions(null, 1000).length === actionCountBeforeUnmentionedUrl, "Unmentioned URL outside a tracked thread should be ignored.");
+    assert(unmentionedUrlReplies.length === 0, "Unmentioned URL outside a tracked thread should not get a Slack reply.");
+
+    const mentionedUrlReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "C456",
+      ts: "333.666",
+      text: "<@UAGENT> prep this https://www.upwork.com/jobs/~033053866890130225260",
+    }, {
+      chat: {
+        postMessage: async (payload: { text: string }) => {
+          mentionedUrlReplies.push(payload.text);
+        },
+      },
+    });
+    assert(mentionedUrlReplies.some((reply) => reply.includes("Captured Upwork URL for tracking")), "Mentioned URL should be captured and acknowledged.");
+    assert(listBrowserActions(null, 1000).some((action) => action.jobId.includes("033053866890130225260") && action.actionType === "capture_job_from_url"), "Mentioned URL should queue capture.");
+
+    const trackedThreadUrlReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "C456",
+      ts: "333.777",
+      thread_ts: "333.444",
+      text: "related listing https://www.upwork.com/jobs/~044053866890130225260",
+    }, {
+      chat: {
+        postMessage: async (payload: { text: string }) => {
+          trackedThreadUrlReplies.push(payload.text);
+        },
+      },
+    });
+    assert(trackedThreadUrlReplies.some((reply) => reply.includes("Captured Upwork URL for tracking")), "URL inside an existing tracked thread should be captured without a fresh mention.");
+    assert(listBrowserActions(null, 1000).some((action) => action.jobId.includes("044053866890130225260") && action.actionType === "capture_job_from_url"), "Tracked-thread URL should queue capture.");
+
     const prepareJob = scoreJob({
       id: "prepare-job-1",
       title: "Klaviyo retention strategist for beauty skincare brand",
@@ -279,6 +327,7 @@ async function runTests(): Promise<void> {
     assert(typeof prepareResult.actionId === "number", "Prepare draft should return an action id.");
     assert(prepareResult.text.includes("Got it"), "Prepare draft reply should acknowledge natural approval concisely.");
     assert(prepareResult.text.includes("ready for QA"), "Prepare draft reply should promise a QA update.");
+    assert(prepareResult.text.includes("Browser queue:"), "Prepare draft reply should include queue position/status.");
     assert(prepareResult.text.includes("stop before submit"), "Prepare draft reply should keep manual submit boundary.");
     assert(!prepareResult.text.toLowerCase().includes("copy/paste"), "Prepare draft reply must not introduce copy/paste workflow.");
     assert(!prepareResult.text.includes("Auto-attach assets:"), "Prepare draft reply should not dump proof inventory.");
@@ -292,6 +341,43 @@ async function runTests(): Promise<void> {
 
     const queuedActions = listBrowserActions(null, 10).filter((action) => action.actionType === "prepare_application_review" && action.jobId === prepareJob.id);
     assert(queuedActions.length === 1, `Expected exactly one queued prepare_application_review action, got ${queuedActions.length}`);
+
+    const multiApprovalReplies: string[] = [];
+    for (let i = 1; i <= 3; i += 1) {
+      const job = scoreJob({
+        ...prepareJob,
+        id: `multi-approval-job-${i}`,
+        title: `Multi approval job ${i}`,
+        url: `https://www.upwork.com/jobs/~multiapproval${i}`,
+      });
+      job.applicationDraft = buildApplicationDraft(job);
+      markJobSeen(job, false);
+      upsertSlackThreadState({
+        channelId: "CMULTI",
+        messageTs: `500.${i}`,
+        threadTs: `500.${i}`,
+        upworkUrl: job.url,
+        jobId: job.id,
+        status: "packet_sent",
+      });
+      await handleThreadCommand({
+        channelId: "CMULTI",
+        threadTs: `500.${i}`,
+        text: "prep it",
+        client: {
+          chat: {
+            postMessage: async (payload: { text: string }) => {
+              multiApprovalReplies.push(payload.text);
+            },
+          },
+        },
+      });
+    }
+    const multiApprovalActions = listBrowserActions(null, 1000)
+      .filter((action) => action.actionType === "prepare_application_review" && action.jobId.startsWith("multi-approval-job-"));
+    assert(multiApprovalActions.length === 3, "Three approvals in separate Slack threads should queue three prepare_application_review actions.");
+    assert(multiApprovalActions.every((action) => action.status === "pending"), "Multiple Slack approvals should queue pending browser work, not run it inline.");
+    assert(multiApprovalReplies.filter((reply) => reply.includes("Browser queue:")).length === 3, "Each queued approval should acknowledge queue status.");
 
     await recordBrowserManualAttention({ reason: "captcha_or_security_challenge", actionId: prepareResult.actionId, jobId: prepareJob.id, url: prepareJob.url, title: "Just a moment..." });
     const blockedReplies: string[] = [];

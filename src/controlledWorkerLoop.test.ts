@@ -42,6 +42,7 @@ async function run(): Promise<void> {
       actionsCompleted: number;
       actionsPaused: number;
       stoppedReason: string;
+      remainingPendingCount: number;
     }>;
   };
 
@@ -139,6 +140,48 @@ async function run(): Promise<void> {
   assert.equal(getBrowserActionById(afterChallengeId)?.status, "pending", "later action should remain pending after true challenge pause");
   updateBrowserActionStatus(challengeId, "cancelled", "test cleanup");
   updateBrowserActionStatus(afterChallengeId, "cancelled", "test cleanup");
+
+  const seq1 = enqueueBrowserAction({ jobId: "cw:test:seq-1", actionType: "prepare_application_review", payload: { url: "https://www.upwork.com/jobs/~seq1" } });
+  const seq2 = enqueueBrowserAction({ jobId: "cw:test:seq-2", actionType: "prepare_application_review", payload: { url: "https://www.upwork.com/jobs/~seq2" } });
+  const seq3 = enqueueBrowserAction({ jobId: "cw:test:seq-3", actionType: "prepare_application_review", payload: { url: "https://www.upwork.com/jobs/~seq3" } });
+  const processedSequentially: number[] = [];
+  const processSequentially = async (action: { id: number }) => {
+    processedSequentially.push(action.id);
+    updateBrowserActionStatus(action.id, "completed", "test completed");
+    return { slackPostsSucceeded: 0, slackPostFailures: 0 };
+  };
+  const sequentialFirst = await runControlledWorkerLoop({
+    maxActions: 1,
+    dryRun: true,
+    allowedActionTypes: ["prepare_application_review"],
+    processActionOverride: processSequentially,
+  });
+  assert.equal(sequentialFirst.actionsProcessed, 1, "first controlled pass should process one queued approval");
+  assert.equal(sequentialFirst.remainingPendingCount, 2, "two queued approvals should remain after the first pass");
+  assert.equal(getBrowserActionById(seq1)?.status, "completed");
+  assert.equal(getBrowserActionById(seq2)?.status, "pending");
+  assert.equal(getBrowserActionById(seq3)?.status, "pending");
+
+  const sequentialSecond = await runControlledWorkerLoop({
+    maxActions: 1,
+    dryRun: true,
+    allowedActionTypes: ["prepare_application_review"],
+    processActionOverride: processSequentially,
+  });
+  assert.equal(sequentialSecond.actionsProcessed, 1, "second controlled pass should process one queued approval");
+  assert.equal(sequentialSecond.remainingPendingCount, 1, "one queued approval should remain after the second pass");
+  assert.equal(getBrowserActionById(seq2)?.status, "completed");
+  assert.equal(getBrowserActionById(seq3)?.status, "pending");
+
+  const sequentialThird = await runControlledWorkerLoop({
+    maxActions: 1,
+    dryRun: true,
+    allowedActionTypes: ["prepare_application_review"],
+    processActionOverride: processSequentially,
+  });
+  assert.equal(sequentialThird.actionsProcessed, 1, "third controlled pass should process the final queued approval");
+  assert.equal(sequentialThird.remainingPendingCount, 0, "no queued approvals should remain after the third pass");
+  assert.deepEqual(processedSequentially, [seq1, seq2, seq3], "queued approvals should be processed one-by-one in FIFO order");
 
   console.log("controlled worker loop tests passed");
   } finally {
