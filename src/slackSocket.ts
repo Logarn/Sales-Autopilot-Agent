@@ -397,15 +397,30 @@ export function buildPrepareDraftQueueReply(input: {
   duplicate: boolean;
   duplicateStatus?: string | null;
   ackText?: string | null;
+  queueStatus?: string | null;
 }): string {
   const ack = input.ackText?.trim() || "Got it — I’ll prep this now and come back here when it’s ready for QA.";
   return [
     input.duplicate
       ? "Already on it — I already have this queued and I’ll come back here when it’s ready for QA."
       : ack,
+    input.queueStatus,
     "I’ll fill what’s safe on Upwork and stop before submit.",
     `Listing: ${input.upworkUrl}`,
-  ].join("\n");
+  ].filter((line): line is string => Boolean(line)).join("\n");
+}
+
+function browserQueueStatusForAction(actionId: number): string | null {
+  const active = listBrowserActions(null, 1000)
+    .filter((action) =>
+      ["pending", "in_progress"].includes(action.status) &&
+      ["capture_job_from_url", "prepare_application_review", "open_job", "open_apply_page"].includes(action.actionType)
+    );
+  const index = active.findIndex((action) => action.id === actionId);
+  if (index < 0) return null;
+  const action = active[index]!;
+  const prefix = action.status === "in_progress" ? "Browser status" : "Browser queue";
+  return `${prefix}: ${index + 1} of ${active.length} active Upwork action${active.length === 1 ? "" : "s"} (${action.status}).`;
 }
 
 export function queuePrepareDraftFromSlackThread(input: { channelId: string; threadTs: string; ackText?: string | null }): { ok: boolean; text: string; actionId?: number } {
@@ -449,6 +464,7 @@ export function queuePrepareDraftFromSlackThread(input: { channelId: string; thr
       duplicate: action.duplicate,
       duplicateStatus: duplicateAction?.status ?? null,
       ackText: input.ackText,
+      queueStatus: browserQueueStatusForAction(action.id),
     }),
   };
 }
@@ -527,6 +543,53 @@ ${availableCommandsText()}`,
   ].join("\n");
 
   await postThreadReply(params.client, params.channelId, params.threadTs, details);
+}
+
+export interface SlackSocketTextEvent {
+  channel: string;
+  ts: string;
+  text?: string;
+  thread_ts?: string;
+  bot_id?: string;
+  subtype?: string;
+}
+
+export async function handleSlackSocketTextEvent(rawEvent: SlackSocketTextEvent, client: App["client"]): Promise<void> {
+  if (!rawEvent.text) return;
+  if (rawEvent.bot_id || rawEvent.subtype === "bot_message" || rawEvent.subtype === "message_changed") {
+    return;
+  }
+
+  const channelId = rawEvent.channel;
+  if (!isAllowedChannel(channelId)) {
+    return;
+  }
+
+  const text = rawEvent.text.trim();
+  const threadTs = rawEvent.thread_ts ?? rawEvent.ts;
+  const mappedThread = getSlackThreadStateByThreadTs(channelId, threadTs);
+  const upworkUrl = parseUpworkJobUrlFromText(text);
+  const botMentioned = hasSlackMention(text);
+
+  if (upworkUrl && (botMentioned || mappedThread)) {
+    await handleUrlMessage({
+      channelId,
+      messageTs: rawEvent.ts,
+      threadTs,
+      text,
+      client,
+    });
+    return;
+  }
+
+  if (mappedThread || botMentioned) {
+    await handleThreadCommand({
+      channelId,
+      threadTs,
+      text,
+      client,
+    });
+  }
 }
 
 export async function handleThreadCommand(params: {
@@ -720,58 +783,11 @@ export async function runSlackSocket(): Promise<void> {
   });
 
   app.event("message", async ({ event, client }) => {
-    const rawEvent = event as {
-      channel: string;
-      ts: string;
-      text?: string;
-      thread_ts?: string;
-      bot_id?: string;
-      subtype?: string;
-    };
+    await handleSlackSocketTextEvent(event as SlackSocketTextEvent, client);
+  });
 
-    if (!rawEvent.text) return;
-    if (rawEvent.bot_id || rawEvent.subtype === "bot_message" || rawEvent.subtype === "message_changed") {
-      return;
-    }
-
-    const channelId = rawEvent.channel;
-    if (!isAllowedChannel(channelId)) {
-      return;
-    }
-
-    const text = rawEvent.text.trim();
-    const threadTs = rawEvent.thread_ts ?? rawEvent.ts;
-    const mappedThread = getSlackThreadStateByThreadTs(channelId, threadTs);
-    const upworkUrl = parseUpworkJobUrlFromText(text);
-
-    if (!mappedThread && upworkUrl) {
-      await handleUrlMessage({
-        channelId,
-        messageTs: rawEvent.ts,
-        threadTs,
-        text,
-        client,
-      });
-      return;
-    }
-
-    if (mappedThread || rawEvent.thread_ts) {
-      await handleThreadCommand({
-        channelId,
-        threadTs,
-        text,
-        client,
-      });
-      return;
-    }
-
-    await handleUrlMessage({
-      channelId,
-      messageTs: rawEvent.ts,
-      threadTs,
-      text,
-      client,
-    });
+  app.event("app_mention", async ({ event, client }) => {
+    await handleSlackSocketTextEvent(event as SlackSocketTextEvent, client);
   });
 
   await app.start();
