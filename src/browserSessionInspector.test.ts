@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { buildSessionPageSnapshot, classifyBrowserSessionSnapshot } from "./browserSessionInspector";
+import { buildBrowserTabDiagnostics, buildSessionPageSnapshot, classifyBrowserSessionSnapshot, selectRelevantBrowserPage } from "./browserSessionInspector";
 
 function inspect(url: string, title: string, text: string, sessionStatus?: any) {
   return classifyBrowserSessionSnapshot({ currentUrl: url, title, textExcerpt: text }, sessionStatus ?? { state: "healthy", blocked: false });
@@ -81,6 +81,22 @@ class FakePage {
     } finally {
       (globalThis as { document?: unknown }).document = previousDocument;
     }
+  }
+}
+
+class UrlOnlyPage {
+  constructor(private readonly currentUrl: string) {}
+
+  url(): string {
+    return this.currentUrl;
+  }
+
+  async title(): Promise<string> {
+    return "Upwork";
+  }
+
+  locator(): FakeLocator {
+    return new FakeLocator();
   }
 }
 
@@ -185,6 +201,19 @@ async function runTests(): Promise<void> {
 
   const unhealthy = inspect("https://www.upwork.com", "Upwork", "Find work", { state: "browser_session_unhealthy", blocked: true, reason: "too many challenges" });
   assertState(unhealthy.internalState, "browser_session_unhealthy");
+
+  const feed = new UrlOnlyPage("https://www.upwork.com/nx/find-work/best-matches/");
+  const work = new UrlOnlyPage("https://www.upwork.com/jobs/~022054111111111111111");
+  const newerWork = new UrlOnlyPage("https://www.upwork.com/ab/proposals/job/~022054222222222222222/apply/");
+  const selected = selectRelevantBrowserPage([work, newerWork, feed]);
+  assert.equal(selected.page, feed, "session check should prefer the stable feed tab over the most recent work tab");
+  assert.match(selected.reason, /feed\/search/);
+
+  const tabDiagnostics = buildBrowserTabDiagnostics([feed, work, newerWork]);
+  assert.equal(tabDiagnostics.openUpworkTabCount, 3);
+  assert.equal(tabDiagnostics.selectedFeedTabUrl, feed.url());
+  assert.equal(tabDiagnostics.selectedWorkTabUrl, work.url());
+  assert.equal(tabDiagnostics.staleWorkTabCount, 1);
 
   console.log("browser session inspector tests passed");
 }

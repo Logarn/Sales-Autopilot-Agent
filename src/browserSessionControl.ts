@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 
 export type BrowserSessionMode = "launch" | "cdp";
@@ -23,6 +23,14 @@ export interface BrowserSessionCdpCheckResult {
   websocketDebuggerUrl?: string;
   browserVersion?: string;
   error?: string;
+}
+
+export interface BrowserProfileProcessDiagnostics {
+  userDataDir: string;
+  remoteDebuggingPort: number;
+  chromeProcessCount: number;
+  chromePids: number[];
+  duplicateProfileConflict: boolean;
 }
 
 export interface PlaywrightLocatorLike {
@@ -113,6 +121,51 @@ export function parseRemoteDebuggingPort(cdpUrl: string): number {
   } catch {
     return 9222;
   }
+}
+
+function readProcessList(): string {
+  for (const args of [
+    ["-eo", "pid=,args="],
+    ["-axo", "pid=,command="],
+  ]) {
+    try {
+      return execFileSync("ps", args, { encoding: "utf8" });
+    } catch {
+      // Try the next ps dialect.
+    }
+  }
+  return "";
+}
+
+export function getChromeProfileProcessDiagnostics(input: {
+  userDataDir: string;
+  cdpUrl: string;
+  processListText?: string;
+}): BrowserProfileProcessDiagnostics {
+  const userDataDir = path.resolve(input.userDataDir);
+  const remoteDebuggingPort = parseRemoteDebuggingPort(input.cdpUrl);
+  const processList = input.processListText ?? readProcessList();
+  const chromePids = processList
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = line.trim().match(/^(\d+)\s+(.+)$/);
+      if (!match) return null;
+      const pid = Number.parseInt(match[1], 10);
+      const command = match[2] ?? "";
+      if (!Number.isFinite(pid)) return null;
+      if (!command.includes(`--remote-debugging-port=${remoteDebuggingPort}`)) return null;
+      if (!command.includes(`--user-data-dir=${userDataDir}`)) return null;
+      return pid;
+    })
+    .filter((pid): pid is number => pid !== null);
+
+  return {
+    userDataDir,
+    remoteDebuggingPort,
+    chromeProcessCount: chromePids.length,
+    chromePids,
+    duplicateProfileConflict: chromePids.length > 1,
+  };
 }
 
 export function buildBrowserSessionLaunchCommand(input: {
@@ -237,6 +290,23 @@ export async function startPersistentChromeSession(input: {
   const executablePath = input.chromeExecutablePath ?? findChromeExecutable();
   if (!executablePath) {
     return { started: false, message: "Chrome executable not found. Set BROWSER_CHROME_EXECUTABLE_PATH first." };
+  }
+
+  const processDiagnostics = getChromeProfileProcessDiagnostics({
+    userDataDir: input.userDataDir,
+    cdpUrl: input.cdpUrl,
+  });
+  if (processDiagnostics.duplicateProfileConflict) {
+    return {
+      started: false,
+      message: `Duplicate Chrome/profile conflict detected for ${processDiagnostics.userDataDir} on port ${processDiagnostics.remoteDebuggingPort}; PIDs: ${processDiagnostics.chromePids.join(", ")}. Stop extra Chrome processes before starting the browser session.`,
+    };
+  }
+  if (processDiagnostics.chromeProcessCount === 1) {
+    return {
+      started: false,
+      message: `Chrome already appears to be running for ${processDiagnostics.userDataDir} on port ${processDiagnostics.remoteDebuggingPort}; PID: ${processDiagnostics.chromePids[0]}. Not starting a duplicate.`,
+    };
   }
 
   const command = buildBrowserSessionLaunchCommand({

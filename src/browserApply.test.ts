@@ -1373,6 +1373,27 @@ async function runTests(): Promise<void> {
     assert(selectedPage.reusedExistingPage === true, "CDP page selection should reuse an existing matching job page");
     assert(selectedPage.page === matchingPage, "CDP page selection should return the matching existing page");
 
+    const feedPage = {
+      url: () => "https://www.upwork.com/nx/find-work/best-matches/",
+    };
+    const activeWorkPage = {
+      url: () => "https://www.upwork.com/jobs/~022054111111111111111",
+    };
+    let openedExtraTab = false;
+    const reusedWorkTab = await selectPageForBrowserAction(
+      {
+        pages: () => [feedPage, activeWorkPage],
+        newPage: async () => {
+          openedExtraTab = true;
+          return { url: () => "about:blank" };
+        },
+      },
+      "https://www.upwork.com/jobs/~022054222222222222222",
+    );
+    assert(reusedWorkTab.page === activeWorkPage, "CDP page selection should reuse the active work tab instead of opening endless job tabs");
+    assert(openedExtraTab === false, "CDP page selection should not open another job tab when a work tab exists");
+    assert(/single active work tab/.test(reusedWorkTab.reason), "CDP page selection should explain active work-tab reuse");
+
     let sampleIndex = 0;
     const settlingPage = {
       goto: async () => undefined,

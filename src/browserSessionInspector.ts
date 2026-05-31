@@ -166,7 +166,7 @@ function hostOf(value: string): string {
   }
 }
 
-function isUpworkUrl(value: string): boolean {
+export function isUpworkUrl(value: string): boolean {
   const host = hostOf(value);
   return host === "upwork.com" || host.endsWith(".upwork.com");
 }
@@ -176,13 +176,44 @@ function isGoogleAccountsUrl(value: string): boolean {
   return host === "accounts.google.com" || host.endsWith(".accounts.google.com");
 }
 
-function isUpworkFindWorkFeedUrl(value: string): boolean {
+export function isUpworkFindWorkFeedUrl(value: string): boolean {
   try {
     const pathname = new URL(value).pathname.toLowerCase();
     return pathname === "/nx/find-work" || pathname === "/nx/find-work/" || /^\/nx\/find-work\/(?:best-matches|most-recent|saved-search(?:es)?|search(?:\/jobs)?|search-jobs)(?:\/|$)/.test(pathname);
   } catch {
     return false;
   }
+}
+
+export function isUpworkWorkTabUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    const target = parsed.pathname + parsed.search + parsed.hash;
+    return /\/jobs\/(?:~\d{12,24}|[^/?#]+_~\d{12,24})(?:[/?#]|$)|\/(?:nx|ab)\/proposals\/job\/~\d{12,24}\/apply(?:[/?#]|$)/i.test(target);
+  } catch {
+    return /\/jobs\/(?:~\d{12,24}|[^/?#]+_~\d{12,24})(?:[/?#]|$)|\/(?:nx|ab)\/proposals\/job\/~\d{12,24}\/apply(?:[/?#]|$)/i.test(value);
+  }
+}
+
+export interface BrowserTabDiagnostics {
+  openUpworkTabCount: number;
+  selectedFeedTabUrl: string | null;
+  selectedWorkTabUrl: string | null;
+  workTabCount: number;
+  staleWorkTabCount: number;
+}
+
+export function buildBrowserTabDiagnostics(pages: InspectorPageLike[]): BrowserTabDiagnostics {
+  const upworkPages = pages.filter((page) => isUpworkUrl(page.url()));
+  const feedPage = upworkPages.find((page) => isUpworkFindWorkFeedUrl(page.url())) ?? null;
+  const workPages = upworkPages.filter((page) => isUpworkWorkTabUrl(page.url()));
+  return {
+    openUpworkTabCount: upworkPages.length,
+    selectedFeedTabUrl: feedPage?.url() ?? null,
+    selectedWorkTabUrl: workPages[0]?.url() ?? null,
+    workTabCount: workPages.length,
+    staleWorkTabCount: Math.max(0, workPages.length - 1),
+  };
 }
 
 function hasLoginMarkers(value: string): boolean {
@@ -330,8 +361,19 @@ export function selectRelevantBrowserPage(pages: InspectorPageLike[]): { page: I
   if (upworkOrGoogle.length === 1) {
     return { page: upworkOrGoogle[0]!, ambiguous: false, reason: "Selected the only Upwork/Google tab." };
   }
-  const activeLike = upworkOrGoogle[upworkOrGoogle.length - 1] ?? null;
-  return { page: activeLike, ambiguous: false, reason: "Selected the most recent Upwork/Google tab." };
+  const feed = upworkOrGoogle.find((page) => isUpworkFindWorkFeedUrl(page.url()));
+  if (feed) {
+    return { page: feed, ambiguous: false, reason: "Selected the stable Upwork feed/search tab." };
+  }
+  const work = upworkOrGoogle.find((page) => isUpworkWorkTabUrl(page.url()));
+  if (work) {
+    return { page: work, ambiguous: false, reason: "Selected the first Upwork job/apply work tab because no feed tab is open." };
+  }
+  const google = upworkOrGoogle.find((page) => isGoogleAccountsUrl(page.url()));
+  if (google) {
+    return { page: google, ambiguous: false, reason: "Selected Google login tab." };
+  }
+  return { page: upworkOrGoogle[0] ?? null, ambiguous: false, reason: "Selected the first Upwork/Google tab deterministically." };
 }
 
 export async function inspectBrowserSession(context: InspectorContextLike, options: { includeStoredSessionState?: boolean } = {}): Promise<BrowserSessionInspection> {

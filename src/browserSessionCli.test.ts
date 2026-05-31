@@ -1,5 +1,6 @@
 import { strict as assert } from "node:assert";
 import { runBrowserSessionClear } from "./browserSessionCli";
+import { getChromeProfileProcessDiagnostics } from "./browserSessionControl";
 import { BrowserSessionStatus } from "./browserSession";
 import { BrowserSessionInspection } from "./browserSessionInspector";
 import { BrowserAction } from "./types";
@@ -130,6 +131,20 @@ async function runTests(): Promise<void> {
   const json = JSON.stringify(result.result);
   assert.ok(json.length < 1000, "session clear JSON should be compact");
   assert.doesNotMatch(json, /<html|<body|document\.querySelector|window\.TOP_NAV_USER_CONFIG/i);
+
+  const profile = "/opt/upwork-agent/shared/browser-profile";
+  const processDiagnostics = getChromeProfileProcessDiagnostics({
+    userDataDir: profile,
+    cdpUrl: "http://127.0.0.1:9222",
+    processListText: [
+      `101 /usr/bin/google-chrome --remote-debugging-port=9222 --user-data-dir=${profile}`,
+      `202 /usr/bin/google-chrome --remote-debugging-port=9222 --user-data-dir=${profile}`,
+      "303 /usr/bin/google-chrome --remote-debugging-port=9333 --user-data-dir=/tmp/other",
+    ].join("\n"),
+  });
+  assert.equal(processDiagnostics.chromeProcessCount, 2);
+  assert.deepEqual(processDiagnostics.chromePids, [101, 202]);
+  assert.equal(processDiagnostics.duplicateProfileConflict, true);
 
   console.log("browser session CLI tests passed");
 }
