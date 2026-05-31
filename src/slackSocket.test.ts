@@ -156,6 +156,9 @@ async function runTests(): Promise<void> {
       { name: "natural prep it", input: "prep it", expectType: "approve_prepare" },
       { name: "natural looks good proceed", input: "looks good, proceed", expectType: "approve_prepare" },
       { name: "natural apply", input: "apply", expectType: "approve_prepare" },
+      { name: "prep issue cover letter empty", input: "I do not see the cover letter filled in.", expectType: "prep_issue_report" },
+      { name: "prep issue empty", input: "it’s empty", expectType: "prep_issue_report" },
+      { name: "prep issue not attached", input: "The file is not attached.", expectType: "prep_issue_report" },
       { name: "live phrasing", input: "yeah, prep drafts and send link to listing", expectType: "approve_prepare" },
       { name: "bot mention raises prep confidence", input: "yeah, prep drafts and send link to listing <@UAGENT>", expectType: "approve_prepare" },
       { name: "retry action", input: "retry 123", expectType: "retry_action", actionId: 123 },
@@ -339,6 +342,23 @@ async function runTests(): Promise<void> {
     assert(duplicatePrepareResult.text.includes("Already on it"), "Duplicate prepare draft should stay concise.");
     assert(!duplicatePrepareResult.text.toLowerCase().includes("browser action"), "Duplicate prepare draft should not expose action ids by default.");
 
+    updateBrowserActionStatus(prepareResult.actionId!, "paused", "field_preparation_incomplete");
+    const qaIssueRecheckReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "I do not see the cover letter filled in.",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            qaIssueRecheckReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(getBrowserActionById(prepareResult.actionId!)?.status === "pending", "Prep issue report should requeue a paused apply-page action for remote Chrome re-check.");
+    assert(qaIssueRecheckReplies.some((reply) => reply.includes("re-check the apply page")), "Prep issue report should acknowledge the remote apply-page re-check.");
+
     const queuedActions = listBrowserActions(null, 10).filter((action) => action.actionType === "prepare_application_review" && action.jobId === prepareJob.id);
     assert(queuedActions.length === 1, `Expected exactly one queued prepare_application_review action, got ${queuedActions.length}`);
 
@@ -395,6 +415,21 @@ async function runTests(): Promise<void> {
       },
     });
     assert(blockedReplies.some((reply) => reply.includes("Quick blocker: Upwork is asking for a human check")), "Blocked prep should explain the browser blocker in-thread.");
+
+    const issueReportReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "I do not see the cover letter filled in.",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            issueReportReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(issueReportReplies.some((reply) => reply.includes("re-check the apply page") || reply.includes("Quick blocker")), "Prep issue report should trigger a status/recheck response instead of being ignored.");
 
     const retryReplies: string[] = [];
     updateBrowserActionStatus(prepareResult.actionId!, "failed", "field_preparation_incomplete");

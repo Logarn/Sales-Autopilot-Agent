@@ -126,7 +126,10 @@ function runTests(): void {
   assert(text.length < 900, "lead alert should stay short enough for a fast scan");
   assertIncludes(text, "🚀 *New lead: Email Marketing Specialist Needed*", "lead heading");
   assertIncludes(text, "<@U0A2X5BCNKC> <@U0AHJFYV42K>", "lead alert should tag Steve/Natalie");
-  assertIncludes(text, "This looks strong enough to prep", "human lead sentence");
+  assert(
+    /This is worth prepping|I’d move this into prep|This one has enough signal to stage/.test(text),
+    "human lead sentence should vary while preserving prep intent",
+  );
   assertIncludes(text, "Klaviyo email flows and campaign support", "human lead sentence");
   assertIncludes(text, "• *Fit:* Medium", "fit summary");
   assertIncludes(text, "• *Platform:* Klaviyo", "platform summary");
@@ -201,7 +204,10 @@ function runTests(): void {
     autoPrepareNote: "Not auto-preparing because Connects spend needs manual review.",
   }).text;
   assertIncludes(unknownText, "• *Connects:* unknown for now", "missing Connects should render unknown");
-  assertIncludes(unknownText, "This one is close, but I’m not fully sold", "borderline lead should sound conversational");
+  assert(
+    /This is relevant|Worth a look|This could be useful/.test(unknownText),
+    "borderline lead should sound conversational without fixed boilerplate",
+  );
   assertIncludes(unknownText, "*Next:* Reply *“prep it”* if you want me to prepare the draft.", "borderline lead should ask for a clear next action");
   assertNotIncludes(unknownText, "Connects: 0", "missing Connects must not render as zero");
   for (const noisy of ["manual review", "platformEligibility", "lead decision", "packet", "source context", "action id"]) {
