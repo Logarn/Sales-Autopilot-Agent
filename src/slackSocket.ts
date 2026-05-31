@@ -42,6 +42,7 @@ export type SlackSocketParsedCommandType =
   | "revise"
   | "approve_prepare"
   | "prepare_draft"
+  | "prep_issue_report"
   | "retry_action"
   | "mark_submitted"
   | "clarify"
@@ -170,6 +171,12 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
     return { type: "approve_prepare", rawText: normalized, source: "fallback" };
   }
 
+  if (/\b(?:do\s+not|don't|cant|can't|cannot|not)\s+see\b.*\b(?:cover\s*letter|filled|attached|file|portfolio|proof|highlight|rate|boost|connects)\b/i.test(normalized) ||
+    /\b(?:cover\s*letter|field|answer|attachment|file|portfolio|proof|highlight|rate|boost)\b.*\b(?:empty|blank|missing|not\s+filled|not\s+there|not\s+attached|not\s+selected|not\s+set)\b/i.test(normalized) ||
+    /\bit['’]?s\s+(?:empty|blank|not\s+filled)\b/i.test(normalized)) {
+    return { type: "prep_issue_report", rawText: normalized, source: "fallback" };
+  }
+
   const retryMatch = commandText.match(/^retry(?:\s+(?:preparation|prep))?(?:\s+(\d+))?$/i);
   if (retryMatch) {
     return {
@@ -204,6 +211,11 @@ async function resolveSlackThreadCommand(input: {
   state: ReturnType<typeof getSlackThreadStateByThreadTs>;
   provider?: SlackThreadBrainProvider;
 }): Promise<ParsedSlackSocketCommand> {
+  const fallback = parseSlackThreadCommand(input.text);
+  if (fallback.type === "prep_issue_report") {
+    return { ...fallback, source: "fallback" };
+  }
+
   const llm = await classifySlackThreadWithLlm({
     text: input.text,
     botMentioned: hasSlackMention(input.text),
@@ -220,7 +232,6 @@ async function resolveSlackThreadCommand(input: {
     return commandFromBrainDecision(input.text, llm.decision);
   }
 
-  const fallback = parseSlackThreadCommand(input.text);
   return { ...fallback, source: "fallback" };
 }
 
@@ -396,12 +407,15 @@ export function buildPrepareDraftQueueReply(input: {
   actionId: number;
   duplicate: boolean;
   duplicateStatus?: string | null;
+  requeued?: boolean;
   ackText?: string | null;
   queueStatus?: string | null;
 }): string {
   const ack = input.ackText?.trim() || "Got it — I’ll prep this now and come back here when it’s ready for QA.";
   return [
-    input.duplicate
+    input.requeued
+      ? ack
+      : input.duplicate
       ? "Already on it — I already have this queued and I’ll come back here when it’s ready for QA."
       : ack,
     input.queueStatus,
@@ -423,7 +437,7 @@ function browserQueueStatusForAction(actionId: number): string | null {
   return `${prefix}: ${index + 1} of ${active.length} active Upwork action${active.length === 1 ? "" : "s"} (${action.status}).`;
 }
 
-export function queuePrepareDraftFromSlackThread(input: { channelId: string; threadTs: string; ackText?: string | null }): { ok: boolean; text: string; actionId?: number } {
+export function queuePrepareDraftFromSlackThread(input: { channelId: string; threadTs: string; ackText?: string | null; forceRetryPaused?: boolean }): { ok: boolean; text: string; actionId?: number } {
   const state = getSlackThreadStateByThreadTs(input.channelId, input.threadTs);
   if (!state?.jobId) {
     return { ok: false, text: "I cannot queue a browser draft without a tracked job id for this thread." };
@@ -452,6 +466,10 @@ export function queuePrepareDraftFromSlackThread(input: { channelId: string; thr
     },
   });
   const duplicateAction = action.duplicate ? getBrowserActionById(action.id) : null;
+  const requeuedPaused = Boolean(input.forceRetryPaused && duplicateAction?.status === "paused" && duplicateAction.actionType === "prepare_application_review");
+  if (requeuedPaused) {
+    updateBrowserActionStatus(action.id, "pending", "Slack socket prep issue report requested remote Chrome re-check.");
+  }
   updateSlackThreadStateStatus(state.channelId, state.threadTs, "prepare_draft_requested");
   return {
     ok: true,
@@ -462,7 +480,8 @@ export function queuePrepareDraftFromSlackThread(input: { channelId: string; thr
       upworkUrl: state.upworkUrl,
       actionId: action.id,
       duplicate: action.duplicate,
-      duplicateStatus: duplicateAction?.status ?? null,
+      duplicateStatus: requeuedPaused ? "pending" : duplicateAction?.status ?? null,
+      requeued: requeuedPaused,
       ackText: input.ackText,
       queueStatus: browserQueueStatusForAction(action.id),
     }),
@@ -663,7 +682,7 @@ export async function handleThreadCommand(params: {
     return;
   }
 
-  if (!state.jobId && ["approve", "reject", "revise", "approve_prepare", "prepare_draft", "mark_submitted", "retry_action"].includes(command.type)) {
+  if (!state.jobId && ["approve", "reject", "revise", "approve_prepare", "prepare_draft", "prep_issue_report", "mark_submitted", "retry_action"].includes(command.type)) {
     const response = `This thread tracks ${state.upworkUrl} but no job id was parsed. ${
       command.type === "approve_prepare" || command.type === "prepare_draft" ? "I can’t prep it until I have the job id. Send the Upwork listing link here and I’ll pick it up." : "Please share a supported Upwork job URL first."
     }`;
@@ -712,6 +731,23 @@ export async function handleThreadCommand(params: {
     const result = queuePrepareDraftFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs, ackText: command.replyText });
     if (!result.ok) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
+    }
+    await postThreadReply(params.client, params.channelId, params.threadTs, result.text);
+    return;
+  }
+
+  if (command.type === "prep_issue_report") {
+    const result = queuePrepareDraftFromSlackThread({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      ackText: "Thanks for the catch — I’ll re-check the apply page and only report fields that verify on-page.",
+      forceRetryPaused: true,
+    });
+    if (!result.ok) {
+      updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
+      const details = buildThreadStatusDetails(state).slice(0, 8).join("\n");
+      await postThreadReply(params.client, params.channelId, params.threadTs, [result.text, details].filter(Boolean).join("\n"));
+      return;
     }
     await postThreadReply(params.client, params.channelId, params.threadTs, result.text);
     return;

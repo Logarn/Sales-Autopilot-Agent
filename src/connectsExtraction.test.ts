@@ -50,20 +50,20 @@ assert.match(jobSidebarConnects.sourceText ?? "", /Send a proposal for: 14 Conne
 
 const applyPageConnects = extractConnectsFromVisibleText(`
 Proposal settings
-Required for proposal: 14 Connects
+Required for proposal: 8 Connects
 Boost your proposal
 `);
-assert.equal(applyPageConnects.requiredConnects, 14);
+assert.equal(applyPageConnects.requiredConnects, 8);
 assert.equal(applyPageConnects.confidence, "high");
-assert.match(applyPageConnects.sourceText ?? "", /Required for proposal: 14 Connects/i);
+assert.match(applyPageConnects.sourceText ?? "", /Required for proposal: 8 Connects/i);
 
 const finalButtonConnects = extractConnectsFromVisibleText(`
 Cover letter
-Send for 14 Connects
+Send for 8 Connects
 `);
-assert.equal(finalButtonConnects.requiredConnects, 14);
+assert.equal(finalButtonConnects.requiredConnects, 8);
 assert.equal(finalButtonConnects.confidence, "high");
-assert.match(finalButtonConnects.sourceText ?? "", /Send for 14 Connects/i);
+assert.match(finalButtonConnects.sourceText ?? "", /Send for 8 Connects/i);
 
 class FakeProvider implements ConnectsExtractionProvider {
   isAvailable(): boolean {

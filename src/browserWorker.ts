@@ -22,6 +22,7 @@ import { buildBrowserApplyPlan } from "./browserApply";
 import {
   closeDb,
   enqueueBrowserActionDeduped,
+  getApplicationStatus,
   getBrowserActionById,
   getSlackThreadStateByJobId,
   getSlackThreadStateByThreadTs,
@@ -71,6 +72,7 @@ import {
   checkCdpEndpoint,
 } from "./browserSessionControl";
 import { isUpworkFindWorkFeedUrl, isUpworkWorkTabUrl } from "./browserSessionInspector";
+import { listProtectedQaApplyUrls } from "./browserQaHold";
 
 type DetectedBrowserState =
   | "dry_run"
@@ -231,6 +233,30 @@ interface PlaywrightPageLike {
   evaluate?<R>(fn: () => R): Promise<R>;
 }
 
+export type ApplyVerificationStatus =
+  | "verified"
+  | "attempted_unverified"
+  | "unavailable_on_page"
+  | "missing_local_file"
+  | "blocked_by_upwork_ui"
+  | "skipped_by_strategy";
+
+export interface ApplyFieldVerification {
+  field: string;
+  status: ApplyVerificationStatus;
+  expected?: string;
+  actual?: string;
+  detail: string;
+}
+
+interface ApplyVerificationSnapshot {
+  url: string;
+  visibleText: string;
+  inputValues: string[];
+  checkedLabels: string[];
+  fileNames: string[];
+}
+
 interface PlaywrightContextLike {
   pages?(): PlaywrightPageLike[];
   newPage(): Promise<PlaywrightPageLike>;
@@ -277,6 +303,13 @@ interface ApplyPreparationDiagnostics {
   attemptedFields: string[];
   skippedFields: string[];
   manualFields: string[];
+  fieldVerification: ApplyFieldVerification[];
+  verifiedFields: string[];
+  unverifiedFields: string[];
+  unavailableFields: string[];
+  missingFileFields: string[];
+  blockedByUiFields: string[];
+  skippedByStrategyFields: string[];
 }
 
 const QA_MENTIONS = "<@U0A2X5BCNKC> <@U0AHJFYV42K>";
@@ -500,7 +533,7 @@ function buildApplyDiagnostics(
   plan: BrowserApplyFillPlan | null,
   issues: BrowserApplyValidationIssue[],
   state: ApplyPreparationDiagnostics["state"],
-  fields: Partial<Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields">> = {}
+  fields: Partial<Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields" | "fieldVerification">> = {}
 ): ApplyPreparationDiagnostics {
   const extendedPlan = plan as (BrowserApplyFillPlan & Partial<{
     filesAttached: string[];
@@ -513,6 +546,10 @@ function buildApplyDiagnostics(
       ? `${sourceBackedConnects.sourceLocation ?? "visible text"}: ${sourceBackedConnects.sourceText}`
       : sourceBackedConnects.extractionMethod
     : null;
+  const fieldVerification = fields.fieldVerification ?? [];
+  const fieldsWithStatus = (status: ApplyVerificationStatus): string[] => fieldVerification
+    .filter((item) => item.status === status)
+    .map((item) => item.field);
   return {
     actionId: action.id,
     jobId: action.jobId,
@@ -554,6 +591,13 @@ function buildApplyDiagnostics(
     attemptedFields: fields.attemptedFields ?? [],
     skippedFields: fields.skippedFields ?? [],
     manualFields: fields.manualFields ?? [],
+    fieldVerification,
+    verifiedFields: fieldsWithStatus("verified"),
+    unverifiedFields: fieldsWithStatus("attempted_unverified"),
+    unavailableFields: fieldsWithStatus("unavailable_on_page"),
+    missingFileFields: fieldsWithStatus("missing_local_file"),
+    blockedByUiFields: fieldsWithStatus("blocked_by_upwork_ui"),
+    skippedByStrategyFields: fieldsWithStatus("skipped_by_strategy"),
   };
 }
 
@@ -589,6 +633,9 @@ function formatApplyDiagnostics(diagnostics: ApplyPreparationDiagnostics): strin
     `  manual_review_warnings: ${diagnostics.manualReviewWarnings.length > 0 ? diagnostics.manualReviewWarnings.join("; ") : "none"}`,
     `  selected_highlights: ${diagnostics.selectedHighlights.length > 0 ? diagnostics.selectedHighlights.join("; ") : "none"}`,
     `  fields_filled: ${diagnostics.attemptedFields.length > 0 ? diagnostics.attemptedFields.join(", ") : "none"}`,
+    `  fields_verified: ${diagnostics.verifiedFields.length > 0 ? diagnostics.verifiedFields.join(", ") : "none"}`,
+    `  fields_attempted_unverified: ${diagnostics.unverifiedFields.length > 0 ? diagnostics.unverifiedFields.join(", ") : "none"}`,
+    `  fields_unavailable: ${diagnostics.unavailableFields.length > 0 ? diagnostics.unavailableFields.join(", ") : "none"}`,
     `  fields_not_filled: ${diagnostics.skippedFields.length > 0 ? diagnostics.skippedFields.join(", ") : "none"}`,
     `  fields_manual_review: ${diagnostics.manualFields.length > 0 ? diagnostics.manualFields.join(", ") : "none"}`,
     `  stop_before_submit: ${diagnostics.stopBeforeSubmit}`,
@@ -612,23 +659,32 @@ function sleep(ms: number): Promise<void> {
 export async function selectPageForBrowserAction(
   context: { pages?: () => PlaywrightPageLike[]; newPage: () => Promise<PlaywrightPageLike> },
   targetUrl: string,
+  options: { protectedApplyUrls?: string[] } = {},
 ): Promise<{ page: PlaywrightPageLike; reusedExistingPage: boolean; reason: string }> {
   const pages = context.pages?.() ?? [];
   const exactMatch = pages.find((candidate) => urlsReferToSameUpworkJob(candidate.url(), targetUrl) || candidate.url() === targetUrl);
   if (exactMatch) {
     return { page: exactMatch, reusedExistingPage: true, reason: `Reused existing page matching target URL/job token: ${exactMatch.url()}` };
   }
-  const reusableWorkTab = pages.find((candidate) => isUpworkWorkTabUrl(candidate.url()));
+  const protectedApplyUrls = options.protectedApplyUrls ?? [];
+  const reusableWorkTab = pages.find((candidate) => isUpworkWorkTabUrl(candidate.url()) && !isProtectedQaApplyTab(candidate.url(), targetUrl, protectedApplyUrls));
   if (reusableWorkTab) {
     return { page: reusableWorkTab, reusedExistingPage: true, reason: `Reused the single active work tab and will navigate it to the target URL: ${reusableWorkTab.url()}` };
   }
-  return { page: await context.newPage(), reusedExistingPage: false, reason: "Opened a new page because no matching existing Upwork page was found." };
+  return {
+    page: await context.newPage(),
+    reusedExistingPage: false,
+    reason: protectedApplyUrls.length > 0
+      ? "Opened a new page because existing apply tabs are protected while awaiting QA."
+      : "Opened a new page because no matching existing Upwork page was found.",
+  };
 }
 
 async function cleanStaleWorkTabs(input: {
   context: { pages?: () => PlaywrightPageLike[] };
   selectedPage?: PlaywrightPageLike | null;
   targetUrl: string;
+  protectedApplyUrls?: string[];
 }): Promise<{ openPagesBefore: number; upworkWorkTabsBefore: number; staleWorkTabsClosed: number; staleWorkTabsIgnored: number; selectedFeedTabUrl?: string }> {
   const pages = input.context.pages?.() ?? [];
   let staleWorkTabsClosed = 0;
@@ -638,6 +694,10 @@ async function cleanStaleWorkTabs(input: {
   for (const page of workTabs) {
     if (page === input.selectedPage) continue;
     if (urlsReferToSameUpworkJob(page.url(), input.targetUrl)) continue;
+    if (isProtectedQaApplyTab(page.url(), input.targetUrl, input.protectedApplyUrls ?? [])) {
+      staleWorkTabsIgnored += 1;
+      continue;
+    }
     if (typeof page.close === "function") {
       try {
         await page.close({ runBeforeUnload: false });
@@ -656,6 +716,17 @@ async function cleanStaleWorkTabs(input: {
     staleWorkTabsIgnored,
     ...(selectedFeedTabUrl ? { selectedFeedTabUrl } : {}),
   };
+}
+
+function isProtectedQaApplyTab(pageUrl: string, targetUrl: string, protectedApplyUrls: string[]): boolean {
+  return protectedApplyUrls.some((protectedUrl) =>
+    (pageUrl === protectedUrl || urlsReferToSameUpworkJob(pageUrl, protectedUrl)) &&
+    !(targetUrl === protectedUrl || urlsReferToSameUpworkJob(targetUrl, protectedUrl))
+  );
+}
+
+function currentProtectedQaApplyUrls(): string[] {
+  return listProtectedQaApplyUrls(listBrowserActions(null, 1000), getApplicationStatus);
 }
 
 export async function readPageOuterHtml(page: PlaywrightPageLike): Promise<string> {
@@ -888,47 +959,109 @@ function buildPrepareDraftStatusMessage(input: {
   nextCommand?: string;
 }): string {
   const { diagnostics } = input;
-  const readyState = diagnostics.state === "apply_page_loaded" || diagnostics.state === "dry_run" || diagnostics.state === "prepared";
+  const fieldVerification = diagnostics.fieldVerification ?? [];
+  const coverLetterVerification = getVerification(fieldVerification, "coverLetter");
+  const screeningVerification = getVerification(fieldVerification, "screeningAnswers");
+  const attachmentVerification = getVerification(fieldVerification, "attachments");
+  const highlightVerification = getVerification(fieldVerification, "profileHighlights");
+  const rateVerification = getVerification(fieldVerification, "rate");
+  const boostVerification = getVerification(fieldVerification, "boostConnects");
+  const targetTabVerification = getVerification(fieldVerification, "targetTab");
   const needsManualReview = diagnostics.validationIssues.some((issue) => issue.severity === "warning" || issue.severity === "error") ||
     diagnostics.missingLocalAssets.length > 0 ||
-    diagnostics.manualFields.length > 0 ||
-    diagnostics.connectsDecision !== "safe_apply";
+    diagnostics.manualFields.some((field) => field !== "finalSubmit") ||
+    diagnostics.connectsDecision !== "safe_apply" ||
+    hasUnverifiedRequiredApplyFields(fieldVerification);
   const readyForFinalManualSubmit = diagnostics.state === "apply_page_loaded" && diagnostics.stopBeforeSubmit && !needsManualReview;
-  const screeningCount = diagnostics.screeningAnswersCount;
-  const proofSummary = diagnostics.selectedAttachments.length > 0
-    ? `${diagnostics.selectedAttachments.length} proof item${diagnostics.selectedAttachments.length === 1 ? "" : "s"} selected`
-    : "none attached";
   const connectsSummary = diagnostics.requiredConnects === null
     ? "unknown"
-    : `${diagnostics.requiredConnects} required${diagnostics.boostConnects ? `, ${diagnostics.boostConnects} boost` : ", no boost recommended"}`;
-  const rateSummary = diagnostics.rate ? `set ${diagnostics.rate}` : "left the rate alone";
+    : `${diagnostics.requiredConnects} required${diagnostics.boostConnects ? `, ${diagnostics.boostConnects} boost` : ", no boost set"}`;
+  const coverLetterSummary = coverLetterVerification?.status === "verified"
+    ? "verified filled"
+    : coverLetterVerification?.status === "attempted_unverified"
+      ? "attempted, not verified"
+      : coverLetterVerification?.status === "blocked_by_upwork_ui"
+        ? "blocked by Upwork UI"
+        : "not verified";
+  const screeningSummary = screeningVerification?.status === "verified"
+    ? screeningVerification.detail
+    : screeningVerification?.status === "skipped_by_strategy"
+      ? "none generated"
+      : screeningVerification?.detail ?? "not verified";
+  const proofSummary = attachmentVerification?.status === "verified"
+    ? attachmentVerification.detail
+    : attachmentVerification?.status === "missing_local_file"
+      ? attachmentVerification.detail
+      : attachmentVerification?.status === "skipped_by_strategy"
+        ? "No files selected by strategy."
+        : attachmentVerification?.detail ?? "not verified";
+  const profileProofSummary = highlightVerification?.status === "verified"
+    ? highlightVerification.detail
+    : highlightVerification?.status === "unavailable_on_page"
+      ? "Unavailable on page; Upwork shows add portfolio/certificate controls."
+      : highlightVerification?.status === "skipped_by_strategy"
+        ? "No profile highlights selected by strategy."
+        : highlightVerification?.detail ?? "not verified";
+  const rateSummary = rateVerification?.status === "verified"
+    ? rateVerification.detail
+    : diagnostics.rate ? `attempted ${diagnostics.rate}, not verified` : "left alone";
+  const boostSummary = boostVerification?.detail ?? (diagnostics.boostConnects ? `${diagnostics.boostConnects} boost planned, not verified` : "No boost set.");
   const missingFiles = diagnostics.missingLocalAssets.map((asset) => path.basename(asset)).slice(0, 2);
-  const manualFields = diagnostics.manualFields.filter((field) => field !== "finalSubmit").slice(0, 3);
+  const manualFields = [
+    ...(diagnostics.unverifiedFields ?? []),
+    ...(diagnostics.unavailableFields ?? []),
+    ...(diagnostics.blockedByUiFields ?? []),
+  ].filter((field) => field !== "finalSubmit").slice(0, 5);
   const reviewItems = [
     missingFiles.length > 0 ? `${missingFiles.length} missing file${missingFiles.length === 1 ? "" : "s"}: ${missingFiles.join(", ")}` : null,
-    manualFields.length > 0 ? `I couldn’t safely fill: ${manualFields.join(", ")}` : null,
+    targetTabVerification && targetTabVerification.status !== "verified" ? targetTabVerification.detail : null,
+    manualFields.length > 0 ? `Not verified: ${manualFields.join(", ")}` : null,
     diagnostics.connectsDecision !== "safe_apply" ? "Connects need a quick look" : null,
     diagnostics.validationIssues.find((issue) => issue.severity === "error")?.message,
   ].filter((item): item is string => Boolean(item));
   const reviewText = reviewItems.length > 0 ? reviewItems.slice(0, 3).map(humanSlackPrepDetail).join("; ") : "none";
   const submitLabel = diagnostics.requiredConnects === null ? "Submit" : `Send for ${diagnostics.requiredConnects} Connects`;
   const actionLine = readyForFinalManualSubmit
-    ? `Open the Upwork draft, QA it, and manually click *${submitLabel}* if it looks good.`
+    ? `Review it through remote Chrome/VNC and manually click *${submitLabel}* if it looks good.`
     : "Please check the item above, then reply “retry” when it’s cleared.";
+  const locationLine = readyForFinalManualSubmit
+    ? "Draft is ready in the remote Chrome session. Opening the apply URL in Safari or another local browser may not show unsaved Upwork form fields."
+    : "I checked the remote Chrome apply page and stopped before submit.";
+  const coverLetterBlock = readyForFinalManualSubmit && diagnostics.coverLetterPreview
+    ? ["", "*Cover letter draft:*", diagnostics.coverLetterPreview].join("\n")
+    : "";
+  const screeningBlock = readyForFinalManualSubmit
+    ? [
+        "",
+        "*Screening answers filled:*",
+        diagnostics.screeningAnswers.length > 0
+          ? diagnostics.screeningAnswers.map((answer, index) => `${index + 1}. ${boundedExcerpt(answer, 700)}`).join("\n")
+          : "None generated.",
+      ].join("\n")
+    : "";
   return [
-    readyState ? "✅ *Draft ready for QA*" : "⚠️ *I hit a blocker on the apply page*",
+    readyForFinalManualSubmit ? "✅ *Draft ready for QA*" : "⚠️ *I hit a blocker on the apply page*",
     "",
-    `Hey ${QA_MENTIONS} — I ${diagnostics.coverLetterPresent ? "filled the cover letter" : "couldn’t fill the cover letter"}, answered ${screeningCount} screening question${screeningCount === 1 ? "" : "s"}, ${rateSummary}, and checked the Connects. I did *not* click submit.`,
+    `Hey ${QA_MENTIONS} — ${locationLine}`,
+    "",
+    "Here’s what I can verify on the apply page:",
     "",
     [
+      `• *Cover letter:* ${coverLetterSummary}`,
+      `• *Screening answers:* ${screeningSummary}`,
+      `• *Rate:* ${rateSummary}`,
       `• *Connects:* ${connectsSummary}`,
-      `• *Proof/files:* ${proofSummary}`,
+      `• *Boost:* ${boostSummary}`,
+      `• *Files:* ${proofSummary}`,
+      `• *Profile/proof:* ${profileProofSummary}`,
       `• *Needs review:* ${readyForFinalManualSubmit ? "none" : reviewText}`,
     ].join("\n"),
+    coverLetterBlock,
+    screeningBlock,
     "",
     `*Next:* ${actionLine}`,
     "",
-    diagnostics.applyUrl ?? diagnostics.sourceUrl ?? "Upwork application URL unavailable",
+    `*Apply URL:* ${diagnostics.applyUrl ?? diagnostics.sourceUrl ?? "Upwork application URL unavailable"}`,
   ].join("\n");
 }
 
@@ -1410,7 +1543,15 @@ function verifyApplyPageConnects(plan: BrowserApplyFillPlan, bodyText: string): 
   }
 
   removeConnectsVerificationIssues(issues);
-  const plannedBoost = plan.connects.boost ?? 0;
+  const requestedBoost = plan.connects.boost ?? 0;
+  const plannedBoost = Math.min(Math.max(0, requestedBoost), 50);
+  if (requestedBoost > 50) {
+    issues.push({
+      severity: "warning",
+      code: "boost_hard_cap_applied",
+      message: `Requested boost ${requestedBoost} exceeds the hard cap 50; boost was capped before any browser fill attempt.`,
+    });
+  }
   const required = extracted.requiredConnects;
   const total = required + plannedBoost;
   const requiresManualReview = total > AUTO_PREPARE_MAX_CONNECTS;
@@ -1455,7 +1596,224 @@ function verifyApplyPageConnects(plan: BrowserApplyFillPlan, bodyText: string): 
   return [];
 }
 
-async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillPlan): Promise<Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields">> {
+function normalizeVerificationValue(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function significantExpectedText(value: string): string {
+  const normalized = normalizeVerificationValue(value);
+  return normalized.length > 120 ? normalized.slice(0, 120) : normalized;
+}
+
+function textCollectionContains(values: string[], expected: string): boolean {
+  const significant = significantExpectedText(expected);
+  if (!significant) return false;
+  return values.some((value) => normalizeVerificationValue(value).includes(significant));
+}
+
+function rateNeedle(value: string): string | null {
+  const match = value.match(/\d+(?:\.\d+)?/);
+  return match?.[0] ?? null;
+}
+
+function verification(
+  field: string,
+  status: ApplyVerificationStatus,
+  detail: string,
+  extra: Pick<ApplyFieldVerification, "expected" | "actual"> = {},
+): ApplyFieldVerification {
+  return { field, status, detail, ...extra };
+}
+
+async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackBodyText: string): Promise<ApplyVerificationSnapshot> {
+  if (!page.evaluate) {
+    return {
+      url: page.url(),
+      visibleText: fallbackBodyText,
+      inputValues: [],
+      checkedLabels: [],
+      fileNames: [],
+    };
+  }
+  try {
+    const snapshot = await page.evaluate(() => {
+      type LooseElement = {
+        value?: string;
+        checked?: boolean;
+        type?: string;
+        name?: string;
+        files?: ArrayLike<{ name?: string }>;
+        getAttribute?: (name: string) => string | null;
+        closest?: (selector: string) => { textContent?: string | null } | null;
+      };
+      const documentLike = (globalThis as unknown as {
+        document?: {
+          body?: { innerText?: string };
+          querySelectorAll?: (selector: string) => ArrayLike<LooseElement>;
+        };
+      }).document;
+      const nodes = Array.from(documentLike?.querySelectorAll?.("textarea,input") ?? []);
+      const inputValues = nodes
+        .map((node) => typeof node.value === "string" ? node.value : "")
+        .filter((value) => value.trim().length > 0);
+      const checkedLabels = nodes
+        .filter((node) => Boolean(node.checked))
+        .map((node) => {
+          const labelText = node.closest?.("label")?.textContent ?? "";
+          const aria = node.getAttribute?.("aria-label") ?? "";
+          const name = node.name ?? "";
+          return [labelText, aria, name].filter(Boolean).join(" ");
+        })
+        .filter((value) => value.trim().length > 0);
+      const fileNames = nodes
+        .flatMap((node) => Array.from(node.files ?? []).map((file) => file.name ?? ""))
+        .filter((value) => value.trim().length > 0);
+      return {
+        visibleText: documentLike?.body?.innerText ?? "",
+        inputValues,
+        checkedLabels,
+        fileNames,
+      };
+    });
+    return {
+      url: page.url(),
+      visibleText: snapshot.visibleText || fallbackBodyText,
+      inputValues: snapshot.inputValues ?? [],
+      checkedLabels: snapshot.checkedLabels ?? [],
+      fileNames: snapshot.fileNames ?? [],
+    };
+  } catch {
+    return {
+      url: page.url(),
+      visibleText: fallbackBodyText,
+      inputValues: [],
+      checkedLabels: [],
+      fileNames: [],
+    };
+  }
+}
+
+export async function verifyApplyPreparationOnPage(input: {
+  page: PlaywrightPageLike;
+  plan: BrowserApplyFillPlan;
+  fields: Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields">;
+  bodyText: string;
+}): Promise<ApplyFieldVerification[]> {
+  const { plan, fields } = input;
+  const snapshot = await readApplyVerificationSnapshot(input.page, input.bodyText);
+  const visibleAndValues = [snapshot.visibleText, ...snapshot.inputValues, ...snapshot.checkedLabels, ...snapshot.fileNames];
+  const results: ApplyFieldVerification[] = [];
+
+  results.push(urlsReferToSameUpworkJob(snapshot.url, plan.applyUrl)
+    ? verification("targetTab", "verified", `Apply tab matches target job URL: ${snapshot.url}`)
+    : verification("targetTab", "attempted_unverified", `Apply tab URL does not match target job URL. target=${plan.applyUrl} actual=${snapshot.url}`, { expected: plan.applyUrl, actual: snapshot.url }));
+
+  if (!plan.coverLetter.trim()) {
+    results.push(verification("coverLetter", "skipped_by_strategy", "No cover letter text was available in the plan."));
+  } else if (textCollectionContains(snapshot.inputValues, plan.coverLetter)) {
+    results.push(verification("coverLetter", "verified", "Cover letter field contains the intended text.", { expected: significantExpectedText(plan.coverLetter) }));
+  } else if (fields.skippedFields.includes("coverLetter") || fields.manualFields.includes("coverLetter")) {
+    results.push(verification("coverLetter", "blocked_by_upwork_ui", "Cover letter field was not filled by the Upwork UI.", { expected: significantExpectedText(plan.coverLetter) }));
+  } else {
+    results.push(verification("coverLetter", "attempted_unverified", "Cover letter fill was attempted, but the field did not verify with the intended text.", { expected: significantExpectedText(plan.coverLetter), actual: snapshot.inputValues.join(" | ").slice(0, 500) }));
+  }
+
+  if (plan.screeningAnswers.length === 0) {
+    results.push(verification("screeningAnswers", "skipped_by_strategy", "No screening answers were generated for this application."));
+  } else {
+    const verifiedCount = plan.screeningAnswers.filter((answer) => textCollectionContains(snapshot.inputValues, answer)).length;
+    if (verifiedCount === plan.screeningAnswers.length) {
+      results.push(verification("screeningAnswers", "verified", `${verifiedCount}/${plan.screeningAnswers.length} screening answers are present.`));
+    } else if (verifiedCount > 0) {
+      results.push(verification("screeningAnswers", "attempted_unverified", `${verifiedCount}/${plan.screeningAnswers.length} screening answers verified; remaining answers need QA.`));
+    } else if (fields.manualFields.includes("screeningAnswers")) {
+      results.push(verification("screeningAnswers", "blocked_by_upwork_ui", "Screening answer fields were unavailable or could not be filled safely."));
+    } else {
+      results.push(verification("screeningAnswers", "attempted_unverified", "Screening answers were planned, but none verified on the page."));
+    }
+  }
+
+  const rateValue = rateNeedle(plan.rate);
+  if (!rateValue) {
+    results.push(verification("rate", "skipped_by_strategy", "No safe rate value was available in the plan."));
+  } else if (textCollectionContains(snapshot.inputValues, rateValue)) {
+    results.push(verification("rate", "verified", `Rate field contains ${rateValue}.`, { expected: rateValue }));
+  } else if (fields.skippedFields.includes("rate")) {
+    results.push(verification("rate", "blocked_by_upwork_ui", "Rate field was not fillable.", { expected: rateValue }));
+  } else {
+    results.push(verification("rate", "attempted_unverified", "Rate fill was attempted, but the value was not verified.", { expected: rateValue }));
+  }
+
+  if (plan.connects.required === null) {
+    results.push(verification("requiredConnects", "attempted_unverified", "Required Connects are still unknown."));
+  } else {
+    results.push(verification("requiredConnects", "verified", `Required Connects verified as ${plan.connects.required}.`, { actual: String(plan.connects.required) }));
+  }
+
+  const plannedBoost = plan.connects.boost ?? 0;
+  if (plannedBoost <= 0) {
+    results.push(verification("boostConnects", "skipped_by_strategy", "No boost set."));
+  } else if (plannedBoost > 50) {
+    results.push(verification("boostConnects", "blocked_by_upwork_ui", `Planned boost ${plannedBoost} exceeds the hard cap 50; boost must not be set.`));
+  } else if (textCollectionContains(visibleAndValues, String(plannedBoost))) {
+    results.push(verification("boostConnects", "verified", `Boost Connects verified as ${plannedBoost}.`, { actual: String(plannedBoost) }));
+  } else if (fields.skippedFields.includes("connectsBoost")) {
+    results.push(verification("boostConnects", "blocked_by_upwork_ui", "Boost field was not fillable.", { expected: String(plannedBoost) }));
+  } else {
+    results.push(verification("boostConnects", "attempted_unverified", `Boost ${plannedBoost} was attempted, but not verified.`, { expected: String(plannedBoost) }));
+  }
+
+  if (plan.attachments.length === 0) {
+    results.push(verification("attachments", "skipped_by_strategy", "No local files were selected for upload."));
+  } else {
+    const missing = plan.attachments.filter((attachment) => !fs.existsSync(path.resolve(process.cwd(), attachment.filePath)));
+    if (missing.length > 0) {
+      results.push(verification("attachments", "missing_local_file", `Missing local files: ${missing.map((item) => item.filePath).join(", ")}`));
+    } else {
+      const expectedNames = plan.attachments.map((attachment) => path.basename(attachment.filePath));
+      const verifiedNames = expectedNames.filter((name) => textCollectionContains(visibleAndValues, name));
+      if (verifiedNames.length === expectedNames.length) {
+        results.push(verification("attachments", "verified", `${verifiedNames.length}/${expectedNames.length} uploaded files are visible.`, { actual: verifiedNames.join(", ") }));
+      } else if (fields.manualFields.includes("attachments")) {
+        results.push(verification("attachments", "blocked_by_upwork_ui", `Upload field was unavailable. Expected files: ${expectedNames.join(", ")}`));
+      } else {
+        results.push(verification("attachments", "attempted_unverified", `File upload was attempted but not verified. Expected files: ${expectedNames.join(", ")}`, { expected: expectedNames.join(", "), actual: snapshot.fileNames.join(", ") }));
+      }
+    }
+  }
+
+  if (plan.highlights.length === 0) {
+    results.push(verification("profileHighlights", "skipped_by_strategy", "No profile highlights were selected by strategy."));
+  } else {
+    const checkedCount = plan.highlights.filter((highlight) => textCollectionContains(snapshot.checkedLabels, highlight)).length;
+    if (checkedCount === plan.highlights.length) {
+      results.push(verification("profileHighlights", "verified", `${checkedCount}/${plan.highlights.length} profile highlights are checked.`));
+    } else if (/add a portfolio project|add portfolio project|add a certificate|add certificate/i.test(snapshot.visibleText)) {
+      results.push(verification("profileHighlights", "unavailable_on_page", "The page shows add-portfolio/add-certificate controls instead of selectable existing proof."));
+    } else if (fields.manualFields.includes("highlights")) {
+      results.push(verification("profileHighlights", "blocked_by_upwork_ui", "Profile highlight controls were unavailable or could not be selected safely."));
+    } else {
+      results.push(verification("profileHighlights", "attempted_unverified", "Profile/proof selection was attempted but not verified."));
+    }
+  }
+
+  results.push(verification("finalSubmit", "skipped_by_strategy", "Final submit/send button was intentionally not clicked."));
+  return results;
+}
+
+type ApplyFillResult = Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields" | "fieldVerification">;
+
+function getVerification(results: ApplyFieldVerification[], field: string): ApplyFieldVerification | null {
+  return results.find((item) => item.field === field) ?? null;
+}
+
+function hasUnverifiedRequiredApplyFields(results: ApplyFieldVerification[]): boolean {
+  if (results.length === 0) return false;
+  const required = ["targetTab", "coverLetter", "requiredConnects"];
+  return required.some((field) => getVerification(results, field)?.status !== "verified");
+}
+
+async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillPlan, bodyText: string): Promise<ApplyFillResult> {
   assertSubmitGuard(plan);
   logger.info(`Submit guard before fill: stopBeforeSubmit=${plan.stopBeforeSubmit}; final submit will not be clicked.`);
   const attemptedFields: string[] = [];
@@ -1518,7 +1876,13 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
 
   manualFields.push("finalSubmit");
   logger.info(`Submit guard after fill: stopBeforeSubmit=${plan.stopBeforeSubmit}; final submit remains manual.`);
-  return { attemptedFields, skippedFields, manualFields };
+  const fieldVerification = await verifyApplyPreparationOnPage({
+    page,
+    plan,
+    fields: { attemptedFields, skippedFields, manualFields },
+    bodyText,
+  });
+  return { attemptedFields, skippedFields, manualFields, fieldVerification };
 }
 
 async function inspectWithBrowser(
@@ -1529,7 +1893,7 @@ async function inspectWithBrowser(
 ): Promise<{
   state: DetectedBrowserState;
   snapshot?: PageSnapshot;
-  fields: Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields">;
+  fields: ApplyFillResult;
   bodyText: string;
   inspectionDiagnostics?: BrowserInspectionDiagnostics;
   extractionBodyText?: string;
@@ -1545,7 +1909,7 @@ async function inspectWithBrowser(
     );
     return {
       state: "browser_unavailable",
-      fields: { attemptedFields: [], skippedFields: [], manualFields: [] },
+      fields: { attemptedFields: [], skippedFields: [], manualFields: [], fieldVerification: [] },
       bodyText: "",
     };
   }
@@ -1560,7 +1924,7 @@ async function inspectWithBrowser(
       saveTextArtifact(options, action, "browser-profile-conflict.json", JSON.stringify({ actionId: action.id, jobId: action.jobId, actionType: action.actionType, url, processDiagnostics }, null, 2));
       return {
         state: "browser_profile_in_use",
-        fields: { attemptedFields: [], skippedFields: [], manualFields: [] },
+        fields: { attemptedFields: [], skippedFields: [], manualFields: [], fieldVerification: [] },
         bodyText: "",
       };
     }
@@ -1579,7 +1943,7 @@ async function inspectWithBrowser(
         saveTextArtifact(options, action, "browser-profile-in-use.json", JSON.stringify({ actionId: action.id, jobId: action.jobId, actionType: action.actionType, url, message }, null, 2));
         return {
           state: "browser_profile_in_use",
-          fields: { attemptedFields: [], skippedFields: [], manualFields: [] },
+          fields: { attemptedFields: [], skippedFields: [], manualFields: [], fieldVerification: [] },
           bodyText: "",
         };
       }
@@ -1587,7 +1951,7 @@ async function inspectWithBrowser(
         saveTextArtifact(options, action, "cdp-unavailable.json", JSON.stringify({ actionId: action.id, jobId: action.jobId, actionType: action.actionType, url, message, cdpUrl: options.cdpUrl }, null, 2));
         return {
           state: "cdp_unavailable",
-          fields: { attemptedFields: [], skippedFields: [], manualFields: [] },
+          fields: { attemptedFields: [], skippedFields: [], manualFields: [], fieldVerification: [] },
           bodyText: "",
         };
       }
@@ -1603,9 +1967,10 @@ async function inspectWithBrowser(
     const directJobPageRejectedForDiscovery = sourceContextAttempted && openPages.some((candidate) => isDirectUpworkJobPage(candidate.url()) && urlsReferToSameUpworkJob(candidate.url(), url));
     const sourceContextCapture = sourceContextAttempted ? await tryCaptureDiscoverySourceContext(sessionHandle.context, action, url) : null;
     const shouldDirectFallback = !sourceContextAttempted || shouldUseDirectFallbackForCaptureAction(action);
-    const selectedPage = sourceContextCapture || !shouldDirectFallback ? null : await selectPageForBrowserAction(sessionHandle.context, url);
+    const protectedApplyUrls = currentProtectedQaApplyUrls();
+    const selectedPage = sourceContextCapture || !shouldDirectFallback ? null : await selectPageForBrowserAction(sessionHandle.context, url, { protectedApplyUrls });
     const page = selectedPage?.page;
-    const tabHygiene = await cleanStaleWorkTabs({ context: sessionHandle.context, selectedPage: page, targetUrl: url });
+    const tabHygiene = await cleanStaleWorkTabs({ context: sessionHandle.context, selectedPage: page, targetUrl: url, protectedApplyUrls });
     if (page && (!selectedPage.reusedExistingPage || !urlsReferToSameUpworkJob(page.url(), url))) {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
     }
@@ -1643,17 +2008,25 @@ async function inspectWithBrowser(
         state = "source_context_unavailable";
       }
     }
-    let fields: Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields"> = { attemptedFields: [], skippedFields: [], manualFields: [] };
+    let fields: ApplyFillResult = { attemptedFields: [], skippedFields: [], manualFields: [], fieldVerification: [] };
     if (plan && state === "apply_page_loaded") {
       const connectsIssues = verifyApplyPageConnects(plan, bodyText);
       if (connectsIssues.some((validationIssue) => validationIssue.severity === "error")) {
         state = "field_preparation_incomplete";
-        fields = { attemptedFields: [], skippedFields: [], manualFields: ["connects", "finalSubmit"] };
+        fields = {
+          attemptedFields: [],
+          skippedFields: [],
+          manualFields: ["connects", "finalSubmit"],
+          fieldVerification: [
+            verification("requiredConnects", "attempted_unverified", "Required Connects could not be verified on the apply page."),
+            verification("finalSubmit", "skipped_by_strategy", "Final submit/send button was intentionally not clicked."),
+          ],
+        };
       } else {
-        fields = await fillApplyFields(page!, plan);
+        fields = await fillApplyFields(page!, plan, bodyText);
       }
     }
-    if (plan && state === "apply_page_loaded" && getRequiredSkippedFields(fields).length > 0) {
+    if (plan && state === "apply_page_loaded" && (getRequiredSkippedFields(fields).length > 0 || hasUnverifiedRequiredApplyFields(fields.fieldVerification ?? []))) {
       state = "field_preparation_incomplete";
     }
     const inspectionDiagnostics: BrowserInspectionDiagnostics = {
@@ -2092,8 +2465,29 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           reason: state,
         });
       }
+      if (state === "apply_page_loaded" || state === "field_preparation_incomplete") {
+        const qaStatus = state === "apply_page_loaded" ? "prepared_for_qa" : "needs_review";
+        const holdApplyUrl = snapshot?.url ?? diagnostics.applyUrl ?? url;
+        updateApplicationStatus(
+          action.jobId,
+          qaStatus,
+          state === "apply_page_loaded"
+            ? "Browser draft prepared in remote Chrome for final human QA. Final submit was not clicked."
+            : "Browser draft preparation needs human review in remote Chrome. Final submit was not clicked."
+        );
+        mergeBrowserActionPayload(action.id, {
+          qaHold: {
+            protected: true,
+            jobId: action.jobId,
+            applyUrl: holdApplyUrl,
+            status: qaStatus,
+            state,
+            reason: state === "apply_page_loaded" ? "awaiting_human_qa" : "needs_review",
+            createdAt: new Date().toISOString(),
+          },
+        });
+      }
       if (state === "apply_page_loaded") {
-        updateApplicationStatus(action.jobId, "draft_prepared", "Browser draft prepared for final human review. Final submit was not clicked.");
         if (thread) {
           updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "prepared_draft", { jobId: action.jobId });
         }

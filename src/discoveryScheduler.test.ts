@@ -25,6 +25,22 @@ function action(id: number, status: BrowserAction["status"], actionType: Browser
   };
 }
 
+function protectedPrepareAction(id: number): BrowserAction {
+  return {
+    ...action(id, "completed", "prepare_application_review"),
+    jobId: "manual:upwork-022055333333333333333",
+    payload: {
+      url: "https://www.upwork.com/jobs/~022055333333333333333",
+      qaHold: {
+        protected: true,
+        jobId: "manual:upwork-022055333333333333333",
+        applyUrl: "https://www.upwork.com/ab/proposals/job/~022055333333333333333/apply/",
+        status: "prepared_for_qa",
+      },
+    },
+  };
+}
+
 async function runTests(): Promise<void> {
   assert.equal(computeDiscoveryJitterMs(config, () => 0), 480000);
   assert.equal(computeDiscoveryJitterMs(config, () => 0.999999), 840000);
@@ -85,6 +101,16 @@ async function runTests(): Promise<void> {
   assert.equal(tooMany.skipped, true);
   assert.equal(tooMany.skippedReason, "too_many_pending_capture_actions");
   assert.equal(tooMany.pendingCaptureCount, 4);
+
+  const qaHold = await runDiscoverySchedulerCycle(config, {
+    inspectSession: async () => ({ sessionState: "logged_in", manualAttentionRequired: false, blocked: false }),
+    listActions: () => [protectedPrepareAction(33), action(5, "pending")],
+    getApplicationStatus: () => "prepared_for_qa",
+    runDiscovery: async () => { throw new Error("discovery must not navigate away from a prepared-for-QA application"); },
+  });
+  assert.equal(qaHold.skipped, true);
+  assert.equal(qaHold.skippedReason, "prepared_application_awaiting_qa");
+  assert.equal(qaHold.protectedQaApplyCount, 1);
 
   let firstResolve!: (value: any) => void;
   const firstRun = runDiscoverySchedulerCycle(config, {

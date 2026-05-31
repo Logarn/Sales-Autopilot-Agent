@@ -17,6 +17,8 @@ const VALID_STATUSES: ApplicationStatus[] = [
   "draft",
   "sent_to_slack",
   "draft_prepared",
+  "prepared_for_qa",
+  "needs_review",
   "approved",
   "rejected",
   "applied",

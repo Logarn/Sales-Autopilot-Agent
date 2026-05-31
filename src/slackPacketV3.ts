@@ -467,6 +467,14 @@ function articleFor(value: string): "a" | "an" {
   return /^[aeiou]/i.test(value.trim()) ? "an" : "a";
 }
 
+function variantIndex(seed: string, count: number): number {
+  let hash = 0;
+  for (const char of seed) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  return count > 0 ? hash % count : 0;
+}
+
 function conciseLeadSentence(job: ScoredJob, context: SlackPacketV3Context, proceeding: boolean, connectsUnknown: boolean): string {
   const intelligence = context.jobIntelligence ?? job.applicationDraft?.jobIntelligence;
   const platform = concisePlatform(job, context);
@@ -491,11 +499,21 @@ function conciseLeadSentence(job: ScoredJob, context: SlackPacketV3Context, proc
   const fitReason = humanizeSlackText(reason, "it lines up with Steve’s wheelhouse").toLowerCase();
   if (proceeding) {
     const connectsNote = connectsUnknown ? " The Connects aren’t visible yet, so I’ll check them on the apply page before doing anything risky." : "";
-    return `This looks strong enough to prep: ${scope}. ${fitLabel(job)} fit because ${fitReason}.${connectsNote}`;
+    const variants = [
+      `This is worth prepping: ${scope}. ${fitLabel(job)} fit because ${fitReason}.${connectsNote}`,
+      `I’d move this into prep: ${scope}. ${fitLabel(job)} fit because ${fitReason}.${connectsNote}`,
+      `This one has enough signal to stage: ${scope}. ${fitLabel(job)} fit because ${fitReason}.${connectsNote}`,
+    ];
+    return variants[variantIndex(job.id || job.url || job.title, variants.length)];
   }
   const risk = conciseRisk(job, context);
   const riskNote = risk === "none obvious" ? "" : ` The weak part: ${risk.toLowerCase()}.`;
-  return `This one is close, but I’m not fully sold. It’s relevant work (${scope}), but I’d want a quick human call before spending Connects.${riskNote}`;
+  const variants = [
+    `This is relevant, but I’d get a quick yes before spending Connects: ${scope}.${riskNote}`,
+    `Worth a look, not an automatic prep yet: ${scope}.${riskNote}`,
+    `This could be useful, but I’d wait for a human call before staging it: ${scope}.${riskNote}`,
+  ];
+  return variants[variantIndex(job.id || job.url || job.title, variants.length)];
 }
 
 function conciseRisk(job: ScoredJob, context: SlackPacketV3Context): string {

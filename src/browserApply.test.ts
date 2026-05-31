@@ -45,7 +45,7 @@ async function runTests(): Promise<void> {
   const { buildBrowserApplyPlan } = require("./browserApply") as {
     buildBrowserApplyPlan: (jobId: string) => { plan: any; valid: boolean; issues: Array<{ severity: string; code: string; message: string }> };
   };
-  const { autoPrepareDraftForThread, autoQueuePrepareDraft, buildCaptureCompletionStatus, decideAutoPrepareDraft, detectStateWithDiagnostics, isCaptureBlockedState, postDiscoveryCapturePacket, postPrepareDraftStatus, postV3CapturePacketToThread, selectPageForBrowserAction, settlePageAndDetect } = require("./browserWorker") as {
+  const { autoPrepareDraftForThread, autoQueuePrepareDraft, buildCaptureCompletionStatus, decideAutoPrepareDraft, detectStateWithDiagnostics, isCaptureBlockedState, postDiscoveryCapturePacket, postPrepareDraftStatus, postV3CapturePacketToThread, selectPageForBrowserAction, settlePageAndDetect, verifyApplyPreparationOnPage } = require("./browserWorker") as {
     autoPrepareDraftForThread: (job: any, thread: { channelId: string; messageTs: string; threadTs: string }, options?: any) => { shouldQueue: boolean; category: string; note: string; actionId?: number; duplicate?: boolean };
     autoQueuePrepareDraft: (job: any, options?: any, thread?: { channelId: string; messageTs: string; threadTs: string } | null) => { shouldQueue: boolean; category: string; note: string; actionId?: number; duplicate?: boolean; duplicateStatus?: string | null };
     buildCaptureCompletionStatus: (input: { hasThreadContext: boolean; packetPosted: boolean; discoverySlackStatus?: "not_discovery" | "missing_channel" | "post_failed" | "posted" }) => string;
@@ -63,8 +63,9 @@ async function runTests(): Promise<void> {
       postWebhookMessage?: (params: any) => Promise<boolean>;
     }) => Promise<"posted" | "skipped" | "failed">;
     postV3CapturePacketToThread: (job: any, thread: { channelId: string; messageTs: string; threadTs: string }, context: any, postThreadMessage?: (params: any) => Promise<boolean>) => Promise<"posted" | "skipped" | "failed">;
-    selectPageForBrowserAction: (context: { pages?: () => Array<{ url: () => string }>; newPage: () => Promise<any> }, targetUrl: string) => Promise<{ page: any; reusedExistingPage: boolean; reason: string }>;
+    selectPageForBrowserAction: (context: { pages?: () => Array<{ url: () => string }>; newPage: () => Promise<any> }, targetUrl: string, options?: { protectedApplyUrls?: string[] }) => Promise<{ page: any; reusedExistingPage: boolean; reason: string }>;
     settlePageAndDetect: (page: any, action: any) => Promise<{ snapshot: any; bodyText: string; detection: { state: string; source: string; matchedText?: string }; samples: Array<any> }>;
+    verifyApplyPreparationOnPage: (input: { page: any; plan: any; fields: { attemptedFields: string[]; skippedFields: string[]; manualFields: string[] }; bodyText: string }) => Promise<Array<{ field: string; status: string; detail: string }>>;
   };
   const { buildPrepareDraftQueueReply } = require("./slackSocket") as {
     buildPrepareDraftQueueReply: (input: {
@@ -131,6 +132,56 @@ async function runTests(): Promise<void> {
     confidence: "medium",
     ...overrides,
   });
+
+  function fakeApplyPage(input: {
+    url?: string;
+    visibleText?: string;
+    inputValues?: string[];
+    checkedLabels?: string[];
+    fileNames?: string[];
+  }) {
+    return {
+      url: () => input.url ?? "https://www.upwork.com/ab/proposals/job/~beautyjob123456/apply/",
+      locator: () => ({ first: () => ({ textContent: async () => input.visibleText ?? "" }) }),
+      evaluate: async (fn: () => unknown) => {
+        const holder = globalThis as unknown as { document?: unknown };
+        const previousDocument = holder.document;
+        const inputElements = (input.inputValues ?? []).map((value) => ({
+          value,
+          checked: false,
+          type: "text",
+          files: [],
+          getAttribute: () => null,
+          closest: () => null,
+        }));
+        const checkedElements = (input.checkedLabels ?? []).map((label) => ({
+          value: "",
+          checked: true,
+          type: "checkbox",
+          files: [],
+          getAttribute: () => label,
+          closest: () => ({ textContent: label }),
+        }));
+        const fileElements = (input.fileNames ?? []).map((name) => ({
+          value: "",
+          checked: false,
+          type: "file",
+          files: [{ name }],
+          getAttribute: () => null,
+          closest: () => null,
+        }));
+        holder.document = {
+          body: { innerText: input.visibleText ?? "" },
+          querySelectorAll: () => [...inputElements, ...checkedElements, ...fileElements],
+        };
+        try {
+          return fn();
+        } finally {
+          holder.document = previousDocument;
+        }
+      },
+    };
+  }
 
   try {
     const beautyJob = scoreJob({
@@ -324,7 +375,7 @@ async function runTests(): Promise<void> {
     );
     assert(manualReviewDiscovery.status === "posted", "Manual-review discovery lead should post via webhook fallback");
     assert(manualReviewDiscovery.outcome === "posted", "Manual-review discovery lead should report posted outcome");
-    assert(webhookPostedText.includes("This one is close, but I’m not fully sold"), "Review-needed lead should sound conversational in Slack");
+    assert(/This is relevant|Worth a look|This could be useful/.test(webhookPostedText), "Review-needed lead should sound conversational in Slack");
     assert(webhookPostedText.includes("*Next:* Reply *“prep it”* if you want me to prepare the draft."), "Review-needed lead should ask for a clear next action");
     assert(!webhookPostedText.includes("Available replies"), "Normal lead alert should not include a command menu");
     assert(!webhookPostedText.includes("Debug:"), "Normal lead alert should not include debug lines");
@@ -787,6 +838,71 @@ async function runTests(): Promise<void> {
     assert(!prepareReply.includes("Auto-attach assets:"), "Prepare reply should not dump proof inventory");
     assert(!prepareReply.toLowerCase().includes("action:"), "Prepare reply should not expose action ids by default");
 
+    const verificationPlan = {
+      ...beautyPlanResult.plan,
+      attachments: [],
+      highlights: ["Klaviyo retention proof"],
+      missingLocalAssets: [],
+      connects: { ...beautyPlanResult.plan.connects, required: 8, boost: 0, total: 8 },
+      connectsStrategy: { ...beautyPlanResult.plan.connectsStrategy, decision: "safe_apply", sourceBackedConnects: { requiredConnects: 8, boostConnects: null, totalConnects: null, confidence: "high", sourceText: "Required for proposal: 8 Connects", sourceLocation: "line 1", extractionMethod: "deterministic_visible_text" } },
+    };
+    const emptyCoverVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({ visibleText: "Required for proposal: 8 Connects\nSend for 8 Connects\nAdd a portfolio project\nAdd a certificate", inputValues: ["", "$35"], checkedLabels: [], fileNames: [] }),
+      plan: verificationPlan,
+      fields: { attemptedFields: ["coverLetter", "rate"], skippedFields: [], manualFields: ["finalSubmit"] },
+      bodyText: "Required for proposal: 8 Connects\nSend for 8 Connects",
+    });
+    assert(emptyCoverVerification.find((item) => item.field === "coverLetter")?.status === "attempted_unverified", "Cover letter must not verify when the field remains empty.");
+    assert(emptyCoverVerification.find((item) => item.field === "requiredConnects")?.status === "verified", "Apply-page required Connects should verify separately from boost.");
+    assert(emptyCoverVerification.find((item) => item.field === "boostConnects")?.detail === "No boost set.", "No boost should be reported honestly when none is set.");
+    assert(emptyCoverVerification.find((item) => item.field === "profileHighlights")?.status === "unavailable_on_page", "Add portfolio/certificate UI should not be reported as selected profile highlights.");
+
+    const unsafeBoostVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({ visibleText: "Required for proposal: 8 Connects\nBoost: 80 Connects", inputValues: [verificationPlan.coverLetter, "80"] }),
+      plan: { ...verificationPlan, connects: { ...verificationPlan.connects, boost: 80, total: 88 } },
+      fields: { attemptedFields: ["coverLetter", "connectsBoost"], skippedFields: [], manualFields: ["finalSubmit"] },
+      bodyText: "Required for proposal: 8 Connects\nBoost: 80 Connects",
+    });
+    assert(unsafeBoostVerification.find((item) => item.field === "boostConnects")?.status === "blocked_by_upwork_ui", "Boost Connects above 50 must never be reported as safe/set.");
+
+    const verifiedApplyVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({
+        visibleText: "Required for proposal: 8 Connects\nSend for 8 Connects\npackage.json",
+        inputValues: [verificationPlan.coverLetter, ...verificationPlan.screeningAnswers, "$35"],
+        checkedLabels: ["Klaviyo retention proof"],
+        fileNames: ["package.json"],
+      }),
+      plan: {
+        ...verificationPlan,
+        attachments: [{ id: "truly", name: "Truly Beauty case study", filePath: "package.json", sensitivity: "approved_external" }],
+      },
+      fields: { attemptedFields: ["coverLetter", "screeningAnswers:2", "rate", "attachments", "highlights"], skippedFields: [], manualFields: ["finalSubmit"] },
+      bodyText: "Required for proposal: 8 Connects\nSend for 8 Connects",
+    });
+    assert(verifiedApplyVerification.find((item) => item.field === "coverLetter")?.status === "verified", "Cover letter should verify after fill when intended text is present.");
+    assert(verifiedApplyVerification.find((item) => item.field === "screeningAnswers")?.status === "verified", "Screening answers should verify after fill when answer text is present.");
+    assert(verifiedApplyVerification.find((item) => item.field === "attachments")?.status === "verified", "Attachments should verify when uploaded file names are visible.");
+    assert(verifiedApplyVerification.find((item) => item.field === "profileHighlights")?.status === "verified", "Profile highlights should verify only when checked labels are visible.");
+
+    const missingFileVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({ visibleText: "Required for proposal: 8 Connects", inputValues: [verificationPlan.coverLetter], fileNames: [] }),
+      plan: {
+        ...verificationPlan,
+        attachments: [{ id: "missing", name: "Missing case study", filePath: "profile/attachments/missing-case-study.pdf", sensitivity: "approved_external" }],
+      },
+      fields: { attemptedFields: ["coverLetter", "attachments"], skippedFields: [], manualFields: ["attachments", "finalSubmit"] },
+      bodyText: "Required for proposal: 8 Connects",
+    });
+    assert(missingFileVerification.find((item) => item.field === "attachments")?.status === "missing_local_file", "Missing local files must be reported honestly.");
+
+    const tabMismatchVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({ url: "https://www.upwork.com/ab/proposals/job/~differentjob123456/apply/", visibleText: "Required for proposal: 8 Connects", inputValues: [verificationPlan.coverLetter] }),
+      plan: verificationPlan,
+      fields: { attemptedFields: ["coverLetter"], skippedFields: [], manualFields: ["finalSubmit"] },
+      bodyText: "Required for proposal: 8 Connects",
+    });
+    assert(tabMismatchVerification.find((item) => item.field === "targetTab")?.status === "attempted_unverified", "Tab mismatch must not produce false apply-prep success.");
+
     let prepCompletionText = "";
     const prepCompletionPost = await postPrepareDraftStatus(
       {
@@ -805,7 +921,9 @@ async function runTests(): Promise<void> {
           validationIssues: [],
           coverLetterPresent: true,
           coverLetterLength: 220,
+          coverLetterPreview: "Hi there - I can help turn these Klaviyo campaign emails into a tighter retention sequence.",
           screeningAnswersCount: 2,
+          screeningAnswers: ["I would audit the current segments, then prioritize flows by revenue impact.", "I can start with a quick QA pass and implementation plan."],
           rate: "$72/hr",
           requiredConnects: 4,
           boostConnects: 0,
@@ -826,6 +944,23 @@ async function runTests(): Promise<void> {
           attemptedFields: ["cover letter", "screening answers", "rate"],
           skippedFields: [],
           manualFields: [],
+          fieldVerification: [
+            { field: "targetTab", status: "verified", detail: "Apply tab matches target job URL." },
+            { field: "coverLetter", status: "verified", detail: "Cover letter field contains the intended text." },
+            { field: "screeningAnswers", status: "verified", detail: "2/2 screening answers are present." },
+            { field: "rate", status: "verified", detail: "Rate field contains 72." },
+            { field: "requiredConnects", status: "verified", detail: "Required Connects verified as 4." },
+            { field: "boostConnects", status: "skipped_by_strategy", detail: "No boost set." },
+            { field: "attachments", status: "verified", detail: "1/1 uploaded files are visible." },
+            { field: "profileHighlights", status: "skipped_by_strategy", detail: "No profile highlights selected by strategy." },
+            { field: "finalSubmit", status: "skipped_by_strategy", detail: "Final submit/send button was intentionally not clicked." },
+          ],
+          verifiedFields: ["targetTab", "coverLetter", "screeningAnswers", "rate", "requiredConnects", "attachments"],
+          unverifiedFields: [],
+          unavailableFields: [],
+          missingFileFields: [],
+          blockedByUiFields: [],
+          skippedByStrategyFields: ["boostConnects", "profileHighlights", "finalSubmit"],
         },
       },
       {
@@ -839,9 +974,18 @@ async function runTests(): Promise<void> {
     );
     assert(prepCompletionPost === "posted", "Prepared browser application should post final-review Slack thread reply");
     assert(prepCompletionText.includes("✅ *Draft ready for QA*"), "Prep completion alert should use concise ready-for-QA wording");
+    assert(prepCompletionText.includes("remote Chrome session"), "Prep completion alert should say the draft is in remote Chrome");
+    assert(prepCompletionText.includes("VNC"), "Prep completion alert should direct QA to remote Chrome/VNC");
+    assert(prepCompletionText.includes("Safari"), "Prep completion alert should not imply local Safari will show unsaved form fields");
     assert(prepCompletionText.includes(`${beautyJob.url}/apply`), "Prep completion alert should include apply URL");
-    assert(prepCompletionText.includes("answered 2 screening questions"), "Prep completion alert should summarize screening answers");
-    assert(prepCompletionText.includes("• *Connects:* 4 required, no boost recommended"), "Prep completion alert should summarize Connects");
+    assert(prepCompletionText.includes("• *Cover letter:* verified filled"), "Prep completion alert should only claim verified cover-letter fill");
+    assert(prepCompletionText.includes("• *Screening answers:* 2/2 screening answers are present."), "Prep completion alert should summarize verified screening answers");
+    assert(prepCompletionText.includes("*Cover letter draft:*"), "Prep completion alert should include a cover letter preview for Slack QA");
+    assert(prepCompletionText.includes("I can help turn these Klaviyo campaign emails"), "Prep completion alert should include the actual cover letter preview");
+    assert(prepCompletionText.includes("*Screening answers filled:*"), "Prep completion alert should include filled screening answers");
+    assert(prepCompletionText.includes("I would audit the current segments"), "Prep completion alert should include screening answer text");
+    assert(prepCompletionText.includes("• *Connects:* 4 required, no boost set"), "Prep completion alert should summarize Connects");
+    assert(prepCompletionText.includes("• *Boost:* No boost set."), "Prep completion alert should report no boost set honestly");
     assert(prepCompletionText.includes("• *Needs review:* none"), "Prep completion alert should explicitly mark no extra manual issues");
     assert(prepCompletionText.includes("manually click *Send for 4 Connects*"), "Prep completion alert should preserve final submit safety");
     assert(!prepCompletionText.includes("Fields filled:"), "Prep completion alert should not include internal field inventory");
@@ -869,7 +1013,9 @@ async function runTests(): Promise<void> {
       ],
       coverLetterPresent: true,
       coverLetterLength: 220,
+      coverLetterPreview: "Hi there - I can help with Klaviyo retention work.",
       screeningAnswersCount: 2,
+      screeningAnswers: ["I would audit the current lifecycle setup.", "I would prioritize high-impact flows first."],
       rate: "$72/hr",
       requiredConnects: 4,
       boostConnects: 0,
@@ -890,6 +1036,22 @@ async function runTests(): Promise<void> {
       attemptedFields: ["screening answers"],
       skippedFields: ["coverLetter", "rate"],
       manualFields: ["attachments", "finalSubmit"],
+      fieldVerification: [
+        { field: "targetTab", status: "verified", detail: "Apply tab matches target job URL." },
+        { field: "coverLetter", status: "blocked_by_upwork_ui", detail: "Cover letter field was not filled by the Upwork UI." },
+        { field: "screeningAnswers", status: "attempted_unverified", detail: "0/2 screening answers verified; remaining answers need QA." },
+        { field: "rate", status: "blocked_by_upwork_ui", detail: "Rate field was not fillable." },
+        { field: "requiredConnects", status: "verified", detail: "Required Connects verified as 4." },
+        { field: "boostConnects", status: "skipped_by_strategy", detail: "No boost set." },
+        { field: "attachments", status: "missing_local_file", detail: "Missing local files: profile/attachments/truly-beauty-case-study.pdf" },
+        { field: "finalSubmit", status: "skipped_by_strategy", detail: "Final submit/send button was intentionally not clicked." },
+      ],
+      verifiedFields: ["targetTab", "requiredConnects"],
+      unverifiedFields: ["screeningAnswers"],
+      unavailableFields: [],
+      missingFileFields: ["attachments"],
+      blockedByUiFields: ["coverLetter", "rate"],
+      skippedByStrategyFields: ["boostConnects", "finalSubmit"],
     };
 
     let blockedPrepCompletionText = "";
@@ -910,9 +1072,11 @@ async function runTests(): Promise<void> {
     );
     assert(blockedPrepCompletionPost === "posted", "Blocked browser application diagnostics should post into the job thread");
     assert(blockedPrepCompletionText.includes("⚠️ *I hit a blocker on the apply page*"), "Blocked prep diagnostics should use human blocker heading");
+    assert(!blockedPrepCompletionText.includes("filled the cover letter"), "Blocked prep diagnostics must not claim the cover letter was filled unless verified.");
+    assert(blockedPrepCompletionText.includes("• *Cover letter:* blocked by Upwork UI"), "Blocked prep diagnostics should report cover letter status truthfully.");
     assert(blockedPrepCompletionText.includes("• *Needs review:*"), "Blocked prep diagnostics should show the actionable review line");
     assert(blockedPrepCompletionText.includes("truly-beauty-case-study.pdf"), "Blocked prep diagnostics should list the missing file name");
-    assert(blockedPrepCompletionText.includes("I couldn’t safely fill: attachments"), "Blocked prep diagnostics should list required manual fields without internal wording");
+    assert(blockedPrepCompletionText.includes("Not verified:"), "Blocked prep diagnostics should list unverified fields without false success claims");
     assert(blockedPrepCompletionText.includes("reply “retry”"), "Blocked prep diagnostics should give a concise next step");
     assert(!blockedPrepCompletionText.includes("Stop before submit:"), "Blocked prep diagnostics should not include internal submit-guard debug lines");
     for (const noisy of ["manual review", "platformEligibility", "lead decision", "packet", "source context", "action id"]) {
@@ -1393,6 +1557,37 @@ async function runTests(): Promise<void> {
     assert(reusedWorkTab.page === activeWorkPage, "CDP page selection should reuse the active work tab instead of opening endless job tabs");
     assert(openedExtraTab === false, "CDP page selection should not open another job tab when a work tab exists");
     assert(/single active work tab/.test(reusedWorkTab.reason), "CDP page selection should explain active work-tab reuse");
+
+    const protectedApplyPage = {
+      url: () => "https://www.upwork.com/ab/proposals/job/~022054333333333333333/apply/",
+    };
+    const protectedOpenedNewTab = { value: false };
+    const protectedSelection = await selectPageForBrowserAction(
+      {
+        pages: () => [feedPage, protectedApplyPage],
+        newPage: async () => {
+          protectedOpenedNewTab.value = true;
+          return { url: () => "about:blank" };
+        },
+      },
+      "https://www.upwork.com/jobs/~022054444444444444444",
+      { protectedApplyUrls: ["https://www.upwork.com/ab/proposals/job/~022054333333333333333/apply/"] },
+    );
+    assert(protectedOpenedNewTab.value, "A prepared-for-QA apply tab must not be reused for another job");
+    assert(protectedSelection.page !== protectedApplyPage, "Protected apply page should remain available for QA");
+    assert(/protected/.test(protectedSelection.reason), "Protected-tab selection should explain why a new page was opened");
+
+    const sameProtectedSelection = await selectPageForBrowserAction(
+      {
+        pages: () => [feedPage, protectedApplyPage],
+        newPage: async () => {
+          throw new Error("same protected target should reuse the matching apply page");
+        },
+      },
+      "https://www.upwork.com/jobs/~022054333333333333333",
+      { protectedApplyUrls: ["https://www.upwork.com/ab/proposals/job/~022054333333333333333/apply/"] },
+    );
+    assert(sameProtectedSelection.page === protectedApplyPage, "The original protected job should still reuse its own apply page for re-checks");
 
     let sampleIndex = 0;
     const settlingPage = {

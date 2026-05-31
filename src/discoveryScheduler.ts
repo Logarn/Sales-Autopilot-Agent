@@ -13,8 +13,9 @@ import {
 import { runDiscoveryConfiguredSources, DiscoveryBestMatchesResult } from "./browserDiscoveryTool";
 import { inspectBrowserSession } from "./browserSessionInspector";
 import { acquireBrowserSession, findChromeExecutable, PlaywrightChromiumLike } from "./browserSessionControl";
-import { closeDb, listBrowserActions } from "./db";
-import { BrowserAction } from "./types";
+import { closeDb, getApplicationStatus, listBrowserActions } from "./db";
+import { BrowserAction, ApplicationStatus } from "./types";
+import { countProtectedQaApplyActions } from "./browserQaHold";
 import * as path from "node:path";
 
 export type DiscoveryRunType = "discovery.run_once" | "discovery.scheduler";
@@ -37,6 +38,7 @@ export interface DiscoverySchedulerRunResult {
   skipped?: boolean;
   skippedReason?: string;
   pendingCaptureCount?: number;
+  protectedQaApplyCount?: number;
   jobsFound: number;
   jobsQueued: number;
   duplicatesSkipped: number;
@@ -55,6 +57,7 @@ interface DiscoverySchedulerDeps {
   now?: () => Date;
   random?: () => number;
   listActions?: () => BrowserAction[];
+  getApplicationStatus?: (jobId: string) => ApplicationStatus | null;
   inspectSession: () => Promise<{ sessionState: string; manualAttentionRequired: boolean; blocked: boolean }>;
   runDiscovery: (options: { maxJobs: number; maxScrolls: number; now: Date }) => Promise<DiscoveryBestMatchesResult>;
   log?: (message: string) => void;
@@ -92,6 +95,7 @@ function compactResult(result: DiscoverySchedulerRunResult): DiscoverySchedulerR
     "skipped",
     "skippedReason",
     "pendingCaptureCount",
+    "protectedQaApplyCount",
     "newestQueuedPostedAtText",
     "oldestQueuedPostedAtText",
     "queuedActionIds",
@@ -135,6 +139,7 @@ function skippedResult(input: {
   manualAttentionRequired?: boolean;
   blocked?: boolean;
   pendingCaptureCount?: number;
+  protectedQaApplyCount?: number;
 }): DiscoverySchedulerRunResult {
   return compactResult({
     ok: true,
@@ -145,6 +150,7 @@ function skippedResult(input: {
     skipped: true,
     skippedReason: input.reason,
     pendingCaptureCount: input.pendingCaptureCount,
+    protectedQaApplyCount: input.protectedQaApplyCount,
     ...DEFAULT_RESULT_COUNTS,
     nextRunInMs: input.nextRunInMs,
     lockAcquired: input.lockAcquired,
@@ -179,7 +185,24 @@ export async function runDiscoverySchedulerCycle(
       return result;
     }
 
-    const pendingCaptureCount = countPendingCaptureActions(deps.listActions?.() ?? []);
+    const actions = deps.listActions?.() ?? [];
+    const protectedQaApplyCount = countProtectedQaApplyActions(actions, deps.getApplicationStatus ?? getApplicationStatus);
+    if (protectedQaApplyCount > 0) {
+      const result = skippedResult({
+        runType,
+        sessionState: inspection.sessionState,
+        reason: "prepared_application_awaiting_qa",
+        nextRunInMs,
+        lockAcquired: true,
+        manualAttentionRequired: inspection.manualAttentionRequired,
+        blocked: inspection.blocked,
+        protectedQaApplyCount,
+      });
+      log(JSON.stringify({ event: "discovery_run_skipped", reason: result.skippedReason, protectedQaApplyCount, nextRunInMs }));
+      return result;
+    }
+
+    const pendingCaptureCount = countPendingCaptureActions(actions);
     if (pendingCaptureCount > config.skipIfPendingCaptureCountGt) {
       const result = skippedResult({
         runType,
