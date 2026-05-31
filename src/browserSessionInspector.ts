@@ -179,7 +179,10 @@ function isGoogleAccountsUrl(value: string): boolean {
 export function isUpworkFindWorkFeedUrl(value: string): boolean {
   try {
     const pathname = new URL(value).pathname.toLowerCase();
-    return pathname === "/nx/find-work" || pathname === "/nx/find-work/" || /^\/nx\/find-work\/(?:best-matches|most-recent|saved-search(?:es)?|search(?:\/jobs)?|search-jobs)(?:\/|$)/.test(pathname);
+    return pathname === "/nx/find-work" ||
+      pathname === "/nx/find-work/" ||
+      /^\/nx\/find-work\/(?:best-matches|most-recent|saved-search(?:es)?|search(?:\/jobs)?|search-jobs)(?:\/|$)/.test(pathname) ||
+      /^\/nx\/search\/jobs(?:\/|$)/.test(pathname);
   } catch {
     return false;
   }
@@ -201,18 +204,21 @@ export interface BrowserTabDiagnostics {
   selectedWorkTabUrl: string | null;
   workTabCount: number;
   staleWorkTabCount: number;
+  ignoredTabCount: number;
 }
 
 export function buildBrowserTabDiagnostics(pages: InspectorPageLike[]): BrowserTabDiagnostics {
   const upworkPages = pages.filter((page) => isUpworkUrl(page.url()));
   const feedPage = upworkPages.find((page) => isUpworkFindWorkFeedUrl(page.url())) ?? null;
   const workPages = upworkPages.filter((page) => isUpworkWorkTabUrl(page.url()));
+  const ignoredTabCount = upworkPages.filter((page) => page !== feedPage && !workPages.includes(page)).length;
   return {
     openUpworkTabCount: upworkPages.length,
     selectedFeedTabUrl: feedPage?.url() ?? null,
     selectedWorkTabUrl: workPages[0]?.url() ?? null,
     workTabCount: workPages.length,
     staleWorkTabCount: Math.max(0, workPages.length - 1),
+    ignoredTabCount,
   };
 }
 

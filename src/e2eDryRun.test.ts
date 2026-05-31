@@ -51,11 +51,14 @@ async function runTests(): Promise<void> {
   };
 
   try {
+    const e2eCaptureJobId = "022060000000000123456";
+    const e2eCaptureUrl = `https://www.upwork.com/jobs/Beauty-Klaviyo-Retention_~${e2eCaptureJobId}`;
     const queuedCapture = enqueueBrowserActionDeduped({
-      jobId: "manual:upwork-0123456789abcdef",
+      jobId: `manual:upwork-${e2eCaptureJobId}`,
       actionType: "capture_job_from_url",
       payload: {
-        url: "https://www.upwork.com/jobs/Beauty-Klaviyo-Retention_~0123456789abcdef",
+        url: e2eCaptureUrl,
+        canonicalJobUrl: `https://www.upwork.com/jobs/~${e2eCaptureJobId}`,
         channelId: "C999",
         messageTs: "111.222",
         threadTs: "111.222",
