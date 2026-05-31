@@ -11,11 +11,12 @@ import {
   checkCdpEndpoint,
   classifyBrowserSessionError,
   findChromeExecutable,
+  getChromeProfileProcessDiagnostics,
   PlaywrightChromiumLike,
   PlaywrightContextLike,
   startPersistentChromeSession,
 } from "./browserSessionControl";
-import { inspectBrowserSession, BrowserSessionInspection, selectRelevantBrowserPage } from "./browserSessionInspector";
+import { buildBrowserTabDiagnostics, inspectBrowserSession, BrowserSessionInspection, selectRelevantBrowserPage } from "./browserSessionInspector";
 import { closeDb, getBrowserActionById } from "./db";
 import { BrowserAction } from "./types";
 import * as path from "node:path";
@@ -194,6 +195,11 @@ async function loadChromium(): Promise<PlaywrightChromiumLike> {
 interface VisibleCdpSessionDeepInspection {
   inspection: BrowserSessionInspection;
   pageCount: number;
+  chromeProcessCount: number;
+  duplicateProfileConflict: boolean;
+  openUpworkTabCount: number;
+  selectedFeedTabUrl: string | null;
+  selectedWorkTabUrl: string | null;
   selectedPageUrl: string;
   selectedPageTitle: string;
   selectedPageReason: string;
@@ -212,12 +218,22 @@ async function inspectVisibleCdpSession(): Promise<VisibleCdpSessionDeepInspecti
     const context = handle.context as PlaywrightContextLike;
     const pages = context.pages?.() ?? [];
     const selected = selectRelevantBrowserPage(pages);
+    const processDiagnostics = getChromeProfileProcessDiagnostics({
+      userDataDir: path.resolve(process.cwd(), BROWSER_USER_DATA_DIR),
+      cdpUrl: BROWSER_CDP_URL,
+    });
+    const tabDiagnostics = buildBrowserTabDiagnostics(pages);
     const selectedPageUrl = selected.page?.url() ?? "";
     const selectedPageTitle = selected.page ? await selected.page.title().catch(() => "") : "";
     const inspection = await inspectBrowserSession(context, { includeStoredSessionState: false });
     return {
       inspection,
       pageCount: pages.length,
+      chromeProcessCount: processDiagnostics.chromeProcessCount,
+      duplicateProfileConflict: processDiagnostics.duplicateProfileConflict,
+      openUpworkTabCount: tabDiagnostics.openUpworkTabCount,
+      selectedFeedTabUrl: tabDiagnostics.selectedFeedTabUrl,
+      selectedWorkTabUrl: tabDiagnostics.selectedWorkTabUrl,
       selectedPageUrl,
       selectedPageTitle,
       selectedPageReason: selected.page ? selected.reason : "No pages are open in the default CDP context.",
@@ -254,8 +270,14 @@ async function main(): Promise<void> {
     try {
       const deep = await inspectVisibleCdpSession();
       console.log(`Deep check: ok cdpReachable=true connectOverCDP=true defaultContext=true pageCount=${deep.pageCount} sessionState=${deep.inspection.sessionState} blocked=${deep.inspection.blocked}`);
+      console.log(`Chrome shared-profile processes: count=${deep.chromeProcessCount} duplicateProfileConflict=${deep.duplicateProfileConflict}`);
+      console.log(`Upwork tabs: count=${deep.openUpworkTabCount} feed=${deep.selectedFeedTabUrl ?? "n/a"} work=${deep.selectedWorkTabUrl ?? "n/a"}`);
       console.log(`Selected page: url=${deep.selectedPageUrl || "n/a"} title=${deep.selectedPageTitle || "n/a"}`);
       console.log(`Selected page reason: ${deep.selectedPageReason}`);
+      if (deep.duplicateProfileConflict) {
+        console.error("Duplicate Chrome/profile conflict detected for the shared browser profile; stop extra Chrome processes before running browser work.");
+        process.exitCode = 1;
+      }
     } catch (error) {
       const classification = classifyBrowserSessionError(error);
       console.error(`Deep check failed: ${classification}: ${error instanceof Error ? error.message : String(error)}`);

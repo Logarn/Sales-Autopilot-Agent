@@ -66,9 +66,11 @@ import {
   BrowserSessionMode,
   classifyBrowserSessionError,
   findChromeExecutable,
+  getChromeProfileProcessDiagnostics,
   PlaywrightChromiumLike,
   checkCdpEndpoint,
 } from "./browserSessionControl";
+import { isUpworkFindWorkFeedUrl, isUpworkWorkTabUrl } from "./browserSessionInspector";
 
 type DetectedBrowserState =
   | "dry_run"
@@ -174,6 +176,13 @@ export interface BrowserInspectionDiagnostics {
     reason: string;
     selectedPageUrl: string;
   };
+  tabHygiene?: {
+    openPagesBefore: number;
+    upworkWorkTabsBefore: number;
+    staleWorkTabsClosed: number;
+    staleWorkTabsIgnored: number;
+    selectedFeedTabUrl?: string;
+  };
   settleSamples: Array<{
     step: number;
     url: string;
@@ -218,6 +227,7 @@ interface PlaywrightPageLike {
   url(): string;
   title(): Promise<string>;
   locator(selector: string): PlaywrightLocatorLike;
+  close?(options?: { runBeforeUnload?: boolean }): Promise<unknown>;
   evaluate?<R>(fn: () => R): Promise<R>;
 }
 
@@ -608,7 +618,44 @@ export async function selectPageForBrowserAction(
   if (exactMatch) {
     return { page: exactMatch, reusedExistingPage: true, reason: `Reused existing page matching target URL/job token: ${exactMatch.url()}` };
   }
+  const reusableWorkTab = pages.find((candidate) => isUpworkWorkTabUrl(candidate.url()));
+  if (reusableWorkTab) {
+    return { page: reusableWorkTab, reusedExistingPage: true, reason: `Reused the single active work tab and will navigate it to the target URL: ${reusableWorkTab.url()}` };
+  }
   return { page: await context.newPage(), reusedExistingPage: false, reason: "Opened a new page because no matching existing Upwork page was found." };
+}
+
+async function cleanStaleWorkTabs(input: {
+  context: { pages?: () => PlaywrightPageLike[] };
+  selectedPage?: PlaywrightPageLike | null;
+  targetUrl: string;
+}): Promise<{ openPagesBefore: number; upworkWorkTabsBefore: number; staleWorkTabsClosed: number; staleWorkTabsIgnored: number; selectedFeedTabUrl?: string }> {
+  const pages = input.context.pages?.() ?? [];
+  let staleWorkTabsClosed = 0;
+  let staleWorkTabsIgnored = 0;
+  const selectedFeedTabUrl = pages.find((page) => isUpworkFindWorkFeedUrl(page.url()))?.url();
+  const workTabs = pages.filter((page) => isUpworkWorkTabUrl(page.url()));
+  for (const page of workTabs) {
+    if (page === input.selectedPage) continue;
+    if (urlsReferToSameUpworkJob(page.url(), input.targetUrl)) continue;
+    if (typeof page.close === "function") {
+      try {
+        await page.close({ runBeforeUnload: false });
+        staleWorkTabsClosed += 1;
+      } catch {
+        staleWorkTabsIgnored += 1;
+      }
+    } else {
+      staleWorkTabsIgnored += 1;
+    }
+  }
+  return {
+    openPagesBefore: pages.length,
+    upworkWorkTabsBefore: workTabs.length,
+    staleWorkTabsClosed,
+    staleWorkTabsIgnored,
+    ...(selectedFeedTabUrl ? { selectedFeedTabUrl } : {}),
+  };
 }
 
 export async function readPageOuterHtml(page: PlaywrightPageLike): Promise<string> {
@@ -1505,6 +1552,18 @@ async function inspectWithBrowser(
 
   let sessionHandle: Awaited<ReturnType<typeof acquireBrowserSession>> | null = null;
   try {
+    const processDiagnostics = getChromeProfileProcessDiagnostics({
+      userDataDir: options.userDataDir,
+      cdpUrl: options.cdpUrl,
+    });
+    if (processDiagnostics.duplicateProfileConflict) {
+      saveTextArtifact(options, action, "browser-profile-conflict.json", JSON.stringify({ actionId: action.id, jobId: action.jobId, actionType: action.actionType, url, processDiagnostics }, null, 2));
+      return {
+        state: "browser_profile_in_use",
+        fields: { attemptedFields: [], skippedFields: [], manualFields: [] },
+        bodyText: "",
+      };
+    }
     try {
       sessionHandle = await acquireBrowserSession(chromium, {
         mode: options.sessionMode,
@@ -1546,6 +1605,7 @@ async function inspectWithBrowser(
     const shouldDirectFallback = !sourceContextAttempted || shouldUseDirectFallbackForCaptureAction(action);
     const selectedPage = sourceContextCapture || !shouldDirectFallback ? null : await selectPageForBrowserAction(sessionHandle.context, url);
     const page = selectedPage?.page;
+    const tabHygiene = await cleanStaleWorkTabs({ context: sessionHandle.context, selectedPage: page, targetUrl: url });
     if (page && (!selectedPage.reusedExistingPage || !urlsReferToSameUpworkJob(page.url(), url))) {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
     }
@@ -1609,6 +1669,7 @@ async function inspectWithBrowser(
           : selectedPage?.reason ?? "Discovery source context unavailable; direct fallback disabled.",
         selectedPageUrl: sourceContextCapture?.sourcePageUrl ?? selectedPage?.page.url() ?? snapshot.url,
       },
+      tabHygiene,
       settleSamples: samples,
       finalSnapshot: snapshot,
       finalDetection: { ...detection, state },
@@ -2259,10 +2320,15 @@ export async function runBrowserWorker(options = loadOptions()): Promise<void> {
     return;
   }
 
-  const actionLimit = options.dryRun ? options.limit : Math.min(options.limit, options.liveActionLimit);
+  const active = listBrowserActions("in_progress", 1);
+  if (active.length > 0) {
+    logger.warn(`Browser worker found active browser action #${active[0]!.id}; leaving pending queue untouched to keep browser work serialized.`);
+    return;
+  }
+  const actionLimit = options.dryRun ? options.limit : 1;
   const pending = listBrowserActions("pending", actionLimit);
-  if (!options.dryRun && options.liveActionLimit === 1) {
-    logger.info("Live browser mode action limit enforced: processing at most 1 pending action this run.");
+  if (!options.dryRun) {
+    logger.info("Live browser mode serialization enforced: processing at most 1 pending action this run.");
   }
   if (pending.length === 0) {
     logger.info("No pending browser actions.");
@@ -2298,6 +2364,12 @@ export async function runControlledWorkerLoop(input: ControlledWorkerRunOptions 
 
   const options = loadOptions();
   const workerOptions = { ...options, dryRun: input.dryRun ?? options.dryRun, limit: 1 };
+  const active = listBrowserActions("in_progress", 1);
+  if (active.length > 0) {
+    summary.stoppedReason = "browser_action_in_progress";
+    summary.remainingPendingCount = listBrowserActions("pending", 500).length;
+    return summary;
+  }
   const pending = listBrowserActions("pending", 500);
   if (pending.length === 0) {
     summary.stoppedReason = "queue_empty";

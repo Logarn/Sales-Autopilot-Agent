@@ -59,6 +59,15 @@ async function run(): Promise<void> {
   const empty = await runControlledWorkerLoop({ maxActions: 2, dryRun: true });
   assert.equal(empty.stoppedReason, "queue_empty");
 
+  const activeId = enqueueBrowserAction({ jobId: "cw:test:active", actionType: "capture_job_from_url", payload: { url: "https://www.upwork.com/jobs/~active" } });
+  const queuedBehindActiveId = enqueueBrowserAction({ jobId: "cw:test:behind-active", actionType: "capture_job_from_url", payload: { url: "https://www.upwork.com/jobs/~behind" } });
+  updateBrowserActionStatus(activeId, "in_progress", "active browser work");
+  const activeBlocked = await runControlledWorkerLoop({ maxActions: 2, dryRun: true });
+  assert.equal(activeBlocked.stoppedReason, "browser_action_in_progress", "controlled worker should not start another browser action while one is active");
+  assert.equal(getBrowserActionById(queuedBehindActiveId)?.status, "pending", "queued work should remain pending behind active browser work");
+  updateBrowserActionStatus(activeId, "cancelled", "continue test");
+  updateBrowserActionStatus(queuedBehindActiveId, "cancelled", "continue test");
+
   const id1 = enqueueBrowserAction({ jobId: "cw:test:1", actionType: "capture_job_from_url", payload: { url: "https://www.upwork.com/jobs/~1" } });
   const id2 = enqueueBrowserAction({ jobId: "cw:test:2", actionType: "capture_job_from_url", payload: { url: "https://www.upwork.com/jobs/~2" } });
   const id3 = enqueueBrowserAction({ jobId: "cw:test:3", actionType: "open_job", payload: { url: "https://www.upwork.com/jobs/~3" } });
