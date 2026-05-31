@@ -1273,6 +1273,7 @@ async function runTests(): Promise<void> {
       startUrl: "https://www.upwork.com",
     });
     assert(launchCommand.args.some((arg: string) => arg.includes("--remote-debugging-port=9222")), "Browser session command should enable remote debugging");
+    assert(launchCommand.args.includes("--remote-debugging-address=127.0.0.1"), "Browser session command should keep CDP local-only");
 
     const originalFetch = global.fetch;
     global.fetch = async () => ({

@@ -125,6 +125,7 @@ export function buildBrowserSessionLaunchCommand(input: {
   return {
     executablePath: input.chromeExecutablePath,
     args: [
+      "--remote-debugging-address=127.0.0.1",
       `--remote-debugging-port=${port}`,
       `--user-data-dir=${path.resolve(input.userDataDir)}`,
       "--no-first-run",

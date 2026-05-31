@@ -2,6 +2,7 @@
 Description=Upwork Agent lead engine
 After=network.target upwork-agent-browser-session.service
 Wants=network.target
+Requires=upwork-agent-browser-session.service
 
 [Service]
 Type=simple

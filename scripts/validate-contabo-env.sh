@@ -26,6 +26,10 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
+if [[ "$(basename "$ENV_FILE")" == ".env.example" ]]; then
+  MODE="template"
+fi
+
 required_keys=(
   SLACK_CHANNEL_WEBHOOK_URL
   APIFY_API_TOKEN
@@ -135,6 +139,33 @@ for key in "${path_keys[@]}"; do
 done
 
 if [[ "$MODE" != "template" ]]; then
+  if [[ "$session_mode" != "cdp" ]]; then
+    echo "Production Contabo env must use BROWSER_SESSION_MODE=cdp." >&2
+    exit 1
+  fi
+
+  cdp_url="$(value_for BROWSER_CDP_URL)"
+  case "$cdp_url" in
+    http://127.0.0.1:9222|http://localhost:9222) ;;
+    *)
+      echo "Production Contabo env must keep BROWSER_CDP_URL on localhost port 9222." >&2
+      exit 1
+      ;;
+  esac
+
+  if start_url="$(value_for BROWSER_START_URL)"; then
+    if [[ "$start_url" != https://www.upwork.com/nx/find-work/best-matches* ]]; then
+      echo "Production Contabo env must start Chrome on the Upwork Best Matches URL." >&2
+      exit 1
+    fi
+  fi
+
+  browser_profile="$(value_for BROWSER_USER_DATA_DIR)"
+  if [[ "$browser_profile" != /opt/upwork-agent/shared/browser-profile ]]; then
+    echo "Production Contabo env must use BROWSER_USER_DATA_DIR=/opt/upwork-agent/shared/browser-profile." >&2
+    exit 1
+  fi
+
   contabo_warnings=()
   for key in DB_PATH BROWSER_USER_DATA_DIR BROWSER_ARTIFACT_DIR AGENT_ENGINE_STATE_PATH; do
     value="$(value_for "$key")"
