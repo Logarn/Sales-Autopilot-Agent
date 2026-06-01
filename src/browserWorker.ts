@@ -62,6 +62,7 @@ import {
   getBrowserSessionStatus,
   recordBrowserManualAttention,
 } from "./browserSession";
+import { hasAllowedCaptureSourceMetadata } from "./browserDiscoveryTool";
 import {
   acquireBrowserSession,
   BrowserSessionMode,
@@ -2348,6 +2349,34 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       });
       countPrepareDraftStatusPost(result, postStatus);
     }
+    return result;
+  }
+
+  if (action.actionType === "capture_job_from_url" && !hasAllowedCaptureSourceMetadata(action)) {
+    const message = "Capture skipped: missing allowed discovery or Slack URL source metadata.";
+    saveTextArtifact(options, action, "capture-unknown-source.json", JSON.stringify({
+      actionId: action.id,
+      jobId: action.jobId,
+      url,
+      source: action.payload.source ?? null,
+      discovery: action.payload.discovery ?? null,
+      reason: message,
+    }, null, 2));
+    if (thread) {
+      updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "capture_failed", { jobId: action.jobId });
+      await postSlackThreadMessage({
+        channel: thread.channelId,
+        threadTs: thread.threadTs,
+        text: [
+          "⚠️ Browser capture skipped.",
+          "I could not tie this job URL to an allowed discovery source or an explicit Slack URL intake, so I did not open it in Chrome.",
+          `URL: ${url}`,
+          `Retry command: mention me with the Upwork job URL in this thread or queue it from Best Matches/saved search discovery.`,
+        ].join("\n"),
+      });
+    }
+    updateBrowserActionStatus(action.id, "failed", message);
+    logger.warn(`Browser action #${action.id} skipped unknown capture source: url=${url}`);
     return result;
   }
 

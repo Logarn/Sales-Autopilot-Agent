@@ -16,8 +16,9 @@ import {
   PlaywrightContextLike,
   startPersistentChromeSession,
 } from "./browserSessionControl";
+import { countUnknownSourceQueuedCaptureActions, getActiveDiscoverySourceLabelForUrl } from "./browserDiscoveryTool";
 import { buildBrowserTabDiagnostics, inspectBrowserSession, BrowserSessionInspection, selectRelevantBrowserPage } from "./browserSessionInspector";
-import { closeDb, getBrowserActionById } from "./db";
+import { closeDb, getBrowserActionById, listBrowserActions } from "./db";
 import { BrowserAction } from "./types";
 import * as path from "node:path";
 
@@ -200,6 +201,10 @@ interface VisibleCdpSessionDeepInspection {
   openUpworkTabCount: number;
   selectedFeedTabUrl: string | null;
   selectedWorkTabUrl: string | null;
+  staleWorkTabCount: number;
+  ignoredTabCount: number;
+  activeDiscoverySourceLabel: string | null;
+  unknownSourceQueuedCaptureCount: number;
   selectedPageUrl: string;
   selectedPageTitle: string;
   selectedPageReason: string;
@@ -234,6 +239,10 @@ async function inspectVisibleCdpSession(): Promise<VisibleCdpSessionDeepInspecti
       openUpworkTabCount: tabDiagnostics.openUpworkTabCount,
       selectedFeedTabUrl: tabDiagnostics.selectedFeedTabUrl,
       selectedWorkTabUrl: tabDiagnostics.selectedWorkTabUrl,
+      staleWorkTabCount: tabDiagnostics.staleWorkTabCount,
+      ignoredTabCount: tabDiagnostics.ignoredTabCount,
+      activeDiscoverySourceLabel: tabDiagnostics.selectedFeedTabUrl ? getActiveDiscoverySourceLabelForUrl(tabDiagnostics.selectedFeedTabUrl) : null,
+      unknownSourceQueuedCaptureCount: countUnknownSourceQueuedCaptureActions(listBrowserActions(null, 1000)),
       selectedPageUrl,
       selectedPageTitle,
       selectedPageReason: selected.page ? selected.reason : "No pages are open in the default CDP context.",
@@ -271,7 +280,8 @@ async function main(): Promise<void> {
       const deep = await inspectVisibleCdpSession();
       console.log(`Deep check: ok cdpReachable=true connectOverCDP=true defaultContext=true pageCount=${deep.pageCount} sessionState=${deep.inspection.sessionState} blocked=${deep.inspection.blocked}`);
       console.log(`Chrome shared-profile processes: count=${deep.chromeProcessCount} duplicateProfileConflict=${deep.duplicateProfileConflict}`);
-      console.log(`Upwork tabs: count=${deep.openUpworkTabCount} feed=${deep.selectedFeedTabUrl ?? "n/a"} work=${deep.selectedWorkTabUrl ?? "n/a"}`);
+      console.log(`Upwork tabs: count=${deep.openUpworkTabCount} feed=${deep.selectedFeedTabUrl ?? "n/a"} work=${deep.selectedWorkTabUrl ?? "n/a"} staleWorkTabs=${deep.staleWorkTabCount} ignoredTabs=${deep.ignoredTabCount}`);
+      console.log(`Discovery source: active=${deep.activeDiscoverySourceLabel ?? "n/a"} unknownSourceQueuedCaptures=${deep.unknownSourceQueuedCaptureCount}`);
       console.log(`Selected page: url=${deep.selectedPageUrl || "n/a"} title=${deep.selectedPageTitle || "n/a"}`);
       console.log(`Selected page reason: ${deep.selectedPageReason}`);
       if (deep.duplicateProfileConflict) {

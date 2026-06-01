@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { canonicalizeUpworkJobUrl, deriveCaptureThreadJobId, extractUpworkJobIdFromUrl } from "./browserCapture";
 import { SAVED_SEARCHES_CONFIG_PATH } from "./config";
 import { enqueueBrowserActionDeduped, getApplicationStatus, listBrowserActions } from "./db";
-import { BrowserSessionInspection, InspectorLocatorLike, inspectBrowserSession, selectRelevantBrowserPage } from "./browserSessionInspector";
+import { BrowserSessionInspection, InspectorLocatorLike, inspectBrowserSession, isUpworkFindWorkFeedUrl, isUpworkWorkTabUrl } from "./browserSessionInspector";
 import { BrowserAction } from "./types";
 
 export const BEST_MATCHES_URL = "https://www.upwork.com/nx/find-work/best-matches/";
@@ -98,6 +98,7 @@ export interface DiscoveryPageLike {
 
 export interface DiscoveryContextLike {
   pages?(): DiscoveryPageLike[];
+  newPage?(): Promise<DiscoveryPageLike>;
 }
 
 function readSavedSearchConfig(configPath: string): SavedDiscoverySearchConfig[] {
@@ -152,7 +153,6 @@ function sourceLabelForSavedSearch(search: SavedDiscoverySearchConfig, sourceTyp
 export function buildConfiguredDiscoverySources(searches = loadSavedDiscoverySearches()): DiscoverySourceConfig[] {
   return [
     DISCOVERY_SOURCES.best_matches,
-    DISCOVERY_SOURCES.recent_jobs,
     ...searches.map((search) => {
       const sourceType = sourceTypeForSavedSearch(search);
       return {
@@ -164,6 +164,30 @@ export function buildConfiguredDiscoverySources(searches = loadSavedDiscoverySea
       };
     }),
   ];
+}
+
+function isUpworkSourceUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    return host === "upwork.com" || host.endsWith(".upwork.com");
+  } catch {
+    return false;
+  }
+}
+
+export function isAllowedDiscoverySourceConfig(source: DiscoverySourceConfig): boolean {
+  if (!source.sourceLabel.trim() || !isUpworkSourceUrl(source.url) || isApplyUrl(source.url)) return false;
+  if (source.sourceType === "best_matches") {
+    return isCurrentDiscoverySourceUrl(source.url, DISCOVERY_SOURCES.best_matches.url);
+  }
+  if (source.sourceType === "saved_search" || source.sourceType === "keyword_search" || source.sourceType === "category_search") {
+    return isUpworkFindWorkFeedUrl(source.url);
+  }
+  if (source.sourceType === "recent_jobs") {
+    return Boolean(source.purpose?.trim()) && isUpworkFindWorkFeedUrl(source.url);
+  }
+  return false;
 }
 
 function absoluteUpworkUrl(value: string): string | null {
@@ -389,6 +413,73 @@ function isCurrentDiscoverySourceUrl(currentUrl: string, sourceUrl: string): boo
   }
 }
 
+export function getActiveDiscoverySourceLabelForUrl(currentUrl: string, sources = buildConfiguredDiscoverySources()): string | null {
+  const source = sources.find((candidate) => isAllowedDiscoverySourceConfig(candidate) && isCurrentDiscoverySourceUrl(currentUrl, candidate.url));
+  return source?.sourceLabel ?? null;
+}
+
+export function hasAllowedCaptureSourceMetadata(action: BrowserAction): boolean {
+  if (action.actionType !== "capture_job_from_url") return true;
+  const source = typeof action.payload.source === "string" ? action.payload.source : "";
+  const canonicalJobUrl = typeof action.payload.canonicalJobUrl === "string" ? action.payload.canonicalJobUrl : "";
+  if (source === "slack_url" && canonicalizeDiscoveryUpworkJobUrl(canonicalJobUrl)) return true;
+
+  const discovery = action.payload.discovery;
+  if (!discovery || typeof discovery !== "object" || Array.isArray(discovery)) return false;
+  const payload = discovery as Record<string, unknown>;
+  const sourceType = typeof payload.sourceType === "string" ? payload.sourceType : "";
+  const sourceLabel = typeof payload.sourceLabel === "string" ? payload.sourceLabel : "";
+  const sourceUrl = typeof payload.sourceUrl === "string" ? payload.sourceUrl : "";
+  const discoveredAt = typeof payload.discoveredAt === "string" ? payload.discoveredAt : "";
+  const discoveryCanonicalJobUrl = typeof payload.canonicalJobUrl === "string" ? payload.canonicalJobUrl : canonicalJobUrl;
+  const sourceConfig = { sourceType, sourceLabel, url: sourceUrl } as DiscoverySourceConfig;
+  return Boolean(
+    source.startsWith("discovery.") &&
+    isAllowedDiscoverySourceConfig(sourceConfig) &&
+    discoveredAt &&
+    canonicalizeDiscoveryUpworkJobUrl(discoveryCanonicalJobUrl)
+  );
+}
+
+export function countUnknownSourceQueuedCaptureActions(actions: BrowserAction[]): number {
+  return actions.filter((action) =>
+    action.actionType === "capture_job_from_url" &&
+    ["pending", "in_progress", "paused"].includes(action.status) &&
+    !hasAllowedCaptureSourceMetadata(action)
+  ).length;
+}
+
+async function selectAllowedDiscoveryPage(
+  context: DiscoveryContextLike,
+  source: DiscoverySourceConfig,
+): Promise<{ page: DiscoveryPageLike | null; reason: string; ignoredTabCount: number }> {
+  const pages = context.pages?.() ?? [];
+  const exactSourcePage = pages.find((page) => isCurrentDiscoverySourceUrl(page.url(), source.url));
+  if (exactSourcePage) {
+    return { page: exactSourcePage, reason: `Using existing configured discovery source tab: ${source.sourceLabel}.`, ignoredTabCount: ignoredDiscoveryTabCount(pages, exactSourcePage) };
+  }
+
+  const reusableSourceTab = pages.find((page) => isUpworkFindWorkFeedUrl(page.url()) && !isUpworkWorkTabUrl(page.url()));
+  if (reusableSourceTab?.goto) {
+    await reusableSourceTab.goto(source.url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    return { page: reusableSourceTab, reason: `Navigated existing feed/search tab to configured discovery source: ${source.sourceLabel}.`, ignoredTabCount: ignoredDiscoveryTabCount(pages, reusableSourceTab) };
+  }
+
+  if (context.newPage) {
+    const page = await context.newPage();
+    if (page.goto) {
+      await page.goto(source.url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    }
+    return { page, reason: `Opened a new tab for configured discovery source: ${source.sourceLabel}.`, ignoredTabCount: ignoredDiscoveryTabCount(pages, page) };
+  }
+
+  return { page: null, reason: "No allowed feed/search tab is available and this context cannot open a new source tab.", ignoredTabCount: ignoredDiscoveryTabCount(pages, null) };
+}
+
+function ignoredDiscoveryTabCount(pages: DiscoveryPageLike[], selectedPage: DiscoveryPageLike | null): number {
+  return pages.filter((page) => page !== selectedPage && isUpworkWorkTabUrl(page.url())).length;
+}
+
 export async function runDiscoverySource(
   context: DiscoveryContextLike,
   source: DiscoverySourceConfig,
@@ -396,12 +487,28 @@ export async function runDiscoverySource(
 ): Promise<DiscoveryBestMatchesResult> {
   const maxJobs = Math.max(1, Math.floor(options.maxJobs));
   const tool = toolForSource(source);
+  if (!isAllowedDiscoverySourceConfig(source)) {
+    return {
+      ok: false,
+      tool,
+      sessionState: "unknown",
+      manualAttentionRequired: false,
+      blocked: false,
+      jobsFound: 0,
+      jobsQueued: 0,
+      duplicatesSkipped: 0,
+      alreadyHandledSkipped: 0,
+      invalidSkipped: 0,
+      scrollsPerformed: 0,
+      error: `Discovery source is not allowed or not configured safely: ${source.sourceLabel}`,
+    };
+  }
   const inspection = await inspectBrowserSession(context);
   if (inspection.blocked || inspection.manualAttentionRequired || inspection.sessionState === "browser_session_unhealthy") {
     return blockedResult(inspection, tool);
   }
 
-  const selected = selectRelevantBrowserPage(context.pages?.() ?? []);
+  const selected = await selectAllowedDiscoveryPage(context, source);
   if (!selected.page) {
     return {
       ok: false,
@@ -415,12 +522,25 @@ export async function runDiscoverySource(
       alreadyHandledSkipped: 0,
       invalidSkipped: 0,
       scrollsPerformed: 0,
-      error: "No browser page is available for discovery.",
+      error: selected.reason,
     };
   }
   const page = selected.page as unknown as DiscoveryPageLike;
-  if (!isCurrentDiscoverySourceUrl(page.url(), source.url) && page.goto) {
-    await page.goto(source.url, { waitUntil: "domcontentloaded", timeout: 30000 });
+  if (!isCurrentDiscoverySourceUrl(page.url(), source.url)) {
+    return {
+      ok: false,
+      tool,
+      sessionState: inspection.sessionState,
+      manualAttentionRequired: false,
+      blocked: false,
+      jobsFound: 0,
+      jobsQueued: 0,
+      duplicatesSkipped: 0,
+      alreadyHandledSkipped: 0,
+      invalidSkipped: 0,
+      scrollsPerformed: 0,
+      error: `Selected page is not the configured discovery source. source=${source.url} actual=${page.url()}`,
+    };
   }
 
   const maxScrolls = Math.max(0, Math.floor(options.maxScrolls ?? 3));
@@ -490,6 +610,10 @@ export async function runDiscoverySource(
       actionType: "capture_job_from_url",
       payload: {
         source: `discovery.${source.sourceType}`,
+        sourceType: link.sourceType,
+        sourceLabel: link.sourceLabel,
+        sourceUrl: link.sourceUrl ?? source.url,
+        discoveredAt: link.discoveredAt,
         url: link.canonicalJobUrl,
         originalUrl: link.originalUrl,
         canonicalJobUrl: link.canonicalJobUrl,

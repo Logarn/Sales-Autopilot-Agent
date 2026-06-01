@@ -36,9 +36,10 @@ function blockedContext() {
   return { pages: () => [page] };
 }
 
-function discoveryContext(html: string) {
+function discoveryContext(html: string, initialUrl = "https://www.upwork.com/nx/find-work/best-matches/") {
+  let currentUrl = initialUrl;
   const page = {
-    url: () => "https://www.upwork.com/nx/find-work/best-matches/",
+    url: () => currentUrl,
     title: async () => "Best Matches - Upwork",
     locator: () => ({
       count: async () => 1,
@@ -47,9 +48,49 @@ function discoveryContext(html: string) {
         return this;
       },
     }),
+    goto: async (url: string) => {
+      currentUrl = url;
+    },
     evaluate: async <R>() => html as unknown as R,
   };
   return { pages: () => [page] };
+}
+
+function workOnlyDiscoveryContext(html: string, options: { canOpenNewPage: boolean; workUrl?: string; sourceUrl?: string }) {
+  const workPage = {
+    url: () => options.workUrl ?? "https://www.upwork.com/jobs/~022054121212121212121",
+    title: async () => "Random Upwork job",
+    locator: () => ({
+      count: async () => 1,
+      textContent: async () => "Job details",
+      first() {
+        return this;
+      },
+    }),
+    evaluate: async <R>() => {
+      throw new Error("random work/apply tab must not be used as a discovery source");
+    },
+  };
+  let sourceUrl = options.sourceUrl ?? "";
+  const sourcePage = {
+    url: () => sourceUrl,
+    title: async () => "Best Matches - Upwork",
+    locator: () => ({
+      count: async () => 1,
+      textContent: async () => "Best Matches Find Work My Jobs Proposals Profile",
+      first() {
+        return this;
+      },
+    }),
+    goto: async (url: string) => {
+      sourceUrl = url;
+    },
+    evaluate: async <R>() => html as unknown as R,
+  };
+  return {
+    pages: () => options.canOpenNewPage && sourceUrl ? [workPage, sourcePage] : [workPage],
+    ...(options.canOpenNewPage ? { newPage: async () => sourcePage } : {}),
+  };
 }
 
 function scrollingDiscoveryContext(htmlPages: string[]) {
@@ -89,10 +130,14 @@ async function runTests(): Promise<void> {
     DISCOVERY_SOURCES,
     buildConfiguredDiscoverySources,
     canonicalizeDiscoveryUpworkJobUrl,
+    countUnknownSourceQueuedCaptureActions,
     extractBestMatchesJobLinksFromHtml,
     extractBestMatchesJobLinksWithStats,
     extractDiscoveryJobLinksWithStats,
+    getActiveDiscoverySourceLabelForUrl,
+    hasAllowedCaptureSourceMetadata,
     isAlreadyHandledDiscoveryJob,
+    isAllowedDiscoverySourceConfig,
     isDuplicateDiscoveryJob,
     isValidDiscoveryUpworkJobId,
     loadSavedDiscoverySearches,
@@ -157,14 +202,6 @@ async function runTests(): Promise<void> {
     assert.equal(links[0]?.postedAtText, "1 hour ago");
     assert.equal(links[0]?.discoveredAt, discoveredAt.toISOString());
 
-    const recentLinks = extractDiscoveryJobLinksWithStats(
-      `<article><a href="/jobs/~022056111111111111111">Recent email role</a><span>Posted 2 minutes ago</span></article>`,
-      { maxJobs: 5, now: discoveredAt, source: DISCOVERY_SOURCES.recent_jobs }
-    ).links;
-    assert.equal(recentLinks[0]?.sourceType, "recent_jobs");
-    assert.equal(recentLinks[0]?.sourceLabel, "Recent Jobs");
-    assert.equal(recentLinks[0]?.sourceUrl, DISCOVERY_SOURCES.recent_jobs.url);
-
     const savedConfigPath = path.join(tempDir, "saved-searches.json");
     fs.writeFileSync(savedConfigPath, JSON.stringify({
       searches: [
@@ -178,11 +215,15 @@ async function runTests(): Promise<void> {
       ],
     }));
     const savedSources = buildConfiguredDiscoverySources(loadSavedDiscoverySearches(savedConfigPath));
+    assert.deepEqual(savedSources.map((source) => source.sourceLabel), ["Best Matches", "Saved Search - Klaviyo DTC"], "default configured discovery sources should exclude broad unfiltered Most Recent");
     const savedSearch = savedSources.find((source) => source.sourceLabel === "Saved Search - Klaviyo DTC");
     assert(savedSearch, "configured sources should include named saved searches");
     assert.equal(savedSearch?.sourceType, "saved_search");
     assert(savedSearch?.url.includes("Klaviyo+Shopify+retention"), "saved search query should be encoded into an Upwork search URL");
+    assert(savedSearch && isAllowedDiscoverySourceConfig(savedSearch), "saved/filtered search source should be allowed only when configured and labeled");
+    assert.equal(isAllowedDiscoverySourceConfig({ sourceType: "saved_search", sourceLabel: "Bad Job Source", url: "https://www.upwork.com/jobs/~022054111111111111111" }), false, "job pages are not allowed discovery sources");
     if (!savedSearch) throw new Error("saved search source missing");
+    assert.equal(getActiveDiscoverySourceLabelForUrl(savedSearch.url, savedSources), "Saved Search - Klaviyo DTC", "diagnostics should identify active configured search source");
 
     const capped = extractBestMatchesJobLinksFromHtml(html, { maxJobs: 2, now: discoveredAt });
     assert.equal(capped.length, 2, "max-jobs cap should be enforced after dedupe/apply filtering");
@@ -246,27 +287,64 @@ async function runTests(): Promise<void> {
     assert.equal(queued[0]?.actionType, "capture_job_from_url");
     assert.equal(queued[0]?.payload.url, "https://www.upwork.com/jobs/~022054888888888888888");
 
-    const recentDiscovery = await runDiscoverySource(
-      discoveryContext(`<article><a href="/jobs/~022056222222222222222">Fresh recent role</a><span>Posted 3 minutes ago</span></article>`),
-      DISCOVERY_SOURCES.recent_jobs,
+    const savedDiscovery = await runDiscoverySource(
+      discoveryContext(`<article><a href="/jobs/~022056222222222222222">Fresh saved-search role</a><span>Posted 3 minutes ago</span></article>`, savedSearch.url),
+      savedSearch,
       { maxJobs: 5, now: discoveredAt }
     );
-    assert.equal(recentDiscovery.ok, true);
-    assert.equal(recentDiscovery.jobsQueued, 1, "recent jobs discovery should enqueue valid capture actions");
-    const recentQueued = listBrowserActions(null, 10).find((item) => item.payload.url === "https://www.upwork.com/jobs/~022056222222222222222");
-    const recentPayload = recentQueued?.payload.discovery as { sourceLabel?: string; sourceType?: string } | undefined;
-    assert.equal(recentPayload?.sourceLabel, "Recent Jobs");
-    assert.equal(recentPayload?.sourceType, "recent_jobs");
+    assert.equal(savedDiscovery.ok, true);
+    assert.equal(savedDiscovery.jobsQueued, 1, "saved/filtered search discovery should enqueue valid capture actions");
+    const savedQueued = listBrowserActions(null, 10).find((item) => item.payload.url === "https://www.upwork.com/jobs/~022056222222222222222");
+    const savedPayload = savedQueued?.payload.discovery as { sourceLabel?: string; sourceType?: string; sourceUrl?: string; discoveredAt?: string; canonicalJobUrl?: string } | undefined;
+    assert.equal(savedQueued?.payload.sourceType, "saved_search");
+    assert.equal(savedQueued?.payload.sourceLabel, "Saved Search - Klaviyo DTC");
+    assert.equal(savedQueued?.payload.sourceUrl, savedSearch.url);
+    assert.equal(savedQueued?.payload.discoveredAt, discoveredAt.toISOString());
+    assert.equal(savedPayload?.sourceLabel, "Saved Search - Klaviyo DTC");
+    assert.equal(savedPayload?.sourceType, "saved_search");
+    assert.equal(savedPayload?.sourceUrl, savedSearch.url);
+    assert.equal(savedPayload?.discoveredAt, discoveredAt.toISOString());
+    assert.equal(savedPayload?.canonicalJobUrl, "https://www.upwork.com/jobs/~022056222222222222222");
+    assert(savedQueued && hasAllowedCaptureSourceMetadata(savedQueued), "queued saved-search capture should carry allowed source metadata");
 
     const multiSourceDiscovery = await runDiscoveryConfiguredSources(
       discoveryContext(`<article><a href="/jobs/~022056333333333333333">Multi source duplicate role</a><span>Posted 4 minutes ago</span></article>`),
       { maxJobs: 2, now: discoveredAt },
-      [DISCOVERY_SOURCES.recent_jobs, savedSearch]
+      [DISCOVERY_SOURCES.best_matches, savedSearch]
     );
     assert.equal(multiSourceDiscovery.ok, true);
-    assert.deepEqual(multiSourceDiscovery.sourcesChecked, ["Recent Jobs", "Saved Search - Klaviyo DTC"]);
+    assert.deepEqual(multiSourceDiscovery.sourcesChecked, ["Best Matches", "Saved Search - Klaviyo DTC"]);
     assert.equal(multiSourceDiscovery.jobsQueued, 1, "multi-source discovery should dedupe jobs across sources");
     assert.equal(multiSourceDiscovery.duplicatesSkipped, 1, "second source should count duplicate canonical jobs");
+
+    const randomWorkTabDiscovery = await runDiscoveryBestMatches(
+      workOnlyDiscoveryContext(`<a href="/jobs/~022056444444444444444">Should not scrape random tab</a>`, { canOpenNewPage: false }),
+      { maxJobs: 5, now: discoveredAt }
+    );
+    assert.equal(randomWorkTabDiscovery.ok, false);
+    assert.match(randomWorkTabDiscovery.error ?? "", /No allowed feed\/search tab/);
+    assert.equal(listBrowserActions(null, 100).some((item) => item.payload.url === "https://www.upwork.com/jobs/~022056444444444444444"), false, "random open job tab should not be used as discovery source");
+
+    const openedSourceDiscovery = await runDiscoveryBestMatches(
+      workOnlyDiscoveryContext(`<a href="/jobs/~022056555555555555555">Opened source tab role</a>`, { canOpenNewPage: true }),
+      { maxJobs: 5, now: discoveredAt }
+    );
+    assert.equal(openedSourceDiscovery.ok, true);
+    assert.equal(openedSourceDiscovery.jobsQueued, 1, "discovery may open a controlled source tab instead of reusing work/apply tabs");
+
+    const staleApplyDiscovery = await runDiscoveryBestMatches(
+      workOnlyDiscoveryContext(`<a href="/jobs/~022056666666666666666">Apply protected role</a>`, { canOpenNewPage: true, workUrl: "https://www.upwork.com/ab/proposals/job/~022056999999999999999/apply/" }),
+      { maxJobs: 5, now: discoveredAt }
+    );
+    assert.equal(staleApplyDiscovery.ok, true, "stale apply tab should be ignored while a source tab is opened for discovery");
+
+    assert.equal(
+      countUnknownSourceQueuedCaptureActions([
+        action(100, "manual:upwork-022057000000000000000", "https://www.upwork.com/jobs/~022057000000000000000", "pending"),
+      ]),
+      1,
+      "unknown-source queued captures should be diagnosed"
+    );
 
     const scrolledDiscovery = await runDiscoveryBestMatches(
       scrollingDiscoveryContext([

@@ -205,15 +205,17 @@ async function runTests(): Promise<void> {
   const feed = new UrlOnlyPage("https://www.upwork.com/nx/find-work/best-matches/");
   const work = new UrlOnlyPage("https://www.upwork.com/jobs/~022054111111111111111");
   const newerWork = new UrlOnlyPage("https://www.upwork.com/ab/proposals/job/~022054222222222222222/apply/");
+  const ignoredUpworkTab = new UrlOnlyPage("https://www.upwork.com/freelancers/~0123456789abcdef");
   const selected = selectRelevantBrowserPage([work, newerWork, feed]);
   assert.equal(selected.page, feed, "session check should prefer the stable feed tab over the most recent work tab");
   assert.match(selected.reason, /feed\/search/);
 
-  const tabDiagnostics = buildBrowserTabDiagnostics([feed, work, newerWork]);
-  assert.equal(tabDiagnostics.openUpworkTabCount, 3);
+  const tabDiagnostics = buildBrowserTabDiagnostics([feed, work, newerWork, ignoredUpworkTab]);
+  assert.equal(tabDiagnostics.openUpworkTabCount, 4);
   assert.equal(tabDiagnostics.selectedFeedTabUrl, feed.url());
   assert.equal(tabDiagnostics.selectedWorkTabUrl, work.url());
   assert.equal(tabDiagnostics.staleWorkTabCount, 1);
+  assert.equal(tabDiagnostics.ignoredTabCount, 1);
 
   console.log("browser session inspector tests passed");
 }

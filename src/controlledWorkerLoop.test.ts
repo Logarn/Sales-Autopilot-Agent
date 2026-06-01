@@ -54,14 +54,19 @@ async function run(): Promise<void> {
   }
 }
 
+  function slackCapturePayload(index: number): { url: string; canonicalJobUrl: string; source: "slack_url" } {
+    const url = `https://www.upwork.com/jobs/~022060000000000${String(index).padStart(6, "0")}`;
+    return { url, canonicalJobUrl: url, source: "slack_url" };
+  }
+
   try {
   clearPending();
 
   const empty = await runControlledWorkerLoop({ maxActions: 2, dryRun: true });
   assert.equal(empty.stoppedReason, "queue_empty");
 
-  const activeId = enqueueBrowserAction({ jobId: "cw:test:active", actionType: "capture_job_from_url", payload: { url: "https://www.upwork.com/jobs/~active" } });
-  const queuedBehindActiveId = enqueueBrowserAction({ jobId: "cw:test:behind-active", actionType: "capture_job_from_url", payload: { url: "https://www.upwork.com/jobs/~behind" } });
+  const activeId = enqueueBrowserAction({ jobId: "cw:test:active", actionType: "capture_job_from_url", payload: slackCapturePayload(1) });
+  const queuedBehindActiveId = enqueueBrowserAction({ jobId: "cw:test:behind-active", actionType: "capture_job_from_url", payload: slackCapturePayload(2) });
   updateBrowserActionStatus(activeId, "in_progress", "active browser work");
   const activeBlocked = await runControlledWorkerLoop({ maxActions: 2, dryRun: true });
   assert.equal(activeBlocked.stoppedReason, "browser_action_in_progress", "controlled worker should not start another browser action while one is active");
@@ -69,8 +74,8 @@ async function run(): Promise<void> {
   updateBrowserActionStatus(activeId, "cancelled", "continue test");
   updateBrowserActionStatus(queuedBehindActiveId, "cancelled", "continue test");
 
-  const id1 = enqueueBrowserAction({ jobId: "cw:test:1", actionType: "capture_job_from_url", payload: { url: "https://www.upwork.com/jobs/~1" } });
-  const id2 = enqueueBrowserAction({ jobId: "cw:test:2", actionType: "capture_job_from_url", payload: { url: "https://www.upwork.com/jobs/~2" } });
+  const id1 = enqueueBrowserAction({ jobId: "cw:test:1", actionType: "capture_job_from_url", payload: slackCapturePayload(3) });
+  const id2 = enqueueBrowserAction({ jobId: "cw:test:2", actionType: "capture_job_from_url", payload: slackCapturePayload(4) });
   const id3 = enqueueBrowserAction({ jobId: "cw:test:3", actionType: "open_job", payload: { url: "https://www.upwork.com/jobs/~3" } });
 
   const limited = await runControlledWorkerLoop({ maxActions: 2, dryRun: true, allowedActionTypes: ["capture_job_from_url"] });
@@ -100,8 +105,17 @@ async function run(): Promise<void> {
   assert.equal(getBrowserActionById(prepareId)?.status, "paused");
   updateBrowserActionStatus(prepareId, "cancelled", "test cleanup");
 
-  const unavailableId = enqueueBrowserAction({ jobId: "cw:test:unavailable", actionType: "capture_job_from_url", payload: { url: "https://www.upwork.com/jobs/~unavailable" } });
-  const laterId = enqueueBrowserAction({ jobId: "cw:test:later", actionType: "capture_job_from_url", payload: { url: "https://www.upwork.com/jobs/~later" } });
+  const unknownUrl = slackCapturePayload(9).url;
+  const unknownSourceId = enqueueBrowserAction({ jobId: "cw:test:unknown-source", actionType: "capture_job_from_url", payload: { url: unknownUrl, canonicalJobUrl: unknownUrl } });
+  const unknownSource = await runControlledWorkerLoop({ maxActions: 1, dryRun: true, allowedActionTypes: ["capture_job_from_url"] });
+  assert.equal(unknownSource.actionsProcessed, 1, "unknown-source capture should be inspected by the worker");
+  assert.equal(unknownSource.actionsPaused, 0, "unknown-source capture should fail without manual browser attention");
+  assert.equal(unknownSource.stoppedReason, "completed_batch");
+  assert.equal(getBrowserActionById(unknownSourceId)?.status, "failed", "unknown-source capture should be failed before browser work");
+  updateBrowserActionStatus(unknownSourceId, "cancelled", "test cleanup");
+
+  const unavailableId = enqueueBrowserAction({ jobId: "cw:test:unavailable", actionType: "capture_job_from_url", payload: slackCapturePayload(5) });
+  const laterId = enqueueBrowserAction({ jobId: "cw:test:later", actionType: "capture_job_from_url", payload: slackCapturePayload(6) });
   const nonCritical = await runControlledWorkerLoop({
     maxActions: 2,
     dryRun: true,
@@ -122,8 +136,8 @@ async function run(): Promise<void> {
   assert.equal(getBrowserActionById(unavailableId)?.status, "failed");
   assert.equal(getBrowserActionById(laterId)?.status, "completed");
 
-  const challengeId = enqueueBrowserAction({ jobId: "cw:test:challenge", actionType: "capture_job_from_url", payload: { url: "https://www.upwork.com/jobs/~challenge" } });
-  const afterChallengeId = enqueueBrowserAction({ jobId: "cw:test:after-challenge", actionType: "capture_job_from_url", payload: { url: "https://www.upwork.com/jobs/~afterchallenge" } });
+  const challengeId = enqueueBrowserAction({ jobId: "cw:test:challenge", actionType: "capture_job_from_url", payload: slackCapturePayload(7) });
+  const afterChallengeId = enqueueBrowserAction({ jobId: "cw:test:after-challenge", actionType: "capture_job_from_url", payload: slackCapturePayload(8) });
   const trueChallenge = await runControlledWorkerLoop({
     maxActions: 2,
     dryRun: true,
