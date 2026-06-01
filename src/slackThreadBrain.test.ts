@@ -63,6 +63,21 @@ async function runTests(): Promise<void> {
   assert.equal(revise.ok && revise.decision.intent, "revise");
   assert.equal(revise.ok && revise.decision.instruction, "Use the Truly Beauty proof instead.");
 
+  const outcomeProvider = new FakeProvider({
+    intent: "record_outcome",
+    confidence: "high",
+    outcomeStatus: "interview",
+    replyText: "Got it - I marked this as interview booked.",
+  });
+  const outcome = await classifySlackThreadWithLlm({
+    text: "interview booked",
+    botMentioned: false,
+    threadMapped: true,
+    jobId: "job-1",
+  }, outcomeProvider);
+  assert.equal(outcome.ok && outcome.decision.intent, "record_outcome");
+  assert.equal(outcome.ok && outcome.decision.outcomeStatus, "interview");
+
   const sanitizedProvider = new FakeProvider({
     intent: "approve_prepare",
     confidence: "high",

@@ -55,15 +55,18 @@ async function runTests(): Promise<void> {
       rawText: string;
       instruction?: string;
       actionId?: number;
+      outcomeStatus?: string;
     };
     parseUpworkJobUrlFromText: (value: string) => { originalUrl: string; normalizedUrl: string; canonicalJobUrl: string; jobId: string } | null;
     queueCaptureFromSlackUrl: (input: { channelId: string; messageTs: string; threadTs: string; text: string }) => { parsed: any; state: any; action: any } | null;
     queuePrepareDraftFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string; actionId?: number };
   };
-  const { closeDb, getApplicationDraft, getBrowserActionById, markJobSeen, upsertSlackThreadState, listBrowserActions, updateBrowserActionStatus } = require("./db") as {
+  const { closeDb, getApplicationDraft, getApplicationStatus, getBrowserActionById, getSlackThreadStateByThreadTs, markJobSeen, upsertSlackThreadState, listBrowserActions, updateBrowserActionStatus } = require("./db") as {
     closeDb: () => void;
     getApplicationDraft: (jobId: string) => { proposalText: string } | null;
+    getApplicationStatus: (jobId: string) => string | null;
     getBrowserActionById: (id: number) => { payload: Record<string, unknown>; status: string } | null;
+    getSlackThreadStateByThreadTs: (channelId: string, threadTs: string) => { status: string } | null;
     markJobSeen: (job: any, notified: boolean) => void;
     upsertSlackThreadState: (input: any) => unknown;
     listBrowserActions: (status?: string | null, limit?: number) => Array<{ id: number; actionType: string; jobId: string; status: string }>;
@@ -138,7 +141,7 @@ async function runTests(): Promise<void> {
       assert(pass, `${t.name}: expected ${JSON.stringify(t.want)}, got ${JSON.stringify(t.got)}`);
     }
 
-    const commandTests: Array<{ name: string; input: string; expectType: string; instruction?: string; actionId?: number }> = [
+    const commandTests: Array<{ name: string; input: string; expectType: string; instruction?: string; actionId?: number; outcomeStatus?: string }> = [
       { name: "status", input: "status", expectType: "status" },
       { name: "approve", input: "approve", expectType: "approve" },
       { name: "reject", input: "reject", expectType: "reject" },
@@ -164,6 +167,11 @@ async function runTests(): Promise<void> {
       { name: "retry action", input: "retry 123", expectType: "retry_action", actionId: 123 },
       { name: "natural retry preparation", input: "Retry preparation.", expectType: "retry_action" },
       { name: "mark submitted", input: "mark submitted", expectType: "mark_submitted" },
+      { name: "got reply outcome", input: "got reply", expectType: "record_outcome", outcomeStatus: "replied" },
+      { name: "client replied outcome", input: "client replied", expectType: "record_outcome", outcomeStatus: "replied" },
+      { name: "interview booked outcome", input: "interview booked", expectType: "record_outcome", outcomeStatus: "interview" },
+      { name: "hired outcome", input: "hired", expectType: "record_outcome", outcomeStatus: "hired" },
+      { name: "lost outcome", input: "lost", expectType: "record_outcome", outcomeStatus: "lost" },
       { name: "unknown", input: "something else", expectType: "unknown" },
     ];
 
@@ -175,6 +183,9 @@ async function runTests(): Promise<void> {
       }
       if (t.expectType === "retry_action") {
         assert(parsed.actionId === t.actionId, `${t.name}: expected actionId=${t.actionId}, got=${parsed.actionId}`);
+      }
+      if (t.expectType === "record_outcome") {
+        assert(parsed.outcomeStatus === t.outcomeStatus, `${t.name}: expected outcomeStatus=${t.outcomeStatus}, got=${parsed.outcomeStatus}`);
       }
     }
 
@@ -473,6 +484,65 @@ async function runTests(): Promise<void> {
     assert(revisionResult.text.includes("Browser draft needs update: yes"), "Revision reply should flag that queued browser draft needs updating.");
     const revisedDraft = getApplicationDraft(prepareJob.id);
     assert(Boolean(revisedDraft?.proposalText.includes("highest-leverage retention work")), "Stored draft should be updated with deterministic revision text.");
+
+    const outcomeReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "got reply",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            outcomeReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(getApplicationStatus(prepareJob.id) === "replied", "Slack got reply command should update application status to replied.");
+    assert(outcomeReplies.some((reply) => reply.includes("Outcome recorded") && reply.includes("replied")), "Slack outcome command should acknowledge the recorded reply.");
+
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "interview booked",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            outcomeReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(getApplicationStatus(prepareJob.id) === "interview", "Slack interview booked command should update application status to interview.");
+
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "hired",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            outcomeReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(getApplicationStatus(prepareJob.id) === "hired", "Slack hired command should update application status to hired.");
+
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "lost",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            outcomeReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(getApplicationStatus(prepareJob.id) === "lost", "Slack lost command should update application status to lost.");
+    assert(getSlackThreadStateByThreadTs("C123", "111.222")?.status === "outcome_recorded", "Slack outcome command should mark the thread outcome recorded.");
 
     const envError = buildSlackSocketStartupError({ socketEnabled: false, botToken: "", appToken: "" });
     assert(typeof envError === "string", "Expected an error when socket mode is disabled.");

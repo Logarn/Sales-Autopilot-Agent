@@ -258,6 +258,7 @@ export type SlackThreadStatus =
   | "prepared_draft"
   | "retry_requested"
   | "submitted_marked"
+  | "outcome_recorded"
   | "status_checked"
   | "error";
 
