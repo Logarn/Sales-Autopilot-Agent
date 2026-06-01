@@ -133,18 +133,55 @@ async function runTests(): Promise<void> {
   assert.doesNotMatch(json, /<html|<body|document\.querySelector|window\.TOP_NAV_USER_CONFIG/i);
 
   const profile = "/opt/upwork-agent/shared/browser-profile";
-  const processDiagnostics = getChromeProfileProcessDiagnostics({
+  const oneParentWithChildren = getChromeProfileProcessDiagnostics({
+    userDataDir: profile,
+    cdpUrl: "http://127.0.0.1:9222",
+    processListText: [
+      `101 /usr/bin/google-chrome --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=${profile}`,
+      `202 /opt/google/chrome/chrome --type=renderer --remote-debugging-port=9222 --user-data-dir=${profile}`,
+      `203 /opt/google/chrome/chrome --type=zygote --remote-debugging-port=9222 --user-data-dir=${profile}`,
+      `204 /opt/google/chrome/chrome --type=gpu-process --remote-debugging-port=9222 --user-data-dir=${profile}`,
+      `205 /opt/google/chrome/chrome --type=utility --remote-debugging-port=9222 --user-data-dir=${profile}`,
+      `206 /opt/google/chrome/chrome_crashpad_handler --remote-debugging-port=9222 --user-data-dir=${profile}`,
+      "303 /usr/bin/google-chrome --remote-debugging-port=9333 --user-data-dir=/tmp/other",
+    ].join("\n"),
+  });
+  assert.equal(oneParentWithChildren.matchingProcessCount, 6, "diagnostics should retain raw matching process count");
+  assert.equal(oneParentWithChildren.chromeProcessCount, 1, "only browser parents should count as Chrome sessions");
+  assert.deepEqual(oneParentWithChildren.chromePids, [101]);
+  assert.equal(oneParentWithChildren.ignoredChromeChildProcessCount, 5);
+  assert.deepEqual(oneParentWithChildren.ignoredChromeChildPids, [202, 203, 204, 205, 206]);
+  assert.equal(oneParentWithChildren.duplicateProfileConflict, false);
+
+  const twoBrowserParents = getChromeProfileProcessDiagnostics({
     userDataDir: profile,
     cdpUrl: "http://127.0.0.1:9222",
     processListText: [
       `101 /usr/bin/google-chrome --remote-debugging-port=9222 --user-data-dir=${profile}`,
       `202 /usr/bin/google-chrome --remote-debugging-port=9222 --user-data-dir=${profile}`,
-      "303 /usr/bin/google-chrome --remote-debugging-port=9333 --user-data-dir=/tmp/other",
+      `303 /opt/google/chrome/chrome --type=renderer --remote-debugging-port=9222 --user-data-dir=${profile}`,
+      "404 /usr/bin/google-chrome --remote-debugging-port=9333 --user-data-dir=/tmp/other",
     ].join("\n"),
   });
-  assert.equal(processDiagnostics.chromeProcessCount, 2);
-  assert.deepEqual(processDiagnostics.chromePids, [101, 202]);
-  assert.equal(processDiagnostics.duplicateProfileConflict, true);
+  assert.equal(twoBrowserParents.matchingProcessCount, 3);
+  assert.equal(twoBrowserParents.chromeProcessCount, 2);
+  assert.deepEqual(twoBrowserParents.chromePids, [101, 202]);
+  assert.equal(twoBrowserParents.ignoredChromeChildProcessCount, 1);
+  assert.equal(twoBrowserParents.duplicateProfileConflict, true);
+
+  const onlyHelpers = getChromeProfileProcessDiagnostics({
+    userDataDir: profile,
+    cdpUrl: "http://127.0.0.1:9222",
+    processListText: [
+      `202 /opt/google/chrome/chrome --type=renderer --remote-debugging-port=9222 --user-data-dir=${profile}`,
+      `203 /opt/google/chrome/chrome --type=zygote --remote-debugging-port=9222 --user-data-dir=${profile}`,
+      `204 /opt/google/chrome/chrome_crashpad_handler --remote-debugging-port=9222 --user-data-dir=${profile}`,
+    ].join("\n"),
+  });
+  assert.equal(onlyHelpers.matchingProcessCount, 3);
+  assert.equal(onlyHelpers.chromeProcessCount, 0);
+  assert.equal(onlyHelpers.ignoredChromeChildProcessCount, 3);
+  assert.equal(onlyHelpers.duplicateProfileConflict, false);
 
   console.log("browser session CLI tests passed");
 }
