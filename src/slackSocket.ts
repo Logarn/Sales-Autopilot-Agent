@@ -32,6 +32,7 @@ import { logger } from "./logger";
 import { buildProposalContextPack } from "./skills/profileContextSkill";
 import { formatConnectsStrategy } from "./connectsStrategy";
 import { classifySlackThreadWithLlm, type SlackThreadBrainProvider, type SlackThreadBrainDecision } from "./slackThreadBrain";
+import type { ApplicationStatus } from "./types";
 
 const THREAD_MENTIONS = "<@U0A2X5BCNKC> <@U0AHJFYV42K>";
 
@@ -45,6 +46,7 @@ export type SlackSocketParsedCommandType =
   | "prep_issue_report"
   | "retry_action"
   | "mark_submitted"
+  | "record_outcome"
   | "clarify"
   | "ignore"
   | "unknown";
@@ -57,6 +59,8 @@ export interface ParsedSlackSocketCommand {
   confidence?: "high" | "medium" | "low";
   replyText?: string;
   source?: "llm" | "fallback";
+  outcomeStatus?: ApplicationStatus;
+  outcomeLabel?: string;
 }
 
 export interface ParsedUpworkUrl {
@@ -92,7 +96,7 @@ function matchesApprovePrepareIntent(value: string, mentioned: boolean): boolean
 export function shouldAskClarifyingThreadQuestion(text: string): boolean {
   const normalized = normalizeSlackTextInput(text).toLowerCase();
   return hasSlackMention(text) ||
-    /\b(?:prep|prepare|draft|apply|listing|link|connects|rate|proof|file|red flags?|risk|why|status|next|should|can you|please)\b/.test(normalized);
+    /\b(?:prep|prepare|draft|apply|listing|link|connects|rate|proof|file|red flags?|risk|why|status|next|should|can you|please|reply|replied|interview|hired|lost|outcome|submitted)\b/.test(normalized);
 }
 
 function parseUrlSafely(value: string): ParsedUpworkUrl | null {
@@ -138,6 +142,54 @@ export function parseUpworkJobUrlFromText(text: string): ParsedUpworkUrl | null 
     };
   }
   return null;
+}
+
+function parseOutcomeCommand(commandText: string, rawText: string): ParsedSlackSocketCommand | null {
+  const outcomePatterns: Array<{ status: ApplicationStatus; label: string; pattern: RegExp }> = [
+    {
+      status: "replied",
+      label: "reply received",
+      pattern: /^(?:got\s+(?:a\s+)?reply|client\s+replied|they\s+replied|reply\s+received|mark\s+(?:as\s+)?replied|replied)$/i,
+    },
+    {
+      status: "interview",
+      label: "interview booked",
+      pattern: /^(?:interview\s+booked|booked\s+(?:an\s+)?interview|call\s+booked|mark\s+(?:as\s+)?interview|interview)$/i,
+    },
+    {
+      status: "hired",
+      label: "hired",
+      pattern: /^(?:hired|got\s+hired|we\s+got\s+hired|won|closed\s+won|mark\s+(?:as\s+)?hired)$/i,
+    },
+    {
+      status: "lost",
+      label: "lost",
+      pattern: /^(?:lost|closed\s+lost|did\s+not\s+win|didn't\s+win|not\s+hired|mark\s+(?:as\s+)?lost)$/i,
+    },
+  ];
+  const match = outcomePatterns.find((candidate) => candidate.pattern.test(commandText));
+  if (!match) return null;
+  return {
+    type: "record_outcome",
+    rawText,
+    outcomeStatus: match.status,
+    outcomeLabel: match.label,
+  };
+}
+
+function outcomeLabelForStatus(status?: ApplicationStatus | null): string | undefined {
+  switch (status) {
+    case "replied":
+      return "reply received";
+    case "interview":
+      return "interview booked";
+    case "hired":
+      return "hired";
+    case "lost":
+      return "lost";
+    default:
+      return undefined;
+  }
 }
 
 export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand {
@@ -188,11 +240,15 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
 
   if (/^mark\s+submitted$/i.test(commandText)) return { type: "mark_submitted", rawText: normalized };
 
+  const outcomeCommand = parseOutcomeCommand(commandText, normalized);
+  if (outcomeCommand) return outcomeCommand;
+
   return { type: "unknown", rawText: normalized };
 }
 
 function commandFromBrainDecision(text: string, decision: SlackThreadBrainDecision): ParsedSlackSocketCommand {
   const type = decision.intent === "approve_prepare" ? "approve_prepare" : decision.intent;
+  const outcomeStatus = type === "record_outcome" ? decision.outcomeStatus ?? undefined : undefined;
   return {
     type,
     rawText: normalizeSlackTextInput(text),
@@ -201,6 +257,8 @@ function commandFromBrainDecision(text: string, decision: SlackThreadBrainDecisi
     confidence: decision.confidence,
     replyText: decision.replyText ?? undefined,
     source: "llm",
+    outcomeStatus,
+    outcomeLabel: outcomeLabelForStatus(outcomeStatus),
   };
 }
 
@@ -212,7 +270,7 @@ async function resolveSlackThreadCommand(input: {
   provider?: SlackThreadBrainProvider;
 }): Promise<ParsedSlackSocketCommand> {
   const fallback = parseSlackThreadCommand(input.text);
-  if (fallback.type === "prep_issue_report") {
+  if (fallback.type === "prep_issue_report" || fallback.type === "record_outcome") {
     return { ...fallback, source: "fallback" };
   }
 
@@ -275,7 +333,8 @@ Available commands:
 • revise: <instruction>
 • prepare draft
 • retry <action-id>
-• mark submitted`;
+• mark submitted
+• got reply / interview booked / hired / lost`;
 }
 
 function statusLabel(status?: string | null): string {
@@ -682,7 +741,7 @@ export async function handleThreadCommand(params: {
     return;
   }
 
-  if (!state.jobId && ["approve", "reject", "revise", "approve_prepare", "prepare_draft", "prep_issue_report", "mark_submitted", "retry_action"].includes(command.type)) {
+  if (!state.jobId && ["approve", "reject", "revise", "approve_prepare", "prepare_draft", "prep_issue_report", "mark_submitted", "record_outcome", "retry_action"].includes(command.type)) {
     const response = `This thread tracks ${state.upworkUrl} but no job id was parsed. ${
       command.type === "approve_prepare" || command.type === "prepare_draft" ? "I can’t prep it until I have the job id. Send the Upwork listing link here and I’ll pick it up." : "Please share a supported Upwork job URL first."
     }`;
@@ -798,6 +857,43 @@ export async function handleThreadCommand(params: {
     }
     updateSlackThreadStateStatus(state.channelId, state.threadTs, "submitted_marked");
     await postThreadReply(params.client, params.channelId, params.threadTs, `Marked ${state.jobId} as submitted in local state.`);
+    return;
+  }
+
+  if (command.type === "record_outcome") {
+    if (!command.outcomeStatus) {
+      await postThreadReply(params.client, params.channelId, params.threadTs, "I understand this is an outcome update, but I need one of: got reply, interview booked, hired, or lost.");
+      return;
+    }
+    if (!state.jobId) {
+      await postThreadReply(params.client, params.channelId, params.threadTs, "I can’t record that outcome until this thread is tied to a job.");
+      return;
+    }
+    if (!maybeJobStatus) {
+      updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
+      await postThreadReply(params.client, params.channelId, params.threadTs, `I found job ${state.jobId}, but there is no application record to update yet.`);
+      return;
+    }
+
+    const updated = updateApplicationStatus(
+      state.jobId,
+      command.outcomeStatus,
+      `Outcome recorded from Slack socket thread command: ${command.rawText}`
+    );
+    if (!updated) {
+      updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
+      await postThreadReply(params.client, params.channelId, params.threadTs, `I couldn’t record that outcome for ${state.jobId}.`);
+      return;
+    }
+
+    updateSlackThreadStateStatus(state.channelId, state.threadTs, "outcome_recorded");
+    const outcomeLabel = command.outcomeLabel ?? command.outcomeStatus;
+    await postThreadReply(
+      params.client,
+      params.channelId,
+      params.threadTs,
+      `Outcome recorded: ${state.jobId} is now ${outcomeLabel} (${command.outcomeStatus}). I’ll use that signal in future fit/proof learning.`
+    );
     return;
   }
 }
