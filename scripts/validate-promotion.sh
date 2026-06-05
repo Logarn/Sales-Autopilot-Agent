@@ -18,6 +18,7 @@ run npx tsx src/slackThreadBrain.test.ts
 run npx tsx src/leadDecision.test.ts
 run npx tsx src/platformEligibility.test.ts
 run npx tsx src/proofAvailability.test.ts
+run npx tsx src/proofAssets.test.ts
 run npx tsx src/slackPacketV3.test.ts
 run npx tsx src/slackSocket.test.ts
 run npx tsx src/browserDiscoveryTool.test.ts

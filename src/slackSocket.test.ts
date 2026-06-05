@@ -45,8 +45,9 @@ async function runTests(): Promise<void> {
   mkdirSync(dirname(tempDb), { recursive: true });
   process.env.DB_PATH = tempDb;
 
-  const { applySlackThreadRevision, buildSlackSocketStartupError, handleSlackSocketTextEvent, handleThreadCommand, parseSlackThreadCommand, parseUpworkJobUrlFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread } = require("./slackSocket") as {
+  const { applySlackThreadRevision, buildDraftPreviewFromSlackThread, buildSlackSocketStartupError, handleSlackSocketTextEvent, handleThreadCommand, parseSlackThreadCommand, parseUpworkJobUrlFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread } = require("./slackSocket") as {
     applySlackThreadRevision: (input: { channelId: string; threadTs: string; instruction: string }) => { ok: boolean; text: string; proposalVersion?: number };
+    buildDraftPreviewFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string };
     buildSlackSocketStartupError: (input: { socketEnabled: boolean; botToken: string; appToken: string }) => string | null;
     handleSlackSocketTextEvent: (event: { channel: string; ts: string; text?: string; thread_ts?: string; bot_id?: string; subtype?: string }, client: any) => Promise<void>;
     handleThreadCommand: (input: { channelId: string; threadTs: string; text: string; client: any; intentProvider?: any }) => Promise<void>;
@@ -154,10 +155,14 @@ async function runTests(): Promise<void> {
       { name: "natural proof swap", input: "Use the Truly Beauty proof instead.", expectType: "revise", instruction: "the Truly Beauty proof instead." },
       { name: "prepare draft", input: "prepare draft", expectType: "prepare_draft" },
       { name: "prepare proposal punctuation", input: "prepare proposal.", expectType: "prepare_draft" },
+      { name: "draft preview first", input: "go ahead and prepare this - show me the draft here first", expectType: "draft_preview" },
+      { name: "draft cv preview first", input: "show me the draft CV here first", expectType: "draft_preview" },
       { name: "natural proceed", input: "Please proceed with the draft", expectType: "approve_prepare" },
       { name: "natural go ahead", input: "go ahead", expectType: "approve_prepare" },
       { name: "natural prep it", input: "prep it", expectType: "approve_prepare" },
       { name: "natural looks good proceed", input: "looks good, proceed", expectType: "approve_prepare" },
+      { name: "natural use this", input: "use this", expectType: "approve_prepare" },
+      { name: "natural put it in Upwork", input: "put it in Upwork", expectType: "approve_prepare" },
       { name: "natural apply", input: "apply", expectType: "approve_prepare" },
       { name: "prep issue cover letter empty", input: "I do not see the cover letter filled in.", expectType: "prep_issue_report" },
       { name: "prep issue empty", input: "it’s empty", expectType: "prep_issue_report" },
@@ -278,6 +283,30 @@ async function runTests(): Promise<void> {
       jobId: prepareJob.id,
       status: "packet_sent",
     });
+
+    const directDraftPreview = buildDraftPreviewFromSlackThread({ channelId: "C123", threadTs: "111.222" });
+    assert(directDraftPreview.ok, "Draft preview helper should return the stored proposal without queuing browser work.");
+    assert(directDraftPreview.text.includes("I have not filled the Upwork form yet."), "Draft preview must state the Upwork form has not been filled.");
+    assert(directDraftPreview.text.includes("Final submit remains manual."), "Draft preview must keep final submit manual.");
+
+    const previewReplies: string[] = [];
+    const actionCountBeforePreview = listBrowserActions(null, 1000).length;
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "go ahead and prepare this - show me the draft here first",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            previewReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(previewReplies.some((reply) => reply.includes("Draft preview for")), "Draft-preview command should post the draft in-thread.");
+    assert(previewReplies.some((reply) => reply.includes("I have not filled the Upwork form yet.")), "Draft-preview command must not imply browser fill happened.");
+    assert(listBrowserActions(null, 1000).length === actionCountBeforePreview, "Draft-preview command must not queue a browser preparation action.");
+    assert(getSlackThreadStateByThreadTs("C123", "111.222")?.status === "draft_preview_sent", "Draft-preview command should mark the thread preview-sent.");
 
     const llmPrepareJob = {
       ...prepareJob,

@@ -58,6 +58,12 @@ function runTests(): void {
     const lines = formatProofAvailabilityLines(report, { includePath: true });
     assert(lines.some((line) => line.includes("Suggested proof: Missing proof; Status: File missing locally - manual upload needed; File: profile/attachments/missing.pdf")));
     assert(lines.some((line) => line.includes("Suggested proof: Available proof; Status: File available - eligible for attachment")));
+
+    const sharedRoot = path.join(tempDir, "shared/proof-assets");
+    fs.mkdirSync(path.join(sharedRoot, "profile/attachments"), { recursive: true });
+    fs.writeFileSync(path.join(sharedRoot, "profile/attachments/missing.pdf"), "test");
+    const sharedRootReport = buildProofAvailabilityReport(selection, { cwd: tempDir, assetRoot: "shared/proof-assets" });
+    assert.equal(sharedRootReport.find((item) => item.name === "Missing proof")?.status, "available_uploadable");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

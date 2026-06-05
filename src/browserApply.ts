@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { CONNECTS_RULES_CONFIG_PATH } from "./config";
 import { evaluateConnectsStrategy } from "./connectsStrategy";
 import { getApplicationDraft, getApplicationJobLink, getScoredJobForSlackPreview } from "./db";
+import { proofAssetExists } from "./proofAssets";
 import { buildProofAvailabilityReport, formatProofAvailabilityLines } from "./proofAvailability";
 import { buildProposalContextPack } from "./skills/profileContextSkill";
 import { selectPortfolioAssetsForJob } from "./skills/portfolioSelectionSkill";
@@ -250,13 +251,13 @@ function buildConnectsPlan(draft: ApplicationDraft, rules: ConnectsRules, issues
 function findMissingLocalAssets(attachments: BrowserApplyAttachmentInstruction[]): string[] {
   return attachments
     .map((attachment) => attachment.filePath)
-    .filter((filePath) => !fs.existsSync(path.resolve(process.cwd(), filePath)));
+    .filter((filePath) => !proofAssetExists(filePath));
 }
 
 function buildAttachmentDiagnostics(attachments: BrowserApplyAttachmentInstruction[]): BrowserApplyAttachmentDiagnostic[] {
   return attachments.map((attachment) => ({
     ...attachment,
-    existsLocally: fs.existsSync(path.resolve(process.cwd(), attachment.filePath)),
+    existsLocally: proofAssetExists(attachment.filePath),
   }));
 }
 

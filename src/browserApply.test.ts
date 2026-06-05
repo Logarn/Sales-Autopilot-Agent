@@ -865,6 +865,17 @@ async function runTests(): Promise<void> {
     });
     assert(unsafeBoostVerification.find((item) => item.field === "boostConnects")?.status === "blocked_by_upwork_ui", "Boost Connects above 50 must never be reported as safe/set.");
 
+    const visibleTableOnlyBoostVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({ visibleText: "Required for proposal: 8 Connects\n#4 bid 12 Connects", inputValues: [verificationPlan.coverLetter] }),
+      plan: { ...verificationPlan, connects: { ...verificationPlan.connects, boost: 12, total: 20 } },
+      fields: { attemptedFields: ["coverLetter", "connectsBoost"], skippedFields: [], manualFields: ["finalSubmit"] },
+      bodyText: "Required for proposal: 8 Connects\n#4 bid 12 Connects",
+    });
+    assert(
+      visibleTableOnlyBoostVerification.find((item) => item.field === "boostConnects")?.status === "attempted_unverified",
+      "Visible boost table text must not be treated as proof that the boost field was set.",
+    );
+
     const verifiedApplyVerification = await verifyApplyPreparationOnPage({
       page: fakeApplyPage({
         visibleText: "Required for proposal: 8 Connects\nSend for 8 Connects\npackage.json",

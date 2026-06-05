@@ -44,6 +44,8 @@
     "knowledge:add": "tsx src/knowledge.ts",
     "knowledge:video": "tsx src/knowledge.ts --video",
     "portfolio:upsert": "tsx src/knowledge.ts --portfolio-upsert",
+    "proof:check": "tsx src/proofAssets.ts",
+    "assets:check": "tsx src/proofAssets.ts",
     "browser:enqueue": "tsx src/browserQueue.ts --enqueue",
     "browser:list": "tsx src/browserQueue.ts --list",
     "browser:update": "tsx src/browserQueue.ts --update",
