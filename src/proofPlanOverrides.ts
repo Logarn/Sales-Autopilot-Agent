@@ -184,6 +184,11 @@ function labels(matches: ProofAliasMatch[]): string[] {
   return unique(matches.map((match) => match.label));
 }
 
+function aliasesExcept(matches: ProofAliasMatch[]): ProofAliasMatch[] {
+  const keep = new Set(labels(matches));
+  return PROOF_ALIASES.filter((entry) => !keep.has(entry.label));
+}
+
 function conciseList(values: string[], fallback: string): string {
   if (values.length === 0) return fallback;
   if (values.length === 1) return values[0]!;
@@ -244,6 +249,12 @@ export function reviseProofPlanOverrides(
     excluded.push(...excludeMatches);
     next = applyInclude(next, includeMatches);
     next = applyExclude(next, excludeMatches);
+  } else if (/\binstead\b/i.test(lower) && matchesInText(normalized).length > 0) {
+    const includeMatches = matchesInText(normalized);
+    included.push(...includeMatches);
+    next = applyExclude(next, aliasesExcept(includeMatches));
+    next = applyInclude(next, includeMatches);
+    flags.push("replace default proof");
   } else if (/\breplace\b/i.test(lower) && /\bwith\b/i.test(lower)) {
     const [, afterWith = ""] = normalized.split(/\bwith\b/i, 2);
     const includeMatches = matchesInText(afterWith);

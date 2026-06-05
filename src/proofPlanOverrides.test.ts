@@ -57,6 +57,17 @@ assert(hasAsset(swappedSelection, "steve-intro-pdf"), "Swapped plan should attac
 assert(!hasAsset(swappedSelection, "truly-beauty-case-study"), "Swapped plan should remove Truly.");
 assert(hasPortfolio(swappedSelection, "The Fly Boutique"), "Swapped plan should select Fly Upwork portfolio item.");
 
+const implicitInstead = reviseProofPlanOverrides(
+  EMPTY_PROOF_PLAN_OVERRIDES,
+  "Use Fly Boutique instead.",
+  new Date("2026-06-05T00:00:30Z"),
+);
+const implicitInsteadSelection = applyProofPlanOverridesToSelection(beautySelection, implicitInstead.overrides);
+assert(hasAsset(implicitInsteadSelection, "fly-boutique-case-study"), "Implicit instead command should attach Fly.");
+assert(!hasAsset(implicitInsteadSelection, "truly-beauty-case-study"), "Implicit instead command should remove the default Truly attachment.");
+assert(hasPortfolio(implicitInsteadSelection, "The Fly Boutique"), "Implicit instead command should select Fly portfolio proof.");
+assert(!hasPortfolio(implicitInsteadSelection, "Truly Beauty"), "Implicit instead command should remove the default Truly portfolio proof.");
+
 const addDesign = reviseProofPlanOverrides(swap.overrides, "Attach the Design Case Studies too.", new Date("2026-06-05T00:01:00Z"));
 const withDesign = applyProofPlanOverridesToSelection(beautySelection, addDesign.overrides);
 assert(hasAsset(withDesign, "design-case-studies"), "Attach-too command should add Design Case Studies.");
