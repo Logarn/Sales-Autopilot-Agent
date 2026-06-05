@@ -56,18 +56,20 @@ async function runTests(): Promise<void> {
       instruction?: string;
       actionId?: number;
       outcomeStatus?: string;
+      statusTopic?: string;
     };
     parseUpworkJobUrlFromText: (value: string) => { originalUrl: string; normalizedUrl: string; canonicalJobUrl: string; jobId: string } | null;
     queueCaptureFromSlackUrl: (input: { channelId: string; messageTs: string; threadTs: string; text: string }) => { parsed: any; state: any; action: any } | null;
     queuePrepareDraftFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string; actionId?: number };
   };
-  const { closeDb, getApplicationDraft, getApplicationStatus, getBrowserActionById, getSlackThreadStateByThreadTs, markJobSeen, upsertSlackThreadState, listBrowserActions, updateBrowserActionStatus } = require("./db") as {
+  const { closeDb, getApplicationDraft, getApplicationStatus, getBrowserActionById, getSlackThreadStateByThreadTs, markJobSeen, mergeBrowserActionPayload, upsertSlackThreadState, listBrowserActions, updateBrowserActionStatus } = require("./db") as {
     closeDb: () => void;
     getApplicationDraft: (jobId: string) => { proposalText: string } | null;
     getApplicationStatus: (jobId: string) => string | null;
     getBrowserActionById: (id: number) => { payload: Record<string, unknown>; status: string } | null;
     getSlackThreadStateByThreadTs: (channelId: string, threadTs: string) => { status: string } | null;
     markJobSeen: (job: any, notified: boolean) => void;
+    mergeBrowserActionPayload: (id: number, patch: Record<string, unknown>) => unknown;
     upsertSlackThreadState: (input: any) => unknown;
     listBrowserActions: (status?: string | null, limit?: number) => Array<{ id: number; actionType: string; jobId: string; status: string }>;
     updateBrowserActionStatus: (id: number, status: string, lastError?: string) => boolean;
@@ -141,13 +143,16 @@ async function runTests(): Promise<void> {
       assert(pass, `${t.name}: expected ${JSON.stringify(t.want)}, got ${JSON.stringify(t.got)}`);
     }
 
-    const commandTests: Array<{ name: string; input: string; expectType: string; instruction?: string; actionId?: number; outcomeStatus?: string }> = [
-      { name: "status", input: "status", expectType: "status" },
+    const commandTests: Array<{ name: string; input: string; expectType: string; instruction?: string; actionId?: number; outcomeStatus?: string; statusTopic?: string }> = [
+      { name: "status", input: "status", expectType: "status", statusTopic: "summary" },
       { name: "approve", input: "approve", expectType: "approve" },
       { name: "reject", input: "reject", expectType: "reject" },
       { name: "natural skip", input: "Skip this one.", expectType: "reject" },
-      { name: "natural why picked", input: "Why did you pick this job?", expectType: "status" },
-      { name: "natural red flags", input: "What are the red flags?", expectType: "status" },
+      { name: "natural why picked", input: "Why did you pick this job?", expectType: "status", statusTopic: "why" },
+      { name: "natural red flags", input: "What are the red flags?", expectType: "status", statusTopic: "risk" },
+      { name: "natural proof question", input: "What proof should we use?", expectType: "status", statusTopic: "proof" },
+      { name: "natural why skip", input: "Why skip this one?", expectType: "status", statusTopic: "skip" },
+      { name: "natural change question", input: "What would you change?", expectType: "status", statusTopic: "change" },
       { name: "natural manual review status", input: "What still needs manual review?", expectType: "status" },
       { name: "revise with instruction", input: "revise: tighten tone", expectType: "revise", instruction: "tighten tone" },
       { name: "natural revise", input: "Make the opener sharper.", expectType: "revise", instruction: "the opener sharper." },
@@ -160,6 +165,7 @@ async function runTests(): Promise<void> {
       { name: "natural looks good proceed", input: "looks good, proceed", expectType: "approve_prepare" },
       { name: "natural apply", input: "apply", expectType: "approve_prepare" },
       { name: "prep issue cover letter empty", input: "I do not see the cover letter filled in.", expectType: "prep_issue_report" },
+      { name: "prep issue generic missing", input: "I don't see it.", expectType: "prep_issue_report" },
       { name: "prep issue empty", input: "it’s empty", expectType: "prep_issue_report" },
       { name: "prep issue not attached", input: "The file is not attached.", expectType: "prep_issue_report" },
       { name: "live phrasing", input: "yeah, prep drafts and send link to listing", expectType: "approve_prepare" },
@@ -186,6 +192,9 @@ async function runTests(): Promise<void> {
       }
       if (t.expectType === "record_outcome") {
         assert(parsed.outcomeStatus === t.outcomeStatus, `${t.name}: expected outcomeStatus=${t.outcomeStatus}, got=${parsed.outcomeStatus}`);
+      }
+      if (t.expectType === "status" && t.statusTopic) {
+        assert(parsed.statusTopic === t.statusTopic, `${t.name}: expected statusTopic=${t.statusTopic}, got=${parsed.statusTopic}`);
       }
     }
 
@@ -279,6 +288,40 @@ async function runTests(): Promise<void> {
       status: "packet_sent",
     });
 
+    const noQaHoldJob = {
+      ...prepareJob,
+      id: "no-qa-hold-job",
+      applicationDraft: {
+        ...prepareJob.applicationDraft,
+        jobId: "no-qa-hold-job",
+      },
+    };
+    markJobSeen(noQaHoldJob, false);
+    upsertSlackThreadState({
+      channelId: "CNOQA",
+      messageTs: "222.111",
+      threadTs: "222.111",
+      upworkUrl: noQaHoldJob.url,
+      jobId: noQaHoldJob.id,
+      status: "packet_sent",
+    });
+    const noQaHoldReplies: string[] = [];
+    const noQaHoldActionsBefore = listBrowserActions(null, 1000).length;
+    await handleThreadCommand({
+      channelId: "CNOQA",
+      threadTs: "222.111",
+      text: "I don't see it.",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            noQaHoldReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(noQaHoldReplies.some((reply) => reply.includes("protected QA tab/action")), "Generic I don't see it should ask for a protected QA action before rechecking.");
+    assert(listBrowserActions(null, 1000).length === noQaHoldActionsBefore, "QA recheck should not queue a browser action when no protected QA action exists.");
+
     const llmPrepareJob = {
       ...prepareJob,
       id: "prepare-job-llm",
@@ -354,6 +397,16 @@ async function runTests(): Promise<void> {
     assert(!duplicatePrepareResult.text.toLowerCase().includes("browser action"), "Duplicate prepare draft should not expose action ids by default.");
 
     updateBrowserActionStatus(prepareResult.actionId!, "paused", "field_preparation_incomplete");
+    mergeBrowserActionPayload(prepareResult.actionId!, {
+      qaHold: {
+        protected: true,
+        jobId: prepareJob.id,
+        applyUrl: `${prepareJob.url}/apply`,
+        status: "needs_review",
+        state: "field_preparation_incomplete",
+        reason: "needs_review",
+      },
+    });
     const qaIssueRecheckReplies: string[] = [];
     await handleThreadCommand({
       channelId: "C123",
@@ -368,7 +421,9 @@ async function runTests(): Promise<void> {
       },
     });
     assert(getBrowserActionById(prepareResult.actionId!)?.status === "pending", "Prep issue report should requeue a paused apply-page action for remote Chrome re-check.");
-    assert(qaIssueRecheckReplies.some((reply) => reply.includes("re-check the apply page")), "Prep issue report should acknowledge the remote apply-page re-check.");
+    assert(getBrowserActionById(prepareResult.actionId!)?.payload.mode === "qa_recheck", "Prep issue report should switch the browser action into QA recheck mode.");
+    assert(getBrowserActionById(prepareResult.actionId!)?.payload.readOnly === true, "Prep issue report should mark the recheck action read-only.");
+    assert(qaIssueRecheckReplies.some((reply) => reply.includes("re-check remote Chrome") && reply.includes("read-only inspection")), "Prep issue report should acknowledge the read-only remote apply-page re-check.");
 
     const queuedActions = listBrowserActions(null, 10).filter((action) => action.actionType === "prepare_application_review" && action.jobId === prepareJob.id);
     assert(queuedActions.length === 1, `Expected exactly one queued prepare_application_review action, got ${queuedActions.length}`);
@@ -473,6 +528,51 @@ async function runTests(): Promise<void> {
       },
     });
     assert(statusReplies.some((reply) => reply.includes("Red flags/risks:")), "Natural status question should resolve against the tracked job context.");
+
+    const proofStatusReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "What proof should we use?",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            proofStatusReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(proofStatusReplies.some((reply) => reply.includes("*Proof plan:*") && reply.includes("Why it matches:")), "Proof status question should return a focused proof plan.");
+
+    const whyStatusReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "Why did you pick this job?",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            whyStatusReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(whyStatusReplies.some((reply) => reply.includes("*Why this one:*") && reply.includes("Taste signal:")), "Why status question should return focused fit reasoning.");
+
+    const changeStatusReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "What would you change?",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            changeStatusReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(changeStatusReplies.some((reply) => reply.includes("*What I would change:*") && reply.includes("Final submit remains manual.")), "Change status question should return focused improvement guidance.");
 
     const revisionResult = applySlackThreadRevision({
       channelId: "C123",

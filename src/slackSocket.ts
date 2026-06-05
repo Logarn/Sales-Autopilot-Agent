@@ -9,6 +9,7 @@ import {
   getScoredJobForSlackPreview,
   getSlackThreadStateByThreadTs,
   listBrowserActions,
+  mergeBrowserActionPayload,
   updateApplicationStatus,
   updateSlackThreadStateStatus,
   upsertSlackThreadState,
@@ -51,6 +52,8 @@ export type SlackSocketParsedCommandType =
   | "ignore"
   | "unknown";
 
+export type SlackSocketStatusTopic = "summary" | "why" | "risk" | "proof" | "draft" | "skip" | "change";
+
 export interface ParsedSlackSocketCommand {
   type: SlackSocketParsedCommandType;
   rawText: string;
@@ -61,6 +64,7 @@ export interface ParsedSlackSocketCommand {
   source?: "llm" | "fallback";
   outcomeStatus?: ApplicationStatus;
   outcomeLabel?: string;
+  statusTopic?: SlackSocketStatusTopic;
 }
 
 export interface ParsedUpworkUrl {
@@ -192,13 +196,23 @@ function outcomeLabelForStatus(status?: ApplicationStatus | null): string | unde
   }
 }
 
+function parseStatusTopic(value: string): SlackSocketStatusTopic {
+  if (/\b(?:show\s+proof|what\s+proof|which\s+proof|proof|portfolio|attachment|file)\b/i.test(value)) return "proof";
+  if (/\b(?:red flags?|risks?|risky|what\s+is\s+risky)\b/i.test(value)) return "risk";
+  if (/\b(?:show\s+draft|draft|cover\s*letter|proposal)\b/i.test(value)) return "draft";
+  if (/\b(?:why\s+skip|why\s+did\s+you\s+skip|why\s+not|skip\s+reason)\b/i.test(value)) return "skip";
+  if (/\b(?:what\s+would\s+you\s+change|what\s+should\s+change|improve|change)\b/i.test(value)) return "change";
+  if (/\b(?:why\b|why\s+this|why\s+did\s+you\s+pick|why\s+pick)\b/i.test(value)) return "why";
+  return "summary";
+}
+
 export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand {
   const mentioned = hasSlackMention(text);
   const normalized = normalizeSlackTextInput(text).trim();
   const commandText = normalized.replace(/[.!?]+$/g, "").trim();
   const statusMatch = /^(status)$/i.test(normalized) ||
-    /\b(details|show details|show proof|show draft|why\b|why did you pick|why pick|what are the red flags|red flags|risks|what still needs manual review|what needs manual review|what is missing|what still needs|manual review)\b/i.test(normalized);
-  if (statusMatch) return { type: "status", rawText: normalized };
+    /\b(details|show details|show proof|what proof|which proof|show draft|why\b|why did you pick|why pick|why skip|what are the red flags|red flags|risks|what would you change|what should change|what still needs manual review|what needs manual review|what is missing|what still needs|manual review)\b/i.test(normalized);
+  if (statusMatch) return { type: "status", rawText: normalized, statusTopic: parseStatusTopic(normalized) };
 
   if (/^(approve)$/i.test(commandText)) return { type: "approve", rawText: normalized };
   if (/^(reject|skip|skip this one|pass|decline)$/i.test(commandText)) return { type: "reject", rawText: normalized };
@@ -223,7 +237,8 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
     return { type: "approve_prepare", rawText: normalized, source: "fallback" };
   }
 
-  if (/\b(?:do\s+not|don't|cant|can't|cannot|not)\s+see\b.*\b(?:cover\s*letter|filled|attached|file|portfolio|proof|highlight|rate|boost|connects)\b/i.test(normalized) ||
+  if (/\b(?:do\s+not|don't|cant|can't|cannot|not)\s+see\s+(?:it|this)\b/i.test(normalized) ||
+    /\b(?:do\s+not|don't|cant|can't|cannot|not)\s+see\b.*\b(?:cover\s*letter|filled|attached|file|portfolio|proof|highlight|rate|boost|connects)\b/i.test(normalized) ||
     /\b(?:cover\s*letter|field|answer|attachment|file|portfolio|proof|highlight|rate|boost)\b.*\b(?:empty|blank|missing|not\s+filled|not\s+there|not\s+attached|not\s+selected|not\s+set)\b/i.test(normalized) ||
     /\bit['’]?s\s+(?:empty|blank|not\s+filled)\b/i.test(normalized)) {
     return { type: "prep_issue_report", rawText: normalized, source: "fallback" };
@@ -249,9 +264,10 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
 function commandFromBrainDecision(text: string, decision: SlackThreadBrainDecision): ParsedSlackSocketCommand {
   const type = decision.intent === "approve_prepare" ? "approve_prepare" : decision.intent;
   const outcomeStatus = type === "record_outcome" ? decision.outcomeStatus ?? undefined : undefined;
+  const normalized = normalizeSlackTextInput(text);
   return {
     type,
-    rawText: normalizeSlackTextInput(text),
+    rawText: normalized,
     instruction: decision.instruction ?? undefined,
     actionId: decision.actionId ?? undefined,
     confidence: decision.confidence,
@@ -259,6 +275,7 @@ function commandFromBrainDecision(text: string, decision: SlackThreadBrainDecisi
     source: "llm",
     outcomeStatus,
     outcomeLabel: outcomeLabelForStatus(outcomeStatus),
+    statusTopic: type === "status" ? parseStatusTopic(normalized) : undefined,
   };
 }
 
@@ -389,7 +406,15 @@ function describeQueuedBrowserDraft(jobId: string): string {
   return `Browser draft needs update: yes - browser action #${latest.id} is ${latest.status}. Re-run prepare draft after reviewing this revision.`;
 }
 
-function buildThreadStatusDetails(state: NonNullable<ReturnType<typeof getSlackThreadStateByThreadTs>>): string[] {
+function joinCompact(values: Array<string | null | undefined>, fallback: string, limit = 5): string {
+  const safeValues = values.map((value) => value?.trim()).filter((value): value is string => Boolean(value));
+  return safeValues.length ? safeValues.slice(0, limit).join("; ") : fallback;
+}
+
+function buildThreadStatusDetails(
+  state: NonNullable<ReturnType<typeof getSlackThreadStateByThreadTs>>,
+  topic: SlackSocketStatusTopic = "summary"
+): string[] {
   if (!state.jobId) return [];
   const job = getScoredJobForSlackPreview(state.jobId);
   const draft = getApplicationDraft(state.jobId);
@@ -399,6 +424,79 @@ function buildThreadStatusDetails(state: NonNullable<ReturnType<typeof getSlackT
     .slice(-3)
     .map((action) => `#${action.id} ${action.actionType} ${action.status}${action.lastError ? ` (${action.lastError})` : ""}`);
   const strategy = draft?.connectsStrategy ?? job?.scoreBreakdown.connectsStrategy;
+  const reasons = job?.scoreBreakdown.reasons ?? draft?.fitReasons ?? [];
+  const risks = job?.scoreBreakdown.risks ?? draft?.redFlags ?? [];
+  const proofNames = [
+    ...(profileContext?.selectedAttachments ?? []),
+    ...(draft?.selectedPortfolioItems.map((item) => item.name) ?? []),
+  ];
+  const proofReasons = [
+    ...(profileContext?.selectedProofPoints ?? []),
+    ...(draft?.structuredProposal?.suggestedHighlights ?? []),
+    ...(draft?.jobIntelligence?.proofRecommendations ?? []),
+  ];
+
+  if (topic === "why") {
+    return [
+      "*Why this one:*",
+      job ? `Fit: ${job.score}/100 (${job.matchLevel})` : null,
+      job?.scoreBreakdown ? `Components: fit ${job.scoreBreakdown.fitScore.score}/100, client ${job.scoreBreakdown.clientQualityScore.score}/100, opportunity ${job.scoreBreakdown.opportunityScore.score}/100, connects risk ${job.scoreBreakdown.connectsRiskScore.score}/100` : null,
+      `Taste signal: ${joinCompact(reasons, "No explicit fit reasons recorded.")}`,
+      draft?.jobIntelligence?.fitScoreReasoning ? `Intelligence: ${draft.jobIntelligence.fitScoreReasoning}` : null,
+      strategy ? `Connects: ${formatConnectsStrategy(strategy)}` : null,
+    ].filter((line): line is string => Boolean(line));
+  }
+
+  if (topic === "risk") {
+    return [
+      "*Risk read:*",
+      `Red flags/risks: ${joinCompact(risks, "none recorded")}`,
+      strategy ? `Connects: ${formatConnectsStrategy(strategy)}` : "Connects: not calculated",
+      latestActions.length ? `Browser state: ${latestActions.join(" | ")}` : "Browser state: no browser actions recorded",
+    ];
+  }
+
+  if (topic === "proof") {
+    return [
+      "*Proof plan:*",
+      `Proof selected: ${joinCompact(proofNames, "none selected yet")}`,
+      `Why it matches: ${joinCompact(proofReasons, "no proof rationale recorded yet")}`,
+      draft?.structuredProposal?.suggestedAttachments.length ? `Suggested attachments: ${draft.structuredProposal.suggestedAttachments.join(", ")}` : null,
+      draft?.structuredProposal?.suggestedHighlights.length ? `Suggested highlights: ${draft.structuredProposal.suggestedHighlights.join(", ")}` : null,
+      latestActions.length ? `Browser verification: ${latestActions.join(" | ")}` : "Browser verification: no prep action has reported proof state yet",
+    ].filter((line): line is string => Boolean(line));
+  }
+
+  if (topic === "draft") {
+    return [
+      "*Draft state:*",
+      draft ? `Draft: ${draft.status}, v${(draft as { proposalVersion?: number }).proposalVersion ?? "stored"}, ${draft.proposalText.length} chars` : "Draft: missing",
+      draft?.structuredProposal?.opening ? `Opening: ${draft.structuredProposal.opening}` : null,
+      draft?.proposalText ? `Draft preview: ${draft.proposalText.replace(/\s+/g, " ").trim().slice(0, 1200)}` : null,
+      describeQueuedBrowserDraft(state.jobId),
+    ].filter((line): line is string => Boolean(line));
+  }
+
+  if (topic === "skip") {
+    return [
+      "*Skip / connects judgment:*",
+      job ? `Current fit: ${job.score}/100 (${job.matchLevel})` : null,
+      `Reasons not to spend Connects: ${joinCompact(risks, "no hard skip reason recorded for this tracked lead")}`,
+      strategy ? `Connects: ${formatConnectsStrategy(strategy)}` : "Connects: not calculated",
+      draft?.jobIntelligence?.skipReason ? `Platform/context skip reason: ${draft.jobIntelligence.skipReason}` : null,
+    ].filter((line): line is string => Boolean(line));
+  }
+
+  if (topic === "change") {
+    return [
+      "*What I would change:*",
+      risks.length ? `Address risk first: ${risks[0]}` : "No major risk adjustment recorded.",
+      proofNames.length ? `Keep proof tight around: ${proofNames[0]}` : "Choose proof before preparing the final review draft.",
+      strategy ? `Connects stance: ${formatConnectsStrategy(strategy)}` : "Confirm Connects before spending.",
+      "Final submit remains manual.",
+    ];
+  }
+
   return [
     job ? `Fit: ${job.score}/100 (${job.matchLevel})` : null,
     job?.scoreBreakdown.reasons.length ? `Why picked: ${job.scoreBreakdown.reasons.slice(0, 5).join("; ")}` : null,
@@ -544,6 +642,115 @@ export function queuePrepareDraftFromSlackThread(input: { channelId: string; thr
       ackText: input.ackText,
       queueStatus: browserQueueStatusForAction(action.id),
     }),
+  };
+}
+
+function payloadString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function qaApplyUrlFromAction(action: ReturnType<typeof getBrowserActionById> | null): string | null {
+  if (!action) return null;
+  const qaHold = action.payload.qaHold;
+  if (qaHold && typeof qaHold === "object" && !Array.isArray(qaHold)) {
+    const applyUrl = payloadString((qaHold as { applyUrl?: unknown }).applyUrl);
+    if (applyUrl) return applyUrl;
+  }
+  const applyPlan = action.payload.applyPlan;
+  if (applyPlan && typeof applyPlan === "object" && !Array.isArray(applyPlan)) {
+    const applyUrl = payloadString((applyPlan as { applyUrl?: unknown }).applyUrl);
+    if (applyUrl) return applyUrl;
+  }
+  return payloadString(action.payload.url);
+}
+
+function hasProtectedQaHold(action: ReturnType<typeof getBrowserActionById> | null): boolean {
+  const qaHold = action?.payload.qaHold;
+  return Boolean(qaHold && typeof qaHold === "object" && !Array.isArray(qaHold) && (qaHold as { protected?: unknown }).protected === true);
+}
+
+export function queueQaRecheckFromSlackThread(input: { channelId: string; threadTs: string; ackText?: string | null }): { ok: boolean; text: string; actionId?: number } {
+  const state = getSlackThreadStateByThreadTs(input.channelId, input.threadTs);
+  if (!state?.jobId) {
+    return { ok: false, text: "I cannot re-check remote Chrome without a tracked job id for this thread." };
+  }
+  const draft = getApplicationDraft(state.jobId);
+  if (!draft?.proposalText.trim()) {
+    return { ok: false, text: "I cannot re-check the apply page yet because there is no stored draft for this job." };
+  }
+  const browserSession = getBrowserSessionStatus();
+  if (browserSession.blocked) {
+    return { ok: false, text: "Quick blocker: Upwork is asking for a human check, so I cannot inspect the QA tab yet." };
+  }
+
+  const latestPrepareActions = listBrowserActions(null, 1000)
+    .filter((action) => action.jobId === state.jobId && action.actionType === "prepare_application_review")
+    .sort((a, b) => a.id - b.id);
+  const latest = latestPrepareActions[latestPrepareActions.length - 1] ?? null;
+  if (!latest) {
+    return {
+      ok: false,
+      text: "I don’t have a protected QA tab/action for this job yet, so there is nothing safe to re-check. Reply `prep it` first to stage the remote Chrome review.",
+    };
+  }
+  if (latest && ["pending", "in_progress"].includes(latest.status) && latest.payload.mode !== "qa_recheck" && latest.payload.readOnly !== true) {
+    return {
+      ok: true,
+      actionId: latest.id,
+      text: `Prep is still ${latest.status} as browser action #${latest.id}. I’ll be able to re-check the actual QA tab after that action reaches remote Chrome.`,
+    };
+  }
+  if (latest && ["pending", "in_progress"].includes(latest.status)) {
+    return {
+      ok: true,
+      actionId: latest.id,
+      text: `QA recheck is already ${latest.status} as browser action #${latest.id}. I’ll report observed remote Chrome state when it finishes.`,
+    };
+  }
+  if (!hasProtectedQaHold(latest)) {
+    return {
+      ok: false,
+      text: "I found prior browser work for this job, but not a protected QA tab. Reply `prep it` first so I can stage a safe remote Chrome review before re-checking.",
+    };
+  }
+
+  const action = enqueueBrowserActionDeduped({
+    jobId: state.jobId,
+    actionType: "prepare_application_review",
+    payload: {
+      url: qaApplyUrlFromAction(latest) ?? state.upworkUrl,
+      channelId: state.channelId,
+      threadTs: state.threadTs,
+      messageTs: state.messageTs,
+      applicationId: state.jobId,
+      mode: "qa_recheck",
+      readOnly: true,
+      sourceActionId: latest?.id,
+      qaRecheckRequestedAt: new Date().toISOString(),
+      notes: "Slack socket: read-only QA recheck requested. Inspect remote Chrome fields only; do not fill and do not submit.",
+    },
+  });
+  const targetAction = getBrowserActionById(action.id);
+  mergeBrowserActionPayload(action.id, {
+    mode: "qa_recheck",
+    readOnly: true,
+    sourceActionId: latest?.id,
+    qaRecheckRequestedAt: new Date().toISOString(),
+    notes: "Slack socket: read-only QA recheck requested. Inspect remote Chrome fields only; do not fill and do not submit.",
+  });
+  if (targetAction?.status === "paused" || targetAction?.status === "failed") {
+    updateBrowserActionStatus(action.id, "pending", "Slack socket requested read-only remote Chrome QA recheck.");
+  }
+  updateSlackThreadStateStatus(state.channelId, state.threadTs, "retry_requested");
+  return {
+    ok: true,
+    actionId: action.id,
+    text: [
+      input.ackText?.trim() || "Thanks for the catch - I’ll re-check the actual remote Chrome QA tab and report only observed field state.",
+      browserQueueStatusForAction(action.id),
+      `Recheck mode: read-only inspection. I will not fill fields or touch final submit.`,
+      `Listing: ${state.upworkUrl}`,
+    ].filter((line): line is string => Boolean(line)).join("\n"),
   };
 }
 
@@ -734,7 +941,7 @@ export async function handleThreadCommand(params: {
       `URL: ${state.upworkUrl}`,
       state.jobId ? `Job ID: ${state.jobId}` : "Job ID: unknown",
       state.jobId && maybeJobStatus ? `Application status: ${maybeJobStatus}` : "Application status: not yet created",
-      ...buildThreadStatusDetails(state),
+      ...buildThreadStatusDetails(state, command.statusTopic ?? "summary"),
     ].join("\n");
     await postThreadReply(params.client, params.channelId, params.threadTs, statusText);
     updateSlackThreadStateStatus(state.channelId, state.threadTs, "status_checked");
@@ -796,11 +1003,10 @@ export async function handleThreadCommand(params: {
   }
 
   if (command.type === "prep_issue_report") {
-    const result = queuePrepareDraftFromSlackThread({
+    const result = queueQaRecheckFromSlackThread({
       channelId: params.channelId,
       threadTs: params.threadTs,
-      ackText: "Thanks for the catch — I’ll re-check the apply page and only report fields that verify on-page.",
-      forceRetryPaused: true,
+      ackText: "Thanks for the catch - I’ll re-check remote Chrome and only report what is actually visible on the apply page.",
     });
     if (!result.ok) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");

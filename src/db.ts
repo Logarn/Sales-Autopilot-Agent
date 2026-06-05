@@ -13,14 +13,21 @@ import {
   BrowserActionStatus,
   BrowserActionType,
   ConnectsStrategySnapshot,
+  DailyAutomationSnapshot,
+  DailyBrowserIssue,
+  DailyQueueItem,
   DailySummary,
   JobIntelligence,
   JobPosting,
   MatchLevel,
+  OutcomeLearningSegment,
+  OutcomeLearningSummary,
   PortfolioItem,
   ScoredJob,
   StructuredProposalDraft,
 } from "./types";
+
+export type { OutcomeLearningSegment, OutcomeLearningSummary } from "./types";
 
 interface SeenStats {
   total: number;
@@ -63,10 +70,23 @@ interface MatchCountRow {
 }
 
 interface DailyRow {
+  id: string;
   title: string;
+  url: string;
   score: number;
   match_level: MatchLevel;
   seen_at: string;
+  notified: number | null;
+  application_status: ApplicationStatus | null;
+}
+
+interface DailyBrowserIssueRow {
+  id: number;
+  job_id: string;
+  action_type: BrowserActionType;
+  status: BrowserActionStatus;
+  last_error: string | null;
+  updated_at: string;
 }
 
 interface SlackPreviewJobRow {
@@ -146,26 +166,6 @@ export interface ApplicationAnalytics {
   hireRate: number;
   topAttachments: Array<{ name: string; count: number }>;
   topHighlights: Array<{ name: string; count: number }>;
-}
-
-export interface OutcomeLearningSegment {
-  name: string;
-  total: number;
-  submitted: number;
-  replied: number;
-  interviews: number;
-  hired: number;
-  lost: number;
-  replyRate: number;
-  hireRate: number;
-}
-
-export interface OutcomeLearningSummary {
-  generatedAt: string;
-  totalTracked: number;
-  bySourceQuery: OutcomeLearningSegment[];
-  byBudgetBand: OutcomeLearningSegment[];
-  byClientSpendBand: OutcomeLearningSegment[];
 }
 
 interface OutcomeLearningRow {
@@ -1652,29 +1652,140 @@ function formatDateKeyInTimezone(date: Date, timeZone: string): string {
   }).format(date);
 }
 
+function parseStoredTimestamp(value: string): Date {
+  if (/[zZ]|[+-]\d\d:?\d\d$/.test(value)) {
+    return new Date(value);
+  }
+  return new Date(`${value.replace(" ", "T")}Z`);
+}
+
+function dateKeyForStoredTimestamp(value: string): string | null {
+  const date = parseStoredTimestamp(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return formatDateKeyInTimezone(date, TIMEZONE);
+}
+
+function isSameSummaryDay(value: string, targetDay: string): boolean {
+  return dateKeyForStoredTimestamp(value) === targetDay;
+}
+
+function numericMetadataValue(metadata: Record<string, unknown>, key: string): number | null {
+  const value = metadata[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function stringMetadataValue(metadata: Record<string, unknown>, key: string): string | null {
+  const value = metadata[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function latestNumberFromHeartbeats(records: HeartbeatRecord[], key: string): number | null {
+  for (const record of records) {
+    const value = numericMetadataValue(record.metadata, key);
+    if (value !== null) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function latestStringFromHeartbeats(records: HeartbeatRecord[], keys: string[]): string | null {
+  for (const record of records) {
+    for (const key of keys) {
+      const value = stringMetadataValue(record.metadata, key);
+      if (value !== null) {
+        return value;
+      }
+    }
+  }
+  return null;
+}
+
+function getDailyAutomationSnapshot(targetDay: string): DailyAutomationSnapshot | null {
+  const records = listHeartbeats()
+    .filter((record) => isSameSummaryDay(record.updatedAt, targetDay))
+    .sort((a, b) => parseStoredTimestamp(b.updatedAt).getTime() - parseStoredTimestamp(a.updatedAt).getTime());
+  if (records.length === 0) {
+    return null;
+  }
+
+  const snapshot: DailyAutomationSnapshot = {
+    updatedAt: records[0].updatedAt,
+    jobsFound: latestNumberFromHeartbeats(records, "jobsFound"),
+    jobsQueued: latestNumberFromHeartbeats(records, "jobsQueued"),
+    jobsCaptured: latestNumberFromHeartbeats(records, "jobsCaptured"),
+    duplicatesSkipped: latestNumberFromHeartbeats(records, "duplicatesSkipped"),
+    alreadyHandledSkipped: latestNumberFromHeartbeats(records, "alreadyHandledSkipped"),
+    invalidSkipped: latestNumberFromHeartbeats(records, "invalidSkipped"),
+    slackPostFailures: latestNumberFromHeartbeats(records, "slackPostFailures"),
+    stoppedReason: latestStringFromHeartbeats(records, ["stoppedReason", "pausedReason"]),
+  };
+
+  const hasUsefulMetric = Object.entries(snapshot).some(([key, value]) =>
+    key !== "updatedAt" && value !== null
+  );
+  return hasUsefulMetric ? snapshot : null;
+}
+
+function rowToDailyBrowserIssue(row: DailyBrowserIssueRow): DailyBrowserIssue | null {
+  if (row.status !== "paused" && row.status !== "failed") {
+    return null;
+  }
+  return {
+    id: row.id,
+    jobId: row.job_id,
+    actionType: row.action_type,
+    status: row.status,
+    lastError: row.last_error,
+    updatedAt: row.updated_at,
+  };
+}
+
+function hasOutcomeLearningData(summary: OutcomeLearningSummary): boolean {
+  return [
+    ...summary.bySourceQuery,
+    ...summary.byBudgetBand,
+    ...summary.byClientSpendBand,
+  ].some((segment) =>
+    segment.submitted > 0 ||
+    segment.replied > 0 ||
+    segment.interviews > 0 ||
+    segment.hired > 0 ||
+    segment.lost > 0
+  );
+}
+
 export function getDailySummary(referenceDate = new Date()): DailySummary {
   const rows = db
     .prepare<[], DailyRow>(
-      "SELECT title, score, match_level, seen_at FROM seen_jobs"
+      `SELECT s.id, s.title, s.url, s.score, s.match_level, s.seen_at, s.notified, a.status as application_status
+       FROM seen_jobs s
+       LEFT JOIN applications a ON a.job_id = s.id`
     )
     .all();
 
   const targetDay = formatDateKeyInTimezone(referenceDate, TIMEZONE);
+  const generatedAt = referenceDate.toISOString();
+  let trackedJobs = 0;
   let high = 0;
   let medium = 0;
   let low = 0;
   let filteredOut = 0;
+  let slackWorthyLeads = 0;
   let topJobTitle: string | null = null;
   let topJobScore: number | null = null;
+  const morningQueueCandidates: DailyQueueItem[] = [];
 
   for (const row of rows) {
-    const rowDate = new Date(`${row.seen_at}Z`);
-    if (Number.isNaN(rowDate.getTime())) {
+    if (!isSameSummaryDay(row.seen_at, targetDay)) {
       continue;
     }
-    const rowDay = formatDateKeyInTimezone(rowDate, TIMEZONE);
-    if (rowDay !== targetDay) {
-      continue;
+
+    trackedJobs += 1;
+    if (row.notified) {
+      slackWorthyLeads += 1;
     }
 
     if (row.match_level === "high") {
@@ -1691,14 +1802,55 @@ export function getDailySummary(referenceDate = new Date()): DailySummary {
       topJobTitle = row.title;
       topJobScore = row.score;
     }
+
+    if (row.match_level === "high" || row.match_level === "medium") {
+      morningQueueCandidates.push({
+        jobId: row.id,
+        title: row.title,
+        score: row.score,
+        status: row.application_status ?? (row.notified ? "sent_to_slack" : "found"),
+        url: row.url,
+      });
+    }
   }
 
+  const applicationCounts = getApplicationSummary();
+  const preparedDrafts = applicationCounts.find((row) => row.status === "draft_prepared")?.count ?? 0;
+  const qaWaiting = applicationCounts.find((row) => row.status === "prepared_for_qa")?.count ?? 0;
+  const browserIssueRows = db
+    .prepare<[], DailyBrowserIssueRow>(
+      `SELECT id, job_id, action_type, status, last_error, updated_at
+       FROM browser_actions
+       WHERE status IN ('paused', 'failed')
+       ORDER BY datetime(updated_at) DESC, id DESC`
+    )
+    .all();
+  const browserIssues = browserIssueRows
+    .map(rowToDailyBrowserIssue)
+    .filter((issue): issue is DailyBrowserIssue => issue !== null);
+  const outcomeLearning = getOutcomeLearningSummary(referenceDate);
+
   return {
+    generatedAt,
+    dayKey: targetDay,
+    trackedJobs,
+    realCandidates: high + medium + low,
+    slackWorthyLeads,
     high,
     medium,
     low,
     filteredOut,
     topJobTitle,
     topJobScore,
+    preparedDrafts,
+    qaWaiting,
+    browserBlockers: browserIssues.filter((issue) => issue.status === "paused").length,
+    browserNonBlockingFailures: browserIssues.filter((issue) => issue.status === "failed" && isSameSummaryDay(issue.updatedAt, targetDay)).length,
+    recentBrowserIssues: browserIssues.slice(0, 5),
+    morningQueue: morningQueueCandidates
+      .sort((a, b) => b.score - a.score || a.title.localeCompare(b.title))
+      .slice(0, 3),
+    automation: getDailyAutomationSnapshot(targetDay),
+    outcomeLearning: hasOutcomeLearningData(outcomeLearning) ? outcomeLearning : null,
   };
 }

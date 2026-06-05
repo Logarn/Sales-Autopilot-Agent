@@ -24,6 +24,7 @@ import {
   enqueueBrowserActionDeduped,
   getApplicationStatus,
   getBrowserActionById,
+  getOutcomeLearningSummary,
   getSlackThreadStateByJobId,
   getSlackThreadStateByThreadTs,
   incrementBrowserActionAttempts,
@@ -960,6 +961,7 @@ function buildPrepareDraftStatusMessage(input: {
   nextCommand?: string;
 }): string {
   const { diagnostics } = input;
+  const qaRecheckOnly = /\b(?:qa\s+)?re-?check\b/i.test(input.heading);
   const fieldVerification = diagnostics.fieldVerification ?? [];
   const coverLetterVerification = getVerification(fieldVerification, "coverLetter");
   const screeningVerification = getVerification(fieldVerification, "screeningAnswers");
@@ -980,7 +982,7 @@ function buildPrepareDraftStatusMessage(input: {
   const coverLetterSummary = coverLetterVerification?.status === "verified"
     ? "verified filled"
     : coverLetterVerification?.status === "attempted_unverified"
-      ? "attempted, not verified"
+      ? qaRecheckOnly ? "not observed on page" : "attempted, not verified"
       : coverLetterVerification?.status === "blocked_by_upwork_ui"
         ? "blocked by Upwork UI"
         : "not verified";
@@ -1005,7 +1007,7 @@ function buildPrepareDraftStatusMessage(input: {
         : highlightVerification?.detail ?? "not verified";
   const rateSummary = rateVerification?.status === "verified"
     ? rateVerification.detail
-    : diagnostics.rate ? `attempted ${diagnostics.rate}, not verified` : "left alone";
+    : diagnostics.rate ? qaRecheckOnly ? `${diagnostics.rate} not observed on page` : `attempted ${diagnostics.rate}, not verified` : "left alone";
   const boostSummary = boostVerification?.detail ?? (diagnostics.boostConnects ? `${diagnostics.boostConnects} boost planned, not verified` : "No boost set.");
   const missingFiles = diagnostics.missingLocalAssets.map((asset) => path.basename(asset)).slice(0, 2);
   const manualFields = [
@@ -1023,11 +1025,19 @@ function buildPrepareDraftStatusMessage(input: {
   const reviewText = reviewItems.length > 0 ? reviewItems.slice(0, 3).map(humanSlackPrepDetail).join("; ") : "none";
   const submitLabel = diagnostics.requiredConnects === null ? "Submit" : `Send for ${diagnostics.requiredConnects} Connects`;
   const actionLine = readyForFinalManualSubmit
-    ? `Review it through remote Chrome/VNC and manually click *${submitLabel}* if it looks good.`
-    : "Please check the item above, then reply “retry” when it’s cleared.";
+    ? qaRecheckOnly
+      ? `Remote Chrome matches the prepared state I can verify. Final submit remains manual; click *${submitLabel}* only after human review.`
+      : `Review it through remote Chrome/VNC and manually click *${submitLabel}* if it looks good.`
+    : qaRecheckOnly
+      ? "I did not change the page. Final submit remains manual. Review the missing fields above, then reply “retry prep” if you want me to fill again."
+      : "Please check the item above, then reply “retry” when it’s cleared.";
   const locationLine = readyForFinalManualSubmit
-    ? "Draft is ready in the remote Chrome session. Opening the apply URL in Safari or another local browser may not show unsaved Upwork form fields."
-    : "I checked the remote Chrome apply page and stopped before submit.";
+    ? qaRecheckOnly
+      ? "I inspected the protected remote Chrome apply tab and reported only observed field state. I did not edit fields."
+      : "Draft is ready in the remote Chrome session. Opening the apply URL in Safari or another local browser may not show unsaved Upwork form fields."
+    : qaRecheckOnly
+      ? "I inspected the protected remote Chrome apply tab and reported only observed field state. I did not edit fields."
+      : "I checked the remote Chrome apply page and stopped before submit.";
   const coverLetterBlock = readyForFinalManualSubmit && diagnostics.coverLetterPreview
     ? ["", "*Cover letter draft:*", diagnostics.coverLetterPreview].join("\n")
     : "";
@@ -1041,7 +1051,7 @@ function buildPrepareDraftStatusMessage(input: {
       ].join("\n")
     : "";
   return [
-    readyForFinalManualSubmit ? "✅ *Draft ready for QA*" : "⚠️ *I hit a blocker on the apply page*",
+    qaRecheckOnly ? "🔎 *Remote Chrome QA recheck*" : readyForFinalManualSubmit ? "✅ *Draft ready for QA*" : "⚠️ *I hit a blocker on the apply page*",
     "",
     `Hey ${QA_MENTIONS} — ${locationLine}`,
     "",
@@ -1137,6 +1147,23 @@ function boostConnectsForSlack(job: ScoredJob): number | undefined {
   const sourceBacked = job.applicationDraft?.connectsStrategy?.sourceBackedConnects ?? job.scoreBreakdown?.connectsStrategy?.sourceBackedConnects ?? job.connects;
   if (sourceBacked?.requiredConnects === null) return undefined;
   return job.applicationDraft?.suggestedBoostConnects ?? job.scoreBreakdown?.connectsStrategy?.suggestedBoostConnects ?? undefined;
+}
+
+function outcomeMemoryForSlack(job: ScoredJob): string | undefined {
+  const summary = getOutcomeLearningSummary();
+  const sourceSegment = summary.bySourceQuery.find((segment) =>
+    segment.name === (job.sourceQuery?.trim() || "unknown source") && segment.submitted > 0
+  );
+  if (!sourceSegment) {
+    return undefined;
+  }
+  const parts = [
+    `${sourceSegment.replied} replies`,
+    `${sourceSegment.interviews} interviews`,
+    `${sourceSegment.hired} hires`,
+    `${sourceSegment.lost} losses`,
+  ];
+  return `Source pattern "${sourceSegment.name}" has ${parts.join(", ")} from ${sourceSegment.submitted} submitted.`;
 }
 
 export function decideAutoPrepareDraft(
@@ -1699,8 +1726,10 @@ export async function verifyApplyPreparationOnPage(input: {
   plan: BrowserApplyFillPlan;
   fields: Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields">;
   bodyText: string;
+  mode?: "after_fill" | "recheck_only";
 }): Promise<ApplyFieldVerification[]> {
   const { plan, fields } = input;
+  const recheckOnly = input.mode === "recheck_only";
   const snapshot = await readApplyVerificationSnapshot(input.page, input.bodyText);
   const visibleAndValues = [snapshot.visibleText, ...snapshot.inputValues, ...snapshot.checkedLabels, ...snapshot.fileNames];
   const results: ApplyFieldVerification[] = [];
@@ -1716,7 +1745,12 @@ export async function verifyApplyPreparationOnPage(input: {
   } else if (fields.skippedFields.includes("coverLetter") || fields.manualFields.includes("coverLetter")) {
     results.push(verification("coverLetter", "blocked_by_upwork_ui", "Cover letter field was not filled by the Upwork UI.", { expected: significantExpectedText(plan.coverLetter) }));
   } else {
-    results.push(verification("coverLetter", "attempted_unverified", "Cover letter fill was attempted, but the field did not verify with the intended text.", { expected: significantExpectedText(plan.coverLetter), actual: snapshot.inputValues.join(" | ").slice(0, 500) }));
+    results.push(verification(
+      "coverLetter",
+      "attempted_unverified",
+      recheckOnly ? "Observed cover letter field does not contain the intended text." : "Cover letter fill was attempted, but the field did not verify with the intended text.",
+      { expected: significantExpectedText(plan.coverLetter), actual: snapshot.inputValues.join(" | ").slice(0, 500) }
+    ));
   }
 
   if (plan.screeningAnswers.length === 0) {
@@ -1730,7 +1764,7 @@ export async function verifyApplyPreparationOnPage(input: {
     } else if (fields.manualFields.includes("screeningAnswers")) {
       results.push(verification("screeningAnswers", "blocked_by_upwork_ui", "Screening answer fields were unavailable or could not be filled safely."));
     } else {
-      results.push(verification("screeningAnswers", "attempted_unverified", "Screening answers were planned, but none verified on the page."));
+      results.push(verification("screeningAnswers", "attempted_unverified", recheckOnly ? "Observed page does not contain the planned screening answers." : "Screening answers were planned, but none verified on the page."));
     }
   }
 
@@ -1742,7 +1776,7 @@ export async function verifyApplyPreparationOnPage(input: {
   } else if (fields.skippedFields.includes("rate")) {
     results.push(verification("rate", "blocked_by_upwork_ui", "Rate field was not fillable.", { expected: rateValue }));
   } else {
-    results.push(verification("rate", "attempted_unverified", "Rate fill was attempted, but the value was not verified.", { expected: rateValue }));
+    results.push(verification("rate", "attempted_unverified", recheckOnly ? "Observed rate field does not contain the planned value." : "Rate fill was attempted, but the value was not verified.", { expected: rateValue }));
   }
 
   if (plan.connects.required === null) {
@@ -1761,7 +1795,7 @@ export async function verifyApplyPreparationOnPage(input: {
   } else if (fields.skippedFields.includes("connectsBoost")) {
     results.push(verification("boostConnects", "blocked_by_upwork_ui", "Boost field was not fillable.", { expected: String(plannedBoost) }));
   } else {
-    results.push(verification("boostConnects", "attempted_unverified", `Boost ${plannedBoost} was attempted, but not verified.`, { expected: String(plannedBoost) }));
+    results.push(verification("boostConnects", "attempted_unverified", recheckOnly ? `Observed page does not show planned boost ${plannedBoost}.` : `Boost ${plannedBoost} was attempted, but not verified.`, { expected: String(plannedBoost) }));
   }
 
   if (plan.attachments.length === 0) {
@@ -1778,7 +1812,7 @@ export async function verifyApplyPreparationOnPage(input: {
       } else if (fields.manualFields.includes("attachments")) {
         results.push(verification("attachments", "blocked_by_upwork_ui", `Upload field was unavailable. Expected files: ${expectedNames.join(", ")}`));
       } else {
-        results.push(verification("attachments", "attempted_unverified", `File upload was attempted but not verified. Expected files: ${expectedNames.join(", ")}`, { expected: expectedNames.join(", "), actual: snapshot.fileNames.join(", ") }));
+        results.push(verification("attachments", "attempted_unverified", recheckOnly ? `Observed page does not show expected uploaded files: ${expectedNames.join(", ")}` : `File upload was attempted but not verified. Expected files: ${expectedNames.join(", ")}`, { expected: expectedNames.join(", "), actual: snapshot.fileNames.join(", ") }));
       }
     }
   }
@@ -1794,7 +1828,7 @@ export async function verifyApplyPreparationOnPage(input: {
     } else if (fields.manualFields.includes("highlights")) {
       results.push(verification("profileHighlights", "blocked_by_upwork_ui", "Profile highlight controls were unavailable or could not be selected safely."));
     } else {
-      results.push(verification("profileHighlights", "attempted_unverified", "Profile/proof selection was attempted but not verified."));
+      results.push(verification("profileHighlights", "attempted_unverified", recheckOnly ? "Observed page does not show the planned proof/highlight selections." : "Profile/proof selection was attempted but not verified."));
     }
   }
 
@@ -1803,6 +1837,10 @@ export async function verifyApplyPreparationOnPage(input: {
 }
 
 type ApplyFillResult = Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields" | "fieldVerification">;
+
+function isQaRecheckOnlyAction(action: BrowserAction): boolean {
+  return action.actionType === "prepare_application_review" && (action.payload.mode === "qa_recheck" || action.payload.readOnly === true);
+}
 
 function getVerification(results: ApplyFieldVerification[], field: string): ApplyFieldVerification | null {
   return results.find((item) => item.field === field) ?? null;
@@ -2023,6 +2061,20 @@ async function inspectWithBrowser(
             verification("finalSubmit", "skipped_by_strategy", "Final submit/send button was intentionally not clicked."),
           ],
         };
+      } else if (isQaRecheckOnlyAction(action)) {
+        const fieldVerification = await verifyApplyPreparationOnPage({
+          page: page!,
+          plan,
+          fields: { attemptedFields: [], skippedFields: [], manualFields: ["finalSubmit"] },
+          bodyText,
+          mode: "recheck_only",
+        });
+        fields = {
+          attemptedFields: [],
+          skippedFields: [],
+          manualFields: ["finalSubmit"],
+          fieldVerification,
+        };
       } else {
         fields = await fillApplyFields(page!, plan, bodyText);
       }
@@ -2223,6 +2275,7 @@ export async function postDiscoveryCapturePacket(input: {
     sourceType: discovery.sourceType,
     sourceLabel: discovery.sourceLabel,
     postedAtText: discovery.postedAtText,
+    outcomeMemory: outcomeMemoryForSlack(input.scored),
   });
   const existingThread = getSlackThreadStateByJobId(input.scored.id);
   if (existingThread) {
@@ -2441,6 +2494,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           questionAnswers: answers,
           proofRecommendations: extractProofRecommendations(scored.applicationDraft),
           autoPrepareNote: autoPrepareDecision.note,
+          outcomeMemory: outcomeMemoryForSlack(scored),
         });
         if (threadPostStatus === "posted") {
           result.slackPostsSucceeded += 1;
@@ -2479,6 +2533,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
     const { state, snapshot, fields, bodyText, inspectionDiagnostics, extractionBodyText, extractionDiagnostics } = await inspectWithBrowser(action, options, url, plan ?? undefined);
 
     if (action.actionType === "prepare_application_review") {
+      const qaRecheckOnly = isQaRecheckOnlyAction(action);
       const diagnostics = buildApplyDiagnostics(action, plan, applyPlanResult?.issues ?? [], state, fields);
       saveApplyDiagnostics(options, action, diagnostics);
       if (state === "field_preparation_incomplete") {
@@ -2500,9 +2555,11 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         updateApplicationStatus(
           action.jobId,
           qaStatus,
-          state === "apply_page_loaded"
-            ? "Browser draft prepared in remote Chrome for final human QA. Final submit was not clicked."
-            : "Browser draft preparation needs human review in remote Chrome. Final submit was not clicked."
+          qaRecheckOnly
+            ? "Read-only QA recheck inspected remote Chrome field state. Final submit was not clicked."
+            : state === "apply_page_loaded"
+              ? "Browser draft prepared in remote Chrome for final human QA. Final submit was not clicked."
+              : "Browser draft preparation needs human review in remote Chrome. Final submit was not clicked."
         );
         mergeBrowserActionPayload(action.id, {
           qaHold: {
@@ -2523,7 +2580,11 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       }
       const postStatus = await postPrepareDraftStatus({
         thread,
-        heading: state === "apply_page_loaded" ? `✅ Upwork application page prepared for final manual submit for browser action #${action.id}.` : `⚠️ Draft preparation paused for browser action #${action.id}.`,
+        heading: qaRecheckOnly
+          ? `🔎 Remote Chrome QA recheck complete for browser action #${action.id}.`
+          : state === "apply_page_loaded"
+            ? `✅ Upwork application page prepared for final manual submit for browser action #${action.id}.`
+            : `⚠️ Draft preparation paused for browser action #${action.id}.`,
         diagnostics,
         nextCommand: state === "apply_page_loaded" ? "status" : `retry ${action.id}`,
       });
@@ -2687,6 +2748,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           questionAnswers,
           proofRecommendations: extractProofRecommendations(scored.applicationDraft),
           autoPrepareNote: autoPrepareDecision.note,
+          outcomeMemory: outcomeMemoryForSlack(scored),
         });
         packetPosted = threadPostStatus === "posted";
         if (packetPosted) {

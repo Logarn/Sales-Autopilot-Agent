@@ -1,6 +1,5 @@
-import { buildProposalContextPack } from "./skills/profileContextSkill";
-import { selectPortfolioAssetsForJob } from "./skills/portfolioSelectionSkill";
-import { buildProofAvailabilityReport, formatProofAvailabilityLines } from "./proofAvailability";
+import { selectPortfolioAssetsForJob, type PortfolioSelectionResult } from "./skills/portfolioSelectionSkill";
+import { buildProofAvailabilityReport, formatProofAvailabilityLines, type ProofAvailabilityItem } from "./proofAvailability";
 import { formatConnectsStrategy } from "./connectsStrategy";
 import { qaProposalPlatformGrounding } from "./proposalQa";
 import { decideLeadHandling } from "./leadDecision";
@@ -25,6 +24,7 @@ export interface SlackPacketV3Context {
   sourceLabel?: string;
   postedAtText?: string;
   commandHints?: string[];
+  outcomeMemory?: string;
   platform?: string;
   businessType?: string;
   ecommerceVertical?: string;
@@ -430,6 +430,105 @@ function firstUsefulLine(values: Array<string | null | undefined>, fallback: str
   return compactSentence(value ?? fallback, limit);
 }
 
+function normalizeProofName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function proofNamesMatch(left: string, right: string): boolean {
+  const normalizedLeft = normalizeProofName(left);
+  const normalizedRight = normalizeProofName(right);
+  return Boolean(
+    normalizedLeft &&
+      normalizedRight &&
+      (normalizedLeft === normalizedRight || normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft)),
+  );
+}
+
+function proofSignalName(value: string): string {
+  return value.split(":")[0]?.trim() || value.trim();
+}
+
+function proofSignalDetail(value: string): string | null {
+  const [, ...detailParts] = value.split(":");
+  const detail = detailParts.join(":").trim();
+  return detail || null;
+}
+
+function compactProofText(value: string, limit = 74): string {
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  if (cleaned.length <= limit) return cleaned.replace(/[.。]+$/g, "");
+  const sliced = cleaned.slice(0, limit);
+  const wordBoundary = sliced.lastIndexOf(" ");
+  return `${(wordBoundary > 24 ? sliced.slice(0, wordBoundary) : sliced).replace(/[.。]+$/g, "")}...`;
+}
+
+function safePortfolioSelection(job: ScoredJob): PortfolioSelectionResult | null {
+  try {
+    return selectPortfolioAssetsForJob(job);
+  } catch {
+    return null;
+  }
+}
+
+function compactProofAvailabilityStatus(item: ProofAvailabilityItem, formattedLine?: string): string {
+  const formattedStatus = formattedLine?.match(/Status:\s*([^;]+)/)?.[1] ?? item.statusText;
+  if (item.status === "available_uploadable") return "file available/uploadable";
+  if (item.status === "available_manual_review") return "file available; review before upload";
+  if (item.status === "missing_manual_upload") return "file missing locally; manual upload needed";
+  if (item.status === "mention_only") return "mention-only; do not attach";
+  return formattedStatus.toLowerCase();
+}
+
+function conciseProofLine(job: ScoredJob, context: SlackPacketV3Context): string {
+  const draft = job.applicationDraft;
+  const intelligence = context.jobIntelligence ?? draft?.jobIntelligence;
+  const portfolioSelection = safePortfolioSelection(job);
+  const proofAvailability = portfolioSelection ? buildProofAvailabilityReport(portfolioSelection) : [];
+  const proofAvailabilityLines = proofAvailability.length > 0
+    ? formatProofAvailabilityLines(proofAvailability, { limit: proofAvailability.length })
+    : [];
+  const proofSignals = [
+    ...(context.proofRecommendations ?? []).map((text) => ({ text, source: "selected_portfolio" as const })),
+    ...(draft?.selectedPortfolioItems ?? []).map((item) => ({
+      text: `${item.name}: ${item.result || item.description || "good portfolio match"}`,
+      source: "selected_portfolio" as const,
+    })),
+    ...(intelligence?.proofRecommendations ?? []).map((text) => ({ text, source: "lead_analysis" as const })),
+  ].filter((item) => item.text.trim());
+
+  const proofFromSignal = proofSignals
+    .map((signal) => ({
+      signal,
+      availabilityIndex: proofAvailability.findIndex((item) => proofNamesMatch(item.name, proofSignalName(signal.text))),
+    }))
+    .find((item) => item.availabilityIndex >= 0);
+  const fallbackAvailabilityIndex = proofSignals.length === 0 && proofAvailability.length > 0 ? 0 : -1;
+  const availabilityIndex = proofFromSignal?.availabilityIndex ?? fallbackAvailabilityIndex;
+  const availabilityItem = availabilityIndex >= 0 ? proofAvailability[availabilityIndex] : null;
+  const selectedProof = portfolioSelection?.selectedProof.find((proof) =>
+    availabilityItem
+      ? proofNamesMatch(proof.name, availabilityItem.name)
+      : proofSignals.some((signal) => proofNamesMatch(proof.name, proofSignalName(signal.text))),
+  );
+  const signal = proofFromSignal?.signal ?? proofSignals[0];
+  const proofName = availabilityItem?.name ?? selectedProof?.name ?? (signal ? proofSignalName(signal.text) : "");
+
+  if (!proofName) {
+    return "No specific proof picked yet";
+  }
+
+  const signalDetail = signal ? proofSignalDetail(signal.text) : null;
+  const reason = signal?.source === "selected_portfolio" && signalDetail
+    ? `selected portfolio: ${compactProofText(signalDetail, 74)}`
+    : signal?.source === "lead_analysis"
+      ? "lead analysis recommends it"
+      : selectedProof?.headline
+        ? `portfolio match: ${compactProofText(selectedProof.headline, 74)}`
+        : "portfolio match";
+  const availability = availabilityItem ? compactProofAvailabilityStatus(availabilityItem, proofAvailabilityLines[availabilityIndex]) : null;
+  return `${proofName} — ${reason}${availability ? `; ${availability}` : ""}`;
+}
+
 function concisePlatform(job: ScoredJob, context: SlackPacketV3Context): string {
   const intelligence = context.jobIntelligence ?? job.applicationDraft?.jobIntelligence;
   return compactSentence(intelligence?.primaryPlatform ?? context.platform ?? job.skills?.[0] ?? "unknown", 42);
@@ -590,8 +689,10 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
       `• *Platform:* ${concisePlatform(job, context)}`,
       `• *Budget:* ${job.budget || "unknown"}`,
       `• *Connects:* ${connectsLabel}`,
+      `• *Proof:* ${conciseProofLine(job, context)}`,
+      context.outcomeMemory ? `• *Pattern:* ${compactSentence(context.outcomeMemory, 180)}` : null,
       `• *Risk:* ${conciseRisk(job, context)}`,
-    ].join("\n"),
+    ].filter((line): line is string => Boolean(line)).join("\n"),
     "",
     `*Next:* ${conciseNextAction(leadDecision, postingDecision, context, autoPrepareProceeding)}`,
     "",
