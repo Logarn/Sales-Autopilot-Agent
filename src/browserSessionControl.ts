@@ -28,8 +28,12 @@ export interface BrowserSessionCdpCheckResult {
 export interface BrowserProfileProcessDiagnostics {
   userDataDir: string;
   remoteDebuggingPort: number;
+  matchingProcessCount: number;
+  matchingPids: number[];
   chromeProcessCount: number;
   chromePids: number[];
+  ignoredChromeChildProcessCount: number;
+  ignoredChromeChildPids: number[];
   duplicateProfileConflict: boolean;
 }
 
@@ -137,6 +141,29 @@ function readProcessList(): string {
   return "";
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function commandHasArg(command: string, name: string, value: string | number): boolean {
+  const escapedName = escapeRegExp(name);
+  const escapedValue = escapeRegExp(String(value));
+  return new RegExp(`(?:^|\\s)${escapedName}(?:=${escapedValue}|\\s+${escapedValue})(?=\\s|$)`).test(command);
+}
+
+function commandReferencesUserDataDir(command: string, userDataDir: string): boolean {
+  if (commandHasArg(command, "--user-data-dir", userDataDir)) return true;
+  return commandHasArg(command, "--user-data-dir", path.resolve(userDataDir));
+}
+
+function isChromeLikeCommand(command: string): boolean {
+  return /(?:^|[/\s])(?:google-chrome(?:-stable)?|chromium(?:-browser)?|chrome|Google Chrome|(?:chrome_)?crashpad_handler)(?:\s|$)/i.test(command);
+}
+
+function isChromeChildOrHelperProcess(command: string): boolean {
+  return /(?:^|\s)--type=[^\s]+/.test(command) || /(?:^|[/\s])(?:chrome_)?crashpad_handler(?:\s|$)/i.test(command);
+}
+
 export function getChromeProfileProcessDiagnostics(input: {
   userDataDir: string;
   cdpUrl: string;
@@ -145,7 +172,7 @@ export function getChromeProfileProcessDiagnostics(input: {
   const userDataDir = path.resolve(input.userDataDir);
   const remoteDebuggingPort = parseRemoteDebuggingPort(input.cdpUrl);
   const processList = input.processListText ?? readProcessList();
-  const chromePids = processList
+  const matchingProcesses = processList
     .split(/\r?\n/)
     .map((line) => {
       const match = line.trim().match(/^(\d+)\s+(.+)$/);
@@ -153,17 +180,27 @@ export function getChromeProfileProcessDiagnostics(input: {
       const pid = Number.parseInt(match[1], 10);
       const command = match[2] ?? "";
       if (!Number.isFinite(pid)) return null;
-      if (!command.includes(`--remote-debugging-port=${remoteDebuggingPort}`)) return null;
-      if (!command.includes(`--user-data-dir=${userDataDir}`)) return null;
-      return pid;
+      if (!isChromeLikeCommand(command)) return null;
+      if (!commandHasArg(command, "--remote-debugging-port", remoteDebuggingPort)) return null;
+      if (!commandReferencesUserDataDir(command, userDataDir)) return null;
+      return { pid, command };
     })
-    .filter((pid): pid is number => pid !== null);
+    .filter((process): process is { pid: number; command: string } => process !== null);
+  const browserParentProcesses = matchingProcesses.filter((process) => !isChromeChildOrHelperProcess(process.command));
+  const ignoredChromeChildProcesses = matchingProcesses.filter((process) => isChromeChildOrHelperProcess(process.command));
+  const chromePids = browserParentProcesses.map((process) => process.pid);
+  const matchingPids = matchingProcesses.map((process) => process.pid);
+  const ignoredChromeChildPids = ignoredChromeChildProcesses.map((process) => process.pid);
 
   return {
     userDataDir,
     remoteDebuggingPort,
+    matchingProcessCount: matchingProcesses.length,
+    matchingPids,
     chromeProcessCount: chromePids.length,
     chromePids,
+    ignoredChromeChildProcessCount: ignoredChromeChildProcesses.length,
+    ignoredChromeChildPids,
     duplicateProfileConflict: chromePids.length > 1,
   };
 }

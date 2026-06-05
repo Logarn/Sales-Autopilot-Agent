@@ -197,6 +197,8 @@ interface VisibleCdpSessionDeepInspection {
   inspection: BrowserSessionInspection;
   pageCount: number;
   chromeProcessCount: number;
+  matchingChromeProcessCount: number;
+  ignoredChromeChildProcessCount: number;
   duplicateProfileConflict: boolean;
   openUpworkTabCount: number;
   selectedFeedTabUrl: string | null;
@@ -235,6 +237,8 @@ async function inspectVisibleCdpSession(): Promise<VisibleCdpSessionDeepInspecti
       inspection,
       pageCount: pages.length,
       chromeProcessCount: processDiagnostics.chromeProcessCount,
+      matchingChromeProcessCount: processDiagnostics.matchingProcessCount,
+      ignoredChromeChildProcessCount: processDiagnostics.ignoredChromeChildProcessCount,
       duplicateProfileConflict: processDiagnostics.duplicateProfileConflict,
       openUpworkTabCount: tabDiagnostics.openUpworkTabCount,
       selectedFeedTabUrl: tabDiagnostics.selectedFeedTabUrl,
@@ -279,7 +283,7 @@ async function main(): Promise<void> {
     try {
       const deep = await inspectVisibleCdpSession();
       console.log(`Deep check: ok cdpReachable=true connectOverCDP=true defaultContext=true pageCount=${deep.pageCount} sessionState=${deep.inspection.sessionState} blocked=${deep.inspection.blocked}`);
-      console.log(`Chrome shared-profile processes: count=${deep.chromeProcessCount} duplicateProfileConflict=${deep.duplicateProfileConflict}`);
+      console.log(`Chrome shared-profile processes: count=${deep.chromeProcessCount} matched=${deep.matchingChromeProcessCount} ignoredChildren=${deep.ignoredChromeChildProcessCount} duplicateProfileConflict=${deep.duplicateProfileConflict}`);
       console.log(`Upwork tabs: count=${deep.openUpworkTabCount} feed=${deep.selectedFeedTabUrl ?? "n/a"} work=${deep.selectedWorkTabUrl ?? "n/a"} staleWorkTabs=${deep.staleWorkTabCount} ignoredTabs=${deep.ignoredTabCount}`);
       console.log(`Discovery source: active=${deep.activeDiscoverySourceLabel ?? "n/a"} unknownSourceQueuedCaptures=${deep.unknownSourceQueuedCaptureCount}`);
       console.log(`Selected page: url=${deep.selectedPageUrl || "n/a"} title=${deep.selectedPageTitle || "n/a"}`);
