@@ -6,7 +6,7 @@ function createScoredJob(overrides: Partial<ScoredJob> = {}): ScoredJob {
     id: "manual:upwork-1234567890",
     title: "Email Marketing Specialist Needed",
     url: "https://www.upwork.com/jobs/~1234567890",
-    description: "Klaviyo email role for an ecommerce brand. Need retention, email flows, and campaign support.",
+    description: "Klaviyo email role for a beauty skincare ecommerce brand. Need retention, email flows, and campaign support.",
     postedAt: "2026-05-11T09:00:00.000Z",
     budget: "$12-$35/hr",
     clientCountry: "United States",
@@ -120,6 +120,7 @@ function runTests(): void {
     applicationQuestions: ["How would you improve Klaviyo revenue mix?"],
     questionAnswers: ["I would start with flow gaps and segmentation quality."],
     jobIntelligence: intelligence,
+    outcomeMemory: "Klaviyo beauty jobs have 2 replies from 5 submitted; Truly Beauty is the strongest proof so far.",
   });
   const text = packet.text;
 
@@ -136,6 +137,10 @@ function runTests(): void {
   assertIncludes(text, "• *Connects:* 4", "connects summary");
   assertIncludes(text, "• *Budget:* $12-$35/hr", "budget summary");
   assertIncludes(text, "• *Risk:* Client has weak spend history and budget looks low", "single risk");
+  assertIncludes(text, "• *Proof:* Truly Beauty case study", "proof concierge should name the proof");
+  assertIncludes(text, "lead analysis recommends it", "proof concierge should explain recommendation source");
+  assertIncludes(text, "file missing locally; manual upload needed", "proof concierge should summarize local availability");
+  assertIncludes(text, "• *Pattern:* Klaviyo beauty jobs have 2 replies from 5 submitted", "outcome memory should surface in lead packet");
   assertIncludes(text, "*Next:* I’m preparing this now.", "autonomous next action");
   assertIncludes(text, job.url, "job url");
 
@@ -150,7 +155,6 @@ function runTests(): void {
     "Screening answers",
     "How would you improve",
     "Suggested proof",
-    "Truly Beauty",
     "figma.com",
     "profile/attachments",
     "Client quality signals",
@@ -255,6 +259,36 @@ function runTests(): void {
     captureStatus: "packet_sent",
   }).text;
   assertNotIncludes(ineligibleText, "Platform skipped", "no per-job skip Slack packet");
+
+  const mentionOnlyIntelligence: JobIntelligence = {
+    ...intelligence,
+    businessType: "DTC supplements",
+    ecommerceVertical: "supplements",
+    clientGoal: "Improve supplement lifecycle revenue.",
+    proofRecommendations: ["Dr. Rachael Institute"],
+  };
+  const mentionOnlyText = buildV3CapturePacket(
+    createScoredJob({
+      id: "manual:upwork-health",
+      description: "Klaviyo email and SMS lifecycle support for a health supplement brand.",
+      skills: ["Klaviyo", "SMS", "Supplements"],
+      applicationDraft: {
+        ...job.applicationDraft!,
+        jobId: "manual:upwork-health",
+        selectedPortfolioItems: [],
+      },
+    }),
+    {
+      upworkUrl: job.url,
+      captureStatus: "packet_sent",
+      autoPrepareNote: "Strong fit. I’m preparing the Upwork draft now. Final submit remains manual.",
+      jobIntelligence: mentionOnlyIntelligence,
+    },
+  ).text;
+  assertIncludes(mentionOnlyText, "• *Proof:* Dr. Rachael Institute", "mention-only proof should be selected by name");
+  assertIncludes(mentionOnlyText, "lead analysis recommends it", "mention-only proof should explain why it was chosen");
+  assertIncludes(mentionOnlyText, "mention-only; do not attach", "mention-only proof should preserve attachment safety");
+  assertNotIncludes(mentionOnlyText, "profile/attachments", "compact proof concierge should not expose local paths");
 
   console.log("slack lead message V3 tests passed");
 }

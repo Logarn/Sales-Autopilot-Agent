@@ -65,7 +65,7 @@ async function runTests(): Promise<void> {
     postV3CapturePacketToThread: (job: any, thread: { channelId: string; messageTs: string; threadTs: string }, context: any, postThreadMessage?: (params: any) => Promise<boolean>) => Promise<"posted" | "skipped" | "failed">;
     selectPageForBrowserAction: (context: { pages?: () => Array<{ url: () => string }>; newPage: () => Promise<any> }, targetUrl: string, options?: { protectedApplyUrls?: string[] }) => Promise<{ page: any; reusedExistingPage: boolean; reason: string }>;
     settlePageAndDetect: (page: any, action: any) => Promise<{ snapshot: any; bodyText: string; detection: { state: string; source: string; matchedText?: string }; samples: Array<any> }>;
-    verifyApplyPreparationOnPage: (input: { page: any; plan: any; fields: { attemptedFields: string[]; skippedFields: string[]; manualFields: string[] }; bodyText: string }) => Promise<Array<{ field: string; status: string; detail: string }>>;
+    verifyApplyPreparationOnPage: (input: { page: any; plan: any; fields: { attemptedFields: string[]; skippedFields: string[]; manualFields: string[] }; bodyText: string; mode?: "after_fill" | "recheck_only" }) => Promise<Array<{ field: string; status: string; detail: string }>>;
   };
   const { buildPrepareDraftQueueReply } = require("./slackSocket") as {
     buildPrepareDraftQueueReply: (input: {
@@ -857,6 +857,17 @@ async function runTests(): Promise<void> {
     assert(emptyCoverVerification.find((item) => item.field === "boostConnects")?.detail === "No boost set.", "No boost should be reported honestly when none is set.");
     assert(emptyCoverVerification.find((item) => item.field === "profileHighlights")?.status === "unavailable_on_page", "Add portfolio/certificate UI should not be reported as selected profile highlights.");
 
+    const recheckOnlyVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({ visibleText: "Required for proposal: 8 Connects\nSend for 8 Connects", inputValues: ["", "$35"], checkedLabels: [], fileNames: [] }),
+      plan: verificationPlan,
+      fields: { attemptedFields: [], skippedFields: [], manualFields: ["finalSubmit"] },
+      bodyText: "Required for proposal: 8 Connects\nSend for 8 Connects",
+      mode: "recheck_only",
+    });
+    const recheckCoverLetter = recheckOnlyVerification.find((item) => item.field === "coverLetter");
+    assert(recheckCoverLetter?.status === "attempted_unverified", "Read-only recheck should still flag a missing cover letter.");
+    assert(Boolean(recheckCoverLetter?.detail.includes("Observed cover letter field")), "Read-only recheck should describe observed state instead of claiming a fill attempt.");
+
     const unsafeBoostVerification = await verifyApplyPreparationOnPage({
       page: fakeApplyPage({ visibleText: "Required for proposal: 8 Connects\nBoost: 80 Connects", inputValues: [verificationPlan.coverLetter, "80"] }),
       plan: { ...verificationPlan, connects: { ...verificationPlan.connects, boost: 80, total: 88 } },
@@ -993,6 +1004,78 @@ async function runTests(): Promise<void> {
     for (const noisy of ["manual review", "platformEligibility", "lead decision", "packet", "source context", "action id"]) {
       assert(!prepCompletionText.toLowerCase().includes(noisy.toLowerCase()), `Prep completion alert should hide ${noisy}`);
     }
+
+    let qaRecheckText = "";
+    const qaRecheckPost = await postPrepareDraftStatus(
+      {
+        thread: { channelId: "C123", messageTs: "999.222", threadTs: "999.222" },
+        heading: "Remote Chrome QA recheck complete for browser action #709.",
+        diagnostics: {
+          actionId: 709,
+          jobId: beautyJob.id,
+          jobTitle: beautyJob.title,
+          actionType: "prepare_application_review",
+          sourceUrl: beautyJob.url,
+          applyUrl: `${beautyJob.url}/apply`,
+          intendedAction: "Read-only remote Chrome QA recheck; do not fill and do not submit.",
+          state: "field_preparation_incomplete",
+          stopBeforeSubmit: true,
+          validationIssues: [],
+          coverLetterPresent: true,
+          coverLetterLength: 220,
+          coverLetterPreview: "Hi there - I can help turn these Klaviyo campaign emails into a tighter retention sequence.",
+          screeningAnswersCount: 0,
+          screeningAnswers: [],
+          rate: "$72/hr",
+          requiredConnects: 4,
+          boostConnects: 0,
+          totalConnects: 4,
+          connectsDecision: "safe_apply",
+          connectsExpectedValue: 88,
+          selectedAttachments: [],
+          manualReviewAssets: [],
+          mentionOnlyProof: [],
+          proofAvailability: [],
+          figmaRecommendations: [],
+          videoRecommendations: [],
+          manualReviewWarnings: [],
+          missingLocalAssets: [],
+          skippedAttachments: [],
+          selectedHighlights: [],
+          warnings: [],
+          attemptedFields: [],
+          skippedFields: [],
+          manualFields: ["finalSubmit"],
+          fieldVerification: [
+            { field: "targetTab", status: "verified", detail: "Apply tab matches target job URL." },
+            { field: "coverLetter", status: "attempted_unverified", detail: "Observed cover letter field does not contain the intended text." },
+            { field: "requiredConnects", status: "verified", detail: "Required Connects verified as 4." },
+            { field: "boostConnects", status: "skipped_by_strategy", detail: "No boost set." },
+            { field: "attachments", status: "skipped_by_strategy", detail: "No local files were selected for upload." },
+            { field: "profileHighlights", status: "skipped_by_strategy", detail: "No profile highlights selected by strategy." },
+            { field: "finalSubmit", status: "skipped_by_strategy", detail: "Final submit/send button was intentionally not clicked." },
+          ],
+          verifiedFields: ["targetTab", "requiredConnects"],
+          unverifiedFields: ["coverLetter"],
+          unavailableFields: [],
+          missingFileFields: [],
+          blockedByUiFields: [],
+          skippedByStrategyFields: ["boostConnects", "attachments", "profileHighlights", "finalSubmit"],
+        },
+      },
+      {
+        postThreadMessage: async (payload) => {
+          qaRecheckText = String(payload.text ?? "");
+          return true;
+        },
+      },
+    );
+    assert(qaRecheckPost === "posted", "QA recheck should post a Slack thread reply");
+    assert(qaRecheckText.includes("Remote Chrome QA recheck"), "QA recheck alert should use recheck-specific wording");
+    assert(qaRecheckText.includes("reported only observed field state"), "QA recheck alert should say it reports observed state");
+    assert(qaRecheckText.includes("I did not edit fields"), "QA recheck alert should say it did not mutate the page");
+    assert(qaRecheckText.includes("• *Cover letter:* not observed on page"), "QA recheck alert should avoid claiming a fill attempt");
+    assert(qaRecheckText.includes("Final submit"), "QA recheck alert should preserve final-submit boundary");
 
     const blockedPrepDiagnostics = {
       actionId: 708,

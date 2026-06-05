@@ -519,33 +519,134 @@ export async function sendHealthAlert(message: string, severity: "warning" | "cr
   });
 }
 
+function formatCount(value: number): string {
+  return String(Math.max(0, value));
+}
+
+function formatMaybeNumber(value: number | null): string {
+  return value === null ? "not recorded" : String(value);
+}
+
+function formatAutomationLine(summary: DailySummary): string {
+  const automation = summary.automation;
+  if (!automation) {
+    return "*Discovery telemetry:* none recorded today.";
+  }
+
+  const scanParts: string[] = [];
+  if (automation.jobsFound !== null || automation.jobsCaptured !== null || automation.jobsQueued !== null) {
+    scanParts.push(
+      `found ${formatMaybeNumber(automation.jobsFound)}`,
+      `captured ${formatMaybeNumber(automation.jobsCaptured)}`,
+      `queued ${formatMaybeNumber(automation.jobsQueued)}`,
+    );
+  }
+
+  const suppressionParts: string[] = [];
+  if (automation.duplicatesSkipped !== null) suppressionParts.push(`${automation.duplicatesSkipped} duplicate`);
+  if (automation.alreadyHandledSkipped !== null) suppressionParts.push(`${automation.alreadyHandledSkipped} already handled`);
+  if (automation.invalidSkipped !== null) suppressionParts.push(`${automation.invalidSkipped} invalid`);
+
+  const lines = [
+    `*Discovery telemetry:* ${scanParts.length ? scanParts.join(" / ") : "scan counts not recorded"}`,
+    `*Duplicates/suppressed:* ${suppressionParts.length ? suppressionParts.join(" / ") : "none recorded"}`,
+  ];
+  if (automation.slackPostFailures !== null) {
+    lines.push(`*Slack post failures:* ${automation.slackPostFailures}`);
+  }
+  if (automation.stoppedReason) {
+    lines.push(`*Last stop reason:* ${automation.stoppedReason}`);
+  }
+  return lines.join("\n");
+}
+
+function formatBrowserIssueLine(issue: DailySummary["recentBrowserIssues"][number]): string {
+  const error = issue.lastError ? ` - ${truncateText(issue.lastError, 160)}` : "";
+  return `• #${issue.id} ${issue.actionType} ${issue.status}${error}`;
+}
+
+function formatBrowserLine(summary: DailySummary): string {
+  const headline = `*Browser handoff:* ${formatCount(summary.browserBlockers)} blocker(s); ${formatCount(summary.browserNonBlockingFailures)} nonblocking failure(s) today.`;
+  if (summary.recentBrowserIssues.length === 0) {
+    return `${headline}\n• No paused or failed browser actions are recorded.`;
+  }
+  return `${headline}\n${summary.recentBrowserIssues.map(formatBrowserIssueLine).join("\n")}`;
+}
+
+function formatMorningQueueLine(summary: DailySummary): string {
+  if (summary.morningQueue.length === 0) {
+    return "*Morning queue:* no high-signal leads waiting.";
+  }
+  const items = summary.morningQueue.map((item, index) =>
+    `${index + 1}. ${truncateText(item.title, 90)} - ${item.score}/100, ${item.status}`
+  );
+  return [
+    "*Morning queue:* start here.",
+    ...items,
+  ].join("\n");
+}
+
+type DailyOutcomeLearning = NonNullable<DailySummary["outcomeLearning"]>;
+type DailyOutcomeSegment = DailyOutcomeLearning["bySourceQuery"][number];
+
+function segmentHasOutcomeData(segment: DailyOutcomeSegment): boolean {
+  return segment.submitted > 0 || segment.replied > 0 || segment.interviews > 0 || segment.hired > 0 || segment.lost > 0;
+}
+
+function pickOutcomeSegment(segments: DailyOutcomeLearning["bySourceQuery"]): DailyOutcomeSegment | null {
+  return segments.find(segmentHasOutcomeData) ?? segments[0] ?? null;
+}
+
+function formatOutcomeSegment(label: string, segment: DailyOutcomeSegment | null): string {
+  if (!segment) {
+    return `• ${label}: none`;
+  }
+  return `• ${label}: ${segment.name} - ${segment.replied} replies, ${segment.interviews} interviews, ${segment.hired} hires, ${segment.lost} losses from ${segment.submitted} submitted`;
+}
+
+function formatOutcomeLearningLine(summary: DailySummary): string {
+  const learning = summary.outcomeLearning;
+  if (!learning) {
+    return "*Outcome memory:* none recorded yet.";
+  }
+  return [
+    `*Outcome memory:* ${learning.totalTracked} tracked application(s).`,
+    formatOutcomeSegment("Source", pickOutcomeSegment(learning.bySourceQuery)),
+    formatOutcomeSegment("Budget", pickOutcomeSegment(learning.byBudgetBand)),
+    formatOutcomeSegment("Client spend", pickOutcomeSegment(learning.byClientSpendBand)),
+  ].join("\n");
+}
+
 export async function sendDailySummary(summary: DailySummary): Promise<void> {
-  const now = new Date();
+  const now = new Date(summary.generatedAt);
   const dayLabel = new Intl.DateTimeFormat("en-KE", {
     timeZone: TIMEZONE,
     month: "long",
     day: "numeric",
     year: "numeric",
-  }).format(now);
+  }).format(Number.isNaN(now.getTime()) ? new Date() : now);
 
   await sendSlackMessage({
-    text: `📊 Daily Upwork Job Summary — ${dayLabel}`,
+    text: `📊 Daily Upwork Operator Handoff — ${dayLabel}`,
     blocks: [
       {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `📊 *Daily Upwork Job Summary — ${dayLabel}*`,
+          text: `📊 *Daily Upwork Operator Handoff — ${dayLabel}*`,
         },
       },
       {
         type: "section",
-        fields: [
-          { type: "mrkdwn", text: `*🔥 High Matches:*\n${summary.high}` },
-          { type: "mrkdwn", text: `*⚡ Medium Matches:*\n${summary.medium}` },
-          { type: "mrkdwn", text: `*🔹 Low Matches:*\n${summary.low}` },
-          { type: "mrkdwn", text: `*🚫 Filtered Out:*\n${summary.filteredOut}` },
-        ],
+        text: {
+          type: "mrkdwn",
+          text: [
+            `*Scanned/tracked:* ${summary.trackedJobs} tracked today`,
+            `*Real candidates:* ${summary.realCandidates} (${summary.high} high / ${summary.medium} medium / ${summary.low} low)`,
+            `*Slack-worthy leads:* ${summary.slackWorthyLeads}`,
+            `*Filtered/suppressed by scoring:* ${summary.filteredOut}`,
+          ].join("\n"),
+        },
       },
       {
         type: "section",
@@ -556,6 +657,41 @@ export async function sendDailySummary(summary: DailySummary): Promise<void> {
               ? `"${summary.topJobTitle}" — Score: ${summary.topJobScore ?? 0}`
               : "No qualifying jobs tracked today."
           }`,
+        },
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*Prepared / QA waiting:* ${summary.preparedDrafts} prepared draft(s); ${summary.qaWaiting} waiting for QA.`,
+        },
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: slackText(formatMorningQueueLine(summary)),
+        },
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: slackText(formatAutomationLine(summary)),
+        },
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: slackText(formatBrowserLine(summary)),
+        },
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: slackText(formatOutcomeLearningLine(summary)),
         },
       },
     ],

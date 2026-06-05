@@ -506,6 +506,9 @@ export interface BrowserActionPayload {
   notes?: string;
   applicationId?: string;
   applyPlan?: BrowserApplyFillPlan;
+  mode?: "prepare" | "qa_recheck";
+  readOnly?: boolean;
+  sourceActionId?: number;
   [key: string]: unknown;
 }
 
@@ -551,11 +554,73 @@ export interface BrowserActionEnqueueResult {
   duplicateOf?: number;
 }
 
+export interface OutcomeLearningSegment {
+  name: string;
+  total: number;
+  submitted: number;
+  replied: number;
+  interviews: number;
+  hired: number;
+  lost: number;
+  replyRate: number;
+  hireRate: number;
+}
+
+export interface OutcomeLearningSummary {
+  generatedAt: string;
+  totalTracked: number;
+  bySourceQuery: OutcomeLearningSegment[];
+  byBudgetBand: OutcomeLearningSegment[];
+  byClientSpendBand: OutcomeLearningSegment[];
+}
+
+export interface DailyBrowserIssue {
+  id: number;
+  jobId: string;
+  actionType: BrowserActionType;
+  status: Extract<BrowserActionStatus, "paused" | "failed">;
+  lastError: string | null;
+  updatedAt: string;
+}
+
+export interface DailyAutomationSnapshot {
+  updatedAt: string;
+  jobsFound: number | null;
+  jobsQueued: number | null;
+  jobsCaptured: number | null;
+  duplicatesSkipped: number | null;
+  alreadyHandledSkipped: number | null;
+  invalidSkipped: number | null;
+  slackPostFailures: number | null;
+  stoppedReason: string | null;
+}
+
+export interface DailyQueueItem {
+  jobId: string;
+  title: string;
+  score: number;
+  status: ApplicationStatus | "found";
+  url: string;
+}
+
 export interface DailySummary {
+  generatedAt: string;
+  dayKey: string;
+  trackedJobs: number;
+  realCandidates: number;
+  slackWorthyLeads: number;
   high: number;
   medium: number;
   low: number;
   filteredOut: number;
   topJobTitle: string | null;
   topJobScore: number | null;
+  preparedDrafts: number;
+  qaWaiting: number;
+  browserBlockers: number;
+  browserNonBlockingFailures: number;
+  recentBrowserIssues: DailyBrowserIssue[];
+  morningQueue: DailyQueueItem[];
+  automation: DailyAutomationSnapshot | null;
+  outcomeLearning: OutcomeLearningSummary | null;
 }
