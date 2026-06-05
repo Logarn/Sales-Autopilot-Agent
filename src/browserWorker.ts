@@ -49,6 +49,7 @@ import {
   ScoredJob,
 } from "./types";
 import { extractConnectsFromVisibleText } from "./connectsExtraction";
+import { chooseVisibleBoost, extractVisibleBoostBids } from "./connectsStrategy";
 import { guardedClick } from "./browserSafetyGuard";
 import { buildV3CapturePacket, getSlackLeadPostingDecision, SlackPacketV3Context } from "./slackPacketV3";
 import { evaluatePlatformEligibility } from "./platformEligibility";
@@ -74,6 +75,7 @@ import {
 } from "./browserSessionControl";
 import { isUpworkFindWorkFeedUrl, isUpworkWorkTabUrl } from "./browserSessionInspector";
 import { listProtectedQaApplyUrls } from "./browserQaHold";
+import { proofAssetExists, resolveProofAssetPath } from "./proofAssets";
 
 type DetectedBrowserState =
   | "dry_run"
@@ -1545,7 +1547,14 @@ function verifyApplyPageConnects(plan: BrowserApplyFillPlan, bodyText: string): 
 
   removeConnectsVerificationIssues(issues);
   const requestedBoost = plan.connects.boost ?? 0;
-  const plannedBoost = Math.min(Math.max(0, requestedBoost), 50);
+  const visibleBoostDecision = chooseVisibleBoost({
+    requiredConnects: extracted.requiredConnects,
+    expectedValueScore: plan.connectsStrategy.expectedValueScore,
+    clientQualityScore: plan.connectsStrategy.decision === "safe_apply" ? 60 : 0,
+    opportunityScore: plan.connectsStrategy.decision === "safe_apply" ? 60 : 0,
+    currentBids: extractVisibleBoostBids(bodyText),
+  });
+  const plannedBoost = Math.min(Math.max(0, visibleBoostDecision.boostConnects), 50);
   if (requestedBoost > 50) {
     issues.push({
       severity: "warning",
@@ -1562,8 +1571,10 @@ function verifyApplyPageConnects(plan: BrowserApplyFillPlan, bodyText: string): 
   plan.connects.approvalRequired = requiresManualReview;
   plan.connects.notes = [
     `Required Connects verified on the apply page (${required}).`,
-    plannedBoost > 0 ? `Planned boost is conservative (${plannedBoost}).` : "No automatic boost was added.",
-  ];
+    visibleBoostDecision.reason,
+    visibleBoostDecision.skippedReason ? `Boost skipped: ${visibleBoostDecision.skippedReason}` : null,
+    requestedBoost > 0 && plannedBoost !== requestedBoost ? `Initial boost request ${requestedBoost} was replaced by visible-table strategy.` : null,
+  ].filter((line): line is string => Boolean(line));
   plan.connectsStrategy.requiredConnects = required;
   plan.connectsStrategy.suggestedBoostConnects = plannedBoost;
   plan.connectsStrategy.totalConnects = total;
@@ -1756,7 +1767,7 @@ export async function verifyApplyPreparationOnPage(input: {
     results.push(verification("boostConnects", "skipped_by_strategy", "No boost set."));
   } else if (plannedBoost > 50) {
     results.push(verification("boostConnects", "blocked_by_upwork_ui", `Planned boost ${plannedBoost} exceeds the hard cap 50; boost must not be set.`));
-  } else if (textCollectionContains(visibleAndValues, String(plannedBoost))) {
+  } else if (textCollectionContains(snapshot.inputValues, String(plannedBoost))) {
     results.push(verification("boostConnects", "verified", `Boost Connects verified as ${plannedBoost}.`, { actual: String(plannedBoost) }));
   } else if (fields.skippedFields.includes("connectsBoost")) {
     results.push(verification("boostConnects", "blocked_by_upwork_ui", "Boost field was not fillable.", { expected: String(plannedBoost) }));
@@ -1767,7 +1778,7 @@ export async function verifyApplyPreparationOnPage(input: {
   if (plan.attachments.length === 0) {
     results.push(verification("attachments", "skipped_by_strategy", "No local files were selected for upload."));
   } else {
-    const missing = plan.attachments.filter((attachment) => !fs.existsSync(path.resolve(process.cwd(), attachment.filePath)));
+    const missing = plan.attachments.filter((attachment) => !proofAssetExists(attachment.filePath));
     if (missing.length > 0) {
       results.push(verification("attachments", "missing_local_file", `Missing local files: ${missing.map((item) => item.filePath).join(", ")}`));
     } else {
@@ -1858,7 +1869,7 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
     }
   }
 
-  const attachmentFiles = plan.attachments.map((attachment) => path.resolve(process.cwd(), attachment.filePath));
+  const attachmentFiles = plan.attachments.map((attachment) => resolveProofAssetPath(attachment.filePath));
   if (await trySetFiles(page, ["input[type='file']"], attachmentFiles)) {
     attemptedFields.push("attachments");
   } else if (attachmentFiles.length > 0) {

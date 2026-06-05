@@ -1,5 +1,4 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { proofAssetExists, type ProofAssetResolverOptions } from "./proofAssets";
 import type { PortfolioAsset, PortfolioSelectionResult } from "./skills/portfolioSelectionSkill";
 
 export type ProofAvailabilityStatus =
@@ -24,12 +23,8 @@ export interface ProofAvailabilityFormatOptions {
   limit?: number;
 }
 
-function existsRelativeToCwd(relativePath: string, cwd: string): boolean {
-  return fs.existsSync(path.resolve(cwd, relativePath));
-}
-
-function autoAttachItem(asset: PortfolioAsset, cwd: string): ProofAvailabilityItem {
-  const exists = existsRelativeToCwd(asset.path, cwd);
+function autoAttachItem(asset: PortfolioAsset, options: ProofAssetResolverOptions): ProofAvailabilityItem {
+  const exists = proofAssetExists(asset.path, options);
   if (!exists) {
     return {
       name: asset.name,
@@ -55,8 +50,8 @@ function autoAttachItem(asset: PortfolioAsset, cwd: string): ProofAvailabilityIt
   };
 }
 
-function recommendOnlyItem(asset: PortfolioAsset, cwd: string): ProofAvailabilityItem {
-  const exists = existsRelativeToCwd(asset.path, cwd);
+function recommendOnlyItem(asset: PortfolioAsset, options: ProofAssetResolverOptions): ProofAvailabilityItem {
+  const exists = proofAssetExists(asset.path, options);
   return {
     name: asset.name,
     kind: asset.kind,
@@ -73,12 +68,11 @@ function recommendOnlyItem(asset: PortfolioAsset, cwd: string): ProofAvailabilit
 
 export function buildProofAvailabilityReport(
   selection: PortfolioSelectionResult,
-  options: { cwd?: string } = {},
+  options: ProofAssetResolverOptions = {},
 ): ProofAvailabilityItem[] {
-  const cwd = options.cwd ?? process.cwd();
   const items = [
-    ...selection.autoAttachAssets.map((asset) => autoAttachItem(asset, cwd)),
-    ...selection.recommendOnlyAssets.map((asset) => recommendOnlyItem(asset, cwd)),
+    ...selection.autoAttachAssets.map((asset) => autoAttachItem(asset, options)),
+    ...selection.recommendOnlyAssets.map((asset) => recommendOnlyItem(asset, options)),
     ...selection.mentionOnlyProof.map((proof): ProofAvailabilityItem => ({
       name: proof.name,
       kind: "proof",

@@ -2,7 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { CONNECTS_RULES_CONFIG_PATH } from "./config";
 import { evaluateConnectsStrategy } from "./connectsStrategy";
-import { getApplicationDraft, getApplicationJobLink, getScoredJobForSlackPreview } from "./db";
+import { getApplicationDraft, getApplicationJobLink, getScoredJobForSlackPreview, listApplicationAssets, type ApplicationAsset } from "./db";
+import { proofAssetExists } from "./proofAssets";
 import { buildProofAvailabilityReport, formatProofAvailabilityLines } from "./proofAvailability";
 import { buildProposalContextPack } from "./skills/profileContextSkill";
 import { selectPortfolioAssetsForJob } from "./skills/portfolioSelectionSkill";
@@ -200,6 +201,48 @@ function buildAutoAttachmentInstructions(paths: string[]): {
   return { attachments, skipped };
 }
 
+function attachmentsWithApplicationAssets(
+  attachments: BrowserApplyAttachmentInstruction[],
+  applicationAssets: ApplicationAsset[],
+): BrowserApplyAttachmentInstruction[] {
+  const attachableAssets = applicationAssets.filter((asset) =>
+    asset.proofType === "file" &&
+    asset.attachPolicy === "auto_attach" &&
+    Boolean(asset.relativePath)
+  );
+  if (attachableAssets.length === 0) return attachments;
+
+  const byOriginalName = new Map<string, ApplicationAsset>();
+  for (const asset of attachableAssets) {
+    byOriginalName.set(path.basename(asset.originalName).toLowerCase(), asset);
+  }
+
+  const replaced = attachments.map((attachment) => {
+    if (proofAssetExists(attachment.filePath)) return attachment;
+    const replacement = byOriginalName.get(path.basename(attachment.filePath).toLowerCase());
+    if (!replacement?.relativePath) return attachment;
+    return {
+      id: `slack:${replacement.id}`,
+      name: replacement.originalName,
+      filePath: replacement.relativePath,
+      sensitivity: "approved_external" as const,
+    };
+  });
+
+  const seen = new Set(replaced.map((attachment) => attachment.filePath));
+  for (const asset of attachableAssets) {
+    if (!asset.relativePath || seen.has(asset.relativePath)) continue;
+    replaced.push({
+      id: `slack:${asset.id}`,
+      name: asset.originalName,
+      filePath: asset.relativePath,
+      sensitivity: "approved_external",
+    });
+    seen.add(asset.relativePath);
+  }
+  return replaced;
+}
+
 function parseRate(draft: ApplicationDraft): string {
   const structuredRate = safeTrim(draft.structuredProposal?.browserFillNotes.rate);
   if (structuredRate) return structuredRate;
@@ -250,13 +293,13 @@ function buildConnectsPlan(draft: ApplicationDraft, rules: ConnectsRules, issues
 function findMissingLocalAssets(attachments: BrowserApplyAttachmentInstruction[]): string[] {
   return attachments
     .map((attachment) => attachment.filePath)
-    .filter((filePath) => !fs.existsSync(path.resolve(process.cwd(), filePath)));
+    .filter((filePath) => !proofAssetExists(filePath));
 }
 
 function buildAttachmentDiagnostics(attachments: BrowserApplyAttachmentInstruction[]): BrowserApplyAttachmentDiagnostic[] {
   return attachments.map((attachment) => ({
     ...attachment,
-    existsLocally: fs.existsSync(path.resolve(process.cwd(), attachment.filePath)),
+    existsLocally: proofAssetExists(attachment.filePath),
   }));
 }
 
@@ -407,9 +450,12 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
 
   const profileAttachments = profileContext?.selectedAttachments ?? [];
   const fallbackDraftAttachments = draft.selectedPortfolioItems.map((item) => item.filePath).filter(Boolean);
-  const { attachments, skipped } = profileAttachments.length > 0
+  const selected = profileAttachments.length > 0
     ? buildAutoAttachmentInstructions(profileAttachments)
     : buildAttachmentInstructions(draft.selectedPortfolioItems);
+  const skipped = selected.skipped;
+  const applicationAssets = listApplicationAssets(jobId);
+  const attachments = attachmentsWithApplicationAssets(selected.attachments, applicationAssets);
   for (const skippedAttachment of skipped) {
     issues.push(issue("warning", "attachment_skipped", `${skippedAttachment.name}: ${skippedAttachment.reason}`));
   }

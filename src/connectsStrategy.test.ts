@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { buildApplicationDraft } from "./agent";
-import { evaluateConnectsStrategy } from "./connectsStrategy";
+import { chooseVisibleBoost, evaluateConnectsStrategy, extractVisibleBoostBids } from "./connectsStrategy";
 import { scoreJob } from "./filter";
 import { decideLeadHandling } from "./leadDecision";
 import type { JobIntelligence, JobPosting, SourceBackedConnects } from "./types";
@@ -71,7 +71,7 @@ const strong = scoreJob(job());
 strong.applicationDraft = buildApplicationDraft(strong);
 assert.equal(strong.scoreBreakdown.connectsStrategy?.decision, "safe_apply");
 assert.equal(strong.applicationDraft.connectsStrategy?.decision, "safe_apply");
-assert(strong.applicationDraft.suggestedBoostConnects > 0, "Strong lead can recommend a conservative boost");
+assert.equal(strong.applicationDraft.suggestedBoostConnects, 0, "Initial drafts should wait for a visible Upwork boost table before setting optional boost.");
 
 const crowded = scoreJob(job({ proposalCount: 58, competitionLevel: "high" }));
 const crowdedStrategy = evaluateConnectsStrategy({
@@ -120,5 +120,46 @@ assert.equal(weak.applicationDraft.suggestedBoostConnects, 0, "Weak leads should
 const decision = decideLeadHandling(weak, klaviyoIntel);
 assert.equal(decision.decision, "skip");
 assert.equal(decision.internalSkipReason, "connects_strategy_skip");
+
+const visibleBids = extractVisibleBoostBids("Boost table\n#1 bid 60 Connects\n#2 bid 35 Connects\n#3 bid 22 Connects\n#4 bid 12 Connects");
+assert.deepEqual(visibleBids.slice(0, 4), [
+  { rank: 1, connects: 60 },
+  { rank: 2, connects: 35 },
+  { rank: 3, connects: 22 },
+  { rank: 4, connects: 12 },
+]);
+const highFitVisibleBoost = chooseVisibleBoost({
+  requiredConnects: 8,
+  expectedValueScore: 90,
+  clientQualityScore: 80,
+  opportunityScore: 82,
+  currentBids: visibleBids,
+});
+assert.equal(highFitVisibleBoost.boostConnects, 12, "High-fit boost should use the minimum visible top-4 bid.");
+assert.equal(highFitVisibleBoost.targetRank, 4);
+
+const mediumFitVisibleBoost = chooseVisibleBoost({
+  requiredConnects: 8,
+  expectedValueScore: 75,
+  clientQualityScore: 80,
+  opportunityScore: 82,
+  currentBids: visibleBids,
+});
+assert.equal(mediumFitVisibleBoost.boostConnects, 0, "Medium/uncertain jobs should default to no boost.");
+
+const tooExpensiveBoost = chooseVisibleBoost({
+  requiredConnects: 8,
+  expectedValueScore: 92,
+  clientQualityScore: 90,
+  opportunityScore: 90,
+  currentBids: [
+    { rank: 1, connects: 90 },
+    { rank: 2, connects: 80 },
+    { rank: 3, connects: 70 },
+    { rank: 4, connects: 55 },
+  ],
+});
+assert.equal(tooExpensiveBoost.boostConnects, 0, "Boost strategy must never exceed the 50 Connects hard cap.");
+assert(tooExpensiveBoost.skippedReason?.includes("above cap 50"), "Too-expensive boost should explain the skip reason.");
 
 console.log("connects strategy tests passed");

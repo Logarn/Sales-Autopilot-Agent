@@ -182,6 +182,50 @@ export interface ApplicationNoteRow {
   created_at: string;
 }
 
+export type ApplicationAssetSource = "slack" | "manifest" | "manual";
+export type ApplicationAssetProofType = "file" | "upwork_portfolio" | "certificate" | "mention_only" | "do_not_attach";
+export type ApplicationAssetAttachPolicy = "auto_attach" | "manual_review" | "mention_only" | "do_not_attach";
+
+export interface ApplicationAsset {
+  id: number;
+  jobId: string;
+  source: ApplicationAssetSource;
+  sourceFileId: string | null;
+  originalName: string;
+  relativePath: string | null;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  proofType: ApplicationAssetProofType;
+  attachPolicy: ApplicationAssetAttachPolicy;
+  createdAt: string;
+}
+
+interface ApplicationAssetRow {
+  id: number;
+  job_id: string;
+  source: ApplicationAssetSource;
+  source_file_id: string | null;
+  original_name: string;
+  relative_path: string | null;
+  mime_type: string | null;
+  size_bytes: number | null;
+  proof_type: ApplicationAssetProofType;
+  attach_policy: ApplicationAssetAttachPolicy;
+  created_at: string;
+}
+
+export interface RegisterApplicationAssetInput {
+  jobId: string;
+  source: ApplicationAssetSource;
+  sourceFileId?: string | null;
+  originalName: string;
+  relativePath?: string | null;
+  mimeType?: string | null;
+  sizeBytes?: number | null;
+  proofType: ApplicationAssetProofType;
+  attachPolicy: ApplicationAssetAttachPolicy;
+}
+
 export interface ApplicationSubmissionInput {
   jobId: string;
   requiredConnects: number;
@@ -255,6 +299,8 @@ export type SlackThreadStatus =
   | "reject_requested"
   | "revise_requested"
   | "prepare_draft_requested"
+  | "draft_preview_sent"
+  | "files_ingested"
   | "prepared_draft"
   | "retry_requested"
   | "submitted_marked"
@@ -423,6 +469,24 @@ CREATE TABLE IF NOT EXISTS application_events (
 
 CREATE INDEX IF NOT EXISTS idx_application_events_job_id ON application_events(job_id);
 CREATE INDEX IF NOT EXISTS idx_application_events_type ON application_events(event_type);
+
+CREATE TABLE IF NOT EXISTS application_assets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  source_file_id TEXT,
+  original_name TEXT NOT NULL,
+  relative_path TEXT,
+  mime_type TEXT,
+  size_bytes INTEGER,
+  proof_type TEXT NOT NULL,
+  attach_policy TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(job_id, source, source_file_id, original_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_application_assets_job_id ON application_assets(job_id);
+CREATE INDEX IF NOT EXISTS idx_application_assets_source ON application_assets(source);
 
 CREATE TABLE IF NOT EXISTS browser_actions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -859,6 +923,42 @@ const applicationListStmt = db.prepare<[number], ApplicationListRow>(
 const applicationNotesStmt = db.prepare<[string], ApplicationNoteRow>(
   "SELECT id, job_id, note, created_at FROM application_events WHERE job_id = ? AND event_type = 'note' ORDER BY id DESC"
 );
+const upsertApplicationAssetStmt = db.prepare(
+  `INSERT INTO application_assets (
+    job_id,
+    source,
+    source_file_id,
+    original_name,
+    relative_path,
+    mime_type,
+    size_bytes,
+    proof_type,
+    attach_policy
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(job_id, source, source_file_id, original_name) DO UPDATE SET
+    relative_path = excluded.relative_path,
+    mime_type = excluded.mime_type,
+    size_bytes = excluded.size_bytes,
+    proof_type = excluded.proof_type,
+    attach_policy = excluded.attach_policy`
+);
+const getApplicationAssetByUniqueStmt = db.prepare<[string, ApplicationAssetSource, string | null, string], ApplicationAssetRow>(
+  `SELECT id, job_id, source, source_file_id, original_name, relative_path, mime_type, size_bytes, proof_type, attach_policy, created_at
+   FROM application_assets
+   WHERE job_id = ? AND source = ? AND COALESCE(source_file_id, '') = COALESCE(?, '') AND original_name = ?
+   LIMIT 1`
+);
+const listApplicationAssetsStmt = db.prepare<[string], ApplicationAssetRow>(
+  `SELECT id, job_id, source, source_file_id, original_name, relative_path, mime_type, size_bytes, proof_type, attach_policy, created_at
+   FROM application_assets
+   WHERE job_id = ?
+   ORDER BY id ASC`
+);
+const listAllApplicationAssetsStmt = db.prepare<[], ApplicationAssetRow>(
+  `SELECT id, job_id, source, source_file_id, original_name, relative_path, mime_type, size_bytes, proof_type, attach_policy, created_at
+   FROM application_assets
+   ORDER BY created_at DESC, id DESC`
+);
 const outcomeLearningRowsStmt = db.prepare<[], OutcomeLearningRow>(
   `SELECT a.status, s.source_query, s.budget, s.client_spend
    FROM applications a
@@ -1044,6 +1144,57 @@ function rowToApplicationDraft(row: ApplicationDraftRow): ApplicationDraft {
 export function getApplicationDraft(jobId: string): ApplicationDraft | null {
   const row = getApplicationDraftStmt.get(jobId);
   return row ? rowToApplicationDraft(row) : null;
+}
+
+function rowToApplicationAsset(row: ApplicationAssetRow): ApplicationAsset {
+  return {
+    id: row.id,
+    jobId: row.job_id,
+    source: row.source,
+    sourceFileId: row.source_file_id,
+    originalName: row.original_name,
+    relativePath: row.relative_path,
+    mimeType: row.mime_type,
+    sizeBytes: row.size_bytes,
+    proofType: row.proof_type,
+    attachPolicy: row.attach_policy,
+    createdAt: row.created_at,
+  };
+}
+
+export function registerApplicationAsset(input: RegisterApplicationAssetInput): ApplicationAsset {
+  const sourceFileId = input.sourceFileId ?? null;
+  upsertApplicationAssetStmt.run(
+    input.jobId,
+    input.source,
+    sourceFileId,
+    input.originalName,
+    input.relativePath ?? null,
+    input.mimeType ?? null,
+    input.sizeBytes ?? null,
+    input.proofType,
+    input.attachPolicy,
+  );
+  const row = getApplicationAssetByUniqueStmt.get(input.jobId, input.source, sourceFileId, input.originalName);
+  if (!row) {
+    throw new Error(`Failed to register application asset for job_id=${input.jobId}`);
+  }
+  insertApplicationEventStmt.run(
+    input.jobId,
+    "asset_registered",
+    null,
+    null,
+    `${input.source}: ${input.originalName}`,
+  );
+  return rowToApplicationAsset(row);
+}
+
+export function listApplicationAssets(jobId: string): ApplicationAsset[] {
+  return listApplicationAssetsStmt.all(jobId).map(rowToApplicationAsset);
+}
+
+export function listAllApplicationAssets(): ApplicationAsset[] {
+  return listAllApplicationAssetsStmt.all().map(rowToApplicationAsset);
 }
 
 export function getApplicationStatus(jobId: string): ApplicationStatus | null {

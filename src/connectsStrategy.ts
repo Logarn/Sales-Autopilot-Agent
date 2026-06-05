@@ -1,11 +1,23 @@
 import { loadConnectsRules } from "./profile";
-import type { ConnectsStrategySnapshot, JobPosting, ScoreBreakdown, SourceBackedConnects } from "./types";
+import type { ConnectsRules, ConnectsStrategySnapshot, JobPosting, ScoreBreakdown, SourceBackedConnects } from "./types";
 
 interface ConnectsStrategyInput {
   job: JobPosting;
   score: number;
   scoreBreakdown: Pick<ScoreBreakdown, "clientQualityScore" | "opportunityScore" | "connectsRiskScore" | "redFlagScore">;
   suggestedBoostConnects?: number;
+}
+
+export interface VisibleBoostBid {
+  rank: number;
+  connects: number;
+}
+
+export interface VisibleBoostDecision {
+  boostConnects: number;
+  reason: string;
+  targetRank: number | null;
+  skippedReason?: string;
 }
 
 function parseBudgetMax(value: string): number | null {
@@ -49,6 +61,72 @@ function sourceBackedConnectsForJob(job: JobPosting): SourceBackedConnects {
   };
 }
 
+export function extractVisibleBoostBids(text: string): VisibleBoostBid[] {
+  const bids: VisibleBoostBid[] = [];
+  const patterns = [
+    /(?:rank|place|position|#)\s*(\d{1,2})[^\n]{0,60}?(\d{1,3})\s+connects?/gi,
+    /(\d{1,2})(?:st|nd|rd|th)?\s+(?:place|position)[^\n]{0,60}?(\d{1,3})\s+connects?/gi,
+  ];
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text)) !== null) {
+      const rank = Number.parseInt(match[1] ?? "", 10);
+      const connects = Number.parseInt(match[2] ?? "", 10);
+      if (Number.isFinite(rank) && Number.isFinite(connects) && rank > 0 && connects >= 0) {
+        bids.push({ rank, connects });
+      }
+    }
+  }
+  const seen = new Set<string>();
+  return bids
+    .sort((left, right) => left.rank - right.rank || left.connects - right.connects)
+    .filter((bid) => {
+      const key = `${bid.rank}:${bid.connects}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+export function chooseVisibleBoost(input: {
+  requiredConnects: number | null;
+  expectedValueScore: number;
+  clientQualityScore: number;
+  opportunityScore: number;
+  currentBids: VisibleBoostBid[];
+  rules?: ConnectsRules;
+}): VisibleBoostDecision {
+  const rules = input.rules ?? loadConnectsRules();
+  const maxBoost = Math.min(50, Math.max(0, rules.maxBoost));
+  if (input.requiredConnects === null) {
+    return { boostConnects: 0, targetRank: null, reason: "No boost set.", skippedReason: "Required Connects are unknown." };
+  }
+  if (input.expectedValueScore < 82 || input.clientQualityScore < 60 || input.opportunityScore < 60) {
+    return { boostConnects: 0, targetRank: null, reason: "No boost set.", skippedReason: "Job is not high-fit enough for optional boost." };
+  }
+  const topVisible = input.currentBids
+    .filter((bid) => bid.rank >= 1 && bid.rank <= 4 && bid.connects > 0)
+    .sort((left, right) => left.rank - right.rank);
+  if (topVisible.length === 0) {
+    return { boostConnects: 0, targetRank: null, reason: "No boost set.", skippedReason: "No visible boost table was available." };
+  }
+  const target = topVisible[topVisible.length - 1]!;
+  const requiredBoost = Math.max(0, Math.floor(target.connects));
+  if (requiredBoost > maxBoost) {
+    return {
+      boostConnects: 0,
+      targetRank: target.rank,
+      reason: "No boost set.",
+      skippedReason: `Visible top-${target.rank} boost requires ${requiredBoost} Connects, above cap ${maxBoost}.`,
+    };
+  }
+  return {
+    boostConnects: requiredBoost,
+    targetRank: target.rank,
+    reason: `Boost ${requiredBoost} Connects targets the visible top-${target.rank} range.`,
+  };
+}
+
 export function chooseConnectsBoost(input: {
   job: JobPosting;
   score: number;
@@ -58,10 +136,8 @@ export function chooseConnectsBoost(input: {
   const rules = loadConnectsRules();
   const requiredConnects = sourceBackedConnectsForJob(input.job).requiredConnects;
   if (requiredConnects === null || requiredConnects > rules.requireApprovalAbove) return 0;
-  const competition = competitionRisk(input.job);
   if (input.score < 82 || input.clientQualityScore < 60 || input.opportunityScore < 60) return 0;
-  if (competition.level === "high" && input.score < 92) return 0;
-  return rules.idealBoostMin;
+  return 0;
 }
 
 export function evaluateConnectsStrategy(input: ConnectsStrategyInput): ConnectsStrategySnapshot {
