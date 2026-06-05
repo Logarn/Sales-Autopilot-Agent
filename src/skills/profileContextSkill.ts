@@ -69,7 +69,7 @@ function buildProposalAngle(text: string): string {
     return "Lead with the revenue leak in subscriber quality and repeat purchase behavior, then use Truly Beauty proof around zero-party data, quiz performance, and retention revenue.";
   }
   if (/(health|wellness|supplement)/.test(text)) {
-    return "Lead with the lifecycle leak between first purchase, replenishment timing, and subscriber retention. Use Dr. Rachael as mention-only proof and keep sensitive assets out of auto-attach.";
+    return "Lead with the lifecycle leak between first purchase, replenishment timing, and subscriber retention. Use the strongest relevant health/wellness proof and attach approved proof files when useful.";
   }
   if (/(figma|design|template|visual)/.test(text)) {
     return "Lead with how design should remove friction and increase certainty, then use design case studies and manual-review Figma links as supporting proof.";
@@ -162,8 +162,11 @@ export function buildProposalContextPack(job: JobPosting | ScoredJob): ProposalC
     selectedPositioning: buildPositioning(text),
     selectedProofPoints: selectedRecords.map((record) => `${record.name}: ${record.headline}`).slice(0, 4),
     selectedProofLines: selectProofLines(selectedRecords),
-    selectedAttachments: assetPathsByKind(selection.autoAttachAssets, "attachment"),
-    selectedScreenshots: assetPathsByKind(selection.recommendOnlyAssets, "screenshot"),
+    selectedAttachments: [
+      ...assetPathsByKind(selection.autoAttachAssets, "attachment"),
+      ...assetPathsByKind(selection.autoAttachAssets, "screenshot"),
+    ],
+    selectedScreenshots: assetPathsByKind(selection.autoAttachAssets, "screenshot"),
     selectedFigmaLinks: toLinkOutput(selection.selectedFigmaLinks),
     selectedVideoLinks: toLinkOutput(selection.selectedVideoLinks),
     voiceRules: compactMarkdownLines("voice-rules.md", 8),

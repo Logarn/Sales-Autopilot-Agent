@@ -49,6 +49,13 @@ export interface PortfolioLink {
   requiresManualReview: boolean;
 }
 
+export interface UpworkPortfolioItem {
+  id: string;
+  name: string;
+  proofIds: string[];
+  aliases: string[];
+}
+
 export interface PortfolioSelectionResult {
   matchedThemes: string[];
   selectedProof: ProofRecord[];
@@ -56,6 +63,7 @@ export interface PortfolioSelectionResult {
   recommendOnlyAssets: PortfolioAsset[];
   mentionOnlyProof: ProofRecord[];
   doNotUseAssets: PortfolioAsset[];
+  selectedUpworkPortfolioItems: UpworkPortfolioItem[];
   selectedFigmaLinks: PortfolioLink[];
   selectedVideoLinks: PortfolioLink[];
   warnings: string[];
@@ -82,6 +90,33 @@ const PROOF_BANK_PATH = path.join(PROFILE_DIR, "proof-bank.json");
 const PORTFOLIO_ASSETS_PATH = path.join(PROFILE_DIR, "portfolio-assets.json");
 const FIGMA_LINKS_PATH = path.join(PROFILE_DIR, "figma-links.json");
 const VIDEO_LINKS_PATH = path.join(PROFILE_DIR, "video-links.json");
+
+export const UPWORK_PORTFOLIO_ITEMS: UpworkPortfolioItem[] = [
+  {
+    id: "design-case-studies-upwork",
+    name: "Steve's Design Case Studies",
+    proofIds: ["design-case-studies"],
+    aliases: ["design case studies", "steve's design case studies"],
+  },
+  {
+    id: "fly-boutique-upwork",
+    name: "The Fly Boutique (Retain Like Crazy)",
+    proofIds: ["fly-boutique"],
+    aliases: ["fly boutique", "retain like crazy"],
+  },
+  {
+    id: "lifely-upwork",
+    name: "How Lifely Transformed Their Retention Marketing",
+    proofIds: ["lifely"],
+    aliases: ["lifely"],
+  },
+  {
+    id: "truly-beauty-upwork",
+    name: "From $250k to $1.2 Million In 12 Months / Truly Beauty",
+    proofIds: ["truly-beauty"],
+    aliases: ["truly beauty", "$1.2 million", "250k"],
+  },
+];
 
 function readJson<T>(filePath: string): T {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as T;
@@ -175,6 +210,11 @@ function addProofAndAssets(
   }
 }
 
+function addUpworkPortfolioForProof(result: PortfolioSelectionResult, proofId: string): void {
+  const matches = UPWORK_PORTFOLIO_ITEMS.filter((item) => item.proofIds.includes(proofId));
+  result.selectedUpworkPortfolioItems.push(...matches);
+}
+
 function isDesignRelevant(text: string): boolean {
   return /(figma|design|email design|template|campaign design|flow design|creative|visual|mockup)/.test(text);
 }
@@ -202,11 +242,15 @@ function rankAutoAttachAssets(text: string, assets: PortfolioAsset[]): Portfolio
     if (/(subscription|lifecycle foundation|foundation|recharge)/.test(text) && /subscription|foundation|recharge/.test(haystack)) value += 4;
     if (isDesignRelevant(text) && /design|figma|creative/.test(haystack)) value += 5;
     if (/(mailchimp|automation|strategy|retention|klaviyo|shopify|sms|lifecycle)/.test(text) && /case study|retention|automation|lifecycle/.test(haystack)) value += 3;
+    if (/(portfolio|proof|case stud|sample|previous work)/.test(text) && /portfolio|proof|case study/.test(haystack)) value += 3;
+    if (/(intro|introduction|deck|about steve|meet steve)/.test(text) && /intro|meet steve/.test(haystack)) value += 5;
+    if (asset.kind === "screenshot" && /(screenshot|performance|numbers|proof|metric|revenue|klaviyo)/.test(text)) value += 2;
+    if (asset.kind === "screenshot" && !/(screenshot|performance|numbers|proof|metric|revenue|klaviyo)/.test(text)) value -= 2;
     if (/endurance wellness/i.test(asset.name) && !/(subscription|lifecycle foundation|foundation|health|wellness)/.test(text)) value -= 10;
     if (/design case studies/i.test(asset.name) && !isDesignRelevant(text)) value -= 10;
     return value;
   };
-  return [...assets].sort((left, right) => score(right) - score(left)).slice(0, 2);
+  return [...assets].sort((left, right) => score(right) - score(left)).slice(0, 3);
 }
 
 export function selectPortfolioAssetsForJob(job: JobPosting | ScoredJob): PortfolioSelectionResult {
@@ -223,6 +267,7 @@ export function selectPortfolioAssetsForJob(job: JobPosting | ScoredJob): Portfo
     recommendOnlyAssets: [],
     mentionOnlyProof: [],
     doNotUseAssets: [],
+    selectedUpworkPortfolioItems: [],
     selectedFigmaLinks: [],
     selectedVideoLinks: [],
     warnings: [],
@@ -235,12 +280,13 @@ export function selectPortfolioAssetsForJob(job: JobPosting | ScoredJob): Portfo
   if (/(beauty|skincare|cosmetic)/.test(text) && /(klaviyo|shopify|email|sms|retention|lifecycle)/.test(text)) {
     addTheme("beauty_klaviyo");
     addProofAndAssets(result, findProofById(proofBank, "truly-beauty"), assets, "auto_attach");
+    addUpworkPortfolioForProof(result, "truly-beauty");
   }
 
   if (/(health|wellness|supplement|men'?s health)/.test(text)) {
     addTheme("health_supplements");
-    addProofAndAssets(result, findProofById(proofBank, "dr-rachael-institute"), assets, "mention_only");
-    addProofAndAssets(result, findProofById(proofBank, "dr-rachael-klaviyo-screenshot"), assets, "recommend_only");
+    addProofAndAssets(result, findProofById(proofBank, "dr-rachael-institute"), assets, "auto_attach");
+    addProofAndAssets(result, findProofById(proofBank, "dr-rachael-klaviyo-screenshot"), assets, "auto_attach");
     if (/(subscription|foundation|setup|recharge)/.test(text)) {
       addProofAndAssets(result, findProofById(proofBank, "endurance-wellness"), assets, "auto_attach");
     }
@@ -249,33 +295,43 @@ export function selectPortfolioAssetsForJob(job: JobPosting | ScoredJob): Portfo
   if (/(high-aov|high aov|furniture|home goods|sofa|mattress|premium lifestyle|considered purchase)/.test(text)) {
     addTheme("high_aov_home");
     addProofAndAssets(result, findProofById(proofBank, "lifely"), assets, "auto_attach");
+    addUpworkPortfolioForProof(result, "lifely");
   }
 
   if (/(fashion|apparel|boutique|clothing|deliverability|spam|rfm)/.test(text)) {
     addTheme("fashion_deliverability");
     addProofAndAssets(result, findProofById(proofBank, "fly-boutique"), assets, "auto_attach");
+    addUpworkPortfolioForProof(result, "fly-boutique");
   }
 
   if (/(figma|design|email design|template|visual|campaign design|flow design)/.test(text)) {
     addTheme("design_figma");
     addProofAndAssets(result, findProofById(proofBank, "design-case-studies"), assets, "auto_attach");
+    addUpworkPortfolioForProof(result, "design-case-studies");
     result.selectedFigmaLinks.push(...pickFigmaLinks(text, figmaLinks));
   }
 
   if (/(pet|dog|cat|chicken|farm|hobby)/.test(text) && /(dtc|shopify|klaviyo|retention|email|sms|recharge)/.test(text)) {
     addTheme("pet_dtc");
-    addProofAndAssets(result, findProofById(proofBank, "whisker-seeker"), assets, "mention_only");
-    addProofAndAssets(result, findProofById(proofBank, "my-pet-chicken"), assets, "mention_only");
+    addProofAndAssets(result, findProofById(proofBank, "whisker-seeker"), assets, "auto_attach");
+    addProofAndAssets(result, findProofById(proofBank, "my-pet-chicken"), assets, "auto_attach");
   }
 
   if (/\b(beverage|drink|lifestyle)\b/.test(text) && /\b(uk|united kingdom|europe|eu|european)\b/.test(text)) {
     addTheme("beverage_lifestyle_uk");
-    addProofAndAssets(result, findProofById(proofBank, "hangaritas-screenshot"), assets, "recommend_only");
+    addProofAndAssets(result, findProofById(proofBank, "hangaritas-screenshot"), assets, "auto_attach");
   }
 
   if (/\b(art|anime|fandom|jewelry)\b/.test(text)) {
     addTheme("art_fandom");
-    addProofAndAssets(result, findProofById(proofBank, "kraymer-art-screenshot"), assets, "recommend_only");
+    addProofAndAssets(result, findProofById(proofBank, "kraymer-art-screenshot"), assets, "auto_attach");
+  }
+
+  if (/(portfolio|proof|case stud|sample|previous work)/.test(text) && result.autoAttachAssets.length === 0) {
+    const general = findAssetByPath(assets, "profile/attachments/portfolio.pdf");
+    if (general) {
+      result.autoAttachAssets.push(general);
+    }
   }
 
   result.selectedVideoLinks.push(...pickVideoLinks(text, videoLinks));
@@ -290,6 +346,7 @@ export function selectPortfolioAssetsForJob(job: JobPosting | ScoredJob): Portfo
     .slice(0, 3);
   result.mentionOnlyProof = uniqueById(result.mentionOnlyProof).slice(0, 2);
   result.doNotUseAssets = uniqueById(result.doNotUseAssets);
+  result.selectedUpworkPortfolioItems = uniqueById(result.selectedUpworkPortfolioItems).slice(0, 2);
   result.selectedFigmaLinks = uniqueById(result.selectedFigmaLinks).slice(0, 2);
   result.selectedVideoLinks = uniqueById(result.selectedVideoLinks).slice(0, 1);
 

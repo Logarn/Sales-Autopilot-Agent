@@ -22,15 +22,15 @@ function runTests(): void {
     const report = auditProofAssets({ cwd: tempDir, assetRoot: "shared/proof-assets" });
     assert(report.availableLocalFiles.some((entry) => entry.relativePath === "profile/attachments/truly-beauty-case-study.pdf"));
     assert(report.missingLocalFiles.some((entry) => entry.relativePath === "profile/attachments/fly-boutique-case-study.pdf"));
-    assert(report.mentionOnlyProof.some((entry) => entry.name === "Dr. Rachael Institute"));
-    assert(report.portfolioSetupRequired.some((entry) => entry.name === "Portfolio"));
-    assert(report.portfolioSetupRequired.some((entry) => entry.proofType === "upwork_portfolio"));
-    assert(report.portfolioSetupRequired.some((entry) => entry.proofType === "certificate"));
-    assert(report.filesNotToAttach.some((entry) => entry.relativePath === "profile/attachments/dr-rachael-email-performance-report.pdf"));
+    assert(report.entries.some((entry) => entry.relativePath === "profile/attachments/dr-rachael-email-performance-report.pdf" && entry.attachPolicy === "auto_attach"));
+    assert(report.entries.some((entry) => entry.relativePath === "profile/screenshots/dr-rachael-klaviyo-performance.png" && entry.attachPolicy === "auto_attach"));
+    assert(report.entries.some((entry) => entry.proofType === "upwork_portfolio" && entry.attachPolicy === "auto_attach"));
+    assert(report.entries.some((entry) => entry.proofType === "certificate" && entry.attachPolicy === "auto_attach"));
+    assert(!report.filesNotToAttach.some((entry) => entry.relativePath === "profile/attachments/dr-rachael-email-performance-report.pdf"));
 
     const formatted = formatProofAssetAudit(report);
     assert(formatted.includes("Missing local files:"));
-    assert(formatted.includes("Mention-only proof:"));
+    assert(formatted.includes("Files that should not be attached automatically:"));
     assert(
       !formatted.includes(path.join(assetRoot, "profile/attachments/truly-beauty-case-study.pdf")),
       "Default audit output should not expose per-file absolute local paths.",

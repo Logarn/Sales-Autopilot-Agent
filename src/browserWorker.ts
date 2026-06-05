@@ -1009,6 +1009,18 @@ function buildPrepareDraftStatusMessage(input: {
     ? rateVerification.detail
     : diagnostics.rate ? `attempted ${diagnostics.rate}, not verified` : "left alone";
   const boostSummary = boostVerification?.detail ?? (diagnostics.boostConnects ? `${diagnostics.boostConnects} boost planned, not verified` : "No boost set.");
+  const selectedFiles = (diagnostics.filesAttached ?? []).length > 0
+    ? (diagnostics.filesAttached ?? []).map((item) => path.basename(item)).slice(0, 3)
+    : (diagnostics.selectedAttachments ?? []).slice(0, 3);
+  const selectedPortfolio = (diagnostics.selectedHighlights ?? []).slice(0, 2);
+  const usedProofParts = [
+    selectedPortfolio.length > 0 ? `portfolio: ${selectedPortfolio.join(", ")}` : null,
+    selectedFiles.length > 0 ? `files: ${selectedFiles.join(", ")}` : null,
+  ].filter((item): item is string => Boolean(item));
+  const usedProofSummary = usedProofParts.length > 0
+    ? `I used ${usedProofParts.join("; ")}.`
+    : "I did not select portfolio proof or files for this one.";
+  const correctionLine = "You can correct proof here in Slack: “Use Fly Boutique instead”, “Remove the intro PDF”, “Attach Design Case Studies too”, “Use Truly + Lifely”, “Don’t attach screenshots”, or “Use portfolio only”.";
   const missingFiles = diagnostics.missingLocalAssets.map((asset) => path.basename(asset)).slice(0, 2);
   const manualFields = [
     ...(diagnostics.unverifiedFields ?? []),
@@ -1061,6 +1073,9 @@ function buildPrepareDraftStatusMessage(input: {
     ].join("\n"),
     coverLetterBlock,
     screeningBlock,
+    "",
+    `*Proof I used:* ${usedProofSummary}`,
+    correctionLine,
     "",
     `*Next:* ${actionLine}`,
     "",
@@ -1492,12 +1507,24 @@ async function trySetFiles(page: PlaywrightPageLike, selectors: string[], files:
 
 async function tryCheckHighlight(page: PlaywrightPageLike, highlight: string): Promise<boolean> {
   const escaped = highlight.replace(/["\\]/g, "\\$&");
-  const selectors = [`label:has-text("${escaped}") input[type='checkbox']`, `text="${escaped}"`];
+  const selectors = [
+    `label:has-text("${escaped}") input[type='checkbox']`,
+    `label:has-text("${escaped}")`,
+    `button:has-text("${escaped}")`,
+    `[role='option']:has-text("${escaped}")`,
+    `[role='checkbox']:has-text("${escaped}")`,
+    `text="${escaped}"`,
+  ];
   for (const selector of selectors) {
     const locator = page.locator(selector).first();
     try {
       if ((await locator.count()) > 0) {
-        await locator.check({ timeout: 1500 });
+        try {
+          await locator.check({ timeout: 1500 });
+        } catch {
+          if (typeof locator.click !== "function") throw new Error("Highlight locator was not clickable.");
+          await guardedClick(locator as PlaywrightLocatorLike & { click(options?: { timeout?: number }): Promise<unknown> }, { selector, label: highlight }, { timeout: 1500 });
+        }
         return true;
       }
     } catch {
@@ -1505,6 +1532,27 @@ async function tryCheckHighlight(page: PlaywrightPageLike, highlight: string): P
     }
   }
   return false;
+}
+
+async function trySelectProofFromSelector(page: PlaywrightPageLike, highlight: string): Promise<boolean> {
+  if (await tryCheckHighlight(page, highlight)) return true;
+  const opened = await tryClickFirst(page, [
+    { selector: "button:has-text('Add portfolio project')", label: "Add portfolio project" },
+    { selector: "a:has-text('Add portfolio project')", label: "Add portfolio project" },
+    { selector: "[role='button']:has-text('Add portfolio project')", label: "Add portfolio project" },
+    { selector: "button:has-text('Add certificate')", label: "Add certificate" },
+    { selector: "a:has-text('Add certificate')", label: "Add certificate" },
+    { selector: "[role='button']:has-text('Add certificate')", label: "Add certificate" },
+  ]);
+  if (!opened) return false;
+  const selected = await tryCheckHighlight(page, highlight);
+  if (!selected) return false;
+  await tryClickFirst(page, [
+    { selector: "button:has-text('Add')", label: "Confirm proof selection" },
+    { selector: "button:has-text('Save')", label: "Save proof selection" },
+    { selector: "button:has-text('Done')", label: "Done proof selection" },
+  ]);
+  return true;
 }
 
 function assertSubmitGuard(plan: BrowserApplyFillPlan | null): asserts plan is BrowserApplyFillPlan {
@@ -1785,7 +1833,7 @@ export async function verifyApplyPreparationOnPage(input: {
       const expectedNames = plan.attachments.map((attachment) => path.basename(attachment.filePath));
       const verifiedNames = expectedNames.filter((name) => textCollectionContains(visibleAndValues, name));
       if (verifiedNames.length === expectedNames.length) {
-        results.push(verification("attachments", "verified", `${verifiedNames.length}/${expectedNames.length} uploaded files are visible.`, { actual: verifiedNames.join(", ") }));
+        results.push(verification("attachments", "verified", `Verified attached files: ${verifiedNames.join(", ")}.`, { actual: verifiedNames.join(", ") }));
       } else if (fields.manualFields.includes("attachments")) {
         results.push(verification("attachments", "blocked_by_upwork_ui", `Upload field was unavailable. Expected files: ${expectedNames.join(", ")}`));
       } else {
@@ -1797,11 +1845,11 @@ export async function verifyApplyPreparationOnPage(input: {
   if (plan.highlights.length === 0) {
     results.push(verification("profileHighlights", "skipped_by_strategy", "No profile highlights were selected by strategy."));
   } else {
-    const checkedCount = plan.highlights.filter((highlight) => textCollectionContains(snapshot.checkedLabels, highlight)).length;
-    if (checkedCount === plan.highlights.length) {
-      results.push(verification("profileHighlights", "verified", `${checkedCount}/${plan.highlights.length} profile highlights are checked.`));
+    const verifiedHighlights = plan.highlights.filter((highlight) => textCollectionContains([...snapshot.checkedLabels, snapshot.visibleText], highlight));
+    if (verifiedHighlights.length === plan.highlights.length) {
+      results.push(verification("profileHighlights", "verified", `Verified selected portfolio/profile proof: ${verifiedHighlights.join(", ")}.`, { actual: verifiedHighlights.join(", ") }));
     } else if (/add a portfolio project|add portfolio project|add a certificate|add certificate/i.test(snapshot.visibleText)) {
-      results.push(verification("profileHighlights", "unavailable_on_page", "The page shows add-portfolio/add-certificate controls instead of selectable existing proof."));
+      results.push(verification("profileHighlights", "attempted_unverified", `Portfolio/certificate selector entry is visible, but selected proof is not verified yet. Expected: ${plan.highlights.join(", ")}`, { expected: plan.highlights.join(", "), actual: snapshot.checkedLabels.join(", ") }));
     } else if (fields.manualFields.includes("highlights")) {
       results.push(verification("profileHighlights", "blocked_by_upwork_ui", "Profile highlight controls were unavailable or could not be selected safely."));
     } else {
@@ -1878,7 +1926,7 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
 
   let checkedHighlights = 0;
   for (const highlight of plan.highlights) {
-    if (await tryCheckHighlight(page, highlight)) checkedHighlights += 1;
+    if (await trySelectProofFromSelector(page, highlight)) checkedHighlights += 1;
   }
   if (checkedHighlights > 0) {
     attemptedFields.push("highlights");

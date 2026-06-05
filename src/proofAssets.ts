@@ -67,7 +67,7 @@ function inferAttachPolicy(asset: PortfolioAsset): CanonicalProofAssetEntry["att
   if (!asset.safeToAttach) return "do_not_attach";
   if (asset.requiresManualReview) return "manual_review";
   if (asset.safeToAutoInclude) return "auto_attach";
-  return "manual_review";
+  return "auto_attach";
 }
 
 function inferProofType(asset: PortfolioAsset): ProofAssetType {
@@ -145,12 +145,12 @@ function upworkSetupEntries(): CanonicalProofAssetEntry[] {
       proofType: "upwork_portfolio",
       platform: ["Upwork"],
       vertical: [],
-      attachPolicy: "manual_review",
-      safeUsageNotes: "Select existing Upwork profile or portfolio items only when visible and verifiable on the apply page.",
+      attachPolicy: "auto_attach",
+      safeUsageNotes: "Click Add portfolio project, select an existing published portfolio item if visible, and verify the selected label on the apply page.",
       existsLocally: false,
       safeToAttach: false,
-      safeToAutoInclude: false,
-      requiresManualReview: true,
+      safeToAutoInclude: true,
+      requiresManualReview: false,
     },
     {
       id: "upwork-certificates",
@@ -158,12 +158,12 @@ function upworkSetupEntries(): CanonicalProofAssetEntry[] {
       proofType: "certificate",
       platform: ["Upwork"],
       vertical: [],
-      attachPolicy: "manual_review",
-      safeUsageNotes: "Select existing certificates only when visible and verifiable on the apply page; add-certificate controls mean unavailable.",
+      attachPolicy: "auto_attach",
+      safeUsageNotes: "Click Add certificate, select an existing relevant certificate if visible, and verify the selected label on the apply page.",
       existsLocally: false,
       safeToAttach: false,
-      safeToAutoInclude: false,
-      requiresManualReview: true,
+      safeToAutoInclude: true,
+      requiresManualReview: false,
     },
   ];
 }
@@ -174,7 +174,7 @@ export function auditProofAssets(options: ProofAssetResolverOptions = {}): Proof
   const slackIngestedFiles = slackAssetEntries(options);
   const upworkSetup = upworkSetupEntries();
   const mentionOnlyProof = proofBank
-    .filter((record) => record.assetRules.some((rule) => rule.usage === "mention_only" || rule.safeToAttach === false))
+    .filter((record) => record.assetRules.length === 0 || record.assetRules.every((rule) => rule.usage === "mention_only" || rule.safeToAttach === false))
     .map(mentionOnlyEntry);
   const entries = [...assetEntries, ...slackIngestedFiles, ...upworkSetup, ...mentionOnlyProof];
 
@@ -184,10 +184,7 @@ export function auditProofAssets(options: ProofAssetResolverOptions = {}): Proof
     missingLocalFiles: assetEntries.filter((entry) => entry.proofType === "file" && !entry.existsLocally),
     slackIngestedFiles,
     mentionOnlyProof,
-    portfolioSetupRequired: [
-      ...upworkSetup,
-      ...assetEntries.filter((entry) => entry.requiresManualReview || entry.proofType !== "file"),
-    ],
+    portfolioSetupRequired: upworkSetup.filter((entry) => entry.requiresManualReview),
     filesNotToAttach: assetEntries.filter((entry) => !entry.safeToAttach || entry.requiresManualReview || entry.attachPolicy === "do_not_attach"),
     entries,
   };

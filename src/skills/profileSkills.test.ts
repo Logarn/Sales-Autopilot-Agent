@@ -54,8 +54,8 @@ function runTests(): void {
   });
   const healthSelection = selectPortfolioAssetsForJob(healthJob);
   assert(includes(healthSelection.selectedProof, "dr-rachael-institute"), "Health job should select Dr. Rachael proof");
-  assert(includes(healthSelection.mentionOnlyProof, "dr-rachael-institute"), "Dr. Rachael should be mention-only");
-  assert(!includes(healthSelection.autoAttachAssets, "dr-rachael-report"), "Sensitive Dr. Rachael report must never auto-attach");
+  assert(includes(healthSelection.autoAttachAssets, "dr-rachael-report"), "Approved Dr. Rachael report should be auto-attach-capable when relevant");
+  assert(healthSelection.autoAttachAssets.length <= 3, "Health jobs should cap proof files at the strongest three");
 
   const homeJob = createJob({
     title: "Retention lead for premium furniture ecommerce brand",
@@ -104,8 +104,7 @@ function runTests(): void {
   const petSelection = selectPortfolioAssetsForJob(petJob);
   assert(includes(petSelection.selectedProof, "whisker-seeker"), "Pet job should select Whisker Seeker");
   assert(includes(petSelection.selectedProof, "my-pet-chicken"), "Pet job should select My Pet Chicken");
-  assert(includes(petSelection.recommendOnlyAssets, "dtc-performance-figures"), "Pet job should flag DTC figures PDF as recommend-only");
-  assert(!includes(petSelection.autoAttachAssets, "dtc-performance-figures"), "Sensitive DTC figures PDF must never auto-attach");
+  assert(includes(petSelection.autoAttachAssets, "dtc-performance-figures"), "Approved DTC figures PDF should auto-attach when relevant");
 
   const beautyPack = buildProposalContextPack(beautyJob);
   assert(beautyPack.selectedProofPoints.some((line) => line.includes("Truly Beauty")), "Beauty context pack should include Truly Beauty proof");
@@ -115,10 +114,10 @@ function runTests(): void {
   assert(designPack.selectedFigmaLinks.length > 0, "Design context pack should include Figma links");
   assert(designPack.selectedProofPoints.some((line) => line.includes("Design Case Studies")), "Design context pack should include design proof");
 
-  const allSensitiveSafe = [beautySelection, healthSelection, homeSelection, fashionSelection, designSelection, petSelection].every((selection) =>
+  const allSelectedAttachable = [beautySelection, healthSelection, homeSelection, fashionSelection, designSelection, petSelection].every((selection) =>
     selection.autoAttachAssets.every((asset) => asset.safeToAttach && !asset.requiresManualReview),
   );
-  assert(allSensitiveSafe, "Sensitive assets should never auto-attach");
+  assert(allSelectedAttachable, "Selected auto-attach assets should be approved and not require manual review");
 
   console.log("profile skills tests passed");
 }
