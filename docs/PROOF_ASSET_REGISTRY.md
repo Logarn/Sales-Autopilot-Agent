@@ -47,3 +47,21 @@ npm run proof:check -- --paths
 ```
 
 The default audit reports available local files, missing files, mention-only proof, portfolio/certificate setup required, and files that should not be attached automatically. It does not print absolute local paths unless `--paths` is passed.
+
+## Slack Intake
+
+Slack-uploaded files are job-specific. When Steve or Natalie attaches supported files in a tracked job thread, the Slack socket downloads them with the bot token and stores them under:
+
+```text
+/opt/upwork-agent/shared/proof-assets/slack-intake/<jobId>/
+```
+
+The agent registers those files against the application and can use them for that Upwork prep run. This does not edit `profile/portfolio-assets.json`; the committed manifest remains the canonical reusable proof library.
+
+Slack app requirements:
+
+- Bot token scope: `files:read`
+- Socket events must include message/file events for the target channel.
+- Configure `SLACK_FILE_MAX_BYTES` and `SLACK_FILE_ALLOWED_EXTENSIONS` if production limits need to differ from the defaults.
+
+Default accepted extensions are `.pdf`, `.png`, `.jpg`, `.jpeg`, and `.webp`. Unsupported or oversized files are rejected and reported in-thread by filename.

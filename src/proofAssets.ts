@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { PROOF_ASSET_ROOT } from "./config";
+import { listAllApplicationAssets } from "./db";
 import {
   loadPortfolioAssets,
   loadProofBank,
@@ -35,6 +36,7 @@ export interface ProofAssetAuditReport {
   assetRoot: string;
   availableLocalFiles: CanonicalProofAssetEntry[];
   missingLocalFiles: CanonicalProofAssetEntry[];
+  slackIngestedFiles: CanonicalProofAssetEntry[];
   mentionOnlyProof: CanonicalProofAssetEntry[];
   portfolioSetupRequired: CanonicalProofAssetEntry[];
   filesNotToAttach: CanonicalProofAssetEntry[];
@@ -115,20 +117,77 @@ function mentionOnlyEntry(record: ProofRecord): CanonicalProofAssetEntry {
   };
 }
 
+function slackAssetEntries(options: ProofAssetResolverOptions): CanonicalProofAssetEntry[] {
+  return listAllApplicationAssets()
+    .filter((asset) => asset.source === "slack" && asset.relativePath)
+    .map((asset): CanonicalProofAssetEntry => ({
+      id: `slack:${asset.id}`,
+      name: asset.originalName,
+      proofType: "file",
+      platform: [],
+      vertical: [],
+      attachPolicy: asset.attachPolicy,
+      safeUsageNotes: `Slack-ingested file for ${asset.jobId}`,
+      relativePath: asset.relativePath ?? undefined,
+      resolvedPath: asset.relativePath ? resolveProofAssetPath(asset.relativePath, options) : undefined,
+      existsLocally: asset.relativePath ? proofAssetExists(asset.relativePath, options) : false,
+      safeToAttach: asset.attachPolicy === "auto_attach",
+      safeToAutoInclude: asset.attachPolicy === "auto_attach",
+      requiresManualReview: asset.attachPolicy !== "auto_attach",
+    }));
+}
+
+function upworkSetupEntries(): CanonicalProofAssetEntry[] {
+  return [
+    {
+      id: "upwork-profile-highlights",
+      name: "Upwork portfolio/profile highlights",
+      proofType: "upwork_portfolio",
+      platform: ["Upwork"],
+      vertical: [],
+      attachPolicy: "manual_review",
+      safeUsageNotes: "Select existing Upwork profile or portfolio items only when visible and verifiable on the apply page.",
+      existsLocally: false,
+      safeToAttach: false,
+      safeToAutoInclude: false,
+      requiresManualReview: true,
+    },
+    {
+      id: "upwork-certificates",
+      name: "Upwork certificates",
+      proofType: "certificate",
+      platform: ["Upwork"],
+      vertical: [],
+      attachPolicy: "manual_review",
+      safeUsageNotes: "Select existing certificates only when visible and verifiable on the apply page; add-certificate controls mean unavailable.",
+      existsLocally: false,
+      safeToAttach: false,
+      safeToAutoInclude: false,
+      requiresManualReview: true,
+    },
+  ];
+}
+
 export function auditProofAssets(options: ProofAssetResolverOptions = {}): ProofAssetAuditReport {
   const proofBank = loadProofBank();
   const assetEntries = loadPortfolioAssets().map((asset) => entryForAsset(asset, proofBank, options));
+  const slackIngestedFiles = slackAssetEntries(options);
+  const upworkSetup = upworkSetupEntries();
   const mentionOnlyProof = proofBank
     .filter((record) => record.assetRules.some((rule) => rule.usage === "mention_only" || rule.safeToAttach === false))
     .map(mentionOnlyEntry);
-  const entries = [...assetEntries, ...mentionOnlyProof];
+  const entries = [...assetEntries, ...slackIngestedFiles, ...upworkSetup, ...mentionOnlyProof];
 
   return {
     assetRoot: proofAssetBaseDir(options),
     availableLocalFiles: assetEntries.filter((entry) => entry.proofType === "file" && entry.existsLocally),
     missingLocalFiles: assetEntries.filter((entry) => entry.proofType === "file" && !entry.existsLocally),
+    slackIngestedFiles,
     mentionOnlyProof,
-    portfolioSetupRequired: assetEntries.filter((entry) => entry.requiresManualReview || entry.proofType !== "file"),
+    portfolioSetupRequired: [
+      ...upworkSetup,
+      ...assetEntries.filter((entry) => entry.requiresManualReview || entry.proofType !== "file"),
+    ],
     filesNotToAttach: assetEntries.filter((entry) => !entry.safeToAttach || entry.requiresManualReview || entry.attachPolicy === "do_not_attach"),
     entries,
   };
@@ -150,6 +209,7 @@ export function formatProofAssetAudit(report: ProofAssetAuditReport, options: { 
     `Proof asset root: ${report.assetRoot}`,
     section("Available local files", report.availableLocalFiles, "none"),
     section("Missing local files", report.missingLocalFiles, "none"),
+    section("Slack-ingested files", report.slackIngestedFiles, "none"),
     section("Mention-only proof", report.mentionOnlyProof, "none"),
     section("Portfolio/certificate setup required", report.portfolioSetupRequired, "none"),
     section("Files that should not be attached automatically", report.filesNotToAttach, "none"),

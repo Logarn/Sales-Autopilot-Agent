@@ -1,5 +1,5 @@
-import { existsSync, unlinkSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 
 function assert(condition: boolean, message: string): void {
   if (!condition) {
@@ -19,8 +19,11 @@ function cleanupDatabase(path: string): void {
 
 async function runTests(): Promise<void> {
   const tempDb = resolve(process.cwd(), "data/.tmp-browser-apply.db");
+  const proofRoot = resolve(process.cwd(), "data/.tmp-browser-apply-proof-assets");
   cleanupDatabase(tempDb);
+  rmSync(proofRoot, { recursive: true, force: true });
   process.env.DB_PATH = tempDb;
+  process.env.PROOF_ASSET_ROOT = proofRoot;
   process.env.DISCOVERY_SLACK_CHANNEL_ID = "C123";
 
   const { buildApplicationDraft } = require("./agent") as {
@@ -34,12 +37,14 @@ async function runTests(): Promise<void> {
     closeDb,
     getBrowserActionById,
     listBrowserActions,
+    registerApplicationAsset,
     upsertSlackThreadState,
   } = require("./db") as {
     markJobSeen: (job: any, notified: boolean) => void;
     closeDb: () => void;
     getBrowserActionById: (id: number) => any;
     listBrowserActions: (status?: any, limit?: number) => any[];
+    registerApplicationAsset: (input: any) => unknown;
     upsertSlackThreadState: (input: any) => unknown;
   };
   const { buildBrowserApplyPlan } = require("./browserApply") as {
@@ -824,6 +829,31 @@ async function runTests(): Promise<void> {
     );
     assert(beautyPlanResult.plan.manualReviewAssets.every((item: string) => !item.includes("figma.com")), "Figma links must not appear in auto/manual asset list");
 
+    const ingestedRelativePath = "slack-intake/beauty-job-1/truly-beauty-case-study.pdf";
+    const ingestedAbsolutePath = resolve(proofRoot, ingestedRelativePath);
+    mkdirSync(dirname(ingestedAbsolutePath), { recursive: true });
+    writeFileSync(ingestedAbsolutePath, "pdf");
+    registerApplicationAsset({
+      jobId: beautyJob.id,
+      source: "slack",
+      sourceFileId: "FTRULY",
+      originalName: "truly-beauty-case-study.pdf",
+      relativePath: ingestedRelativePath,
+      mimeType: "application/pdf",
+      sizeBytes: 3,
+      proofType: "file",
+      attachPolicy: "auto_attach",
+    });
+    const beautyPlanAfterSlackUpload = buildBrowserApplyPlan(beautyJob.id);
+    assert(
+      beautyPlanAfterSlackUpload.plan.attachments.some((item: { filePath: string }) => item.filePath === ingestedRelativePath),
+      "Slack-ingested file with the matching filename should replace the missing manifest path.",
+    );
+    assert(
+      !beautyPlanAfterSlackUpload.plan.missingLocalAssets.includes("profile/attachments/truly-beauty-case-study.pdf"),
+      "Slack upload should resolve the missing file blocker for the matching planned proof file.",
+    );
+
     const prepareReply = buildPrepareDraftQueueReply({
       jobId: beautyJob.id,
       threadTitle: beautyJob.title,
@@ -876,6 +906,7 @@ async function runTests(): Promise<void> {
       "Visible boost table text must not be treated as proof that the boost field was set.",
     );
 
+    writeFileSync(resolve(proofRoot, "package.json"), "{}");
     const verifiedApplyVerification = await verifyApplyPreparationOnPage({
       page: fakeApplyPage({
         visibleText: "Required for proposal: 8 Connects\nSend for 8 Connects\npackage.json",
@@ -1706,6 +1737,7 @@ async function runTests(): Promise<void> {
     const { closeDb } = require("./db") as { closeDb: () => void };
     closeDb();
     cleanupDatabase(tempDb);
+    rmSync(proofRoot, { recursive: true, force: true });
   }
 }
 

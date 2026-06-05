@@ -41,15 +41,18 @@ function cleanupDatabase(path: string): void {
 
 async function runTests(): Promise<void> {
   const tempDb = resolve(process.cwd(), "data/.tmp-slack-socket/jobs.db");
+  const proofRoot = resolve(process.cwd(), "data/.tmp-slack-socket/proof-assets");
   cleanupDatabase(tempDb);
   mkdirSync(dirname(tempDb), { recursive: true });
   process.env.DB_PATH = tempDb;
+  process.env.PROOF_ASSET_ROOT = proofRoot;
+  process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
 
   const { applySlackThreadRevision, buildDraftPreviewFromSlackThread, buildSlackSocketStartupError, handleSlackSocketTextEvent, handleThreadCommand, parseSlackThreadCommand, parseUpworkJobUrlFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread } = require("./slackSocket") as {
     applySlackThreadRevision: (input: { channelId: string; threadTs: string; instruction: string }) => { ok: boolean; text: string; proposalVersion?: number };
     buildDraftPreviewFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string };
     buildSlackSocketStartupError: (input: { socketEnabled: boolean; botToken: string; appToken: string }) => string | null;
-    handleSlackSocketTextEvent: (event: { channel: string; ts: string; text?: string; thread_ts?: string; bot_id?: string; subtype?: string }, client: any) => Promise<void>;
+    handleSlackSocketTextEvent: (event: { channel: string; ts: string; text?: string; thread_ts?: string; bot_id?: string; subtype?: string; files?: any[] }, client: any) => Promise<void>;
     handleThreadCommand: (input: { channelId: string; threadTs: string; text: string; client: any; intentProvider?: any }) => Promise<void>;
     parseSlackThreadCommand: (value: string) => {
       type: string;
@@ -62,12 +65,13 @@ async function runTests(): Promise<void> {
     queueCaptureFromSlackUrl: (input: { channelId: string; messageTs: string; threadTs: string; text: string }) => { parsed: any; state: any; action: any } | null;
     queuePrepareDraftFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string; actionId?: number };
   };
-  const { closeDb, getApplicationDraft, getApplicationStatus, getBrowserActionById, getSlackThreadStateByThreadTs, markJobSeen, upsertSlackThreadState, listBrowserActions, updateBrowserActionStatus } = require("./db") as {
+  const { closeDb, getApplicationDraft, getApplicationStatus, getBrowserActionById, getSlackThreadStateByThreadTs, listApplicationAssets, markJobSeen, upsertSlackThreadState, listBrowserActions, updateBrowserActionStatus } = require("./db") as {
     closeDb: () => void;
     getApplicationDraft: (jobId: string) => { proposalText: string } | null;
     getApplicationStatus: (jobId: string) => string | null;
     getBrowserActionById: (id: number) => { payload: Record<string, unknown>; status: string } | null;
     getSlackThreadStateByThreadTs: (channelId: string, threadTs: string) => { status: string } | null;
+    listApplicationAssets: (jobId: string) => Array<{ originalName: string; relativePath: string | null; source: string }>;
     markJobSeen: (job: any, notified: boolean) => void;
     upsertSlackThreadState: (input: any) => unknown;
     listBrowserActions: (status?: string | null, limit?: number) => Array<{ id: number; actionType: string; jobId: string; status: string }>;
@@ -77,6 +81,7 @@ async function runTests(): Promise<void> {
     recordBrowserManualAttention: (input: { reason: string; actionId?: number; jobId?: string; url?: string | null; title?: string | null }) => Promise<unknown>;
   };
   const { buildApplicationDraft } = require("./agent") as { buildApplicationDraft: (job: any) => any };
+  const { buildBrowserApplyPlan } = require("./browserApply") as { buildBrowserApplyPlan: (jobId: string) => { plan: any } };
   const { scoreJob } = require("./filter") as { scoreJob: (job: any) => any };
   const fakeIntentProvider = (decision: Record<string, unknown>) => ({
     isAvailable: () => true,
@@ -235,7 +240,7 @@ async function runTests(): Promise<void> {
         },
       },
     });
-    assert(mentionedUrlReplies.some((reply) => reply.includes("Captured Upwork URL for tracking")), "Mentioned URL should be captured and acknowledged.");
+    assert(mentionedUrlReplies.some((reply) => reply.includes("Got the Upwork link")), "Mentioned URL should be captured and acknowledged.");
     assert(listBrowserActions(null, 1000).some((action) => action.jobId.includes("033053866890130225260") && action.actionType === "capture_job_from_url"), "Mentioned URL should queue capture.");
 
     const trackedThreadUrlReplies: string[] = [];
@@ -251,7 +256,7 @@ async function runTests(): Promise<void> {
         },
       },
     });
-    assert(trackedThreadUrlReplies.some((reply) => reply.includes("Captured Upwork URL for tracking")), "URL inside an existing tracked thread should be captured without a fresh mention.");
+    assert(trackedThreadUrlReplies.some((reply) => reply.includes("Got the Upwork link")), "URL inside an existing tracked thread should be captured without a fresh mention.");
     assert(listBrowserActions(null, 1000).some((action) => action.jobId.includes("044053866890130225260") && action.actionType === "capture_job_from_url"), "Tracked-thread URL should queue capture.");
 
     const prepareJob = scoreJob({
@@ -284,6 +289,59 @@ async function runTests(): Promise<void> {
       status: "packet_sent",
     });
 
+    const fileQuestionReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "Can you upload the files from here? If you had access?",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            fileQuestionReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(fileQuestionReplies.some((reply) => reply.includes("Attach the PDFs/images in this thread")), "File capability question should get a direct useful answer.");
+    assert(!fileQuestionReplies.join("\n").includes("Want me to prep it"), "File capability answer must not fall back to the old command menu.");
+
+    const fileIntakeReplies: string[] = [];
+    const originalFetch = global.fetch;
+    global.fetch = (async () => new Response(Buffer.from("%PDF-1.4\n"), { status: 200 })) as typeof fetch;
+    try {
+      await handleSlackSocketTextEvent({
+        channel: "C123",
+        ts: "111.224",
+        thread_ts: "111.222",
+        files: [{
+          id: "F-DESIGN",
+          name: "design-case-studies-steve-logarn.pdf",
+          mimetype: "application/pdf",
+          size: 12,
+          url_private_download: "https://files.slack.com/files-pri/T/F-DESIGN",
+        }, {
+          id: "F-TRULY",
+          name: "truly-beauty-case-study.pdf",
+          mimetype: "application/pdf",
+          size: 12,
+          url_private_download: "https://files.slack.com/files-pri/T/F-TRULY",
+        }],
+      }, {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            fileIntakeReplies.push(payload.text);
+          },
+        },
+      });
+    } finally {
+      global.fetch = originalFetch;
+    }
+    assert(fileIntakeReplies.some((reply) => reply.includes("Got 2 files") && reply.includes("design-case-studies-steve-logarn.pdf") && reply.includes("truly-beauty-case-study.pdf")), "Slack file upload should be ingested and acknowledged.");
+    assert(listApplicationAssets(prepareJob.id).some((asset) => asset.originalName === "design-case-studies-steve-logarn.pdf" && asset.source === "slack"), "Slack file should be registered to the application.");
+    const planAfterSlackFiles = buildBrowserApplyPlan(prepareJob.id).plan;
+    assert(planAfterSlackFiles.attachments.some((attachment: { filePath: string }) => attachment.filePath.includes("slack-intake") && attachment.filePath.endsWith("truly-beauty-case-study.pdf")), "Matching Slack upload should become the attachable browser-prep file.");
+    assert(!planAfterSlackFiles.missingLocalAssets.includes("profile/attachments/truly-beauty-case-study.pdf"), "Matching Slack upload should resolve the missing proof file.");
+
     const directDraftPreview = buildDraftPreviewFromSlackThread({ channelId: "C123", threadTs: "111.222" });
     assert(directDraftPreview.ok, "Draft preview helper should return the stored proposal without queuing browser work.");
     assert(directDraftPreview.text.includes("I have not filled the Upwork form yet."), "Draft preview must state the Upwork form has not been filled.");
@@ -307,6 +365,43 @@ async function runTests(): Promise<void> {
     assert(previewReplies.some((reply) => reply.includes("I have not filled the Upwork form yet.")), "Draft-preview command must not imply browser fill happened.");
     assert(listBrowserActions(null, 1000).length === actionCountBeforePreview, "Draft-preview command must not queue a browser preparation action.");
     assert(getSlackThreadStateByThreadTs("C123", "111.222")?.status === "draft_preview_sent", "Draft-preview command should mark the thread preview-sent.");
+
+    const previewUseJob = {
+      ...prepareJob,
+      id: "preview-use-job",
+      applicationDraft: {
+        ...prepareJob.applicationDraft,
+        jobId: "preview-use-job",
+      },
+    };
+    markJobSeen(previewUseJob, false);
+    upsertSlackThreadState({
+      channelId: "CPREVIEW",
+      messageTs: "222.111",
+      threadTs: "222.111",
+      upworkUrl: previewUseJob.url,
+      jobId: previewUseJob.id,
+      status: "packet_sent",
+    });
+    const previewUseReplies: string[] = [];
+    const actionCountBeforePreviewUse = listBrowserActions(null, 1000).length;
+    await handleThreadCommand({
+      channelId: "CPREVIEW",
+      threadTs: "222.111",
+      text: "show me the draft here first",
+      client: { chat: { postMessage: async (payload: { text: string }) => previewUseReplies.push(payload.text) } },
+    });
+    assert(listBrowserActions(null, 1000).length === actionCountBeforePreviewUse, "Draft preview should not queue browser prep on the separate preview thread.");
+    await handleThreadCommand({
+      channelId: "CPREVIEW",
+      threadTs: "222.111",
+      text: "use this",
+      client: { chat: { postMessage: async (payload: { text: string }) => previewUseReplies.push(payload.text) } },
+    });
+    assert(
+      listBrowserActions(null, 1000).some((action) => action.jobId === previewUseJob.id && action.actionType === "prepare_application_review"),
+      "Use-this after a draft preview should queue Upwork browser preparation.",
+    );
 
     const llmPrepareJob = {
       ...prepareJob,
@@ -501,7 +596,23 @@ async function runTests(): Promise<void> {
         },
       },
     });
-    assert(statusReplies.some((reply) => reply.includes("Red flags/risks:")), "Natural status question should resolve against the tracked job context.");
+    assert(statusReplies.some((reply) => reply.includes("Main risk:")), "Natural risk question should resolve against the tracked job context without a raw status dump.");
+    assert(!statusReplies.join("\n").includes("Channel message:"), "Natural risk/status replies should not include raw debug state.");
+
+    const debugReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "show debug details",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            debugReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(debugReplies.some((reply) => reply.includes("Channel message:") && reply.includes("Thread:")), "Explicit debug details should show raw thread state.");
 
     const revisionResult = applySlackThreadRevision({
       channelId: "C123",
@@ -585,6 +696,7 @@ async function runTests(): Promise<void> {
   } finally {
     closeDb();
     cleanupDatabase(tempDb);
+    rmSync(proofRoot, { recursive: true, force: true });
   }
 }
 

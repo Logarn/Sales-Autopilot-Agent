@@ -24,6 +24,8 @@ function runTests(): void {
     assert(report.missingLocalFiles.some((entry) => entry.relativePath === "profile/attachments/fly-boutique-case-study.pdf"));
     assert(report.mentionOnlyProof.some((entry) => entry.name === "Dr. Rachael Institute"));
     assert(report.portfolioSetupRequired.some((entry) => entry.name === "Portfolio"));
+    assert(report.portfolioSetupRequired.some((entry) => entry.proofType === "upwork_portfolio"));
+    assert(report.portfolioSetupRequired.some((entry) => entry.proofType === "certificate"));
     assert(report.filesNotToAttach.some((entry) => entry.relativePath === "profile/attachments/dr-rachael-email-performance-report.pdf"));
 
     const formatted = formatProofAssetAudit(report);
