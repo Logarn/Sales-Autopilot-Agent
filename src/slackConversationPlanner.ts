@@ -1,4 +1,5 @@
 import type { ApplicationDraft, BrowserAction, ScoredJob } from "./types";
+import { looksLikeProofPlanRevision } from "./proofPlanOverrides";
 
 export type SlackConversationIntent =
   | "answer_file_capability_question"
@@ -6,6 +7,7 @@ export type SlackConversationIntent =
   | "draft_preview_first"
   | "attach_uploaded_files"
   | "retry_after_files"
+  | "revise_proof_plan"
   | "revise_draft"
   | "explain_risk"
   | "explain_proof"
@@ -20,6 +22,7 @@ export type SlackConversationAction =
   | "queue_prepare_application"
   | "send_draft_preview"
   | "retry_prepare_after_files"
+  | "queue_proof_recheck"
   | "show_debug_details"
   | "mark_skip"
   | "none";
@@ -146,6 +149,17 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
       confidence: "high",
       reply: fileCapabilityReply(input),
       actions: ["none"],
+      clarificationNeeded: false,
+      debugRequested: false,
+    };
+  }
+
+  if (looksLikeProofPlanRevision(input.latestMessage)) {
+    return {
+      intent: "revise_proof_plan",
+      confidence: "high",
+      reply: "Got it - I’ll update the proof plan and recheck the remote Chrome draft.",
+      actions: ["queue_proof_recheck"],
       clarificationNeeded: false,
       debugRequested: false,
     };

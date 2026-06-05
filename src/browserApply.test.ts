@@ -885,7 +885,7 @@ async function runTests(): Promise<void> {
     assert(emptyCoverVerification.find((item) => item.field === "coverLetter")?.status === "attempted_unverified", "Cover letter must not verify when the field remains empty.");
     assert(emptyCoverVerification.find((item) => item.field === "requiredConnects")?.status === "verified", "Apply-page required Connects should verify separately from boost.");
     assert(emptyCoverVerification.find((item) => item.field === "boostConnects")?.detail === "No boost set.", "No boost should be reported honestly when none is set.");
-    assert(emptyCoverVerification.find((item) => item.field === "profileHighlights")?.status === "unavailable_on_page", "Add portfolio/certificate UI should not be reported as selected profile highlights.");
+    assert(emptyCoverVerification.find((item) => item.field === "profileHighlights")?.status === "attempted_unverified", "Add portfolio/certificate UI should be treated as a selector entry point, not immediate unavailable proof.");
 
     const unsafeBoostVerification = await verifyApplyPreparationOnPage({
       page: fakeApplyPage({ visibleText: "Required for proposal: 8 Connects\nBoost: 80 Connects", inputValues: [verificationPlan.coverLetter, "80"] }),
@@ -925,6 +925,8 @@ async function runTests(): Promise<void> {
     assert(verifiedApplyVerification.find((item) => item.field === "screeningAnswers")?.status === "verified", "Screening answers should verify after fill when answer text is present.");
     assert(verifiedApplyVerification.find((item) => item.field === "attachments")?.status === "verified", "Attachments should verify when uploaded file names are visible.");
     assert(verifiedApplyVerification.find((item) => item.field === "profileHighlights")?.status === "verified", "Profile highlights should verify only when checked labels are visible.");
+    assert(Boolean(verifiedApplyVerification.find((item) => item.field === "attachments")?.detail.includes("package.json")), "Attachment verification should name verified files.");
+    assert(Boolean(verifiedApplyVerification.find((item) => item.field === "profileHighlights")?.detail.includes("Klaviyo retention proof")), "Portfolio/profile verification should name verified labels.");
 
     const missingFileVerification = await verifyApplyPreparationOnPage({
       page: fakeApplyPage({ visibleText: "Required for proposal: 8 Connects", inputValues: [verificationPlan.coverLetter], fileNames: [] }),
@@ -1029,6 +1031,8 @@ async function runTests(): Promise<void> {
     assert(prepCompletionText.includes("• *Connects:* 4 required, no boost set"), "Prep completion alert should summarize Connects");
     assert(prepCompletionText.includes("• *Boost:* No boost set."), "Prep completion alert should report no boost set honestly");
     assert(prepCompletionText.includes("• *Needs review:* none"), "Prep completion alert should explicitly mark no extra manual issues");
+    assert(prepCompletionText.includes("*Proof I used:*"), "Prep completion alert should summarize selected proof in natural language");
+    assert(prepCompletionText.includes("You can correct proof here in Slack"), "Prep completion alert should explain natural proof corrections");
     assert(prepCompletionText.includes("manually click *Send for 4 Connects*"), "Prep completion alert should preserve final submit safety");
     assert(!prepCompletionText.includes("Fields filled:"), "Prep completion alert should not include internal field inventory");
     assert(!prepCompletionText.includes("Auto-attach assets:"), "Prep completion alert should not include exhaustive proof inventory");

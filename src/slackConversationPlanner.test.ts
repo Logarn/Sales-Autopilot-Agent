@@ -60,4 +60,9 @@ const draftPreview = planSlackConversation({ ...baseInput, latestMessage: "show 
 assert.equal(draftPreview.intent, "draft_preview_first");
 assert.deepEqual(draftPreview.actions, ["send_draft_preview"]);
 
+const proofRevision = planSlackConversation({ ...baseInput, latestMessage: "Use Truly instead of Fly and add the intro PDF." });
+assert.equal(proofRevision.intent, "revise_proof_plan");
+assert.deepEqual(proofRevision.actions, ["queue_proof_recheck"]);
+assert(!proofRevision.clarificationNeeded);
+
 console.log("slack conversation planner tests passed");

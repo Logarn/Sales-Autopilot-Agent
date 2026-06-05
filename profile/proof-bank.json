@@ -26,18 +26,18 @@
         {
           "path": "profile/attachments/dr-rachael-email-performance-report.pdf",
           "assetType": "attachment",
-          "safeToAttach": false,
+          "safeToAttach": true,
           "safeToMention": true,
-          "requiresManualReview": true,
-          "usage": "mention_only"
+          "requiresManualReview": false,
+          "usage": "auto_attach"
         },
         {
           "path": "profile/screenshots/dr-rachael-klaviyo-performance.png",
           "assetType": "screenshot",
-          "safeToAttach": "needs_review",
+          "safeToAttach": true,
           "safeToMention": true,
-          "requiresManualReview": true,
-          "usage": "recommend_only"
+          "requiresManualReview": false,
+          "usage": "auto_attach"
         }
       ]
     },
@@ -144,10 +144,10 @@
         {
           "path": "profile/attachments/dtc-brand-performance-real-figures.pdf",
           "assetType": "attachment",
-          "safeToAttach": "needs_review",
+          "safeToAttach": true,
           "safeToMention": true,
-          "requiresManualReview": true,
-          "usage": "recommend_only"
+          "requiresManualReview": false,
+          "usage": "auto_attach"
         }
       ]
     },
@@ -162,10 +162,10 @@
         {
           "path": "profile/attachments/dtc-brand-performance-real-figures.pdf",
           "assetType": "attachment",
-          "safeToAttach": "needs_review",
+          "safeToAttach": true,
           "safeToMention": true,
-          "requiresManualReview": true,
-          "usage": "recommend_only"
+          "requiresManualReview": false,
+          "usage": "auto_attach"
         }
       ]
     },
@@ -225,18 +225,18 @@
         {
           "path": "profile/screenshots/kraymer-art-klaviyo-performance.png",
           "assetType": "screenshot",
-          "safeToAttach": "needs_review",
+          "safeToAttach": true,
           "safeToMention": true,
-          "requiresManualReview": true,
-          "usage": "recommend_only"
+          "requiresManualReview": false,
+          "usage": "auto_attach"
         },
         {
           "path": "profile/attachments/kraymer-retention-audit.pdf",
           "assetType": "attachment",
-          "safeToAttach": "needs_review",
+          "safeToAttach": true,
           "safeToMention": true,
-          "requiresManualReview": true,
-          "usage": "recommend_only"
+          "requiresManualReview": false,
+          "usage": "auto_attach"
         }
       ]
     },
@@ -258,10 +258,10 @@
         {
           "path": "profile/screenshots/hangaritas-klaviyo-performance.png",
           "assetType": "screenshot",
-          "safeToAttach": "needs_review",
+          "safeToAttach": true,
           "safeToMention": true,
-          "requiresManualReview": true,
-          "usage": "recommend_only"
+          "requiresManualReview": false,
+          "usage": "auto_attach"
         }
       ]
     },
@@ -283,10 +283,10 @@
         {
           "path": "profile/screenshots/dr-rachael-klaviyo-performance.png",
           "assetType": "screenshot",
-          "safeToAttach": "needs_review",
+          "safeToAttach": true,
           "safeToMention": true,
-          "requiresManualReview": true,
-          "usage": "recommend_only"
+          "requiresManualReview": false,
+          "usage": "auto_attach"
         }
       ]
     }

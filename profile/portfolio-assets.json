@@ -9,8 +9,8 @@
       "categories": ["general", "retention", "dtc"],
       "safeToMention": true,
       "safeToAttach": true,
-      "safeToAutoInclude": false,
-      "requiresManualReview": true,
+      "safeToAutoInclude": true,
+      "requiresManualReview": false,
       "recommendedUsage": "broad proof when a general portfolio is specifically useful"
     },
     {
@@ -20,10 +20,10 @@
       "kind": "attachment",
       "categories": ["intro", "general"],
       "safeToMention": true,
-      "safeToAttach": false,
-      "safeToAutoInclude": false,
-      "requiresManualReview": true,
-      "recommendedUsage": "manual review only"
+      "safeToAttach": true,
+      "safeToAutoInclude": true,
+      "requiresManualReview": false,
+      "recommendedUsage": "intro PDF when Steve/Natalie asks for intro proof or broad positioning"
     },
     {
       "id": "meet-steve-logarn-pdf",
@@ -32,10 +32,10 @@
       "kind": "attachment",
       "categories": ["intro", "general"],
       "safeToMention": true,
-      "safeToAttach": false,
-      "safeToAutoInclude": false,
-      "requiresManualReview": true,
-      "recommendedUsage": "manual review only"
+      "safeToAttach": true,
+      "safeToAutoInclude": true,
+      "requiresManualReview": false,
+      "recommendedUsage": "intro PDF when Steve/Natalie asks for a meet-Steve attachment"
     },
     {
       "id": "truly-beauty-case-study",
@@ -104,10 +104,10 @@
       "kind": "attachment",
       "categories": ["health", "wellness", "supplements", "klaviyo", "sms"],
       "safeToMention": true,
-      "safeToAttach": false,
-      "safeToAutoInclude": false,
-      "requiresManualReview": true,
-      "recommendedUsage": "mention-only proof for health/supplement roles"
+      "safeToAttach": true,
+      "safeToAutoInclude": true,
+      "requiresManualReview": false,
+      "recommendedUsage": "health/supplement/Klaviyo performance proof"
     },
     {
       "id": "dtc-performance-figures",
@@ -116,10 +116,10 @@
       "kind": "attachment",
       "categories": ["pet", "dtc", "performance proof"],
       "safeToMention": true,
-      "safeToAttach": false,
-      "safeToAutoInclude": false,
-      "requiresManualReview": true,
-      "recommendedUsage": "pet/DTC recommend-only proof"
+      "safeToAttach": true,
+      "safeToAutoInclude": true,
+      "requiresManualReview": false,
+      "recommendedUsage": "pet/DTC performance proof when relevant"
     },
     {
       "id": "kraymer-retention-audit",
@@ -128,10 +128,10 @@
       "kind": "attachment",
       "categories": ["art", "anime", "fandom", "small dtc"],
       "safeToMention": true,
-      "safeToAttach": false,
-      "safeToAutoInclude": false,
-      "requiresManualReview": true,
-      "recommendedUsage": "art/fandom recommend-only proof"
+      "safeToAttach": true,
+      "safeToAutoInclude": true,
+      "requiresManualReview": false,
+      "recommendedUsage": "art/fandom retention audit proof when relevant"
     },
     {
       "id": "dr-rachael-screenshot",
@@ -140,10 +140,10 @@
       "kind": "screenshot",
       "categories": ["health", "wellness", "supplements", "klaviyo"],
       "safeToMention": true,
-      "safeToAttach": false,
-      "safeToAutoInclude": false,
-      "requiresManualReview": true,
-      "recommendedUsage": "recommend-only health proof"
+      "safeToAttach": true,
+      "safeToAutoInclude": true,
+      "requiresManualReview": false,
+      "recommendedUsage": "health/supplement Klaviyo performance screenshot when strategically useful"
     },
     {
       "id": "hangaritas-screenshot",
@@ -152,10 +152,10 @@
       "kind": "screenshot",
       "categories": ["beverage", "lifestyle", "uk", "europe", "klaviyo"],
       "safeToMention": true,
-      "safeToAttach": false,
-      "safeToAutoInclude": false,
-      "requiresManualReview": true,
-      "recommendedUsage": "recommend-only beverage/lifestyle/UK proof"
+      "safeToAttach": true,
+      "safeToAutoInclude": true,
+      "requiresManualReview": false,
+      "recommendedUsage": "beverage/lifestyle/UK Klaviyo performance screenshot when strategically useful"
     },
     {
       "id": "kraymer-screenshot",
@@ -164,10 +164,10 @@
       "kind": "screenshot",
       "categories": ["art", "anime", "fandom", "jewelry", "klaviyo"],
       "safeToMention": true,
-      "safeToAttach": false,
-      "safeToAutoInclude": false,
-      "requiresManualReview": true,
-      "recommendedUsage": "recommend-only art/fandom proof"
+      "safeToAttach": true,
+      "safeToAutoInclude": true,
+      "requiresManualReview": false,
+      "recommendedUsage": "art/fandom Klaviyo performance screenshot when strategically useful"
     }
   ]
 }

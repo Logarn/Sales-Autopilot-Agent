@@ -18,6 +18,7 @@ import {
   JobPosting,
   MatchLevel,
   PortfolioItem,
+  ProofPlanOverrideState,
   ScoredJob,
   StructuredProposalDraft,
 } from "./types";
@@ -570,6 +571,7 @@ ensureApplicationsColumn("revision_requests", "TEXT NOT NULL DEFAULT '[]'");
 ensureApplicationsColumn("job_intelligence", "TEXT");
 ensureApplicationsColumn("connects_strategy", "TEXT");
 ensureApplicationsColumn("structured_proposal", "TEXT");
+ensureApplicationsColumn("proof_plan_overrides", "TEXT NOT NULL DEFAULT '{}'");
 ensureSeenJobsColumn("fingerprint", "TEXT");
 db.exec("CREATE INDEX IF NOT EXISTS idx_seen_jobs_fingerprint ON seen_jobs(fingerprint)");
 
@@ -895,6 +897,17 @@ const updateApplicationRevisionStmt = db.prepare<[string, string]>(
    SET revision_requests = ?, status = 'draft', updated_at = datetime('now')
    WHERE job_id = ?`
 );
+const updateApplicationProofPlanOverridesStmt = db.prepare<[string, string]>(
+  `UPDATE applications
+   SET proof_plan_overrides = ?, updated_at = datetime('now')
+   WHERE job_id = ?`
+);
+const getApplicationProofPlanOverridesStmt = db.prepare<[string], { proof_plan_overrides: string | null }>(
+  `SELECT proof_plan_overrides
+   FROM applications
+   WHERE job_id = ?
+   LIMIT 1`
+);
 const applyApplicationRevisionStmt = db.prepare<[string, string, string, number, string]>(
   `UPDATE applications
    SET proposal_text = ?, revision_requests = ?, generated_at = ?, proposal_version = ?, status = 'draft', updated_at = datetime('now')
@@ -1144,6 +1157,34 @@ function rowToApplicationDraft(row: ApplicationDraftRow): ApplicationDraft {
 export function getApplicationDraft(jobId: string): ApplicationDraft | null {
   const row = getApplicationDraftStmt.get(jobId);
   return row ? rowToApplicationDraft(row) : null;
+}
+
+export function getApplicationProofPlanOverrides(jobId: string): ProofPlanOverrideState | null {
+  const row = getApplicationProofPlanOverridesStmt.get(jobId);
+  if (!row) return null;
+  return parseJsonObject<ProofPlanOverrideState>(row.proof_plan_overrides) ?? {
+    includeAssetIds: [],
+    excludeAssetIds: [],
+    includeProofIds: [],
+    excludeProofIds: [],
+    includePortfolioItemIds: [],
+    excludePortfolioItemIds: [],
+    portfolioOnly: false,
+    noFiles: false,
+    noScreenshots: false,
+    attachAllRelevantScreenshots: false,
+    instructionHistory: [],
+  };
+}
+
+export function updateApplicationProofPlanOverrides(jobId: string, overrides: ProofPlanOverrideState, note?: string): boolean {
+  const currentStatus = getApplicationStatus(jobId);
+  if (!currentStatus) return false;
+  const result = updateApplicationProofPlanOverridesStmt.run(JSON.stringify(overrides), jobId);
+  if (result.changes > 0) {
+    insertApplicationEventStmt.run(jobId, "proof_plan_revised", currentStatus, currentStatus, note ?? "Proof plan revised from Slack.");
+  }
+  return result.changes > 0;
 }
 
 function rowToApplicationAsset(row: ApplicationAssetRow): ApplicationAsset {

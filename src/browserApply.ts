@@ -2,9 +2,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { CONNECTS_RULES_CONFIG_PATH } from "./config";
 import { evaluateConnectsStrategy } from "./connectsStrategy";
-import { getApplicationDraft, getApplicationJobLink, getScoredJobForSlackPreview, listApplicationAssets, type ApplicationAsset } from "./db";
+import { getApplicationDraft, getApplicationJobLink, getApplicationProofPlanOverrides, getScoredJobForSlackPreview, listApplicationAssets, type ApplicationAsset } from "./db";
 import { proofAssetExists } from "./proofAssets";
 import { buildProofAvailabilityReport, formatProofAvailabilityLines } from "./proofAvailability";
+import { applyProofPlanOverridesToSelection, parseProofPlanOverrides } from "./proofPlanOverrides";
 import { buildProposalContextPack } from "./skills/profileContextSkill";
 import { selectPortfolioAssetsForJob } from "./skills/portfolioSelectionSkill";
 import {
@@ -229,17 +230,6 @@ function attachmentsWithApplicationAssets(
     };
   });
 
-  const seen = new Set(replaced.map((attachment) => attachment.filePath));
-  for (const asset of attachableAssets) {
-    if (!asset.relativePath || seen.has(asset.relativePath)) continue;
-    replaced.push({
-      id: `slack:${asset.id}`,
-      name: asset.originalName,
-      filePath: asset.relativePath,
-      sensitivity: "approved_external",
-    });
-    seen.add(asset.relativePath);
-  }
   return replaced;
 }
 
@@ -342,7 +332,7 @@ function buildManualFields(input: {
   if (!isSpecifiedRate(input.rate)) fields.push("rate");
   if (input.connects.required === null || input.connects.approvalRequired || input.connectsStrategy.decision !== "safe_apply") fields.push("connects");
   if (input.skippedAttachments.length > 0 || input.missingLocalAssets.length > 0) fields.push("attachments");
-  if (input.manualReviewAssets.length > 0 || input.mentionOnlyProof.length > 0 || input.manualReviewWarnings.length > 0) {
+  if (input.manualReviewAssets.length > 0 || input.manualReviewWarnings.length > 0) {
     fields.push("proofPortfolioProfileReview");
   }
   if (input.issues.some((validationIssue) => validationIssue.code === "invalid_upwork_link")) fields.push("applyUrl");
@@ -446,9 +436,13 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
 
   const scoredJob = getScoredJobForSlackPreview(jobId);
   const profileContext = scoredJob ? buildProposalContextPack(scoredJob) : null;
-  const portfolioSelection = scoredJob ? selectPortfolioAssetsForJob(scoredJob) : null;
+  const basePortfolioSelection = scoredJob ? selectPortfolioAssetsForJob(scoredJob) : null;
+  const proofOverrides = parseProofPlanOverrides(getApplicationProofPlanOverrides(jobId) ?? {});
+  const portfolioSelection = basePortfolioSelection
+    ? applyProofPlanOverridesToSelection(basePortfolioSelection, proofOverrides)
+    : null;
 
-  const profileAttachments = profileContext?.selectedAttachments ?? [];
+  const profileAttachments = portfolioSelection?.autoAttachAssets.map((asset) => asset.path) ?? profileContext?.selectedAttachments ?? [];
   const fallbackDraftAttachments = draft.selectedPortfolioItems.map((item) => item.filePath).filter(Boolean);
   const selected = profileAttachments.length > 0
     ? buildAutoAttachmentInstructions(profileAttachments)
@@ -473,9 +467,18 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
   const videoRecommendations = profileContext?.selectedVideoLinks.map((link) => `${link.name}: ${link.url}`) ?? [];
   const manualReviewWarnings = profileContext?.manualReviewWarnings ?? [];
   const profileHighlights = profileContext?.selectedPositioning ?? draft.structuredProposal?.browserFillNotes.profileNotes ?? [];
-  const proofHighlights = profileContext?.selectedProofLines ?? [];
+  const upworkPortfolioHighlights = portfolioSelection?.selectedUpworkPortfolioItems.map((item) => item.name) ?? [];
+  const proofHighlights = [
+    ...(portfolioSelection?.selectedProof.flatMap((proof) => [
+      `${proof.name}: ${proof.headline}`,
+      ...proof.supporting.slice(0, 2).map((line) => `${proof.name}: ${line}`),
+    ]) ?? profileContext?.selectedProofLines ?? []),
+  ].slice(0, 8);
   const screeningAnswers = draft.structuredProposal?.clientRequestAnswers ?? [];
-  const highlights = draft.structuredProposal?.browserFillNotes.highlights ?? (profileAttachments.length > 0 ? profileAttachments : fallbackDraftAttachments);
+  const highlights = uniqueStrings([
+    ...upworkPortfolioHighlights,
+    ...(draft.structuredProposal?.browserFillNotes.highlights ?? []),
+  ]);
 
   const connects = buildConnectsPlan(draft, loadConnectsRules(options.connectsRulesPath), issues);
   const connectsStrategy = draft.connectsStrategy ?? (scoredJob
@@ -581,6 +584,7 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
         attachmentDiagnostics,
         proofHighlights,
         portfolioHighlights: uniqueStrings([
+          ...upworkPortfolioHighlights.map((label) => `Upwork portfolio: ${label}`),
           ...attachments.map((attachment) => `${attachment.name}: ${attachment.filePath}`),
           ...manualReviewAssets,
           ...figmaRecommendations,

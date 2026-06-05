@@ -5,6 +5,7 @@ import {
   applyApplicationRevision,
   enqueueBrowserActionDeduped,
   getApplicationDraft,
+  getApplicationProofPlanOverrides,
   getApplicationStatus,
   getBrowserActionById,
   getScoredJobForSlackPreview,
@@ -15,6 +16,7 @@ import {
   upsertSlackThreadState,
   recordApplicationRevisionRequest,
   updateBrowserActionStatus,
+  updateApplicationProofPlanOverrides,
 } from "./db";
 import {
   buildCaptureActionPayload,
@@ -35,6 +37,7 @@ import { formatConnectsStrategy } from "./connectsStrategy";
 import { classifySlackThreadWithLlm, type SlackThreadBrainProvider, type SlackThreadBrainDecision } from "./slackThreadBrain";
 import { planSlackConversation, type SlackConversationPlan } from "./slackConversationPlanner";
 import { formatSlackFileIntakeReply, ingestSlackFilesForThread, type SlackFileLike } from "./slackFileIntake";
+import { looksLikeProofPlanRevision, parseProofPlanOverrides, reviseProofPlanOverrides } from "./proofPlanOverrides";
 import type { ApplicationStatus } from "./types";
 
 const THREAD_MENTIONS = "<@U0A2X5BCNKC> <@U0AHJFYV42K>";
@@ -44,6 +47,7 @@ export type SlackSocketParsedCommandType =
   | "approve"
   | "reject"
   | "revise"
+  | "proof_revision"
   | "approve_prepare"
   | "prepare_draft"
   | "draft_preview"
@@ -221,6 +225,15 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
   if (/^(approve)$/i.test(commandText)) return { type: "approve", rawText: normalized };
   if (/^(reject|skip|skip this one|pass|decline)$/i.test(commandText)) return { type: "reject", rawText: normalized };
 
+  if (looksLikeProofPlanRevision(normalized)) {
+    return {
+      type: "proof_revision",
+      rawText: normalized,
+      instruction: normalized,
+      source: "fallback",
+    };
+  }
+
   if (matchesApprovePrepareIntent(commandText, mentioned) || matchesApprovePrepareIntent(normalized, mentioned)) {
     if (/\b(?:use this|put it in upwork|put this in upwork|fill it in upwork|fill this in upwork)\b/i.test(commandText)) {
       return { type: "approve_prepare", rawText: normalized, source: "fallback" };
@@ -294,7 +307,7 @@ async function resolveSlackThreadCommand(input: {
   provider?: SlackThreadBrainProvider;
 }): Promise<ParsedSlackSocketCommand> {
   const fallback = parseSlackThreadCommand(input.text);
-  if (fallback.type === "prep_issue_report" || fallback.type === "record_outcome" || fallback.type === "draft_preview") {
+  if (fallback.type === "prep_issue_report" || fallback.type === "record_outcome" || fallback.type === "draft_preview" || fallback.type === "proof_revision") {
     return { ...fallback, source: "fallback" };
   }
 
@@ -530,6 +543,28 @@ export function applySlackThreadRevision(input: {
   };
 }
 
+export function applySlackProofPlanRevision(input: {
+  channelId: string;
+  threadTs: string;
+  instruction: string;
+}): { ok: boolean; text: string } {
+  const state = getSlackThreadStateByThreadTs(input.channelId, input.threadTs);
+  if (!state?.jobId) {
+    return { ok: false, text: "I cannot revise proof without a tracked job id for this thread." };
+  }
+  const current = parseProofPlanOverrides(getApplicationProofPlanOverrides(state.jobId) ?? {});
+  const revised = reviseProofPlanOverrides(current, input.instruction);
+  if (!revised.summary.changed) {
+    return { ok: false, text: revised.summary.reply };
+  }
+  const updated = updateApplicationProofPlanOverrides(state.jobId, revised.overrides, input.instruction);
+  if (!updated) {
+    return { ok: false, text: `I could not update the proof plan for ${state.jobId}.` };
+  }
+  updateSlackThreadStateStatus(state.channelId, state.threadTs, "prepare_draft_requested");
+  return { ok: true, text: revised.summary.reply };
+}
+
 export function buildPrepareDraftQueueReply(input: {
   jobId: string;
   threadTitle: string;
@@ -546,7 +581,7 @@ export function buildPrepareDraftQueueReply(input: {
     input.requeued
       ? ack
       : input.duplicate
-      ? "Already on it — I already have this queued and I’ll come back here when it’s ready for QA."
+      ? input.ackText?.trim() || "Already on it — I already have this queued and I’ll come back here when it’s ready for QA."
       : ack,
     input.queueStatus,
     "I’ll fill what’s safe on Upwork and stop before submit.",
@@ -899,7 +934,7 @@ export async function handleThreadCommand(params: {
     return;
   }
 
-  if (!state.jobId && ["approve", "reject", "revise", "approve_prepare", "prepare_draft", "draft_preview", "prep_issue_report", "mark_submitted", "record_outcome", "retry_action"].includes(command.type)) {
+  if (!state.jobId && ["approve", "reject", "revise", "proof_revision", "approve_prepare", "prepare_draft", "draft_preview", "prep_issue_report", "mark_submitted", "record_outcome", "retry_action"].includes(command.type)) {
     const response = `This thread tracks ${state.upworkUrl} but no job id was parsed. ${
       command.type === "approve_prepare" || command.type === "prepare_draft" || command.type === "draft_preview" ? "I can’t prep it until I have the job id. Send the Upwork listing link here and I’ll pick it up." : "Please share a supported Upwork job URL first."
     }`;
@@ -940,6 +975,28 @@ export async function handleThreadCommand(params: {
     if (!result.ok) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
     }
+    await postThreadReply(params.client, params.channelId, params.threadTs, result.text);
+    return;
+  }
+
+  if (command.type === "proof_revision") {
+    const revision = applySlackProofPlanRevision({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      instruction: command.instruction ?? params.text,
+    });
+    if (!revision.ok) {
+      updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
+      await postThreadReply(params.client, params.channelId, params.threadTs, revision.text);
+      return;
+    }
+    const result = queuePrepareDraftFromSlackThread({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      ackText: revision.text,
+      forceRetryPaused: true,
+    });
+    if (!result.ok) updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
     await postThreadReply(params.client, params.channelId, params.threadTs, result.text);
     return;
   }

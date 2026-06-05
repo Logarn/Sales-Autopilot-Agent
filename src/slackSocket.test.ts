@@ -65,9 +65,10 @@ async function runTests(): Promise<void> {
     queueCaptureFromSlackUrl: (input: { channelId: string; messageTs: string; threadTs: string; text: string }) => { parsed: any; state: any; action: any } | null;
     queuePrepareDraftFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string; actionId?: number };
   };
-  const { closeDb, getApplicationDraft, getApplicationStatus, getBrowserActionById, getSlackThreadStateByThreadTs, listApplicationAssets, markJobSeen, upsertSlackThreadState, listBrowserActions, updateBrowserActionStatus } = require("./db") as {
+  const { closeDb, getApplicationDraft, getApplicationProofPlanOverrides, getApplicationStatus, getBrowserActionById, getSlackThreadStateByThreadTs, listApplicationAssets, markJobSeen, upsertSlackThreadState, listBrowserActions, updateBrowserActionStatus } = require("./db") as {
     closeDb: () => void;
     getApplicationDraft: (jobId: string) => { proposalText: string } | null;
+    getApplicationProofPlanOverrides: (jobId: string) => any;
     getApplicationStatus: (jobId: string) => string | null;
     getBrowserActionById: (id: number) => { payload: Record<string, unknown>; status: string } | null;
     getSlackThreadStateByThreadTs: (channelId: string, threadTs: string) => { status: string } | null;
@@ -157,7 +158,7 @@ async function runTests(): Promise<void> {
       { name: "natural manual review status", input: "What still needs manual review?", expectType: "status" },
       { name: "revise with instruction", input: "revise: tighten tone", expectType: "revise", instruction: "tighten tone" },
       { name: "natural revise", input: "Make the opener sharper.", expectType: "revise", instruction: "the opener sharper." },
-      { name: "natural proof swap", input: "Use the Truly Beauty proof instead.", expectType: "revise", instruction: "the Truly Beauty proof instead." },
+      { name: "natural proof swap", input: "Use the Truly Beauty proof instead.", expectType: "proof_revision", instruction: "Use the Truly Beauty proof instead." },
       { name: "prepare draft", input: "prepare draft", expectType: "prepare_draft" },
       { name: "prepare proposal punctuation", input: "prepare proposal.", expectType: "prepare_draft" },
       { name: "draft preview first", input: "go ahead and prepare this - show me the draft here first", expectType: "draft_preview" },
@@ -188,7 +189,7 @@ async function runTests(): Promise<void> {
     for (const t of commandTests) {
       const parsed = parseSlackThreadCommand(t.input);
       assert(parsed.type === t.expectType, `${t.name}: expected type=${t.expectType}, got=${parsed.type}`);
-      if (t.expectType === "revise") {
+      if (t.expectType === "revise" || t.expectType === "proof_revision") {
         assert(parsed.instruction === t.instruction, `${t.name}: expected instruction=${t.instruction}, got=${parsed.instruction}`);
       }
       if (t.expectType === "retry_action") {
@@ -476,6 +477,31 @@ async function runTests(): Promise<void> {
     assert(duplicatePrepareResult.actionId === prepareResult.actionId, "Duplicate prepare draft should return the existing action id.");
     assert(duplicatePrepareResult.text.includes("Already on it"), "Duplicate prepare draft should stay concise.");
     assert(!duplicatePrepareResult.text.toLowerCase().includes("browser action"), "Duplicate prepare draft should not expose action ids by default.");
+
+    const proofRevisionReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "Use Fly instead of Truly and add the intro PDF.",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            proofRevisionReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(proofRevisionReplies.some((reply) => reply.includes("Rechecking now")), "Proof correction should acknowledge the recheck.");
+    const proofOverrides = getApplicationProofPlanOverrides(prepareJob.id);
+    assert(proofOverrides?.includeAssetIds.includes("fly-boutique-case-study"), "Proof override should include Fly Boutique case study.");
+    assert(proofOverrides?.includeAssetIds.includes("steve-intro-pdf"), "Proof override should include intro PDF.");
+    assert(proofOverrides?.excludeAssetIds.includes("truly-beauty-case-study"), "Proof override should remove Truly attachment.");
+    const planAfterProofRevision = buildBrowserApplyPlan(prepareJob.id).plan;
+    assert(planAfterProofRevision.attachments.some((attachment: { filePath: string }) => attachment.filePath === "profile/attachments/fly-boutique-case-study.pdf"), "Revised proof plan should attach Fly Boutique.");
+    assert(planAfterProofRevision.attachments.some((attachment: { filePath: string }) => attachment.filePath === "profile/attachments/steve-logarn-intro.pdf"), "Revised proof plan should attach intro PDF.");
+    assert(!planAfterProofRevision.attachments.some((attachment: { filePath: string }) => attachment.filePath.includes("truly-beauty")), "Revised proof plan should remove Truly attachment.");
+    assert(planAfterProofRevision.highlights.some((label: string) => label.includes("The Fly Boutique")), "Revised proof plan should select the Fly Boutique Upwork portfolio label.");
+    assert(listBrowserActions(null, 1000).some((action) => action.jobId === prepareJob.id && action.actionType === "prepare_application_review"), "Proof correction should queue a remote Chrome recheck.");
 
     updateBrowserActionStatus(prepareResult.actionId!, "paused", "field_preparation_incomplete");
     const qaIssueRecheckReplies: string[] = [];

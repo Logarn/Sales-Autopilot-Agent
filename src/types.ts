@@ -363,6 +363,21 @@ export interface ApplicationDraft {
   jobIntelligence?: JobIntelligence;
 }
 
+export interface ProofPlanOverrideState {
+  includeAssetIds: string[];
+  excludeAssetIds: string[];
+  includeProofIds: string[];
+  excludeProofIds: string[];
+  includePortfolioItemIds: string[];
+  excludePortfolioItemIds: string[];
+  portfolioOnly: boolean;
+  noFiles: boolean;
+  noScreenshots: boolean;
+  attachAllRelevantScreenshots: boolean;
+  instructionHistory: string[];
+  updatedAt?: string;
+}
+
 export interface FeedJobResult {
   jobs: JobPosting[];
   failedFeeds: string[];

@@ -44,6 +44,7 @@ function runTests(): void {
         },
       ],
       doNotUseAssets: [],
+      selectedUpworkPortfolioItems: [],
       selectedFigmaLinks: [],
       selectedVideoLinks: [],
       warnings: [],
