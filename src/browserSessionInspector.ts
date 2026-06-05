@@ -256,7 +256,7 @@ function shouldPreferTextCandidate(current: string, candidate: string): boolean 
 }
 
 function hasAuthenticatedUiSignals(value: string): boolean {
-  return /best\s+matches|my\s+jobs|messages|proposals|profile|saved\s+search|connects\s+(?:balance|available)/i.test(value);
+  return /best\s+matches|my\s+jobs|messages|proposals|profile|account\s+settings|saved\s+search|connects\s+(?:balance|available)/i.test(value);
 }
 
 export function classifyBrowserSessionSnapshot(snapshot: BrowserSessionPageSnapshot, sessionStatus?: Pick<BrowserSessionStatus, "state" | "blocked" | "reason">): BrowserSessionInspection {
@@ -266,7 +266,12 @@ export function classifyBrowserSessionSnapshot(snapshot: BrowserSessionPageSnaps
   const haystack = `${currentUrl}\n${title}\n${text}`;
   const feedSignalCount = Math.max(snapshot.feedSignalCount ?? 0, countFeedSignals(haystack));
   const hasLikelyJobCardText = snapshot.hasLikelyJobCardText ?? hasLikelyUpworkJobCardText(haystack);
+  const hasAuthenticatedUi = hasAuthenticatedUiSignals(haystack);
   const strongUsableFeedEvidence = (snapshot.jobLinkCount ?? 0) >= 10 || (feedSignalCount >= 1 && hasLikelyJobCardText);
+  const strongLoggedInFeedEvidence = isUpworkUrl(currentUrl) &&
+    isUpworkFindWorkFeedUrl(currentUrl) &&
+    hasUsableFeedSignals(haystack) &&
+    (strongUsableFeedEvidence || ((snapshot.jobLinkCount ?? 0) > 0 && hasAuthenticatedUi));
 
   for (const rule of RISK_RULES) {
     for (const entry of rule.patterns) {
@@ -280,15 +285,15 @@ export function classifyBrowserSessionSnapshot(snapshot: BrowserSessionPageSnaps
     return externalize({ internalState: "login_in_progress", currentUrl, title, matchedText: "google_login", summary: "Detected safe Google login-in-progress page." });
   }
 
+  if (strongLoggedInFeedEvidence) {
+    return externalize({ internalState: "logged_in", currentUrl, title, matchedText: "upwork_usable_feed", summary: "Detected usable Upwork find-work feed." });
+  }
+
   if (hasLoginMarkers(haystack) && isUpworkUrl(currentUrl)) {
     return externalize({ internalState: "logged_out", currentUrl, title, matchedText: "upwork_logged_out_or_public_home", summary: "Detected Upwork logged-out/public homepage context." });
   }
 
-  if (isUpworkUrl(currentUrl) && isUpworkFindWorkFeedUrl(currentUrl) && hasUsableFeedSignals(haystack) && strongUsableFeedEvidence && !hasLoginMarkers(haystack)) {
-    return externalize({ internalState: "logged_in", currentUrl, title, matchedText: "upwork_usable_feed", summary: "Detected usable Upwork find-work feed." });
-  }
-
-  if (isUpworkUrl(currentUrl) && hasAuthenticatedUiSignals(haystack) && !/\blog\s*in\b|\bsign\s*in\b|\bjoin\b/i.test(haystack)) {
+  if (isUpworkUrl(currentUrl) && hasAuthenticatedUi && !/\blog\s*in\b|\bsign\s*in\b|\bjoin\b/i.test(haystack)) {
     return externalize({ internalState: "logged_in", currentUrl, title, matchedText: "upwork_authenticated_ui", summary: "Detected authenticated Upwork UI." });
   }
 

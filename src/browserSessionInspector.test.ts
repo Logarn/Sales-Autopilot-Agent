@@ -104,6 +104,33 @@ async function runTests(): Promise<void> {
   assertState(inspect("https://www.upwork.com/nx/find-work/best-matches", "Best Matches - Upwork", "Find work Best Matches My Jobs Messages Profile").internalState, "logged_in");
   assertState(inspect("https://www.upwork.com/ab/account-security/login", "Log In - Upwork", "Log in Continue with Google Sign in").internalState, "logged_out");
   assertState(inspect("https://www.upwork.com/", "Upwork | Hire Top Freelance Talent with Confidence", "Find talent Post a job Log in Sign up").internalState, "logged_out");
+
+  const loggedInFeedWithHiddenSignIn = classifyBrowserSessionSnapshot({
+    currentUrl: "https://www.upwork.com/nx/find-work/best-matches",
+    title: "Upwork",
+    textExcerpt: "Jobs you might like Best Matches Find work Messages Account Settings Search Jobs Sign in",
+    jobLinkCount: 238,
+  }, { state: "healthy", blocked: false });
+  assertState(loggedInFeedWithHiddenSignIn.internalState, "logged_in");
+  assert.equal(loggedInFeedWithHiddenSignIn.blocked, false);
+  assert.equal(loggedInFeedWithHiddenSignIn.matchedText, "upwork_usable_feed");
+
+  const weakSignInOnFeedUrl = classifyBrowserSessionSnapshot({
+    currentUrl: "https://www.upwork.com/nx/find-work/best-matches",
+    title: "Upwork",
+    textExcerpt: "Jobs you might like Best Matches Find work Messages Account Settings Search Jobs Sign in",
+    jobLinkCount: 1,
+  }, { state: "healthy", blocked: false });
+  assertState(weakSignInOnFeedUrl.internalState, "logged_in");
+
+  const realSignInPage = classifyBrowserSessionSnapshot({
+    currentUrl: "https://www.upwork.com/ab/account-security/login",
+    title: "Log In - Upwork",
+    textExcerpt: "Log in Continue with Google Sign in Email or username",
+    jobLinkCount: 0,
+  }, { state: "healthy", blocked: false });
+  assertState(realSignInPage.internalState, "logged_out");
+
   assertState(inspect("https://accounts.google.com/signin/v2/identifier", "Sign in - Google Accounts", "Email or phone Use another account").internalState, "login_in_progress");
   assertState(inspect("https://accounts.google.com/signin/chooser", "Choose an account", "user@example.com Use another account").internalState, "login_in_progress");
 
@@ -122,6 +149,14 @@ async function runTests(): Promise<void> {
   const challenge = inspect("https://www.upwork.com/?__cf_chl_tk=abc", "Challenge - Upwork", "Checking if the site connection is secure Cloudflare CAPTCHA");
   assertState(challenge.internalState, "captcha_or_security_challenge");
   assertState(challenge.sessionState, "manual_attention_required");
+
+  const justAMomentFeed = inspect("https://www.upwork.com/nx/find-work/best-matches", "Just a moment...", "Just a moment Checking if the site connection is secure Jobs you might like Best Matches Find work Messages Account Settings");
+  assertState(justAMomentFeed.internalState, "captcha_or_security_challenge");
+  assertState(justAMomentFeed.sessionState, "manual_attention_required");
+
+  const accessDeniedFeed = inspect("https://www.upwork.com/nx/find-work/best-matches", "Access denied", "Access denied Security challenge Jobs you might like Best Matches Find work Messages Account Settings");
+  assertState(accessDeniedFeed.internalState, "captcha_or_security_challenge");
+  assertState(accessDeniedFeed.sessionState, "manual_attention_required");
 
   const jobShapedChallenge = inspect("https://www.upwork.com/jobs/~022053711714121332703?__cf_chl_rt_tk=abc", "Challenge", "Checking your browser");
   assertState(jobShapedChallenge.internalState, "captcha_or_security_challenge");
