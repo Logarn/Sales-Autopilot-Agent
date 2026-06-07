@@ -84,6 +84,7 @@ export const SLACK_POLL_CHANNEL_ID = process.env.SLACK_POLL_CHANNEL_ID ?? "";
 export const DISCOVERY_SLACK_CHANNEL_ID = process.env.DISCOVERY_SLACK_CHANNEL_ID ?? "";
 export const SLACK_SOCKET_MODE_ENABLED = parseBoolean(process.env.SLACK_SOCKET_MODE_ENABLED, false);
 export const SLACK_ALLOWED_CHANNEL_IDS = parseDelimitedListLoose(process.env.SLACK_ALLOWED_CHANNEL_IDS);
+export const SLACK_ALLOWED_USER_IDS = parseDelimitedListLoose(process.env.SLACK_ALLOWED_USER_IDS);
 export const SLACK_FILE_MAX_BYTES = Math.max(1, parseInteger(process.env.SLACK_FILE_MAX_BYTES, 10 * 1024 * 1024));
 export const SLACK_FILE_ALLOWED_EXTENSIONS = parseDelimitedListLoose(
   process.env.SLACK_FILE_ALLOWED_EXTENSIONS ?? ".pdf,.png,.jpg,.jpeg,.webp",

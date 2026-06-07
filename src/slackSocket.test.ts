@@ -55,12 +55,13 @@ async function runTests(): Promise<void> {
   process.env.DB_PATH = tempDb;
   process.env.PROOF_ASSET_ROOT = proofRoot;
   process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+  process.env.SLACK_ALLOWED_USER_IDS = "U_ALLOWED";
 
   const { applySlackThreadRevision, buildDraftPreviewFromSlackThread, buildSlackSocketStartupError, handleSlackSocketTextEvent, handleThreadCommand, parseSlackThreadCommand, parseUpworkJobUrlFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread, resetSlackSocketEventDedupeForTests } = require("./slackSocket") as {
     applySlackThreadRevision: (input: { channelId: string; threadTs: string; instruction: string }) => { ok: boolean; text: string; proposalVersion?: number };
     buildDraftPreviewFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string };
     buildSlackSocketStartupError: (input: { socketEnabled: boolean; botToken: string; appToken: string }) => string | null;
-    handleSlackSocketTextEvent: (event: { channel: string; ts: string; text?: string; thread_ts?: string; client_msg_id?: string; event_id?: string; event_ts?: string; bot_id?: string; subtype?: string; files?: any[] }, client: any) => Promise<void>;
+    handleSlackSocketTextEvent: (event: { channel: string; ts: string; text?: string; thread_ts?: string; client_msg_id?: string; event_id?: string; event_ts?: string; user?: string; bot_id?: string; subtype?: string; files?: any[] }, client: any) => Promise<void>;
     handleThreadCommand: (input: { channelId: string; threadTs: string; text: string; client: any; intentProvider?: any; conversationProvider?: any; copyProvider?: any; focusQaTab?: any; operatorDeps?: any }) => Promise<void>;
     parseSlackThreadCommand: (value: string) => {
       type: string;
@@ -269,6 +270,7 @@ async function runTests(): Promise<void> {
     await handleSlackSocketTextEvent({
       channel: "C456",
       ts: "333.555",
+      user: "U_ALLOWED",
       text: "https://www.upwork.com/jobs/~033053866890130225260",
     }, {
       chat: {
@@ -284,6 +286,7 @@ async function runTests(): Promise<void> {
     await handleSlackSocketTextEvent({
       channel: "C456",
       ts: "333.666",
+      user: "U_ALLOWED",
       text: "<@UAGENT> prep this https://www.upwork.com/jobs/~033053866890130225260",
     }, {
       chat: {
@@ -301,6 +304,7 @@ async function runTests(): Promise<void> {
       ts: "333.888",
       event_ts: "333.888",
       client_msg_id: "dup-client-msg-1",
+      user: "U_ALLOWED",
       text: "<@UAGENT> prep this https://www.upwork.com/jobs/~055053866890130225260",
     };
     await handleSlackSocketTextEvent(duplicateEvent, {
@@ -316,6 +320,7 @@ async function runTests(): Promise<void> {
       channel: "C456",
       ts: "333.777",
       thread_ts: "333.444",
+      user: "U_ALLOWED",
       text: "related listing https://www.upwork.com/jobs/~044053866890130225260",
     }, {
       chat: {
@@ -326,6 +331,23 @@ async function runTests(): Promise<void> {
     });
     assert(trackedThreadUrlReplies.some((reply) => reply.includes("Got the Upwork link")), "URL inside an existing tracked thread should be captured without a fresh mention.");
     assert(listBrowserActions(null, 1000).some((action) => action.jobId.includes("044053866890130225260") && action.actionType === "capture_job_from_url"), "Tracked-thread URL should queue capture.");
+
+    const unauthorizedReplies: string[] = [];
+    const actionCountBeforeUnauthorized = listBrowserActions(null, 1000).length;
+    await handleSlackSocketTextEvent({
+      channel: "C456",
+      ts: "333.999",
+      user: "U_INTRUDER",
+      text: "<@UAGENT> prep this https://www.upwork.com/jobs/~066053866890130225260",
+    }, {
+      chat: {
+        postMessage: async (payload: { text: string }) => {
+          unauthorizedReplies.push(payload.text);
+        },
+      },
+    });
+    assert(unauthorizedReplies.length === 0, "Unauthorized Slack user should not receive a command reply.");
+    assert(listBrowserActions(null, 1000).length === actionCountBeforeUnauthorized, "Unauthorized Slack user should not queue browser actions.");
 
     const prepareJob = scoreJob({
       id: "prepare-job-1",
@@ -517,6 +539,7 @@ async function runTests(): Promise<void> {
         channel: "C123",
         ts: "111.224",
         thread_ts: "111.222",
+        user: "U_ALLOWED",
         files: [{
           id: "F-DESIGN",
           name: "design-case-studies-steve-logarn.pdf",

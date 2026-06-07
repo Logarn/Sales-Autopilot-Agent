@@ -39,6 +39,7 @@ import {
   SLACK_BOT_TOKEN,
   SLACK_SOCKET_MODE_ENABLED,
   SLACK_ALLOWED_CHANNEL_IDS,
+  SLACK_ALLOWED_USER_IDS,
 } from "./config";
 import { logger } from "./logger";
 import { buildProposalContextPack } from "./skills/profileContextSkill";
@@ -526,6 +527,13 @@ function isAllowedChannel(channelId: string): boolean {
     return true;
   }
   return SLACK_ALLOWED_CHANNEL_IDS.includes(channelId);
+}
+
+function isAllowedUser(userId: string | null | undefined): boolean {
+  if (SLACK_ALLOWED_USER_IDS.length === 0) {
+    return true;
+  }
+  return Boolean(userId && SLACK_ALLOWED_USER_IDS.includes(userId));
 }
 
 function statusLabel(status?: string | null): string {
@@ -1329,6 +1337,7 @@ export interface SlackSocketTextEvent {
   event_ts?: string;
   event_id?: string;
   client_msg_id?: string;
+  user?: string;
   bot_id?: string;
   subtype?: string;
   files?: SlackFileLike[];
@@ -1343,6 +1352,9 @@ export async function handleSlackSocketTextEvent(rawEvent: SlackSocketTextEvent,
 
   const channelId = rawEvent.channel;
   if (!isAllowedChannel(channelId)) {
+    return;
+  }
+  if (!isAllowedUser(rawEvent.user)) {
     return;
   }
 
@@ -2152,7 +2164,8 @@ export async function runSlackSocket(): Promise<void> {
   await app.start();
   logger.info("Slack Socket Mode started.");
   const allowed = SLACK_ALLOWED_CHANNEL_IDS.length ? SLACK_ALLOWED_CHANNEL_IDS.join(", ") : "all configured channels";
-  logger.info(`Listening on channel(s): ${allowed}`);
+  const allowedUsers = SLACK_ALLOWED_USER_IDS.length ? SLACK_ALLOWED_USER_IDS.join(", ") : "all configured users";
+  logger.info(`Listening on channel(s): ${allowed}; user scope: ${allowedUsers}`);
 }
 
 if (require.main === module) {
