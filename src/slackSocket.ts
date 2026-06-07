@@ -48,6 +48,18 @@ import {
   type SlackConversationBrainInput,
 } from "./slackConversationBrain";
 import { buildSoulRuntimeGuidance } from "./soul";
+import {
+  buildSalesLearningPromptContext,
+  forgetSalesLearning,
+  formatSalesLearningMemoryReply,
+  recordApplicationOutcomeLearning,
+  recordCodeImprovementTask,
+  recordProofPreferenceSignal,
+  recordProposalStyleSignal,
+  reflectOnSalesOutcomeWithLlm,
+  rememberSalesLearning,
+  retrieveRelevantSalesLearningMemories,
+} from "./salesLearningMemory";
 import { formatSlackFileIntakeReply, ingestSlackFilesForThread, type SlackFileLike } from "./slackFileIntake";
 import { looksLikeProofPlanRevision, parseProofPlanOverrides, reviseProofPlanOverrides } from "./proofPlanOverrides";
 import {
@@ -116,6 +128,9 @@ export type SlackSocketParsedCommandType =
   | "retry_action"
   | "mark_submitted"
   | "record_outcome"
+  | "memory_query"
+  | "memory_remember"
+  | "memory_forget"
   | "clarify"
   | "ignore"
   | "unknown";
@@ -279,6 +294,32 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
   const mentioned = hasSlackMention(text);
   const normalized = normalizeSlackTextInput(text).trim();
   const commandText = normalized.replace(/[.!?]+$/g, "").trim();
+  const rememberMatch = commandText.match(/^(?:remember this|remember|learn this|save this):?\s+(.+)$/i);
+  if (rememberMatch?.[1]?.trim()) {
+    return {
+      type: "memory_remember",
+      rawText: normalized,
+      instruction: rememberMatch[1].trim(),
+      source: "fallback",
+    };
+  }
+  const forgetMatch = commandText.match(/^(?:forget this|forget that|forget|archive that memory|remove that memory):?\s*(.*)$/i);
+  if (forgetMatch) {
+    return {
+      type: "memory_forget",
+      rawText: normalized,
+      instruction: forgetMatch[1]?.trim() || "latest relevant memory",
+      source: "fallback",
+    };
+  }
+  if (/\b(?:what did you learn|what have you learned|what patterns are working|what proof is working|what boost strategy is working|why did you choose that|what would you do differently next time)\b/i.test(commandText)) {
+    return {
+      type: "memory_query",
+      rawText: normalized,
+      instruction: commandText,
+      source: "fallback",
+    };
+  }
   const qaQueueMatch = /\b(?:what[’']?s ready|what is ready|show qa queue|qa queue|what is blocked|what[’']?s blocked)\b/i.test(commandText);
   if (qaQueueMatch) {
     return { type: "qa_queue", rawText: normalized, source: "fallback" };
@@ -622,6 +663,12 @@ function buildSlackConversationBrainInput(input: {
     scope: memory.scope,
     confidence: memory.confidence,
   }));
+  const salesLearning = buildSalesLearningPromptContext({
+    jobId: state?.jobId ?? null,
+    job,
+    text: input.text,
+    limit: 8,
+  });
   const proofVerified = Boolean(latestAction?.status === "completed" && applicationStatus === "prepared_for_qa");
   return {
     latestUserMessage: input.text,
@@ -670,6 +717,7 @@ function buildSlackConversationBrainInput(input: {
     } : null,
     qaQueue,
     behaviorMemories,
+    salesLearning,
     allowedActions: SLACK_CONVERSATION_ALLOWED_ACTIONS,
     hardSafetyRules: SLACK_CONVERSATION_HARD_SAFETY_RULES,
   };
@@ -782,6 +830,16 @@ function persistConversationBrainLearning(input: {
       fixType: reflection.fixType,
       proposedTask: reflection.proposedTask,
     });
+    if (reflection.fixType === "code_pr" && reflection.proposedTask?.trim()) {
+      recordCodeImprovementTask({
+        task: reflection.proposedTask.trim(),
+        why: reflection.whyItFailed,
+        jobId: input.state?.jobId ?? null,
+        channelId: input.channelId,
+        threadTs: input.threadTs,
+        source: "slack_conversation_brain",
+      });
+    }
   }
 }
 
@@ -817,6 +875,15 @@ export function applySlackThreadRevision(input: {
   if (!revision) {
     return { ok: false, text: `I could not apply the revision for ${state.jobId}; no stored draft row was updated.` };
   }
+  recordProposalStyleSignal({
+    jobId: state.jobId,
+    instruction,
+    beforeText: draft.proposalText,
+    afterText: revision.proposalText,
+    channelId: state.channelId,
+    threadTs: state.threadTs,
+    source: "slack_thread_revision",
+  });
 
   return {
     ok: true,
@@ -849,6 +916,18 @@ export function applySlackProofPlanRevision(input: {
   if (!updated) {
     return { ok: false, text: `I could not update the proof plan for ${state.jobId}.` };
   }
+  recordProofPreferenceSignal({
+    jobId: state.jobId,
+    instruction: input.instruction,
+    plannedProofIds: [
+      ...revised.overrides.includeProofIds,
+      ...revised.overrides.includeAssetIds,
+      ...revised.overrides.includePortfolioItemIds,
+    ],
+    channelId: state.channelId,
+    threadTs: state.threadTs,
+    source: "slack_proof_revision",
+  });
   updateSlackThreadStateStatus(state.channelId, state.threadTs, "prepare_draft_requested");
   return { ok: true, text: revised.summary.reply };
 }
@@ -1562,6 +1641,56 @@ export async function handleThreadCommand(params: {
     return;
   }
 
+  if (command.type === "memory_query") {
+    const text = formatSalesLearningMemoryReply({
+      jobId: state?.jobId ?? null,
+      text: params.text,
+      limit: 6,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return;
+  }
+
+  if (command.type === "memory_remember") {
+    const instruction = command.instruction?.trim();
+    if (!instruction) {
+      await postThreadReply(params.client, params.channelId, params.threadTs, "Tell me exactly what to remember.");
+      return;
+    }
+    const memory = rememberSalesLearning({
+      text: instruction,
+      jobId: state?.jobId ?? null,
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, `Got it — I’ll remember that as a ${memory.scope} sales rule.`);
+    return;
+  }
+
+  if (command.type === "memory_forget") {
+    const rawInstruction = command.instruction?.trim() ?? "";
+    const explicitQuery = rawInstruction && rawInstruction !== "latest relevant memory" ? rawInstruction : null;
+    const relevant = explicitQuery ? [] : retrieveRelevantSalesLearningMemories({
+      jobId: state?.jobId ?? null,
+      text: params.text,
+      limit: 1,
+    });
+    const forgotten = explicitQuery
+      ? forgetSalesLearning({ query: explicitQuery })
+      : relevant[0]
+        ? forgetSalesLearning({ id: relevant[0].id })
+        : 0;
+    await postThreadReply(
+      params.client,
+      params.channelId,
+      params.threadTs,
+      forgotten > 0
+        ? "Done — I forgot that learning signal."
+        : "I could not find a matching sales-learning memory to forget. Name the proof, source, boost, or draft pattern and I’ll remove it."
+    );
+    return;
+  }
+
   if (command.type === "clarify") {
     if (state) {
       const plan = buildConversationPlanForThread({ state, text: params.text });
@@ -1840,6 +1969,20 @@ export async function handleThreadCommand(params: {
     }
 
     updateSlackThreadStateStatus(state.channelId, state.threadTs, "outcome_recorded");
+    recordApplicationOutcomeLearning({
+      jobId: state.jobId,
+      outcome: command.outcomeStatus,
+      note: `Outcome recorded from Slack socket thread command: ${command.rawText}`,
+      source: "slack_outcome_command",
+    });
+    void reflectOnSalesOutcomeWithLlm({
+      jobId: state.jobId,
+      outcome: command.outcomeStatus,
+      note: `Outcome recorded from Slack socket thread command: ${command.rawText}`,
+      source: "slack_outcome_command",
+    }).catch((error) => {
+      logger.warn(`Sales learning reflection skipped: ${error instanceof Error ? error.message : String(error)}`);
+    });
     const outcomeLabel = command.outcomeLabel ?? command.outcomeStatus;
     await postThreadReply(
       params.client,

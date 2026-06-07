@@ -3,6 +3,7 @@ import { evaluateConnectsStrategy, formatConnectsStrategy } from "./connectsStra
 import { buildDeterministicJobIntelligence } from "./jobIntelligenceParser";
 import { loadConnectsRules, loadFreelancerProfile, loadPortfolioLibrary } from "./profile";
 import { loadProfileKnowledge } from "./profileKnowledge";
+import { buildSalesLearningPromptContext } from "./salesLearningMemory";
 import { buildSoulRuntimeGuidance } from "./soul";
 import {
   ApplicationDraft,
@@ -337,6 +338,15 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   const portfolioKnowledge = selectRelevantKnowledge(knowledge.byType.portfolio, job, 2);
   const bidRuleKnowledge = selectRelevantKnowledge(knowledge.byType.bid_rules, job, 2);
   const soulGuidance = buildSoulRuntimeGuidance("proposal_draft_generation");
+  const salesLearning = buildSalesLearningPromptContext({
+    job,
+    text: [job.title, job.description].join("\n"),
+    types: ["proposal_style", "proof_preference", "boost_strategy", "source_quality", "timing_hypothesis"],
+    limit: 6,
+  });
+  const salesLearningGuidance = salesLearning.relevantMemories
+    .map((memory) => `Sales learning (${memory.type}, ${memory.confidence}, evidence ${memory.evidenceCount}): ${memory.hypothesis}`)
+    .slice(0, 6);
   const proofPoints = selectProofPoints(profile, job, proofKnowledge);
   const portfolioItems = selectPortfolioItems(job);
   const fitReasons = [
@@ -384,6 +394,9 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   if (bidRuleKnowledge.length) {
     connects.warnings.push(...bidRuleKnowledge.map((artifact) => `Profile bid rule: ${artifact.summary}`));
   }
+  if (salesLearningGuidance.length) {
+    connects.warnings.push(...salesLearningGuidance.filter((line) => /boost|connects|source|timing/i.test(line)));
+  }
 
   return {
     jobId: job.id,
@@ -413,7 +426,7 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
       proposalText: truncatedProposal,
       suggestedConnects: job.connects?.requiredConnects ?? job.connectsCost,
       suggestedBoostConnects: connects.suggestedBoostConnects,
-      soulGuidance,
+      soulGuidance: [...soulGuidance, ...salesLearningGuidance],
     }),
     generatedAt: new Date().toISOString(),
   };

@@ -11,6 +11,11 @@ import {
 import { OpenAiCompatibleProvider } from "./llm/provider";
 import { logger } from "./logger";
 import { buildJobBlocks, sendSlackPreviewMessage } from "./slack";
+import {
+  buildSalesLearningPromptContext,
+  recordApplicationOutcomeLearning,
+  recordProposalStyleSignal,
+} from "./salesLearningMemory";
 import { buildSoulPromptContext, buildSoulPromptSection } from "./soul";
 import { SlackConversationIntent, SlackConversationIntentType } from "./types";
 
@@ -116,7 +121,17 @@ async function reviseProposalWithLlm(jobId: string, instruction: string): Promis
       },
       {
         role: "user",
-        content: JSON.stringify({ jobId, instruction, currentProposalText: draft.proposalText, soul: buildSoulPromptContext("proposal_revision") }),
+        content: JSON.stringify({
+          jobId,
+          instruction,
+          currentProposalText: draft.proposalText,
+          salesLearning: buildSalesLearningPromptContext({
+            jobId,
+            text: instruction,
+            types: ["proposal_style", "proof_preference", "operator_preference"],
+          }),
+          soul: buildSoulPromptContext("proposal_revision"),
+        }),
       },
     ],
   });
@@ -186,6 +201,14 @@ function handleStatusIntent(intent: SlackConversationIntent): SlackConversationH
   if (intent.type === "mark_applied" || intent.type === "mark_replied") {
     const status = intent.type === "mark_applied" ? "applied" : "replied";
     const updated = updateApplicationStatus(intent.jobId, status, `Marked ${status} from Slack conversation command.`);
+    if (updated) {
+      recordApplicationOutcomeLearning({
+        jobId: intent.jobId,
+        outcome: status,
+        note: `Marked ${status} from Slack conversation command.`,
+        source: "slack_conversation_cli",
+      });
+    }
     return updated
       ? { ok: true, message: `Application ${intent.jobId} marked ${status}.`, intent }
       : { ok: false, message: `No stored application draft found for job_id=${intent.jobId}.`, intent };
@@ -224,10 +247,18 @@ export async function handleSlackConversationCommand(text: string): Promise<Slac
 
   const llmRevision = await reviseProposalWithLlm(intent.jobId, instruction);
   if (llmRevision.ok) {
+    const originalDraft = getApplicationDraft(intent.jobId);
     const applied = applyApplicationRevision(intent.jobId, instruction, llmRevision.proposalText);
     if (!applied) {
       return { ok: false, message: `No stored application draft found for job_id=${intent.jobId}.`, intent };
     }
+    recordProposalStyleSignal({
+      jobId: intent.jobId,
+      instruction,
+      beforeText: originalDraft?.proposalText ?? null,
+      afterText: applied.proposalText,
+      source: "slack_conversation_cli_revision",
+    });
 
     let slackPreviewSent = false;
     try {

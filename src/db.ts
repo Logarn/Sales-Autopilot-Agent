@@ -427,6 +427,526 @@ export interface RecordSlackFailureReflectionInput {
   proposedTask?: string | null;
 }
 
+export type SalesLearningEventType =
+  | "application_seen"
+  | "proposal_draft_created"
+  | "proposal_revision"
+  | "draft_style_signal"
+  | "proof_decision"
+  | "proof_correction"
+  | "boost_decision"
+  | "timing_signal"
+  | "source_signal"
+  | "outcome_recorded"
+  | "failure_reflection"
+  | "operator_correction";
+
+export type SalesLearningMemoryType =
+  | "proposal_style"
+  | "proof_preference"
+  | "boost_strategy"
+  | "timing_hypothesis"
+  | "source_quality"
+  | "operator_preference"
+  | "failure_pattern"
+  | "code_improvement_task";
+
+export type SalesLearningConfidence = "low" | "medium" | "high";
+export type SalesLearningMemoryStatus = "tentative" | "active" | "archived" | "forgotten";
+
+interface SalesLearningEventRow {
+  id: number;
+  event_type: SalesLearningEventType;
+  job_id: string | null;
+  channel_id: string | null;
+  thread_ts: string | null;
+  source: string;
+  payload: string;
+  created_at: string;
+}
+
+interface SalesLearningMemoryRow {
+  id: number;
+  type: SalesLearningMemoryType;
+  scope: string;
+  subject: string;
+  hypothesis: string;
+  rationale: string;
+  confidence: SalesLearningConfidence;
+  evidence_count: number;
+  status: SalesLearningMemoryStatus;
+  source: string;
+  job_id: string | null;
+  channel_id: string | null;
+  thread_ts: string | null;
+  examples: string;
+  metadata: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SalesLearningEvent {
+  id: number;
+  eventType: SalesLearningEventType;
+  jobId: string | null;
+  channelId: string | null;
+  threadTs: string | null;
+  source: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface SalesLearningMemory {
+  id: number;
+  type: SalesLearningMemoryType;
+  scope: string;
+  subject: string;
+  hypothesis: string;
+  rationale: string;
+  confidence: SalesLearningConfidence;
+  evidenceCount: number;
+  status: SalesLearningMemoryStatus;
+  source: string;
+  jobId: string | null;
+  channelId: string | null;
+  threadTs: string | null;
+  examples: string[];
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RecordSalesLearningEventInput {
+  eventType: SalesLearningEventType;
+  jobId?: string | null;
+  channelId?: string | null;
+  threadTs?: string | null;
+  source?: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface UpsertSalesLearningMemoryInput {
+  type: SalesLearningMemoryType;
+  scope?: string;
+  subject: string;
+  hypothesis: string;
+  rationale?: string;
+  confidence?: SalesLearningConfidence;
+  evidenceCount?: number;
+  status?: SalesLearningMemoryStatus;
+  source?: string;
+  jobId?: string | null;
+  channelId?: string | null;
+  threadTs?: string | null;
+  examples?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export type AgentMemoryStatus = "active" | "tentative" | "archived" | "forgotten";
+export type AgentMemoryConfidence = SalesLearningConfidence;
+export type AgentMemoryPrivacyLevel = "normal" | "sensitive" | "debug_only";
+
+interface AgentEventRow {
+  id: number;
+  created_at: string;
+  event_type: string;
+  source_type: string;
+  source_id: string | null;
+  job_id: string | null;
+  application_id: string | null;
+  thread_ts: string | null;
+  actor: string;
+  summary: string;
+  payload_json: string;
+  importance: number;
+  privacy_level: AgentMemoryPrivacyLevel;
+  embedding_id: number | null;
+}
+
+interface AgentMemoryRow {
+  id: number;
+  memory_type: string;
+  scope: string;
+  title: string;
+  summary: string;
+  rule_text: string | null;
+  hypothesis_text: string | null;
+  confidence: AgentMemoryConfidence;
+  importance: number;
+  evidence_count: number;
+  created_at: string;
+  updated_at: string;
+  last_used_at: string | null;
+  decay_score: number;
+  status: AgentMemoryStatus;
+  version: number;
+  supersedes_memory_id: number | null;
+  contradicted_by_memory_id: number | null;
+  source_event_ids: string;
+  keywords: string;
+  embedding_id: number | null;
+}
+
+interface MemoryEmbeddingRow {
+  id: number;
+  owner_type: string;
+  owner_id: number;
+  provider: string;
+  model: string;
+  vector_json_or_blob: string;
+  created_at: string;
+}
+
+interface MemoryConsolidationRow {
+  id: number;
+  created_at: string;
+  period_start: string;
+  period_end: string;
+  summary_type: string;
+  summary: string;
+  source_memory_ids: string;
+  source_event_ids: string;
+  confidence: AgentMemoryConfidence;
+  status: AgentMemoryStatus;
+}
+
+export interface AgentEvent {
+  id: number;
+  createdAt: string;
+  eventType: string;
+  sourceType: string;
+  sourceId: string | null;
+  jobId: string | null;
+  applicationId: string | null;
+  threadTs: string | null;
+  actor: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  importance: number;
+  privacyLevel: AgentMemoryPrivacyLevel;
+  embeddingId: number | null;
+}
+
+export interface AgentMemory {
+  id: number;
+  memoryType: string;
+  scope: string;
+  title: string;
+  summary: string;
+  ruleText: string | null;
+  hypothesisText: string | null;
+  confidence: AgentMemoryConfidence;
+  importance: number;
+  evidenceCount: number;
+  createdAt: string;
+  updatedAt: string;
+  lastUsedAt: string | null;
+  decayScore: number;
+  status: AgentMemoryStatus;
+  version: number;
+  supersedesMemoryId: number | null;
+  contradictedByMemoryId: number | null;
+  sourceEventIds: number[];
+  keywords: string[];
+  embeddingId: number | null;
+}
+
+export interface MemoryEmbedding {
+  id: number;
+  ownerType: string;
+  ownerId: number;
+  provider: string;
+  model: string;
+  vectorJsonOrBlob: string;
+  createdAt: string;
+}
+
+export interface MemoryConsolidation {
+  id: number;
+  createdAt: string;
+  periodStart: string;
+  periodEnd: string;
+  summaryType: string;
+  summary: string;
+  sourceMemoryIds: number[];
+  sourceEventIds: number[];
+  confidence: AgentMemoryConfidence;
+  status: AgentMemoryStatus;
+}
+
+export interface RecordAgentEventInput {
+  eventType: string;
+  sourceType?: string;
+  sourceId?: string | null;
+  jobId?: string | null;
+  applicationId?: string | null;
+  threadTs?: string | null;
+  actor?: string;
+  summary: string;
+  payload?: Record<string, unknown>;
+  importance?: number;
+  privacyLevel?: AgentMemoryPrivacyLevel;
+  embeddingId?: number | null;
+}
+
+export interface UpsertAgentMemoryInput {
+  memoryType: string;
+  scope?: string;
+  title: string;
+  summary: string;
+  ruleText?: string | null;
+  hypothesisText?: string | null;
+  confidence?: AgentMemoryConfidence;
+  importance?: number;
+  evidenceCount?: number;
+  status?: AgentMemoryStatus;
+  version?: number;
+  supersedesMemoryId?: number | null;
+  contradictedByMemoryId?: number | null;
+  sourceEventIds?: number[];
+  keywords?: string[];
+  embeddingId?: number | null;
+}
+
+export type TaskTelemetryType =
+  | "slack_reply"
+  | "lead_packet"
+  | "lead_judgment"
+  | "proposal_draft"
+  | "proof_selection"
+  | "portfolio_selection"
+  | "boost_decision"
+  | "browser_apply_prep"
+  | "browser_retry"
+  | "source_scan"
+  | "qa_handoff"
+  | "outcome_recording";
+
+export type TaskTelemetryActionStatus = "completed" | "paused" | "skipped" | "failed" | "queued";
+
+export type ImprovementCandidateType =
+  | "memory_example"
+  | "prompt_adjustment"
+  | "tool_rule_adjustment"
+  | "code_task_for_mayor"
+  | "eval_case"
+  | "regression_test";
+
+export type ImprovementCandidateStatus = "proposed" | "testing" | "shipped" | "rejected" | "archived";
+export type PromptToolVersionKind = "prompt" | "tool_rule" | "memory_rule" | "eval_rule";
+
+export type SelfImprovementEvalType =
+  | "slack_reply_fixture"
+  | "lead_judgment_fixture"
+  | "proof_selection_fixture"
+  | "boost_decision_fixture"
+  | "draft_quality_fixture"
+  | "retry_browser_blocker_fixture";
+
+interface TaskTelemetryRow {
+  id: number;
+  created_at: string;
+  task_type: TaskTelemetryType;
+  source_type: string;
+  source_id: string | null;
+  job_id: string | null;
+  thread_ts: string | null;
+  success: number;
+  correction_received: number;
+  user_frustration_detected: number;
+  manual_intervention_required: number;
+  browser_security_blocker: number;
+  retry_required: number;
+  latency_ms: number | null;
+  provider: string | null;
+  model: string | null;
+  action_status: TaskTelemetryActionStatus;
+  outcome: string | null;
+  confidence: AgentMemoryConfidence;
+  failure_reason: string | null;
+  metadata_json: string;
+}
+
+interface ImprovementCandidateRow {
+  id: number;
+  created_at: string;
+  candidate_type: ImprovementCandidateType;
+  title: string;
+  summary: string;
+  rationale: string;
+  source_task_ids: string;
+  source_memory_ids: string;
+  status: ImprovementCandidateStatus;
+  priority: number;
+  created_by: string;
+  shipped_at: string | null;
+  metadata_json: string;
+}
+
+interface PromptToolVersionRow {
+  id: number;
+  version_id: string;
+  created_at: string;
+  kind: PromptToolVersionKind;
+  name: string;
+  change_summary: string;
+  reason: string;
+  related_scorecard_json: string;
+  related_failure_id: number | null;
+  created_by: string;
+  active: number;
+  rollback_target_version_id: string | null;
+  tests_json: string;
+  metadata_json: string;
+}
+
+interface SelfImprovementEvalRow {
+  id: number;
+  created_at: string;
+  eval_type: SelfImprovementEvalType;
+  title: string;
+  input_context_json: string;
+  expected_behavior: string;
+  safety_assertions_json: string;
+  regression_guard: string;
+  source_failure_id: number | null;
+  status: string;
+  metadata_json: string;
+}
+
+export interface TaskTelemetry {
+  id: number;
+  createdAt: string;
+  taskType: TaskTelemetryType;
+  sourceType: string;
+  sourceId: string | null;
+  jobId: string | null;
+  threadTs: string | null;
+  success: boolean;
+  correctionReceived: boolean;
+  userFrustrationDetected: boolean;
+  manualInterventionRequired: boolean;
+  browserSecurityBlocker: boolean;
+  retryRequired: boolean;
+  latencyMs: number | null;
+  provider: string | null;
+  model: string | null;
+  actionStatus: TaskTelemetryActionStatus;
+  outcome: string | null;
+  confidence: AgentMemoryConfidence;
+  failureReason: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface ImprovementCandidate {
+  id: number;
+  createdAt: string;
+  candidateType: ImprovementCandidateType;
+  title: string;
+  summary: string;
+  rationale: string;
+  sourceTaskIds: number[];
+  sourceMemoryIds: number[];
+  status: ImprovementCandidateStatus;
+  priority: number;
+  createdBy: string;
+  shippedAt: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface PromptToolVersion {
+  id: number;
+  versionId: string;
+  createdAt: string;
+  kind: PromptToolVersionKind;
+  name: string;
+  changeSummary: string;
+  reason: string;
+  relatedScorecard: Record<string, unknown>;
+  relatedFailureId: number | null;
+  createdBy: string;
+  active: boolean;
+  rollbackTargetVersionId: string | null;
+  tests: string[];
+  metadata: Record<string, unknown>;
+}
+
+export interface SelfImprovementEval {
+  id: number;
+  createdAt: string;
+  evalType: SelfImprovementEvalType;
+  title: string;
+  inputContext: Record<string, unknown>;
+  expectedBehavior: string;
+  safetyAssertions: string[];
+  regressionGuard: string;
+  sourceFailureId: number | null;
+  status: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface RecordTaskTelemetryInput {
+  taskType: TaskTelemetryType;
+  sourceType?: string;
+  sourceId?: string | null;
+  jobId?: string | null;
+  threadTs?: string | null;
+  success: boolean;
+  correctionReceived?: boolean;
+  userFrustrationDetected?: boolean;
+  manualInterventionRequired?: boolean;
+  browserSecurityBlocker?: boolean;
+  retryRequired?: boolean;
+  latencyMs?: number | null;
+  provider?: string | null;
+  model?: string | null;
+  actionStatus?: TaskTelemetryActionStatus;
+  outcome?: string | null;
+  confidence?: AgentMemoryConfidence;
+  failureReason?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CreateImprovementCandidateInput {
+  candidateType: ImprovementCandidateType;
+  title: string;
+  summary: string;
+  rationale?: string;
+  sourceTaskIds?: number[];
+  sourceMemoryIds?: number[];
+  status?: ImprovementCandidateStatus;
+  priority?: number;
+  createdBy?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CreatePromptToolVersionInput {
+  versionId: string;
+  kind: PromptToolVersionKind;
+  name: string;
+  changeSummary: string;
+  reason: string;
+  relatedScorecard?: Record<string, unknown>;
+  relatedFailureId?: number | null;
+  createdBy?: string;
+  active?: boolean;
+  rollbackTargetVersionId?: string | null;
+  tests?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface CreateSelfImprovementEvalInput {
+  evalType: SelfImprovementEvalType;
+  title: string;
+  inputContext: Record<string, unknown>;
+  expectedBehavior: string;
+  safetyAssertions?: string[];
+  regressionGuard: string;
+  sourceFailureId?: number | null;
+  status?: string;
+  metadata?: Record<string, unknown>;
+}
+
 interface ApplicationDraftRow {
   job_id: string;
   status: ApplicationStatus;
@@ -560,6 +1080,209 @@ CREATE TABLE IF NOT EXISTS slack_failure_reflections (
 
 CREATE INDEX IF NOT EXISTS idx_slack_failure_reflections_thread ON slack_failure_reflections(channel_id, thread_ts);
 CREATE INDEX IF NOT EXISTS idx_slack_failure_reflections_created_at ON slack_failure_reflections(created_at);
+
+CREATE TABLE IF NOT EXISTS agent_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT DEFAULT (datetime('now')),
+  event_type TEXT NOT NULL,
+  source_type TEXT NOT NULL DEFAULT 'system',
+  source_id TEXT,
+  job_id TEXT,
+  application_id TEXT,
+  thread_ts TEXT,
+  actor TEXT NOT NULL DEFAULT 'agent',
+  summary TEXT NOT NULL,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  importance INTEGER NOT NULL DEFAULT 3,
+  privacy_level TEXT NOT NULL DEFAULT 'normal',
+  embedding_id INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_events_type ON agent_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_agent_events_job_id ON agent_events(job_id);
+CREATE INDEX IF NOT EXISTS idx_agent_events_thread ON agent_events(thread_ts);
+CREATE INDEX IF NOT EXISTS idx_agent_events_created ON agent_events(created_at);
+
+CREATE TABLE IF NOT EXISTS agent_memories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  memory_type TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'global',
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  rule_text TEXT,
+  hypothesis_text TEXT,
+  confidence TEXT NOT NULL DEFAULT 'low',
+  importance INTEGER NOT NULL DEFAULT 3,
+  evidence_count INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  last_used_at TEXT,
+  decay_score REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'tentative',
+  version INTEGER NOT NULL DEFAULT 1,
+  supersedes_memory_id INTEGER,
+  contradicted_by_memory_id INTEGER,
+  source_event_ids TEXT NOT NULL DEFAULT '[]',
+  keywords TEXT NOT NULL DEFAULT '[]',
+  embedding_id INTEGER,
+  UNIQUE(memory_type, scope, title, summary)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_memories_status ON agent_memories(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_agent_memories_type_scope ON agent_memories(memory_type, scope);
+CREATE INDEX IF NOT EXISTS idx_agent_memories_importance ON agent_memories(importance, confidence, updated_at);
+
+CREATE TABLE IF NOT EXISTS memory_embeddings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_type TEXT NOT NULL,
+  owner_id INTEGER NOT NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  vector_json_or_blob TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_embeddings_owner ON memory_embeddings(owner_type, owner_id);
+
+CREATE TABLE IF NOT EXISTS memory_consolidations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT DEFAULT (datetime('now')),
+  period_start TEXT NOT NULL,
+  period_end TEXT NOT NULL,
+  summary_type TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  source_memory_ids TEXT NOT NULL DEFAULT '[]',
+  source_event_ids TEXT NOT NULL DEFAULT '[]',
+  confidence TEXT NOT NULL DEFAULT 'low',
+  status TEXT NOT NULL DEFAULT 'tentative'
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_consolidations_period ON memory_consolidations(period_start, period_end);
+CREATE INDEX IF NOT EXISTS idx_memory_consolidations_type ON memory_consolidations(summary_type, status);
+
+CREATE TABLE IF NOT EXISTS task_telemetry (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT DEFAULT (datetime('now')),
+  task_type TEXT NOT NULL,
+  source_type TEXT NOT NULL DEFAULT 'system',
+  source_id TEXT,
+  job_id TEXT,
+  thread_ts TEXT,
+  success INTEGER NOT NULL DEFAULT 0,
+  correction_received INTEGER NOT NULL DEFAULT 0,
+  user_frustration_detected INTEGER NOT NULL DEFAULT 0,
+  manual_intervention_required INTEGER NOT NULL DEFAULT 0,
+  browser_security_blocker INTEGER NOT NULL DEFAULT 0,
+  retry_required INTEGER NOT NULL DEFAULT 0,
+  latency_ms INTEGER,
+  provider TEXT,
+  model TEXT,
+  action_status TEXT NOT NULL DEFAULT 'completed',
+  outcome TEXT,
+  confidence TEXT NOT NULL DEFAULT 'low',
+  failure_reason TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_telemetry_type_created ON task_telemetry(task_type, created_at);
+CREATE INDEX IF NOT EXISTS idx_task_telemetry_job ON task_telemetry(job_id);
+CREATE INDEX IF NOT EXISTS idx_task_telemetry_thread ON task_telemetry(thread_ts);
+CREATE INDEX IF NOT EXISTS idx_task_telemetry_status ON task_telemetry(action_status, success);
+
+CREATE TABLE IF NOT EXISTS improvement_candidates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT DEFAULT (datetime('now')),
+  candidate_type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  rationale TEXT NOT NULL DEFAULT '',
+  source_task_ids TEXT NOT NULL DEFAULT '[]',
+  source_memory_ids TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'proposed',
+  priority INTEGER NOT NULL DEFAULT 3,
+  created_by TEXT NOT NULL DEFAULT 'agent',
+  shipped_at TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_improvement_candidates_status ON improvement_candidates(status, priority, created_at);
+CREATE INDEX IF NOT EXISTS idx_improvement_candidates_type ON improvement_candidates(candidate_type);
+
+CREATE TABLE IF NOT EXISTS prompt_tool_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  version_id TEXT NOT NULL UNIQUE,
+  created_at TEXT DEFAULT (datetime('now')),
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  change_summary TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  related_scorecard_json TEXT NOT NULL DEFAULT '{}',
+  related_failure_id INTEGER,
+  created_by TEXT NOT NULL DEFAULT 'agent',
+  active INTEGER NOT NULL DEFAULT 0,
+  rollback_target_version_id TEXT,
+  tests_json TEXT NOT NULL DEFAULT '[]',
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_prompt_tool_versions_active ON prompt_tool_versions(kind, name, active);
+
+CREATE TABLE IF NOT EXISTS self_improvement_evals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT DEFAULT (datetime('now')),
+  eval_type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  input_context_json TEXT NOT NULL DEFAULT '{}',
+  expected_behavior TEXT NOT NULL,
+  safety_assertions_json TEXT NOT NULL DEFAULT '[]',
+  regression_guard TEXT NOT NULL,
+  source_failure_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'active',
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_self_improvement_evals_type ON self_improvement_evals(eval_type, status);
+CREATE INDEX IF NOT EXISTS idx_self_improvement_evals_failure ON self_improvement_evals(source_failure_id);
+
+CREATE TABLE IF NOT EXISTS sales_learning_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_type TEXT NOT NULL,
+  job_id TEXT,
+  channel_id TEXT,
+  thread_ts TEXT,
+  source TEXT NOT NULL DEFAULT 'system',
+  payload TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_sales_learning_events_type ON sales_learning_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_sales_learning_events_job_id ON sales_learning_events(job_id);
+CREATE INDEX IF NOT EXISTS idx_sales_learning_events_created_at ON sales_learning_events(created_at);
+
+CREATE TABLE IF NOT EXISTS sales_learning_memories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'global',
+  subject TEXT NOT NULL,
+  hypothesis TEXT NOT NULL,
+  rationale TEXT NOT NULL DEFAULT '',
+  confidence TEXT NOT NULL DEFAULT 'low',
+  evidence_count INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'tentative',
+  source TEXT NOT NULL DEFAULT 'system',
+  job_id TEXT,
+  channel_id TEXT,
+  thread_ts TEXT,
+  examples TEXT NOT NULL DEFAULT '[]',
+  metadata TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(type, scope, subject, hypothesis)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sales_learning_memories_status ON sales_learning_memories(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_sales_learning_memories_type_scope ON sales_learning_memories(type, scope);
+CREATE INDEX IF NOT EXISTS idx_sales_learning_memories_subject ON sales_learning_memories(subject);
 
 CREATE TABLE IF NOT EXISTS applications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -884,6 +1607,347 @@ const listRecentSlackFailureReflectionsStmt = db.prepare<[number], SlackFailureR
    ORDER BY created_at DESC, id DESC
    LIMIT ?`
 );
+const insertAgentEventStmt = db.prepare(
+  `INSERT INTO agent_events (
+    event_type,
+    source_type,
+    source_id,
+    job_id,
+    application_id,
+    thread_ts,
+    actor,
+    summary,
+    payload_json,
+    importance,
+    privacy_level,
+    embedding_id
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+);
+const getAgentEventByIdStmt = db.prepare<[number], AgentEventRow>(
+  `SELECT id, created_at, event_type, source_type, source_id, job_id, application_id, thread_ts, actor,
+          summary, payload_json, importance, privacy_level, embedding_id
+   FROM agent_events
+   WHERE id = ?`
+);
+const listRecentAgentEventsStmt = db.prepare<[number], AgentEventRow>(
+  `SELECT id, created_at, event_type, source_type, source_id, job_id, application_id, thread_ts, actor,
+          summary, payload_json, importance, privacy_level, embedding_id
+   FROM agent_events
+   ORDER BY created_at DESC, id DESC
+   LIMIT ?`
+);
+const upsertAgentMemoryStmt = db.prepare(
+  `INSERT INTO agent_memories (
+    memory_type,
+    scope,
+    title,
+    summary,
+    rule_text,
+    hypothesis_text,
+    confidence,
+    importance,
+    evidence_count,
+    status,
+    version,
+    supersedes_memory_id,
+    contradicted_by_memory_id,
+    source_event_ids,
+    keywords,
+    embedding_id,
+    updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  ON CONFLICT(memory_type, scope, title, summary) DO UPDATE SET
+    rule_text = COALESCE(excluded.rule_text, agent_memories.rule_text),
+    hypothesis_text = COALESCE(excluded.hypothesis_text, agent_memories.hypothesis_text),
+    confidence = excluded.confidence,
+    importance = MAX(agent_memories.importance, excluded.importance),
+    evidence_count = agent_memories.evidence_count + excluded.evidence_count,
+    status = CASE
+      WHEN excluded.status = 'forgotten' THEN 'forgotten'
+      WHEN agent_memories.status = 'forgotten' THEN excluded.status
+      WHEN agent_memories.evidence_count + excluded.evidence_count >= 2 AND excluded.status = 'tentative' THEN 'active'
+      ELSE excluded.status
+    END,
+    version = MAX(agent_memories.version + 1, excluded.version),
+    supersedes_memory_id = COALESCE(excluded.supersedes_memory_id, agent_memories.supersedes_memory_id),
+    contradicted_by_memory_id = COALESCE(excluded.contradicted_by_memory_id, agent_memories.contradicted_by_memory_id),
+    source_event_ids = excluded.source_event_ids,
+    keywords = excluded.keywords,
+    embedding_id = COALESCE(excluded.embedding_id, agent_memories.embedding_id),
+    updated_at = datetime('now')`
+);
+const getAgentMemoryByKeyStmt = db.prepare<[string, string, string, string], AgentMemoryRow>(
+  `SELECT id, memory_type, scope, title, summary, rule_text, hypothesis_text, confidence, importance, evidence_count,
+          created_at, updated_at, last_used_at, decay_score, status, version, supersedes_memory_id,
+          contradicted_by_memory_id, source_event_ids, keywords, embedding_id
+   FROM agent_memories
+   WHERE memory_type = ? AND scope = ? AND title = ? AND summary = ?
+   LIMIT 1`
+);
+const listAgentMemoriesStmt = db.prepare<[number], AgentMemoryRow>(
+  `SELECT id, memory_type, scope, title, summary, rule_text, hypothesis_text, confidence, importance, evidence_count,
+          created_at, updated_at, last_used_at, decay_score, status, version, supersedes_memory_id,
+          contradicted_by_memory_id, source_event_ids, keywords, embedding_id
+   FROM agent_memories
+   WHERE status IN ('tentative', 'active')
+   ORDER BY importance DESC, evidence_count DESC, updated_at DESC, id DESC
+   LIMIT ?`
+);
+const listAgentMemoriesByTypeStmt = db.prepare<[string, number], AgentMemoryRow>(
+  `SELECT id, memory_type, scope, title, summary, rule_text, hypothesis_text, confidence, importance, evidence_count,
+          created_at, updated_at, last_used_at, decay_score, status, version, supersedes_memory_id,
+          contradicted_by_memory_id, source_event_ids, keywords, embedding_id
+   FROM agent_memories
+   WHERE memory_type = ? AND status IN ('tentative', 'active')
+   ORDER BY importance DESC, evidence_count DESC, updated_at DESC, id DESC
+   LIMIT ?`
+);
+const touchAgentMemoryStmt = db.prepare<[number]>(
+  `UPDATE agent_memories SET last_used_at = datetime('now') WHERE id = ?`
+);
+const forgetAgentMemoryByIdStmt = db.prepare<[number]>(
+  `UPDATE agent_memories SET status = 'forgotten', updated_at = datetime('now') WHERE id = ?`
+);
+const forgetAgentMemoriesMatchingStmt = db.prepare<[string, string, string, string, string]>(
+  `UPDATE agent_memories
+   SET status = 'forgotten', updated_at = datetime('now')
+   WHERE status IN ('tentative', 'active')
+     AND (? = '' OR memory_type = ?)
+     AND (LOWER(title) LIKE LOWER(?) OR LOWER(summary) LIKE LOWER(?) OR LOWER(COALESCE(hypothesis_text, '')) LIKE LOWER(?))`
+);
+const insertMemoryEmbeddingStmt = db.prepare(
+  `INSERT INTO memory_embeddings (owner_type, owner_id, provider, model, vector_json_or_blob)
+   VALUES (?, ?, ?, ?, ?)`
+);
+const insertMemoryConsolidationStmt = db.prepare(
+  `INSERT INTO memory_consolidations (
+    period_start,
+    period_end,
+    summary_type,
+    summary,
+    source_memory_ids,
+    source_event_ids,
+    confidence,
+    status
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+);
+const insertTaskTelemetryStmt = db.prepare(
+  `INSERT INTO task_telemetry (
+    task_type,
+    source_type,
+    source_id,
+    job_id,
+    thread_ts,
+    success,
+    correction_received,
+    user_frustration_detected,
+    manual_intervention_required,
+    browser_security_blocker,
+    retry_required,
+    latency_ms,
+    provider,
+    model,
+    action_status,
+    outcome,
+    confidence,
+    failure_reason,
+    metadata_json
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+);
+const getTaskTelemetryByIdStmt = db.prepare<[number], TaskTelemetryRow>(
+  `SELECT id, created_at, task_type, source_type, source_id, job_id, thread_ts, success,
+          correction_received, user_frustration_detected, manual_intervention_required,
+          browser_security_blocker, retry_required, latency_ms, provider, model,
+          action_status, outcome, confidence, failure_reason, metadata_json
+   FROM task_telemetry
+   WHERE id = ?`
+);
+const listTaskTelemetryStmt = db.prepare<[number], TaskTelemetryRow>(
+  `SELECT id, created_at, task_type, source_type, source_id, job_id, thread_ts, success,
+          correction_received, user_frustration_detected, manual_intervention_required,
+          browser_security_blocker, retry_required, latency_ms, provider, model,
+          action_status, outcome, confidence, failure_reason, metadata_json
+   FROM task_telemetry
+   ORDER BY created_at DESC, id DESC
+   LIMIT ?`
+);
+const insertImprovementCandidateStmt = db.prepare(
+  `INSERT INTO improvement_candidates (
+    candidate_type,
+    title,
+    summary,
+    rationale,
+    source_task_ids,
+    source_memory_ids,
+    status,
+    priority,
+    created_by,
+    metadata_json
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+);
+const getImprovementCandidateByIdStmt = db.prepare<[number], ImprovementCandidateRow>(
+  `SELECT id, created_at, candidate_type, title, summary, rationale, source_task_ids,
+          source_memory_ids, status, priority, created_by, shipped_at, metadata_json
+   FROM improvement_candidates
+   WHERE id = ?`
+);
+const listImprovementCandidatesStmt = db.prepare<[number], ImprovementCandidateRow>(
+  `SELECT id, created_at, candidate_type, title, summary, rationale, source_task_ids,
+          source_memory_ids, status, priority, created_by, shipped_at, metadata_json
+   FROM improvement_candidates
+   ORDER BY priority DESC, created_at DESC, id DESC
+   LIMIT ?`
+);
+const insertPromptToolVersionStmt = db.prepare(
+  `INSERT INTO prompt_tool_versions (
+    version_id,
+    kind,
+    name,
+    change_summary,
+    reason,
+    related_scorecard_json,
+    related_failure_id,
+    created_by,
+    active,
+    rollback_target_version_id,
+    tests_json,
+    metadata_json
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+);
+const getPromptToolVersionByVersionIdStmt = db.prepare<[string], PromptToolVersionRow>(
+  `SELECT id, version_id, created_at, kind, name, change_summary, reason, related_scorecard_json,
+          related_failure_id, created_by, active, rollback_target_version_id, tests_json, metadata_json
+   FROM prompt_tool_versions
+   WHERE version_id = ?`
+);
+const listPromptToolVersionsStmt = db.prepare<[number], PromptToolVersionRow>(
+  `SELECT id, version_id, created_at, kind, name, change_summary, reason, related_scorecard_json,
+          related_failure_id, created_by, active, rollback_target_version_id, tests_json, metadata_json
+   FROM prompt_tool_versions
+   ORDER BY created_at DESC, id DESC
+   LIMIT ?`
+);
+const deactivatePromptToolVersionStmt = db.prepare<[string]>(
+  `UPDATE prompt_tool_versions SET active = 0 WHERE version_id = ?`
+);
+const insertSelfImprovementEvalStmt = db.prepare(
+  `INSERT INTO self_improvement_evals (
+    eval_type,
+    title,
+    input_context_json,
+    expected_behavior,
+    safety_assertions_json,
+    regression_guard,
+    source_failure_id,
+    status,
+    metadata_json
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+);
+const getSelfImprovementEvalByIdStmt = db.prepare<[number], SelfImprovementEvalRow>(
+  `SELECT id, created_at, eval_type, title, input_context_json, expected_behavior,
+          safety_assertions_json, regression_guard, source_failure_id, status, metadata_json
+   FROM self_improvement_evals
+   WHERE id = ?`
+);
+const listSelfImprovementEvalsStmt = db.prepare<[number], SelfImprovementEvalRow>(
+  `SELECT id, created_at, eval_type, title, input_context_json, expected_behavior,
+          safety_assertions_json, regression_guard, source_failure_id, status, metadata_json
+   FROM self_improvement_evals
+   ORDER BY created_at DESC, id DESC
+   LIMIT ?`
+);
+const insertSalesLearningEventStmt = db.prepare(
+  `INSERT INTO sales_learning_events (
+    event_type,
+    job_id,
+    channel_id,
+    thread_ts,
+    source,
+    payload
+  ) VALUES (?, ?, ?, ?, ?, ?)`
+);
+const getSalesLearningEventByIdStmt = db.prepare<[number], SalesLearningEventRow>(
+  `SELECT id, event_type, job_id, channel_id, thread_ts, source, payload, created_at
+   FROM sales_learning_events
+   WHERE id = ?`
+);
+const listRecentSalesLearningEventsStmt = db.prepare<[number], SalesLearningEventRow>(
+  `SELECT id, event_type, job_id, channel_id, thread_ts, source, payload, created_at
+   FROM sales_learning_events
+   ORDER BY created_at DESC, id DESC
+   LIMIT ?`
+);
+const upsertSalesLearningMemoryStmt = db.prepare(
+  `INSERT INTO sales_learning_memories (
+    type,
+    scope,
+    subject,
+    hypothesis,
+    rationale,
+    confidence,
+    evidence_count,
+    status,
+    source,
+    job_id,
+    channel_id,
+    thread_ts,
+    examples,
+    metadata,
+    updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  ON CONFLICT(type, scope, subject, hypothesis) DO UPDATE SET
+    rationale = excluded.rationale,
+    confidence = excluded.confidence,
+    evidence_count = sales_learning_memories.evidence_count + excluded.evidence_count,
+    status = CASE
+      WHEN excluded.status = 'forgotten' THEN 'forgotten'
+      WHEN sales_learning_memories.status = 'forgotten' THEN excluded.status
+      WHEN sales_learning_memories.evidence_count + excluded.evidence_count >= 2 AND excluded.status = 'tentative' THEN 'active'
+      ELSE excluded.status
+    END,
+    source = excluded.source,
+    job_id = COALESCE(excluded.job_id, sales_learning_memories.job_id),
+    channel_id = COALESCE(excluded.channel_id, sales_learning_memories.channel_id),
+    thread_ts = COALESCE(excluded.thread_ts, sales_learning_memories.thread_ts),
+    examples = excluded.examples,
+    metadata = excluded.metadata,
+    updated_at = datetime('now')`
+);
+const getSalesLearningMemoryByKeyStmt = db.prepare<[SalesLearningMemoryType, string, string, string], SalesLearningMemoryRow>(
+  `SELECT id, type, scope, subject, hypothesis, rationale, confidence, evidence_count, status, source,
+          job_id, channel_id, thread_ts, examples, metadata, created_at, updated_at
+   FROM sales_learning_memories
+   WHERE type = ? AND scope = ? AND subject = ? AND hypothesis = ?
+   LIMIT 1`
+);
+const listSalesLearningMemoriesStmt = db.prepare<[number], SalesLearningMemoryRow>(
+  `SELECT id, type, scope, subject, hypothesis, rationale, confidence, evidence_count, status, source,
+          job_id, channel_id, thread_ts, examples, metadata, created_at, updated_at
+   FROM sales_learning_memories
+   WHERE status IN ('tentative', 'active')
+   ORDER BY evidence_count DESC, updated_at DESC, id DESC
+   LIMIT ?`
+);
+const listSalesLearningMemoriesByTypeStmt = db.prepare<[SalesLearningMemoryType, number], SalesLearningMemoryRow>(
+  `SELECT id, type, scope, subject, hypothesis, rationale, confidence, evidence_count, status, source,
+          job_id, channel_id, thread_ts, examples, metadata, created_at, updated_at
+   FROM sales_learning_memories
+   WHERE type = ? AND status IN ('tentative', 'active')
+   ORDER BY evidence_count DESC, updated_at DESC, id DESC
+   LIMIT ?`
+);
+const forgetSalesLearningMemoryByIdStmt = db.prepare<[number]>(
+  `UPDATE sales_learning_memories
+   SET status = 'forgotten', updated_at = datetime('now')
+   WHERE id = ?`
+);
+const forgetSalesLearningMemoriesMatchingStmt = db.prepare<[string, string, string, string]>(
+  `UPDATE sales_learning_memories
+   SET status = 'forgotten', updated_at = datetime('now')
+   WHERE status IN ('tentative', 'active')
+     AND (? = '' OR type = ?)
+     AND (LOWER(subject) LIKE LOWER(?) OR LOWER(hypothesis) LIKE LOWER(?))`
+);
 const insertBrowserActionStmt = db.prepare(
   `INSERT INTO browser_actions (job_id, action_type, status, payload, attempts, last_error, updated_at)
    VALUES (?, ?, 'pending', ?, 0, NULL, datetime('now'))`
@@ -1056,6 +2120,202 @@ function rowToSlackFailureReflection(row: SlackFailureReflectionRow): SlackFailu
     fixType: row.fix_type,
     proposedTask: row.proposed_task,
     createdAt: row.created_at,
+  };
+}
+
+function rowToSalesLearningEvent(row: SalesLearningEventRow): SalesLearningEvent {
+  return {
+    id: row.id,
+    eventType: row.event_type,
+    jobId: row.job_id,
+    channelId: row.channel_id,
+    threadTs: row.thread_ts,
+    source: row.source,
+    payload: parseJsonObject<Record<string, unknown>>(row.payload) ?? {},
+    createdAt: row.created_at,
+  };
+}
+
+function rowToSalesLearningMemory(row: SalesLearningMemoryRow): SalesLearningMemory {
+  return {
+    id: row.id,
+    type: row.type,
+    scope: row.scope,
+    subject: row.subject,
+    hypothesis: row.hypothesis,
+    rationale: row.rationale,
+    confidence: row.confidence,
+    evidenceCount: row.evidence_count,
+    status: row.status,
+    source: row.source,
+    jobId: row.job_id,
+    channelId: row.channel_id,
+    threadTs: row.thread_ts,
+    examples: parseJsonStringArray(row.examples),
+    metadata: parseJsonObject<Record<string, unknown>>(row.metadata) ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToAgentEvent(row: AgentEventRow): AgentEvent {
+  return {
+    id: row.id,
+    createdAt: row.created_at,
+    eventType: row.event_type,
+    sourceType: row.source_type,
+    sourceId: row.source_id,
+    jobId: row.job_id,
+    applicationId: row.application_id,
+    threadTs: row.thread_ts,
+    actor: row.actor,
+    summary: row.summary,
+    payload: parseJsonObject<Record<string, unknown>>(row.payload_json) ?? {},
+    importance: row.importance,
+    privacyLevel: row.privacy_level,
+    embeddingId: row.embedding_id,
+  };
+}
+
+function parseJsonNumberArray(value: string | null | undefined): number[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item): item is number => typeof item === "number" && Number.isFinite(item)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function rowToAgentMemory(row: AgentMemoryRow): AgentMemory {
+  return {
+    id: row.id,
+    memoryType: row.memory_type,
+    scope: row.scope,
+    title: row.title,
+    summary: row.summary,
+    ruleText: row.rule_text,
+    hypothesisText: row.hypothesis_text,
+    confidence: row.confidence,
+    importance: row.importance,
+    evidenceCount: row.evidence_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastUsedAt: row.last_used_at,
+    decayScore: row.decay_score,
+    status: row.status,
+    version: row.version,
+    supersedesMemoryId: row.supersedes_memory_id,
+    contradictedByMemoryId: row.contradicted_by_memory_id,
+    sourceEventIds: parseJsonNumberArray(row.source_event_ids),
+    keywords: parseJsonStringArray(row.keywords),
+    embeddingId: row.embedding_id,
+  };
+}
+
+function rowToMemoryEmbedding(row: MemoryEmbeddingRow): MemoryEmbedding {
+  return {
+    id: row.id,
+    ownerType: row.owner_type,
+    ownerId: row.owner_id,
+    provider: row.provider,
+    model: row.model,
+    vectorJsonOrBlob: row.vector_json_or_blob,
+    createdAt: row.created_at,
+  };
+}
+
+function rowToMemoryConsolidation(row: MemoryConsolidationRow): MemoryConsolidation {
+  return {
+    id: row.id,
+    createdAt: row.created_at,
+    periodStart: row.period_start,
+    periodEnd: row.period_end,
+    summaryType: row.summary_type,
+    summary: row.summary,
+    sourceMemoryIds: parseJsonNumberArray(row.source_memory_ids),
+    sourceEventIds: parseJsonNumberArray(row.source_event_ids),
+    confidence: row.confidence,
+    status: row.status,
+  };
+}
+
+function rowToTaskTelemetry(row: TaskTelemetryRow): TaskTelemetry {
+  return {
+    id: row.id,
+    createdAt: row.created_at,
+    taskType: row.task_type,
+    sourceType: row.source_type,
+    sourceId: row.source_id,
+    jobId: row.job_id,
+    threadTs: row.thread_ts,
+    success: row.success === 1,
+    correctionReceived: row.correction_received === 1,
+    userFrustrationDetected: row.user_frustration_detected === 1,
+    manualInterventionRequired: row.manual_intervention_required === 1,
+    browserSecurityBlocker: row.browser_security_blocker === 1,
+    retryRequired: row.retry_required === 1,
+    latencyMs: row.latency_ms,
+    provider: row.provider,
+    model: row.model,
+    actionStatus: row.action_status,
+    outcome: row.outcome,
+    confidence: row.confidence,
+    failureReason: row.failure_reason,
+    metadata: parseJsonObject<Record<string, unknown>>(row.metadata_json) ?? {},
+  };
+}
+
+function rowToImprovementCandidate(row: ImprovementCandidateRow): ImprovementCandidate {
+  return {
+    id: row.id,
+    createdAt: row.created_at,
+    candidateType: row.candidate_type,
+    title: row.title,
+    summary: row.summary,
+    rationale: row.rationale,
+    sourceTaskIds: parseJsonNumberArray(row.source_task_ids),
+    sourceMemoryIds: parseJsonNumberArray(row.source_memory_ids),
+    status: row.status,
+    priority: row.priority,
+    createdBy: row.created_by,
+    shippedAt: row.shipped_at,
+    metadata: parseJsonObject<Record<string, unknown>>(row.metadata_json) ?? {},
+  };
+}
+
+function rowToPromptToolVersion(row: PromptToolVersionRow): PromptToolVersion {
+  return {
+    id: row.id,
+    versionId: row.version_id,
+    createdAt: row.created_at,
+    kind: row.kind,
+    name: row.name,
+    changeSummary: row.change_summary,
+    reason: row.reason,
+    relatedScorecard: parseJsonObject<Record<string, unknown>>(row.related_scorecard_json) ?? {},
+    relatedFailureId: row.related_failure_id,
+    createdBy: row.created_by,
+    active: row.active === 1,
+    rollbackTargetVersionId: row.rollback_target_version_id,
+    tests: parseJsonStringArray(row.tests_json),
+    metadata: parseJsonObject<Record<string, unknown>>(row.metadata_json) ?? {},
+  };
+}
+
+function rowToSelfImprovementEval(row: SelfImprovementEvalRow): SelfImprovementEval {
+  return {
+    id: row.id,
+    createdAt: row.created_at,
+    evalType: row.eval_type,
+    title: row.title,
+    inputContext: parseJsonObject<Record<string, unknown>>(row.input_context_json) ?? {},
+    expectedBehavior: row.expected_behavior,
+    safetyAssertions: parseJsonStringArray(row.safety_assertions_json),
+    regressionGuard: row.regression_guard,
+    sourceFailureId: row.source_failure_id,
+    status: row.status,
+    metadata: parseJsonObject<Record<string, unknown>>(row.metadata_json) ?? {},
   };
 }
 
@@ -2007,6 +3267,444 @@ export function recordSlackFailureReflection(input: RecordSlackFailureReflection
 
 export function listRecentSlackFailureReflections(limit = 25): SlackFailureReflection[] {
   return listRecentSlackFailureReflectionsStmt.all(Math.max(1, limit)).map(rowToSlackFailureReflection);
+}
+
+function clampMemoryImportance(value: number | undefined): number {
+  if (!Number.isFinite(value ?? NaN)) return 3;
+  return Math.max(1, Math.min(10, Math.round(value ?? 3)));
+}
+
+function cleanAgentMemoryText(value: string, field: string): string {
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  if (!cleaned) throw new Error(`Agent memory ${field} cannot be empty.`);
+  return cleaned;
+}
+
+function normalizeAgentKeywords(values: string[] | undefined): string[] {
+  return Array.from(new Set((values ?? [])
+    .map((value) => value.toLowerCase().replace(/\s+/g, " ").trim())
+    .filter(Boolean)))
+    .slice(0, 40);
+}
+
+export function recordAgentEvent(input: RecordAgentEventInput): AgentEvent {
+  const summary = cleanAgentMemoryText(input.summary, "summary");
+  const result = insertAgentEventStmt.run(
+    input.eventType,
+    input.sourceType?.trim() || "system",
+    input.sourceId ?? null,
+    input.jobId ?? null,
+    input.applicationId ?? input.jobId ?? null,
+    input.threadTs ?? null,
+    input.actor?.trim() || "agent",
+    summary,
+    JSON.stringify(input.payload ?? {}),
+    clampMemoryImportance(input.importance),
+    input.privacyLevel ?? "normal",
+    input.embeddingId ?? null
+  );
+  const row = getAgentEventByIdStmt.get(Number(result.lastInsertRowid));
+  if (!row) throw new Error("Failed to persist agent event.");
+  return rowToAgentEvent(row);
+}
+
+export function listRecentAgentEvents(limit = 25): AgentEvent[] {
+  return listRecentAgentEventsStmt.all(Math.max(1, limit)).map(rowToAgentEvent);
+}
+
+export function upsertAgentMemory(input: UpsertAgentMemoryInput): AgentMemory {
+  const scope = input.scope?.replace(/\s+/g, " ").trim() || "global";
+  const title = cleanAgentMemoryText(input.title, "title");
+  const summary = cleanAgentMemoryText(input.summary, "summary");
+  const confidence = input.confidence ?? "low";
+  const evidenceCount = normalizeEvidenceCount(input.evidenceCount);
+  const status = input.status ?? (evidenceCount > 1 ? "active" : "tentative");
+  const version = Math.max(1, Math.floor(input.version ?? 1));
+  const keywords = normalizeAgentKeywords(input.keywords);
+  const sourceEventIds = Array.from(new Set((input.sourceEventIds ?? []).filter((id) => Number.isFinite(id)))).slice(0, 50);
+  upsertAgentMemoryStmt.run(
+    input.memoryType,
+    scope,
+    title,
+    summary,
+    input.ruleText?.trim() || null,
+    input.hypothesisText?.trim() || null,
+    confidence,
+    clampMemoryImportance(input.importance),
+    evidenceCount,
+    status,
+    version,
+    input.supersedesMemoryId ?? null,
+    input.contradictedByMemoryId ?? null,
+    JSON.stringify(sourceEventIds),
+    JSON.stringify(keywords),
+    input.embeddingId ?? null
+  );
+  const row = getAgentMemoryByKeyStmt.get(input.memoryType, scope, title, summary);
+  if (!row) throw new Error(`Failed to persist agent memory: ${input.memoryType}/${scope}/${title}`);
+  return rowToAgentMemory(row);
+}
+
+export function listAgentMemories(limit = 50): AgentMemory[] {
+  return listAgentMemoriesStmt.all(Math.max(1, limit)).map(rowToAgentMemory);
+}
+
+export function listAgentMemoriesByType(memoryType: string, limit = 50): AgentMemory[] {
+  return listAgentMemoriesByTypeStmt.all(memoryType, Math.max(1, limit)).map(rowToAgentMemory);
+}
+
+export function touchAgentMemory(id: number): boolean {
+  return touchAgentMemoryStmt.run(id).changes > 0;
+}
+
+export function forgetAgentMemory(input: { id?: number; query?: string; memoryType?: string }): number {
+  if (typeof input.id === "number") {
+    return forgetAgentMemoryByIdStmt.run(input.id).changes;
+  }
+  const query = input.query?.replace(/\s+/g, " ").trim();
+  if (!query) return 0;
+  const pattern = `%${query}%`;
+  return forgetAgentMemoriesMatchingStmt.run(input.memoryType ?? "", input.memoryType ?? "", pattern, pattern, pattern).changes;
+}
+
+export function recordMemoryEmbedding(input: {
+  ownerType: string;
+  ownerId: number;
+  provider: string;
+  model: string;
+  vectorJsonOrBlob: string;
+}): MemoryEmbedding {
+  const result = insertMemoryEmbeddingStmt.run(input.ownerType, input.ownerId, input.provider, input.model, input.vectorJsonOrBlob);
+  return rowToMemoryEmbedding({
+    id: Number(result.lastInsertRowid),
+    owner_type: input.ownerType,
+    owner_id: input.ownerId,
+    provider: input.provider,
+    model: input.model,
+    vector_json_or_blob: input.vectorJsonOrBlob,
+    created_at: new Date().toISOString(),
+  });
+}
+
+export function recordMemoryConsolidation(input: {
+  periodStart: string;
+  periodEnd: string;
+  summaryType: string;
+  summary: string;
+  sourceMemoryIds?: number[];
+  sourceEventIds?: number[];
+  confidence?: AgentMemoryConfidence;
+  status?: AgentMemoryStatus;
+}): MemoryConsolidation {
+  const result = insertMemoryConsolidationStmt.run(
+    input.periodStart,
+    input.periodEnd,
+    input.summaryType,
+    input.summary,
+    JSON.stringify(input.sourceMemoryIds ?? []),
+    JSON.stringify(input.sourceEventIds ?? []),
+    input.confidence ?? "low",
+    input.status ?? "tentative"
+  );
+  return rowToMemoryConsolidation({
+    id: Number(result.lastInsertRowid),
+    created_at: new Date().toISOString(),
+    period_start: input.periodStart,
+    period_end: input.periodEnd,
+    summary_type: input.summaryType,
+    summary: input.summary,
+    source_memory_ids: JSON.stringify(input.sourceMemoryIds ?? []),
+    source_event_ids: JSON.stringify(input.sourceEventIds ?? []),
+    confidence: input.confidence ?? "low",
+    status: input.status ?? "tentative",
+  });
+}
+
+function boolToInt(value: boolean | undefined): number {
+  return value ? 1 : 0;
+}
+
+function normalizeTelemetryActionStatus(value: TaskTelemetryActionStatus | undefined, success: boolean): TaskTelemetryActionStatus {
+  if (value) return value;
+  return success ? "completed" : "failed";
+}
+
+function normalizeConfidenceValue(value: AgentMemoryConfidence | undefined): AgentMemoryConfidence {
+  return value === "high" || value === "medium" || value === "low" ? value : "low";
+}
+
+function normalizePriority(value: number | undefined): number {
+  return clampMemoryImportance(value);
+}
+
+function normalizeNumberArray(values: number[] | undefined): number[] {
+  return Array.from(new Set((values ?? []).filter((value) => Number.isFinite(value)).map((value) => Math.floor(value)))).slice(0, 50);
+}
+
+export function recordTaskTelemetry(input: RecordTaskTelemetryInput): TaskTelemetry {
+  const actionStatus = normalizeTelemetryActionStatus(input.actionStatus, input.success);
+  const latencyMs = Number.isFinite(input.latencyMs ?? NaN) ? Math.max(0, Math.round(input.latencyMs ?? 0)) : null;
+  const result = insertTaskTelemetryStmt.run(
+    input.taskType,
+    input.sourceType?.trim() || "system",
+    input.sourceId ?? null,
+    input.jobId ?? null,
+    input.threadTs ?? null,
+    boolToInt(input.success),
+    boolToInt(input.correctionReceived),
+    boolToInt(input.userFrustrationDetected),
+    boolToInt(input.manualInterventionRequired),
+    boolToInt(input.browserSecurityBlocker),
+    boolToInt(input.retryRequired),
+    latencyMs,
+    input.provider?.trim() || null,
+    input.model?.trim() || null,
+    actionStatus,
+    input.outcome?.trim() || null,
+    normalizeConfidenceValue(input.confidence),
+    input.failureReason?.trim() || null,
+    JSON.stringify(input.metadata ?? {})
+  );
+  const row = getTaskTelemetryByIdStmt.get(Number(result.lastInsertRowid));
+  if (!row) throw new Error("Failed to persist task telemetry.");
+  return rowToTaskTelemetry(row);
+}
+
+export function listTaskTelemetry(limit = 250): TaskTelemetry[] {
+  return listTaskTelemetryStmt.all(Math.max(1, limit)).map(rowToTaskTelemetry);
+}
+
+export function createImprovementCandidate(input: CreateImprovementCandidateInput): ImprovementCandidate {
+  const title = cleanAgentMemoryText(input.title, "improvement title");
+  const summary = cleanAgentMemoryText(input.summary, "improvement summary");
+  const result = insertImprovementCandidateStmt.run(
+    input.candidateType,
+    title,
+    summary,
+    input.rationale?.replace(/\s+/g, " ").trim() || "",
+    JSON.stringify(normalizeNumberArray(input.sourceTaskIds)),
+    JSON.stringify(normalizeNumberArray(input.sourceMemoryIds)),
+    input.status ?? "proposed",
+    normalizePriority(input.priority),
+    input.createdBy?.trim() || "agent",
+    JSON.stringify(input.metadata ?? {})
+  );
+  const row = getImprovementCandidateByIdStmt.get(Number(result.lastInsertRowid));
+  if (!row) throw new Error("Failed to persist improvement candidate.");
+  return rowToImprovementCandidate(row);
+}
+
+export function listImprovementCandidates(limit = 50): ImprovementCandidate[] {
+  return listImprovementCandidatesStmt.all(Math.max(1, limit)).map(rowToImprovementCandidate);
+}
+
+export function createPromptToolVersion(input: CreatePromptToolVersionInput): PromptToolVersion {
+  const versionId = cleanAgentMemoryText(input.versionId, "prompt/tool version id");
+  const result = insertPromptToolVersionStmt.run(
+    versionId,
+    input.kind,
+    cleanAgentMemoryText(input.name, "prompt/tool version name"),
+    cleanAgentMemoryText(input.changeSummary, "prompt/tool version change summary"),
+    cleanAgentMemoryText(input.reason, "prompt/tool version reason"),
+    JSON.stringify(input.relatedScorecard ?? {}),
+    input.relatedFailureId ?? null,
+    input.createdBy?.trim() || "agent",
+    input.active ? 1 : 0,
+    input.rollbackTargetVersionId?.trim() || null,
+    JSON.stringify(input.tests ?? []),
+    JSON.stringify(input.metadata ?? {})
+  );
+  const row = getPromptToolVersionByVersionIdStmt.get(versionId);
+  if (!row || Number(result.lastInsertRowid) < 1) throw new Error(`Failed to persist prompt/tool version: ${versionId}`);
+  return rowToPromptToolVersion(row);
+}
+
+export function listPromptToolVersions(limit = 50): PromptToolVersion[] {
+  return listPromptToolVersionsStmt.all(Math.max(1, limit)).map(rowToPromptToolVersion);
+}
+
+export function deactivatePromptToolVersion(versionId: string): boolean {
+  return deactivatePromptToolVersionStmt.run(versionId).changes > 0;
+}
+
+export function createSelfImprovementEval(input: CreateSelfImprovementEvalInput): SelfImprovementEval {
+  const result = insertSelfImprovementEvalStmt.run(
+    input.evalType,
+    cleanAgentMemoryText(input.title, "eval title"),
+    JSON.stringify(input.inputContext ?? {}),
+    cleanAgentMemoryText(input.expectedBehavior, "eval expected behavior"),
+    JSON.stringify(input.safetyAssertions ?? []),
+    cleanAgentMemoryText(input.regressionGuard, "eval regression guard"),
+    input.sourceFailureId ?? null,
+    input.status?.trim() || "active",
+    JSON.stringify(input.metadata ?? {})
+  );
+  const row = getSelfImprovementEvalByIdStmt.get(Number(result.lastInsertRowid));
+  if (!row) throw new Error("Failed to persist self-improvement eval.");
+  return rowToSelfImprovementEval(row);
+}
+
+export function listSelfImprovementEvals(limit = 50): SelfImprovementEval[] {
+  return listSelfImprovementEvalsStmt.all(Math.max(1, limit)).map(rowToSelfImprovementEval);
+}
+
+function cleanSalesLearningText(value: string, field: string): string {
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  if (!cleaned) {
+    throw new Error(`Sales learning ${field} cannot be empty.`);
+  }
+  return cleaned;
+}
+
+function normalizeEvidenceCount(value: number | undefined): number {
+  return Math.max(1, Math.floor(value ?? 1));
+}
+
+function normalizeSalesExamples(values: string[] | undefined): string[] {
+  return Array.from(new Set((values ?? [])
+    .map((value) => value.replace(/\s+/g, " ").trim())
+    .filter(Boolean)))
+    .slice(0, 8);
+}
+
+function summarizeSalesPayload(payload: Record<string, unknown> | undefined, fallback: string): string {
+  const summary = typeof payload?.summary === "string" ? payload.summary : "";
+  const instruction = typeof payload?.instruction === "string" ? payload.instruction : "";
+  const outcome = typeof payload?.outcome === "string" ? payload.outcome : "";
+  return [summary, instruction, outcome, fallback].find((value) => value.replace(/\s+/g, " ").trim())?.replace(/\s+/g, " ").trim() ?? fallback;
+}
+
+function salesMemoryImportance(confidence: SalesLearningConfidence, evidenceCount: number): number {
+  const confidenceScore = confidence === "high" ? 7 : confidence === "medium" ? 5 : 3;
+  return Math.max(1, Math.min(10, confidenceScore + Math.min(3, evidenceCount - 1)));
+}
+
+function salesMemoryKeywords(input: {
+  type: SalesLearningMemoryType;
+  scope: string;
+  subject: string;
+  hypothesis: string;
+  examples: string[];
+  metadata: Record<string, unknown>;
+}): string[] {
+  const metadataKeywords = ["vertical", "platform", "source", "jobType", "outcome"]
+    .map((key) => input.metadata[key])
+    .filter((value): value is string => typeof value === "string");
+  return normalizeAgentKeywords([
+    input.type,
+    input.scope,
+    input.subject,
+    input.hypothesis,
+    ...input.examples,
+    ...metadataKeywords,
+  ].flatMap((value) => value.split(/[^A-Za-z0-9_-]+/)));
+}
+
+export function recordSalesLearningEvent(input: RecordSalesLearningEventInput): SalesLearningEvent {
+  const source = input.source?.replace(/\s+/g, " ").trim() || "system";
+  const result = insertSalesLearningEventStmt.run(
+    input.eventType,
+    input.jobId ?? null,
+    input.channelId ?? null,
+    input.threadTs ?? null,
+    source,
+    JSON.stringify(input.payload ?? {})
+  );
+  const row = getSalesLearningEventByIdStmt.get(Number(result.lastInsertRowid));
+  if (!row) {
+    throw new Error("Failed to persist sales learning event.");
+  }
+  recordAgentEvent({
+    eventType: input.eventType,
+    sourceType: "sales_learning",
+    sourceId: String(row.id),
+    jobId: input.jobId ?? null,
+    applicationId: input.jobId ?? null,
+    threadTs: input.threadTs ?? null,
+    actor: "agent",
+    summary: summarizeSalesPayload(input.payload, input.eventType),
+    payload: input.payload ?? {},
+    importance: input.eventType === "outcome_recorded" || input.eventType === "failure_reflection" ? 7 : 5,
+    privacyLevel: "normal",
+  });
+  return rowToSalesLearningEvent(row);
+}
+
+export function listRecentSalesLearningEvents(limit = 25): SalesLearningEvent[] {
+  return listRecentSalesLearningEventsStmt.all(Math.max(1, limit)).map(rowToSalesLearningEvent);
+}
+
+export function upsertSalesLearningMemory(input: UpsertSalesLearningMemoryInput): SalesLearningMemory {
+  const scope = input.scope?.replace(/\s+/g, " ").trim() || "global";
+  const subject = cleanSalesLearningText(input.subject, "subject");
+  const hypothesis = cleanSalesLearningText(input.hypothesis, "hypothesis");
+  const rationale = input.rationale?.replace(/\s+/g, " ").trim() ?? "";
+  const confidence = input.confidence ?? "low";
+  const evidenceCount = normalizeEvidenceCount(input.evidenceCount);
+  const status = input.status ?? (evidenceCount > 1 ? "active" : "tentative");
+  const source = input.source?.replace(/\s+/g, " ").trim() || "system";
+  const examples = normalizeSalesExamples(input.examples);
+  upsertSalesLearningMemoryStmt.run(
+    input.type,
+    scope,
+    subject,
+    hypothesis,
+    rationale,
+    confidence,
+    evidenceCount,
+    status,
+    source,
+    input.jobId ?? null,
+    input.channelId ?? null,
+    input.threadTs ?? null,
+    JSON.stringify(examples),
+    JSON.stringify(input.metadata ?? {})
+  );
+  const row = getSalesLearningMemoryByKeyStmt.get(input.type, scope, subject, hypothesis);
+  if (!row) {
+    throw new Error(`Failed to persist sales learning memory: ${input.type}/${scope}/${subject}`);
+  }
+  upsertAgentMemory({
+    memoryType: input.type,
+    scope,
+    title: subject,
+    summary: hypothesis,
+    ruleText: input.type === "operator_preference" ? hypothesis : null,
+    hypothesisText: hypothesis,
+    confidence,
+    importance: salesMemoryImportance(confidence, evidenceCount),
+    evidenceCount,
+    status,
+    sourceEventIds: Array.isArray(input.metadata?.sourceEventIds)
+      ? input.metadata.sourceEventIds.filter((item): item is number => typeof item === "number")
+      : [],
+    keywords: salesMemoryKeywords({ type: input.type, scope, subject, hypothesis, examples, metadata: input.metadata ?? {} }),
+    embeddingId: null,
+  });
+  return rowToSalesLearningMemory(row);
+}
+
+export function listSalesLearningMemories(limit = 50): SalesLearningMemory[] {
+  return listSalesLearningMemoriesStmt.all(Math.max(1, limit)).map(rowToSalesLearningMemory);
+}
+
+export function listSalesLearningMemoriesByType(type: SalesLearningMemoryType, limit = 50): SalesLearningMemory[] {
+  return listSalesLearningMemoriesByTypeStmt.all(type, Math.max(1, limit)).map(rowToSalesLearningMemory);
+}
+
+export function forgetSalesLearningMemory(input: { id?: number; query?: string; type?: SalesLearningMemoryType }): number {
+  let changes = 0;
+  if (typeof input.id === "number") {
+    changes += forgetSalesLearningMemoryByIdStmt.run(input.id).changes;
+    changes += forgetAgentMemory({ id: input.id });
+    return changes;
+  }
+  const query = input.query?.replace(/\s+/g, " ").trim();
+  if (!query) return 0;
+  const pattern = `%${query}%`;
+  changes += forgetSalesLearningMemoriesMatchingStmt.run(input.type ?? "", input.type ?? "", pattern, pattern).changes;
+  changes += forgetAgentMemory({ query, memoryType: input.type });
+  return changes;
 }
 
 export function recordHeartbeat(input: HeartbeatWriteInput): HeartbeatRecord {

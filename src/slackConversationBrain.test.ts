@@ -79,6 +79,22 @@ const baseInput: SlackConversationBrainInput = {
     scope: "global",
     confidence: "high",
   }],
+  salesLearning: {
+    relevantMemories: [{
+      type: "proof_preference",
+      scope: "fashion:klaviyo",
+      subject: "fashion:klaviyo:proof",
+      hypothesis: "Fashion/Klaviyo jobs tend to use Fly Boutique proof when the client asks for retention work.",
+      confidence: "medium",
+      evidenceCount: 3,
+      status: "active",
+      updatedAt: "2026-06-07T10:00:00.000Z",
+    }],
+    guidance: [
+      "Use sales memories as hypotheses, not hard rules.",
+      "Hard safety still wins.",
+    ],
+  },
   allowedActions: SLACK_CONVERSATION_ALLOWED_ACTIONS,
   hardSafetyRules: SLACK_CONVERSATION_HARD_SAFETY_RULES,
 };
@@ -115,6 +131,8 @@ async function runTests(): Promise<void> {
   assert.match(prompt, /latestUserMessage/i, "Brain prompt should include the latest message.");
   assert.match(prompt, /Stored proposal draft/i, "Brain prompt should include draft state.");
   assert.match(prompt, /CV in an Upwork thread/i, "Brain prompt should include behavior memories.");
+  assert.match(prompt, /Fashion\/Klaviyo jobs tend to use Fly Boutique/i, "Brain prompt should include relevant sales memories.");
+  assert.match(prompt, /Use sales memories as hypotheses/i, "Brain prompt should include sales-memory guidance.");
   assert.match(prompt, /Final submit remains manual/i, "Brain prompt should include hard safety rules.");
   assert.match(prompt, /Return JSON only/i, "Brain prompt should require structured JSON.");
   assert.match(prompt, /Operating constitution from soul\.md/i, "Brain prompt should include soul.md.");
