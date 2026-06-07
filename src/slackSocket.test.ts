@@ -75,7 +75,7 @@ async function runTests(): Promise<void> {
     queuePrepareDraftFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string; actionId?: number };
     resetSlackSocketEventDedupeForTests: () => void;
   };
-  const { closeDb, getApplicationDraft, getApplicationProofPlanOverrides, getApplicationStatus, getBrowserActionById, getSlackThreadStateByThreadTs, listActiveSlackBehaviorMemories, listApplicationAssets, listRecentSlackFailureReflections, markJobSeen, mergeBrowserActionPayload, upsertSlackThreadState, listBrowserActions, updateApplicationStatus, updateBrowserActionStatus } = require("./db") as {
+  const { closeDb, getApplicationDraft, getApplicationProofPlanOverrides, getApplicationStatus, getBrowserActionById, getSlackThreadStateByThreadTs, listActiveSlackBehaviorMemories, listApplicationAssets, listProposalVersions, listRecentSlackFailureReflections, markJobSeen, mergeBrowserActionPayload, upsertSlackThreadState, listBrowserActions, updateApplicationStatus, updateBrowserActionStatus } = require("./db") as {
     closeDb: () => void;
     getApplicationDraft: (jobId: string) => { proposalText: string } | null;
     getApplicationProofPlanOverrides: (jobId: string) => any;
@@ -84,6 +84,7 @@ async function runTests(): Promise<void> {
     getSlackThreadStateByThreadTs: (channelId: string, threadTs: string) => { status: string } | null;
     listActiveSlackBehaviorMemories: (limit?: number) => Array<{ type: string; rule: string; source: string }>;
     listApplicationAssets: (jobId: string) => Array<{ originalName: string; relativePath: string | null; source: string }>;
+    listProposalVersions: (jobId: string) => Array<{ versionNumber: number; source: string; proposalText: string }>;
     listRecentSlackFailureReflections: (limit?: number) => Array<{ whatHappened: string; whyItFailed: string; nextBehavior: string; proposedTask?: string | null }>;
     markJobSeen: (job: any, notified: boolean) => void;
     mergeBrowserActionPayload: (id: number, patch: Record<string, unknown>) => unknown;
@@ -1085,13 +1086,14 @@ async function runTests(): Promise<void> {
     });
     assert(debugReplies.some((reply) => reply.includes("Channel message:") && reply.includes("Thread:")), "Explicit debug details should show raw thread state.");
 
+    const latestVersionBeforeRevision = listProposalVersions(prepareJob.id).slice(-1)[0]?.versionNumber ?? 1;
     const revisionResult = applySlackThreadRevision({
       channelId: "C123",
       threadTs: "111.222",
       instruction: "make opener more direct",
     });
     assert(revisionResult.ok, `Expected Slack revise to apply stored draft update, got: ${revisionResult.text}`);
-    assert(revisionResult.proposalVersion === 2, `Expected revised proposal version 2, got ${revisionResult.proposalVersion}`);
+    assert(revisionResult.proposalVersion === latestVersionBeforeRevision + 1, `Expected revised proposal version ${latestVersionBeforeRevision + 1}, got ${revisionResult.proposalVersion}`);
     assert(revisionResult.text.includes("Browser draft needs update: yes"), "Revision reply should flag that queued browser draft needs updating.");
     const revisedDraft = getApplicationDraft(prepareJob.id);
     assert(Boolean(revisedDraft?.proposalText.includes("highest-leverage retention work")), "Stored draft should be updated with deterministic revision text.");

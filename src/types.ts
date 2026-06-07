@@ -313,6 +313,42 @@ export interface StructuredProposalDraft {
   browserFillNotes: ProposalBrowserFillNotes;
 }
 
+export type ProposalVersionSource =
+  | "draft_generated"
+  | "slack_preview"
+  | "slack_revision"
+  | "upwork_inserted"
+  | "remote_chrome_qa"
+  | "human_edit_reread"
+  | "final_submitted";
+
+export interface ProposalVersionSnapshot {
+  id: number;
+  jobId: string;
+  versionNumber: number;
+  source: ProposalVersionSource;
+  label: string;
+  proposalText: string;
+  screeningAnswers: string[];
+  note: string | null;
+  createdAt: string;
+}
+
+export type ScreeningCoverageStatus = "planned" | "filled" | "verified" | "edited" | "unknown";
+
+export interface ScreeningCoverageItem {
+  jobId: string;
+  questionIndex: number;
+  questionText: string | null;
+  plannedAnswer: string | null;
+  filledAnswer: string | null;
+  verifiedAnswer: string | null;
+  humanEditedAnswer: string | null;
+  finalAnswer: string | null;
+  status: ScreeningCoverageStatus;
+  updatedAt?: string;
+}
+
 export type EcommerceVertical = "beauty" | "health" | "supplements" | "fashion" | "food" | "home" | "SaaS" | "unknown";
 
 export type PlatformCategory = "ESP" | "CRM" | "SMS" | "CDP" | "ecommerce platform" | "support" | "subscription" | "analytics" | "unknown";
@@ -361,6 +397,8 @@ export interface ApplicationDraft {
   structuredProposal?: StructuredProposalDraft;
   generatedAt: string;
   jobIntelligence?: JobIntelligence;
+  proposalVersion?: number;
+  revisionRequests?: string[];
 }
 
 export interface ProofPlanOverrideState {
@@ -454,7 +492,12 @@ export interface RunStats {
   failedFeeds: number;
 }
 
-export type BrowserActionType = "capture_job_from_url" | "open_job" | "open_apply_page" | "prepare_application_review";
+export type BrowserActionType =
+  | "capture_job_from_url"
+  | "open_job"
+  | "open_apply_page"
+  | "prepare_application_review"
+  | "capture_application_snapshot";
 
 export type BrowserActionStatus = "pending" | "in_progress" | "completed" | "failed" | "paused" | "cancelled";
 

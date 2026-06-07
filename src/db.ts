@@ -19,7 +19,11 @@ import {
   MatchLevel,
   PortfolioItem,
   ProofPlanOverrideState,
+  ProposalVersionSnapshot,
+  ProposalVersionSource,
   ScoredJob,
+  ScreeningCoverageItem,
+  ScreeningCoverageStatus,
   StructuredProposalDraft,
 } from "./types";
 
@@ -239,6 +243,16 @@ export interface ApplicationSubmissionInput {
   profileHighlightsUsed: string[];
   submittedProposalText?: string;
   note?: string;
+}
+
+export interface RecordProposalVersionInput {
+  jobId: string;
+  source: ProposalVersionSource;
+  proposalText: string;
+  screeningAnswers?: string[];
+  label?: string;
+  note?: string | null;
+  versionNumber?: number;
 }
 
 export type HeartbeatStatus = "starting" | "running" | "success" | "error" | "stale";
@@ -967,6 +981,31 @@ interface ApplicationDraftRow {
   connects_strategy: string | null;
 }
 
+interface ApplicationProposalVersionRow {
+  id: number;
+  job_id: string;
+  version_number: number;
+  source: ProposalVersionSource;
+  label: string;
+  proposal_text: string;
+  screening_answers: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+interface ApplicationScreeningCoverageRow {
+  job_id: string;
+  question_index: number;
+  question_text: string | null;
+  planned_answer: string | null;
+  filled_answer: string | null;
+  verified_answer: string | null;
+  human_edited_answer: string | null;
+  final_answer: string | null;
+  status: ScreeningCoverageStatus;
+  updated_at: string;
+}
+
 export interface ApplicationRevisionResult {
   jobId: string;
   proposalVersion: number;
@@ -1324,6 +1363,38 @@ CREATE TABLE IF NOT EXISTS application_events (
 
 CREATE INDEX IF NOT EXISTS idx_application_events_job_id ON application_events(job_id);
 CREATE INDEX IF NOT EXISTS idx_application_events_type ON application_events(event_type);
+
+CREATE TABLE IF NOT EXISTS application_proposal_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id TEXT NOT NULL,
+  version_number INTEGER NOT NULL,
+  source TEXT NOT NULL,
+  label TEXT NOT NULL,
+  proposal_text TEXT NOT NULL,
+  screening_answers TEXT NOT NULL DEFAULT '[]',
+  note TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(job_id, version_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_application_proposal_versions_job_id ON application_proposal_versions(job_id, version_number);
+CREATE INDEX IF NOT EXISTS idx_application_proposal_versions_source ON application_proposal_versions(source);
+
+CREATE TABLE IF NOT EXISTS application_screening_coverage (
+  job_id TEXT NOT NULL,
+  question_index INTEGER NOT NULL,
+  question_text TEXT,
+  planned_answer TEXT,
+  filled_answer TEXT,
+  verified_answer TEXT,
+  human_edited_answer TEXT,
+  final_answer TEXT,
+  status TEXT NOT NULL DEFAULT 'unknown',
+  updated_at TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY(job_id, question_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_application_screening_coverage_job_id ON application_screening_coverage(job_id, question_index);
 
 CREATE TABLE IF NOT EXISTS application_assets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2417,6 +2488,74 @@ const applicationListStmt = db.prepare<[number], ApplicationListRow>(
 const applicationNotesStmt = db.prepare<[string], ApplicationNoteRow>(
   "SELECT id, job_id, note, created_at FROM application_events WHERE job_id = ? AND event_type = 'note' ORDER BY id DESC"
 );
+const getLatestProposalVersionNumberStmt = db.prepare<[string], { version_number: number }>(
+  `SELECT version_number
+   FROM application_proposal_versions
+   WHERE job_id = ?
+   ORDER BY version_number DESC
+   LIMIT 1`
+);
+const insertProposalVersionStmt = db.prepare(
+  `INSERT INTO application_proposal_versions (
+    job_id,
+    version_number,
+    source,
+    label,
+    proposal_text,
+    screening_answers,
+    note
+  ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+);
+const listProposalVersionsStmt = db.prepare<[string], ApplicationProposalVersionRow>(
+  `SELECT id, job_id, version_number, source, label, proposal_text, screening_answers, note, created_at
+   FROM application_proposal_versions
+   WHERE job_id = ?
+   ORDER BY version_number ASC, id ASC`
+);
+const latestProposalVersionStmt = db.prepare<[string], ApplicationProposalVersionRow>(
+  `SELECT id, job_id, version_number, source, label, proposal_text, screening_answers, note, created_at
+   FROM application_proposal_versions
+   WHERE job_id = ?
+   ORDER BY version_number DESC, id DESC
+   LIMIT 1`
+);
+const latestProposalVersionBySourceStmt = db.prepare<[string, ProposalVersionSource], ApplicationProposalVersionRow>(
+  `SELECT id, job_id, version_number, source, label, proposal_text, screening_answers, note, created_at
+   FROM application_proposal_versions
+   WHERE job_id = ? AND source = ?
+   ORDER BY version_number DESC, id DESC
+   LIMIT 1`
+);
+const upsertScreeningCoverageStmt = db.prepare(
+  `INSERT INTO application_screening_coverage (
+    job_id,
+    question_index,
+    question_text,
+    planned_answer,
+    filled_answer,
+    verified_answer,
+    human_edited_answer,
+    final_answer,
+    status,
+    updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  ON CONFLICT(job_id, question_index) DO UPDATE SET
+    question_text = COALESCE(excluded.question_text, application_screening_coverage.question_text),
+    planned_answer = COALESCE(excluded.planned_answer, application_screening_coverage.planned_answer),
+    filled_answer = COALESCE(excluded.filled_answer, application_screening_coverage.filled_answer),
+    verified_answer = COALESCE(excluded.verified_answer, application_screening_coverage.verified_answer),
+    human_edited_answer = COALESCE(excluded.human_edited_answer, application_screening_coverage.human_edited_answer),
+    final_answer = COALESCE(excluded.final_answer, application_screening_coverage.final_answer),
+    status = excluded.status,
+    updated_at = datetime('now')`
+);
+const listScreeningCoverageStmt = db.prepare<[string], ApplicationScreeningCoverageRow>(
+  `SELECT job_id, question_index, question_text, planned_answer, filled_answer, verified_answer,
+          human_edited_answer, final_answer, status, updated_at
+   FROM application_screening_coverage
+   WHERE job_id = ?
+   ORDER BY question_index ASC`
+);
 const upsertApplicationAssetStmt = db.prepare(
   `INSERT INTO application_assets (
     job_id,
@@ -2599,6 +2738,7 @@ export function saveApplicationDraft(draft: ApplicationDraft): void {
   if (!previousStatus) {
     insertApplicationEventStmt.run(draft.jobId, "created", null, draft.status, "Application draft created.");
   }
+  ensureInitialProposalVersion(draft);
 }
 
 function rowToApplicationDraft(row: ApplicationDraftRow): ApplicationDraft {
@@ -2631,6 +2771,8 @@ function rowToApplicationDraft(row: ApplicationDraftRow): ApplicationDraft {
     structuredProposal: parseJsonObject<StructuredProposalDraft>(row.structured_proposal),
     generatedAt: row.generated_at,
     jobIntelligence: parseJsonObject<JobIntelligence>(row.job_intelligence),
+    proposalVersion: row.proposal_version ?? 1,
+    revisionRequests: parseJsonStringArray(row.revision_requests),
     connectsStrategy: parseJsonObject<ConnectsStrategySnapshot>(row.connects_strategy),
   };
 }
@@ -2762,7 +2904,8 @@ export function applyApplicationRevision(
   const row = getApplicationDraftStmt.get(jobId);
   if (!row) return null;
 
-  const nextVersion = (row.proposal_version ?? 1) + 1;
+  const latestAuditVersion = getLatestProposalVersionNumberStmt.get(jobId)?.version_number ?? 0;
+  const nextVersion = Math.max(row.proposal_version ?? 1, latestAuditVersion) + 1;
   const generatedAt = new Date().toISOString();
   const existingRequests = parseJsonStringArray(row.revision_requests);
   const revisionEntry = `${generatedAt} applied v${nextVersion}: ${instruction}`;
@@ -2775,6 +2918,16 @@ export function applyApplicationRevision(
     jobId
   );
   if (result.changes === 0) return null;
+
+  recordProposalVersion({
+    jobId,
+    source: "slack_revision",
+    proposalText: revisedProposalText,
+    screeningAnswers: parseJsonObject<StructuredProposalDraft>(row.structured_proposal)?.clientRequestAnswers ?? [],
+    label: `slack_revision_v${nextVersion}`,
+    versionNumber: nextVersion,
+    note: instruction,
+  });
 
   insertApplicationEventStmt.run(
     jobId,
@@ -2829,6 +2982,140 @@ export function listRecentApplications(limit = 20): ApplicationListRow[] {
 
 export function getApplicationNotes(jobId: string): ApplicationNoteRow[] {
   return applicationNotesStmt.all(jobId);
+}
+
+function proposalVersionLabel(source: ProposalVersionSource, versionNumber: number): string {
+  switch (source) {
+    case "draft_generated":
+      return versionNumber === 1 ? "draft_v1" : `draft_v${versionNumber}`;
+    case "slack_preview":
+      return `slack_preview_v${versionNumber}`;
+    case "slack_revision":
+      return `slack_revision_v${versionNumber}`;
+    case "upwork_inserted":
+      return `upwork_inserted_v${versionNumber}`;
+    case "remote_chrome_qa":
+      return `remote_chrome_qa_v${versionNumber}`;
+    case "human_edit_reread":
+      return `human_edit_reread_v${versionNumber}`;
+    case "final_submitted":
+      return `final_submitted_v${versionNumber}`;
+  }
+}
+
+function rowToProposalVersion(row: ApplicationProposalVersionRow): ProposalVersionSnapshot {
+  return {
+    id: row.id,
+    jobId: row.job_id,
+    versionNumber: row.version_number,
+    source: row.source,
+    label: row.label,
+    proposalText: row.proposal_text,
+    screeningAnswers: parseJsonStringArray(row.screening_answers),
+    note: row.note,
+    createdAt: row.created_at,
+  };
+}
+
+export function recordProposalVersion(input: RecordProposalVersionInput): ProposalVersionSnapshot {
+  const cleanProposalText = input.proposalText.trim();
+  const versionNumber = input.versionNumber ?? ((getLatestProposalVersionNumberStmt.get(input.jobId)?.version_number ?? 0) + 1);
+  const label = input.label ?? proposalVersionLabel(input.source, versionNumber);
+  insertProposalVersionStmt.run(
+    input.jobId,
+    versionNumber,
+    input.source,
+    label,
+    cleanProposalText,
+    JSON.stringify(input.screeningAnswers ?? []),
+    input.note ?? null
+  );
+  const row = latestProposalVersionStmt.get(input.jobId);
+  if (!row) {
+    throw new Error(`Failed to record proposal version for job_id=${input.jobId}`);
+  }
+  insertApplicationEventStmt.run(input.jobId, "proposal_version_recorded", null, null, `${label}: ${input.source}`);
+  return rowToProposalVersion(row);
+}
+
+export function ensureInitialProposalVersion(draft: ApplicationDraft): ProposalVersionSnapshot | null {
+  if (!draft.proposalText.trim()) return null;
+  if (getLatestProposalVersionNumberStmt.get(draft.jobId)) return null;
+  return recordProposalVersion({
+    jobId: draft.jobId,
+    source: "draft_generated",
+    proposalText: draft.proposalText,
+    screeningAnswers: draft.structuredProposal?.clientRequestAnswers ?? [],
+    label: "draft_v1",
+    versionNumber: 1,
+    note: "Initial generated application draft.",
+  });
+}
+
+export function listProposalVersions(jobId: string): ProposalVersionSnapshot[] {
+  return listProposalVersionsStmt.all(jobId).map(rowToProposalVersion);
+}
+
+export function getLatestProposalVersion(jobId: string, source?: ProposalVersionSource): ProposalVersionSnapshot | null {
+  const row = source ? latestProposalVersionBySourceStmt.get(jobId, source) : latestProposalVersionStmt.get(jobId);
+  return row ? rowToProposalVersion(row) : null;
+}
+
+function rowToScreeningCoverage(row: ApplicationScreeningCoverageRow): ScreeningCoverageItem {
+  return {
+    jobId: row.job_id,
+    questionIndex: row.question_index,
+    questionText: row.question_text,
+    plannedAnswer: row.planned_answer,
+    filledAnswer: row.filled_answer,
+    verifiedAnswer: row.verified_answer,
+    humanEditedAnswer: row.human_edited_answer,
+    finalAnswer: row.final_answer,
+    status: row.status,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function upsertScreeningCoverageItem(item: Omit<ScreeningCoverageItem, "updatedAt">): ScreeningCoverageItem {
+  upsertScreeningCoverageStmt.run(
+    item.jobId,
+    item.questionIndex,
+    item.questionText ?? null,
+    item.plannedAnswer ?? null,
+    item.filledAnswer ?? null,
+    item.verifiedAnswer ?? null,
+    item.humanEditedAnswer ?? null,
+    item.finalAnswer ?? null,
+    item.status
+  );
+  const row = listScreeningCoverageStmt.all(item.jobId).find((candidate) => candidate.question_index === item.questionIndex);
+  if (!row) {
+    throw new Error(`Failed to upsert screening coverage for job_id=${item.jobId} index=${item.questionIndex}`);
+  }
+  return rowToScreeningCoverage(row);
+}
+
+export function recordPlannedScreeningCoverage(jobId: string, questions: string[], answers: string[]): ScreeningCoverageItem[] {
+  const count = Math.max(questions.length, answers.length);
+  const rows: ScreeningCoverageItem[] = [];
+  for (let index = 0; index < count; index += 1) {
+    rows.push(upsertScreeningCoverageItem({
+      jobId,
+      questionIndex: index + 1,
+      questionText: questions[index] ?? null,
+      plannedAnswer: answers[index] ?? null,
+      filledAnswer: null,
+      verifiedAnswer: null,
+      humanEditedAnswer: null,
+      finalAnswer: null,
+      status: answers[index] ? "planned" : "unknown",
+    }));
+  }
+  return rows;
+}
+
+export function listScreeningCoverage(jobId: string): ScreeningCoverageItem[] {
+  return listScreeningCoverageStmt.all(jobId).map(rowToScreeningCoverage);
 }
 
 function parseJsonStringArray(value: string | null | undefined): string[] {
@@ -3081,6 +3368,14 @@ export function recordApplicationSubmission(input: ApplicationSubmissionInput): 
     input.note ??
       `Applied: required=${input.requiredConnects}, boost=${input.boostConnects}, total=${totalConnects}, rank=${input.boostRank ?? "n/a"}`
   );
+  if (input.submittedProposalText?.trim()) {
+    recordProposalVersion({
+      jobId: input.jobId,
+      source: "final_submitted",
+      proposalText: input.submittedProposalText,
+      note: input.note ?? "Submitted proposal text recorded from application submission.",
+    });
+  }
   return result.changes > 0;
 }
 

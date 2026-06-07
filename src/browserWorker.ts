@@ -24,14 +24,20 @@ import {
   enqueueBrowserActionDeduped,
   getApplicationStatus,
   getBrowserActionById,
+  getApplicationDraft,
+  getLatestProposalVersion,
   getSlackThreadStateByJobId,
   getSlackThreadStateByThreadTs,
   incrementBrowserActionAttempts,
+  listScreeningCoverage,
   listBrowserActions,
   markJobSeen,
   mergeBrowserActionPayload,
+  recordPlannedScreeningCoverage,
+  recordProposalVersion,
   updateApplicationStatus,
   updateBrowserActionStatus,
+  upsertScreeningCoverageItem,
   updateSlackThreadStateStatus,
   upsertSlackThreadState,
 } from "./db";
@@ -46,6 +52,7 @@ import {
   BrowserAction,
   BrowserApplyFillPlan,
   BrowserApplyValidationIssue,
+  ProposalVersionSource,
   ScoredJob,
 } from "./types";
 import { extractConnectsFromVisibleText } from "./connectsExtraction";
@@ -78,6 +85,7 @@ import { isUpworkFindWorkFeedUrl, isUpworkWorkTabUrl } from "./browserSessionIns
 import { listProtectedQaApplyUrls } from "./browserQaHold";
 import { canQueueNewQaPreparation } from "./browserQaWorkspace";
 import { proofAssetExists, resolveProofAssetPath } from "./proofAssets";
+import { recordProposalStyleSignal } from "./salesLearningMemory";
 
 type DetectedBrowserState =
   | "dry_run"
@@ -141,7 +149,7 @@ interface BrowserWorkerOptions {
 export interface ControlledWorkerRunOptions {
   maxActions?: number;
   dryRun?: boolean;
-  allowedActionTypes?: Array<"capture_job_from_url" | "open_job" | "open_apply_page" | "prepare_application_review">;
+  allowedActionTypes?: Array<BrowserAction["actionType"]>;
   processActionOverride?: (action: BrowserAction) => Promise<ProcessActionResult>;
 }
 
@@ -353,6 +361,7 @@ function getActionUrl(action: BrowserAction): string | null {
   const canonicalPayloadUrl = typeof action.payload.canonicalJobUrl === "string" ? action.payload.canonicalJobUrl : null;
   if (canonicalPayloadUrl) return canonicalizeUpworkJobUrl(canonicalPayloadUrl) ?? canonicalPayloadUrl;
   const payloadUrl = typeof action.payload.url === "string" ? action.payload.url : null;
+  if (payloadUrl && action.actionType === "capture_application_snapshot") return payloadUrl;
   if (payloadUrl) return canonicalizeUpworkJobUrl(payloadUrl) ?? payloadUrl;
   if (action.actionType === "prepare_application_review") {
     const plan = action.payload.applyPlan as BrowserApplyFillPlan | undefined;
@@ -1680,6 +1689,118 @@ function textCollectionContains(values: string[], expected: string): boolean {
   return values.some((value) => normalizeVerificationValue(value).includes(significant));
 }
 
+function uniqueNonEmpty(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function bestMatchingValue(values: string[], expected: string | null | undefined): string | null {
+  if (!expected?.trim()) return null;
+  const significant = significantExpectedText(expected);
+  if (!significant) return null;
+  return values.find((value) => normalizeVerificationValue(value).includes(significant)) ?? null;
+}
+
+function textDiffers(left: string | null | undefined, right: string | null | undefined): boolean {
+  const a = normalizeVerificationValue(left ?? "");
+  const b = normalizeVerificationValue(right ?? "");
+  return Boolean(a && b && a !== b);
+}
+
+function proposalVersionSourceFromPayload(value: unknown): ProposalVersionSource {
+  return value === "draft_generated" ||
+    value === "slack_preview" ||
+    value === "slack_revision" ||
+    value === "upwork_inserted" ||
+    value === "remote_chrome_qa" ||
+    value === "human_edit_reread" ||
+    value === "final_submitted"
+    ? value
+    : "human_edit_reread";
+}
+
+function persistApplicationSnapshot(input: {
+  jobId: string;
+  snapshot: ApplyVerificationSnapshot;
+  plan?: BrowserApplyFillPlan | null;
+  source: ProposalVersionSource;
+  note?: string | null;
+  markSubmittedAfterCapture?: boolean;
+}): { ok: boolean; label?: string; fallbackReason?: string } {
+  const draft = getApplicationDraft(input.jobId);
+  const plannedCover = input.plan?.coverLetter ?? draft?.proposalText ?? "";
+  const plannedScreening = input.plan?.screeningAnswers ?? draft?.structuredProposal?.clientRequestAnswers ?? [];
+  const values = uniqueNonEmpty(input.snapshot.inputValues);
+  const coverLetter = bestMatchingValue(values, plannedCover) ?? [...values].sort((a, b) => b.length - a.length)[0] ?? null;
+  if (!coverLetter || coverLetter.length < 20) {
+    if (input.markSubmittedAfterCapture) {
+      updateApplicationStatus(
+        input.jobId,
+        "applied",
+        "Steve said submitted, but the page no longer exposed readable proposal text. Final version is the last captured QA version if available."
+      );
+    }
+    return {
+      ok: false,
+      fallbackReason: "Remote Chrome did not expose readable application text; final version is the last captured QA/readback version if available.",
+    };
+  }
+
+  const remainingValues = values.filter((value) => value !== coverLetter);
+  const screeningAnswers = plannedScreening.map((answer, index) => bestMatchingValue(remainingValues, answer) ?? remainingValues[index] ?? answer);
+  const beforeVersion = getLatestProposalVersion(input.jobId);
+  const version = recordProposalVersion({
+    jobId: input.jobId,
+    source: input.source,
+    proposalText: coverLetter,
+    screeningAnswers,
+    note: input.note ?? null,
+  });
+
+  const existingCoverage = listScreeningCoverage(input.jobId);
+  if (existingCoverage.length === 0 && plannedScreening.length > 0) {
+    recordPlannedScreeningCoverage(input.jobId, [], plannedScreening);
+  }
+  const coverage = listScreeningCoverage(input.jobId);
+  const count = Math.max(coverage.length, plannedScreening.length, screeningAnswers.length);
+  for (let index = 0; index < count; index += 1) {
+    const current = coverage.find((item) => item.questionIndex === index + 1);
+    const plannedAnswer = current?.plannedAnswer ?? plannedScreening[index] ?? null;
+    const answer = screeningAnswers[index] ?? null;
+    const edited = textDiffers(plannedAnswer, answer);
+    upsertScreeningCoverageItem({
+      jobId: input.jobId,
+      questionIndex: index + 1,
+      questionText: current?.questionText ?? null,
+      plannedAnswer,
+      filledAnswer: input.source === "upwork_inserted" ? answer : current?.filledAnswer ?? null,
+      verifiedAnswer: input.source === "remote_chrome_qa" ? answer : current?.verifiedAnswer ?? null,
+      humanEditedAnswer: edited ? answer : current?.humanEditedAnswer ?? null,
+      finalAnswer: input.source === "final_submitted" ? answer : current?.finalAnswer ?? null,
+      status: input.source === "final_submitted" || input.source === "remote_chrome_qa"
+        ? "verified"
+        : edited
+          ? "edited"
+          : input.source === "upwork_inserted"
+            ? "filled"
+            : "planned",
+    });
+  }
+
+  if (input.source === "human_edit_reread" && textDiffers(draft?.proposalText ?? beforeVersion?.proposalText, coverLetter)) {
+    recordProposalStyleSignal({
+      jobId: input.jobId,
+      instruction: input.note ?? "Steve edited the proposal/application text in remote Chrome.",
+      beforeText: draft?.proposalText ?? beforeVersion?.proposalText ?? null,
+      afterText: coverLetter,
+      source: "remote_chrome_human_edit",
+    });
+  }
+  if (input.markSubmittedAfterCapture) {
+    updateApplicationStatus(input.jobId, "applied", "Steve said submitted; captured current remote Chrome text as final submitted version when possible.");
+  }
+  return { ok: true, label: version.label };
+}
+
 function rateNeedle(value: string): string | null {
   const match = value.match(/\d+(?:\.\d+)?/);
   return match?.[0] ?? null;
@@ -1967,6 +2088,7 @@ async function inspectWithBrowser(
   inspectionDiagnostics?: BrowserInspectionDiagnostics;
   extractionBodyText?: string;
   extractionDiagnostics?: unknown;
+  applicationSnapshot?: ApplyVerificationSnapshot;
 }> {
   const chromium = await loadChromium();
   if (!chromium) {
@@ -2135,6 +2257,9 @@ async function inspectWithBrowser(
       targetJobId,
       currentPageUrlBeforeCapture,
     };
+    const applicationSnapshot = action.actionType === "capture_application_snapshot" && page
+      ? await readApplyVerificationSnapshot(page, bodyText)
+      : undefined;
     logger.info(
       `Browser inspection #${action.id}: reusedExistingPage=${inspectionDiagnostics.pageReuse.reusedExistingPage} ` +
         `pageUrl=${snapshot.url} title=${snapshot.title} detector=${inspectionDiagnostics.finalDetection.source} ` +
@@ -2159,7 +2284,7 @@ async function inspectWithBrowser(
         2
       )
     );
-    return { state, snapshot, fields, bodyText, inspectionDiagnostics, extractionBodyText: extractedRawText, extractionDiagnostics };
+    return { state, snapshot, fields, bodyText, inspectionDiagnostics, extractionBodyText: extractedRawText, extractionDiagnostics, applicationSnapshot };
   } finally {
     await sessionHandle?.close();
   }
@@ -2546,11 +2671,35 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
   }
 
   try {
-    const { state, snapshot, fields, bodyText, inspectionDiagnostics, extractionBodyText, extractionDiagnostics } = await inspectWithBrowser(action, options, url, plan ?? undefined);
+    const { state, snapshot, fields, bodyText, inspectionDiagnostics, extractionBodyText, extractionDiagnostics, applicationSnapshot } = await inspectWithBrowser(action, options, url, plan ?? undefined);
 
     if (action.actionType === "prepare_application_review") {
       const diagnostics = buildApplyDiagnostics(action, plan, applyPlanResult?.issues ?? [], state, fields);
       saveApplyDiagnostics(options, action, diagnostics);
+      if (plan && (state === "apply_page_loaded" || state === "field_preparation_incomplete") && plan.coverLetter.trim()) {
+        recordProposalVersion({
+          jobId: action.jobId,
+          source: "upwork_inserted",
+          proposalText: plan.coverLetter,
+          screeningAnswers: plan.screeningAnswers,
+          note: "Browser worker inserted planned draft into Upwork apply page. Final submit was not clicked.",
+        });
+        recordPlannedScreeningCoverage(action.jobId, [], plan.screeningAnswers);
+        const screeningVerification = getVerification(fields.fieldVerification ?? [], "screeningAnswers");
+        for (let index = 0; index < plan.screeningAnswers.length; index += 1) {
+          upsertScreeningCoverageItem({
+            jobId: action.jobId,
+            questionIndex: index + 1,
+            questionText: null,
+            plannedAnswer: plan.screeningAnswers[index] ?? null,
+            filledAnswer: plan.screeningAnswers[index] ?? null,
+            verifiedAnswer: screeningVerification?.status === "verified" ? plan.screeningAnswers[index] ?? null : null,
+            humanEditedAnswer: null,
+            finalAnswer: null,
+            status: screeningVerification?.status === "verified" ? "verified" : "filled",
+          });
+        }
+      }
       if (state === "field_preparation_incomplete") {
         logger.warn(`Required fields not filled confidently for browser action #${action.id}: ${getRequiredSkippedFields(fields).join(", ")}`);
       }
@@ -2601,6 +2750,49 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       });
       countPrepareDraftStatusPost(result, postStatus);
       logger.info(`Browser action #${action.id} detected state: ${state}`);
+      return result;
+    }
+
+    if (action.actionType === "capture_application_snapshot") {
+      const source = proposalVersionSourceFromPayload(action.payload.proposalVersionSource);
+      const payloadPlan = action.payload.applyPlan as BrowserApplyFillPlan | undefined;
+      const snapshotInput = applicationSnapshot ?? null;
+      if (!snapshotInput) {
+        const message = "Application snapshot could not read remote Chrome fields before the browser session closed.";
+        updateBrowserActionStatus(action.id, "failed", message);
+        if (thread) {
+          await postSlackThreadMessage({
+            channel: thread.channelId,
+            threadTs: thread.threadTs,
+            text: `${message} Final version is the last captured QA/readback version if available.`,
+          });
+        }
+        return result;
+      }
+      const persisted = persistApplicationSnapshot({
+        jobId: action.jobId,
+        snapshot: snapshotInput,
+        plan: payloadPlan ?? buildBrowserApplyPlan(action.jobId).plan,
+        source,
+        note: typeof action.payload.notes === "string" ? action.payload.notes : null,
+        markSubmittedAfterCapture: action.payload.markSubmittedAfterCapture === true,
+      });
+      updateBrowserActionStatus(
+        action.id,
+        "completed",
+        persisted.ok
+          ? `Captured application text as ${persisted.label}. Final submit was not clicked by the agent.`
+          : persisted.fallbackReason ?? "Application text unavailable; used last captured QA version if available."
+      );
+      if (thread) {
+        await postSlackThreadMessage({
+          channel: thread.channelId,
+          threadTs: thread.threadTs,
+          text: persisted.ok
+            ? `Saved current remote Chrome application text as ${persisted.label}. Final submit remains manual on my side.`
+            : `${persisted.fallbackReason ?? "Remote Chrome text was unavailable."} I will not claim final submitted text beyond the last captured QA/readback version.`,
+        });
+      }
       return result;
     }
 
