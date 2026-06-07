@@ -51,7 +51,7 @@ import {
 import { extractConnectsFromVisibleText } from "./connectsExtraction";
 import { chooseVisibleBoost, extractVisibleBoostBids } from "./connectsStrategy";
 import { guardedClick } from "./browserSafetyGuard";
-import { buildV3CapturePacket, getSlackLeadPostingDecision, SlackPacketV3Context, SlackPacketV3Message } from "./slackPacketV3";
+import { getSlackLeadPostingDecision, SlackPacketV3Context, writeV3CapturePacketWithLlm } from "./slackPacketV3";
 import { evaluatePlatformEligibility } from "./platformEligibility";
 import { decideLeadHandling } from "./leadDecision";
 import { sendSlackMessage } from "./slack";
@@ -943,7 +943,7 @@ export async function postV3CapturePacketToThread(
     );
     return "skipped";
   }
-  const packet = await rewriteLeadPacketCopyForSlack(buildV3CapturePacket(job, context), job, context);
+  const packet = await writeV3CapturePacketWithLlm(job, context);
   const posted = await postThreadMessage({
     channel: thread.channelId,
     threadTs: thread.threadTs,
@@ -954,43 +954,6 @@ export async function postV3CapturePacketToThread(
     updateApplicationStatus(job.id, "sent_to_slack", "Lead packet posted to Slack for review.");
   }
   return posted ? "posted" : "failed";
-}
-
-async function rewriteLeadPacketCopyForSlack(
-  packet: SlackPacketV3Message,
-  job: ScoredJob,
-  context: SlackPacketV3Context,
-  copyProvider?: SlackCopyProvider,
-): Promise<SlackPacketV3Message> {
-  const copy = await rewriteSlackCopyWithKimi({
-    path: "lead_packet",
-    deterministicText: packet.text,
-    intent: "new_lead_packet",
-    context: {
-      jobId: job.id,
-      title: job.title,
-      score: job.score,
-      matchLevel: job.matchLevel,
-      platform: context.jobIntelligence?.primaryPlatform ?? job.applicationDraft?.jobIntelligence?.primaryPlatform ?? null,
-      autoPrepareNote: context.autoPrepareNote ?? null,
-    },
-    preservePhrases: [
-      job.url || context.upworkUrl,
-      "Final submit remains manual",
-    ].filter(Boolean),
-  }, copyProvider);
-  if (!copy.usedLlm) return packet;
-  const blocks = packet.blocks.map((block, index) => {
-    if (index !== 0 || block.type !== "section") return block;
-    return {
-      ...block,
-      text: {
-        type: "mrkdwn",
-        text: copy.text,
-      },
-    };
-  });
-  return { text: copy.text, blocks };
 }
 
 function buildPrepareDraftStatusMessage(input: {
@@ -2330,7 +2293,7 @@ export async function postDiscoveryCapturePacket(input: {
     sourceLabel: discovery.sourceLabel,
     postedAtText: discovery.postedAtText,
   };
-  const packet = await rewriteLeadPacketCopyForSlack(buildV3CapturePacket(input.scored, packetContext), input.scored, packetContext, deps.copyProvider);
+  const packet = await writeV3CapturePacketWithLlm(input.scored, packetContext, deps.copyProvider);
   const existingThread = getSlackThreadStateByJobId(input.scored.id);
   if (existingThread) {
     const posted = await postThreadMessage({

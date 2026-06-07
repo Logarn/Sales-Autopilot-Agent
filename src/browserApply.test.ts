@@ -382,8 +382,10 @@ async function runTests(): Promise<void> {
     );
     assert(manualReviewDiscovery.status === "posted", "Manual-review discovery lead should post via webhook fallback");
     assert(manualReviewDiscovery.outcome === "posted", "Manual-review discovery lead should report posted outcome");
-    assert(/This is relevant|Worth a look|This could be useful/.test(webhookPostedText), "Review-needed lead should sound conversational in Slack");
-    assert(webhookPostedText.includes("*Next:* Reply *“prep it”* if you want me to prepare the draft."), "Review-needed lead should ask for a clear next action");
+    assert(/^New lead:/i.test(webhookPostedText), "Review-needed lead should use compact safe fallback copy when no LLM provider is available");
+    assert(webhookPostedText.includes(manualReviewJob.url), "Review-needed lead should include the Upwork link");
+    assert(webhookPostedText.includes("stop before submit"), "Review-needed lead should preserve the final-submit boundary");
+    assert(/Next:.*prep it/i.test(webhookPostedText), "Review-needed lead should ask for a clear next action");
     assert(!webhookPostedText.includes("Available replies"), "Normal lead alert should not include a command menu");
     assert(!webhookPostedText.includes("Debug:"), "Normal lead alert should not include debug lines");
     for (const noisy of ["manual review", "platformEligibility", "lead decision", "packet", "source context", "action id"]) {
@@ -438,7 +440,7 @@ async function runTests(): Promise<void> {
       },
     );
     assert(normalDiscovery.status === "posted", "Eligible discovery lead should post");
-    assert(webhookPostedText.includes("*Next:* I’m preparing this now."), "Post-to-Slack lead should use concise autonomous prep wording");
+    assert(/Next:.*preparing.*stop before submit/i.test(webhookPostedText), "Post-to-Slack lead should use concise autonomous prep wording");
     assert(!webhookPostedText.includes("Screening answers"), "Initial lead alert must not include screening answers");
     assert(!webhookPostedText.includes("Proposal preview"), "Initial lead alert must not include proposal preview");
 
@@ -489,7 +491,7 @@ async function runTests(): Promise<void> {
           isAvailable: () => true,
           completeJson: async (request: any) => {
             kimiLeadRequests.push(request);
-            return { ok: true, data: { text: `Kimi lead: This one is worth a real shot.\n${kimiLeadJob.url}\nFinal submit remains manual.` } };
+            return { ok: true, data: { text: `Kimi lead: This one is worth a real shot. Next: review it in VNC when ready; I’ll stop before submit.\n${kimiLeadJob.url}` } };
           },
         },
         postChannelMessage: async (payload) => {
@@ -502,7 +504,7 @@ async function runTests(): Promise<void> {
     assert(kimiLeadText.startsWith("Kimi lead:"), "Lead packet should use Kimi copy when the provider is available and safe.");
     assert(kimiLeadRequests.some((request) => request.messages?.[1]?.content?.includes("\"path\":\"lead_packet\"")), "Lead packet copy request should use the lead_packet path.");
     assert(kimiLeadRequests.some((request) => JSON.stringify(request).includes("Operating constitution from soul.md")), "Lead packet copy request should include soul.md context.");
-    assert(kimiLeadText.includes("Final submit remains manual"), "Lead packet copy must preserve final-submit safety wording.");
+    assert(kimiLeadText.includes("stop before submit"), "Lead packet copy must preserve final-submit safety wording.");
 
     let queuedPrepPostAttempted = false;
     const queuedPrepJob = {
@@ -732,7 +734,7 @@ async function runTests(): Promise<void> {
     );
     assert(connectsManualReviewDiscovery.status === "posted", "Eligible connects-manual-review discovery lead should post");
     assert(connectsManualReviewDiscovery.outcome === "posted", "Eligible connects-manual-review discovery lead should count as posted");
-    assert(webhookPostedText.includes("*Next:* Reply *“prep it”* if you want me to prepare the draft."), "Connects review-needed lead should ask for a clear next action");
+    assert(/Next:.*prep it/i.test(webhookPostedText), "Connects review-needed lead should ask for a clear next action");
     for (const noisy of ["manual review", "platformEligibility", "lead decision", "packet", "source context", "action id"]) {
       assert(!webhookPostedText.toLowerCase().includes(noisy.toLowerCase()), `Connects lead alert should hide ${noisy}`);
     }

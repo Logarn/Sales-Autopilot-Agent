@@ -1,5 +1,6 @@
-import { buildV3CapturePacket, shouldPostLeadPacket } from "./slackPacketV3";
+import { buildV3CapturePacket, shouldPostLeadPacket, writeV3CapturePacketWithLlm } from "./slackPacketV3";
 import { JobIntelligence, ScoredJob } from "./types";
+import type { LlmJsonRequest } from "./llm/provider";
 
 function createScoredJob(overrides: Partial<ScoredJob> = {}): ScoredJob {
   return {
@@ -83,7 +84,34 @@ function assertEqual<T>(actual: T, expected: T, label: string): void {
   assert(actual === expected, `${label}: expected ${JSON.stringify(expected)} but received ${JSON.stringify(actual)}`);
 }
 
-function runTests(): void {
+function fakeLeadProvider(): { requests: LlmJsonRequest[]; provider: { isAvailable: () => boolean; completeJson: <T>(request: LlmJsonRequest) => Promise<{ ok: true; data: T }> } } {
+  const requests: LlmJsonRequest[] = [];
+  return {
+    requests,
+    provider: {
+      isAvailable: () => true,
+      completeJson: async <T>(request: LlmJsonRequest) => {
+        requests.push(request);
+        const payload = JSON.parse(request.messages[1].content) as { recentOpenings?: string[]; context?: { upworkUrl?: string } };
+        const url = payload.context?.upworkUrl ?? "https://www.upwork.com/jobs/~1234567890";
+        const repeated = (payload.recentOpenings ?? []).some((opening) => opening.includes("this deserves a serious look"));
+        const text = repeated
+          ? `I’d move this one into prep. The fit is strong enough to spend the time, and I’ll stop before submit.\n\nNext: review it in VNC when I post the QA handoff.\n${url}`
+          : `This deserves a serious look. The fit is strong enough to spend the time, and I’ll stop before submit.\n\nNext: review it in VNC when I post the QA handoff.\n${url}`;
+        return { ok: true, data: { text } as T };
+      },
+    },
+  };
+}
+
+function unavailableLeadProvider(): { isAvailable: () => boolean; completeJson: <T>(request: LlmJsonRequest) => Promise<{ ok: false; skippedReason: string }> } {
+  return {
+    isAvailable: () => false,
+    completeJson: async () => ({ ok: false, skippedReason: "disabled" }),
+  };
+}
+
+async function runTests(): Promise<void> {
   const intelligence: JobIntelligence = {
     schemaVersion: "1.0",
     primaryPlatform: "Klaviyo",
@@ -136,7 +164,8 @@ function runTests(): void {
   assertIncludes(text, "• *Connects:* 4", "connects summary");
   assertIncludes(text, "• *Budget:* $12-$35/hr", "budget summary");
   assertIncludes(text, "• *Risk:* Client has weak spend history and budget looks low", "single risk");
-  assertIncludes(text, "*Next:* I’m preparing this now.", "autonomous next action");
+  assertIncludes(text, "*Next:* I’m preparing this now; review it in VNC when I say it’s ready.", "autonomous next action");
+  assertIncludes(text, "stop before submit", "manual submit boundary");
   assertIncludes(text, job.url, "job url");
 
   for (const noisy of [
@@ -170,6 +199,62 @@ function runTests(): void {
     true,
     "eligible lead should post",
   );
+
+  const llm = fakeLeadProvider();
+  const llmPacket = await writeV3CapturePacketWithLlm(job, {
+    upworkUrl: job.url,
+    captureStatus: "packet_sent",
+    autoPrepareNote: "Strong fit. I’m preparing the Upwork draft now. Final submit remains manual.",
+    requiredConnects: 4,
+    suggestedBoostConnects: 0,
+    suggestedBid: "$35/hr",
+    jobIntelligence: intelligence,
+  }, llm.provider);
+  assertEqual(llm.requests.length, 1, "lead packet should invoke LLM writer when available");
+  assert(llmPacket.text.includes(job.url), "LLM lead packet must include the Upwork link");
+  assert(llmPacket.text.includes("Next:"), "LLM lead packet must include one clear CTA");
+  assert(llmPacket.text.includes("stop before submit"), "LLM lead packet must preserve final-submit boundary");
+  for (const noisy of ["packet_sent", "action #", "platformEligibility", "source_context_unavailable", "Job ID:"]) {
+    assertNotIncludes(llmPacket.text, noisy, `LLM lead packet should hide ${noisy}`);
+  }
+  assert(llm.requests[0]?.messages.some((message) => message.content.includes("Operating constitution from soul.md")), "lead writer prompt should include soul.md");
+  assert(llm.requests[0]?.messages.some((message) => message.content.includes("salesLearning")), "lead writer prompt should include long-term memory context");
+
+  const similarJob = createScoredJob({
+    id: "manual:upwork-1234567891",
+    url: "https://www.upwork.com/jobs/~1234567891",
+    title: "Email Marketing Specialist Needed For Shopify",
+    description: "Klaviyo email role for an ecommerce brand. Need retention, email flows, and campaign support.",
+  });
+  similarJob.applicationDraft = {
+    ...job.applicationDraft!,
+    jobId: similarJob.id,
+  };
+  const similarPacket = await writeV3CapturePacketWithLlm(similarJob, {
+    upworkUrl: similarJob.url,
+    captureStatus: "packet_sent",
+    autoPrepareNote: "Strong fit. I’m preparing the Upwork draft now. Final submit remains manual.",
+    requiredConnects: 4,
+    suggestedBoostConnects: 0,
+    suggestedBid: "$35/hr",
+    jobIntelligence: intelligence,
+  }, llm.provider);
+  const firstOpening = llmPacket.text.split(/\n/)[0];
+  const secondOpening = similarPacket.text.split(/\n/)[0];
+  assert(firstOpening !== secondOpening, `two similar LLM-written leads should avoid identical openings: ${firstOpening}`);
+
+  const fallbackPacket = await writeV3CapturePacketWithLlm(job, {
+    upworkUrl: job.url,
+    captureStatus: "packet_sent",
+    autoPrepareNote: "Strong fit. I’m preparing the Upwork draft now. Final submit remains manual.",
+    requiredConnects: 4,
+    suggestedBoostConnects: 0,
+    suggestedBid: "$35/hr",
+    jobIntelligence: intelligence,
+  }, unavailableLeadProvider());
+  assert(fallbackPacket.text.includes(job.url), "lead fallback should include the Upwork link");
+  assert(fallbackPacket.text.includes("stop before submit"), "lead fallback should keep final submit manual");
+  assert(!fallbackPacket.text.includes("I can help with the draft, files, proof, boost, or status"), "lead fallback must not dump command-menu copy");
 
   const unknownConnectsJob = createScoredJob({
     connectsCost: 0,
@@ -260,11 +345,9 @@ function runTests(): void {
 }
 
 if (require.main === module) {
-  try {
-    runTests();
-  } catch (error) {
+  runTests().catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`slack lead message V3 tests failed: ${message}`);
     process.exitCode = 1;
-  }
+  });
 }

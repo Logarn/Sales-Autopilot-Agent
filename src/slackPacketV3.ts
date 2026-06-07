@@ -7,6 +7,8 @@ import { decideLeadHandling } from "./leadDecision";
 import { evaluatePlatformEligibility, type PlatformEligibility } from "./platformEligibility";
 import { JobIntelligence, ScoredJob, SourceBackedConnects } from "./types";
 import { truncateText } from "./utils";
+import { buildSalesLearningPromptContext } from "./salesLearningMemory";
+import { rewriteSlackCopyWithKimi, type SlackCopyProvider } from "./slackCopywriter";
 
 export interface SlackPacketV3Context {
   upworkUrl: string;
@@ -558,7 +560,7 @@ function conciseNextAction(
   proceeding: boolean,
 ): string {
   if (proceeding) {
-    return "I’m preparing this now.";
+    return "I’m preparing this now; review it in VNC when I say it’s ready. I’ll stop before submit.";
   }
   void leadDecision;
   void postingDecision;
@@ -605,4 +607,85 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
 
 export function buildV3CapturePacketText(job: ScoredJob, context: SlackPacketV3Context): string {
   return buildV3CapturePacket(job, context).text;
+}
+
+export async function writeV3CapturePacketWithLlm(
+  job: ScoredJob,
+  context: SlackPacketV3Context,
+  copyProvider?: SlackCopyProvider,
+): Promise<SlackPacketV3Message> {
+  const packet = buildV3CapturePacket(job, context);
+  const intelligence = context.jobIntelligence ?? job.applicationDraft?.jobIntelligence;
+  const leadDecision = decideLeadHandling(job, intelligence);
+  const postingDecision = getSlackLeadPostingDecision(job, context);
+  const salesLearning = buildSalesLearningPromptContext({
+    jobId: job.id,
+    job,
+    text: [
+      job.title,
+      job.description,
+      intelligence?.proposalAngle,
+      intelligence?.proofRecommendations?.join(" "),
+      context.autoPrepareNote,
+    ].filter(Boolean).join(" "),
+    types: ["proposal_style", "proof_preference", "boost_strategy", "source_quality", "operator_preference"],
+    limit: 8,
+  });
+  const upworkUrl = job.url || context.upworkUrl;
+  const copy = await rewriteSlackCopyWithKimi({
+    path: "lead_packet",
+    deterministicText: packet.text,
+    intent: "new_lead_packet",
+    context: {
+      jobId: job.id,
+      title: job.title,
+      upworkUrl,
+      score: job.score,
+      matchLevel: job.matchLevel,
+      budget: job.budget,
+      platform: intelligence?.primaryPlatform ?? null,
+      proofRecommendations: intelligence?.proofRecommendations ?? context.proofRecommendations ?? [],
+      draftAngle: intelligence?.proposalAngle ?? null,
+      boostStrategy: job.applicationDraft?.connectsStrategy ?? job.scoreBreakdown?.connectsStrategy ?? null,
+      autoPrepare: {
+        shouldAutoPrepare: leadDecision.shouldAutoPrepare,
+        reason: leadDecision.reason,
+        note: context.autoPrepareNote ?? null,
+      },
+      leadFitDecision: {
+        shouldPost: postingDecision.shouldPost,
+        classification: postingDecision.classification,
+        reason: postingDecision.reason,
+      },
+      salesLearning,
+      safety: {
+        finalSubmit: "manual_only",
+        browserSecurity: "fail_closed",
+        proofVerification: "deterministic_required",
+        boostCap: "deterministic_connects_rules",
+      },
+    },
+    preservePhrases: [
+      upworkUrl,
+      "stop before submit",
+    ].filter((value): value is string => Boolean(value)),
+  }, copyProvider);
+
+  if (!copy.usedLlm) {
+    return { text: copy.text, blocks: [{ type: "section", text: { type: "mrkdwn", text: copy.text } }] };
+  }
+
+  return {
+    text: copy.text,
+    blocks: packet.blocks.map((block, index) => {
+      if (index !== 0 || block.type !== "section") return block;
+      return {
+        ...block,
+        text: {
+          type: "mrkdwn",
+          text: copy.text,
+        },
+      };
+    }),
+  };
 }

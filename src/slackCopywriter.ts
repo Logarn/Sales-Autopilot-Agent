@@ -25,6 +25,7 @@ export interface SlackCopyRequest {
   intent?: string | null;
   context?: Record<string, unknown>;
   preservePhrases?: string[];
+  recentPhrases?: string[];
 }
 
 export interface SlackCopyResult {
@@ -37,6 +38,8 @@ export interface SlackCopyResult {
 interface SlackCopyPayload {
   text?: unknown;
 }
+
+const recentOpeningsByPath = new Map<SlackCopyPath, string[]>();
 
 function defaultSlackCopyProvider(): SlackCopyProvider {
   return new OpenAiCompatibleProvider(getSlackCopyProviderConfig());
@@ -51,6 +54,17 @@ function containsRawIds(text: string): boolean {
     /\b(?:browser\s+)?action\s*#?\s*\d+\b/i,
     /\b(?:channel\s+(?:id|ts)|thread\s+(?:id|ts)|client_msg_id|event_ts|queue internals)\b/i,
     /\bjob id\s*[:#]\s*[A-Za-z0-9._~:-]+/i,
+  ].some((pattern) => pattern.test(text));
+}
+
+function containsRawInternalFields(text: string): boolean {
+  return [
+    /\bpacket_sent\b/i,
+    /\bplatformEligibility\b/i,
+    /\binternalSkipReason\b/i,
+    /\bsource_context_unavailable\b/i,
+    /\blead decision\b/i,
+    /\bqueue internals\b/i,
   ].some((pattern) => pattern.test(text));
 }
 
@@ -74,16 +88,100 @@ function preservedPhrasesMissing(text: string, phrases: string[] = []): boolean 
   return phrases.some((phrase) => phrase.trim() && !text.includes(phrase));
 }
 
+function normalizeOpening(value: string): string {
+  const firstLine = value
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^[-•*>:\s`*_]+/, "").trim())
+    .find(Boolean) ?? "";
+  return firstLine
+    .replace(/<@[A-Z0-9_]+>/g, "")
+    .replace(/^[^\p{L}\p{N}]+/u, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function recentOpeningsFor(request: SlackCopyRequest): string[] {
+  const fromRequest = request.recentPhrases ?? [];
+  const fromContext = [
+    ...(Array.isArray(request.context?.recentPhrases) ? request.context?.recentPhrases as unknown[] : []),
+    ...(Array.isArray(request.context?.recentLeadOpenings) ? request.context?.recentLeadOpenings as unknown[] : []),
+    ...(Array.isArray(request.context?.recentReplyOpenings) ? request.context?.recentReplyOpenings as unknown[] : []),
+  ].filter((value): value is string => typeof value === "string");
+  return [
+    ...fromRequest,
+    ...fromContext,
+    ...(recentOpeningsByPath.get(request.path) ?? []),
+  ]
+    .map(normalizeOpening)
+    .filter(Boolean);
+}
+
+function repeatsRecentOpening(text: string, request: SlackCopyRequest): boolean {
+  const opening = normalizeOpening(text);
+  if (!opening) return false;
+  return recentOpeningsFor(request).some((recent) => {
+    if (!recent) return false;
+    return recent === opening || opening.startsWith(`${recent} `) || recent.startsWith(`${opening} `);
+  });
+}
+
+function rememberOpening(path: SlackCopyPath, text: string): void {
+  const opening = normalizeOpening(text);
+  if (!opening) return;
+  const next = [opening, ...(recentOpeningsByPath.get(path) ?? []).filter((item) => item !== opening)].slice(0, 12);
+  recentOpeningsByPath.set(path, next);
+}
+
+function extractUpworkUrl(request: SlackCopyRequest): string | null {
+  const fromContext = typeof request.context?.upworkUrl === "string" ? request.context.upworkUrl : null;
+  const fromDeterministic = request.deterministicText.match(/https?:\/\/(?:www\.)?upwork\.com\/[^\s<>]+/i)?.[0] ?? null;
+  return fromContext ?? fromDeterministic;
+}
+
+function hasClearLeadCta(text: string): boolean {
+  return /\b(?:reply|review|open|check|tell me|say|look at|approve|skip|prep it)\b/i.test(text);
+}
+
 function validateSlackCopy(text: string, request: SlackCopyRequest): string | null {
   const trimmed = text.trim();
   if (!trimmed) return "empty copy";
   if (containsOldMenu(trimmed)) return "old command menu";
   if (containsRawIds(trimmed)) return "raw ids in non-debug copy";
+  if (containsRawInternalFields(trimmed)) return "raw internal fields in non-debug copy";
   if (/\bthe agent\b/i.test(trimmed)) return "third-person agent language";
   if (violatesSubmitBoundary(trimmed)) return "submit boundary violation";
   if (violatesProofWording(trimmed, request.deterministicText)) return "proof wording drift";
   if (preservedPhrasesMissing(trimmed, request.preservePhrases)) return "required verbatim text missing";
+  if (repeatsRecentOpening(trimmed, request)) return "repeated recent opening";
+  if (request.path === "lead_packet") {
+    const upworkUrl = extractUpworkUrl(request);
+    if (upworkUrl && !trimmed.includes(upworkUrl)) return "missing Upwork link";
+    if (!hasClearLeadCta(trimmed)) return "missing clear lead CTA";
+  }
   return null;
+}
+
+function compactSafeFallbackText(request: SlackCopyRequest, reason: string): string {
+  const deterministic = request.deterministicText.trim();
+  if (!deterministic) return "I hit a copywriting issue, but I will keep this safe and stop before submit.";
+  if (containsOldMenu(deterministic)) {
+    return "I’m not sure what you want next. Send the specific change or next step and I’ll handle it without touching final submit.";
+  }
+  if (request.path === "lead_packet") {
+    const url = extractUpworkUrl(request);
+    const title = typeof request.context?.title === "string" ? request.context.title : "New Upwork lead";
+    const fit = typeof request.context?.matchLevel === "string" ? request.context.matchLevel : "review";
+    const cta = deterministic.match(/\*Next:\*\s*([^\n]+)/i)?.[1]?.trim() ?? "Review this and reply with the next call.";
+    return [
+      `New lead: ${title}`,
+      `Fit: ${fit}. I’ll keep prep inside the guardrails and stop before submit.`,
+      `Next: ${cta}`,
+      url,
+    ].filter(Boolean).join("\n");
+  }
+  void reason;
+  return deterministic;
 }
 
 export async function rewriteSlackCopyWithKimi(
@@ -91,7 +189,7 @@ export async function rewriteSlackCopyWithKimi(
   provider: SlackCopyProvider = defaultSlackCopyProvider(),
 ): Promise<SlackCopyResult> {
   const fallback = (reason: string): SlackCopyResult => ({
-    text: request.deterministicText,
+    text: compactSafeFallbackText(request, reason),
     usedLlm: false,
     provider: "fallback",
     reason,
@@ -109,10 +207,17 @@ export async function rewriteSlackCopyWithKimi(
         role: "system",
         content: [
           "You write Steve-facing Slack copy for an Upwork application agent.",
-          "Rewrite the deterministic response into natural, concise Slack copy.",
+          "Rewrite the deterministic response into natural, concise Slack copy. Keep the meaning and safety state.",
+          "Reason first from the current context, then write the message. Do not expose the reasoning.",
+          "For lead packets: be concise, human, commercially opinionated, and varied; include the Upwork link; include one clear next-step CTA; avoid raw packet fields.",
+          "For normal Slack replies: answer the actual question directly and conversationally. Do not route natural language into a command-menu fallback.",
+          "Use sales memories as hypotheses when provided. Current context and hard safety override learned preferences.",
+          "Avoid starting with any recent opening listed in recentOpenings.",
           "Do not decide actions, change status, add facts, add raw ids, or expose internals.",
           "Never show a command menu.",
           "Never claim final submit happened or will happen. Final submit always remains manual.",
+          "Never bypass CAPTCHA, security, login, passkey, or 2FA checks.",
+          "Never claim files, proof, portfolio, browser fill, Connects, or boost were verified unless deterministic text/context says so.",
           "Use Proof planned until verification is explicit. Use Proof verified only when the deterministic text already says Proof verified. Never say Proof I used.",
           "If preservePhrases are provided, include each phrase exactly as written.",
           "Return JSON only: {\"text\":\"...\"}.",
@@ -128,6 +233,7 @@ export async function rewriteSlackCopyWithKimi(
           deterministicText: request.deterministicText,
           context: request.context ?? {},
           preservePhrases: request.preservePhrases ?? [],
+          recentOpenings: recentOpeningsFor(request),
           soul: buildSoulPromptContext(`slack_copy:${request.path}`),
         }),
       },
@@ -142,5 +248,7 @@ export async function rewriteSlackCopyWithKimi(
   if (validationError) {
     return fallback(validationError);
   }
-  return { text: text.trim(), usedLlm: true, provider: "kimi" };
+  const trimmed = text.trim();
+  rememberOpening(request.path, trimmed);
+  return { text: trimmed, usedLlm: true, provider: "kimi" };
 }
