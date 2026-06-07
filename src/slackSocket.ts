@@ -12,6 +12,8 @@ import {
   getSlackThreadStateByThreadTs,
   listActiveSlackBehaviorMemories,
   listBrowserActions,
+  getLatestProposalVersion,
+  recordProposalVersion,
   recordSlackFailureReflection,
   updateApplicationStatus,
   updateSlackThreadStateStatus,
@@ -82,7 +84,7 @@ import {
   parseSlackOperatorIntent,
   type SlackOperatorControlDeps,
 } from "./slackOperatorControlPlane";
-import type { ApplicationStatus } from "./types";
+import type { ApplicationStatus, ProposalVersionSource } from "./types";
 
 const THREAD_MENTIONS = "<@U0A2X5BCNKC> <@U0AHJFYV42K>";
 const SLACK_EVENT_DEDUPE_TTL_MS = 10 * 60 * 1000;
@@ -143,6 +145,7 @@ export type SlackSocketParsedCommandType =
   | "discovery_best_matches_only"
   | "discovery_block_status"
   | "discovery_clear_browser"
+  | "reread_application"
   | "mark_submitted"
   | "record_outcome"
   | "memory_query"
@@ -159,6 +162,8 @@ export interface ParsedSlackSocketCommand {
   actionId?: number;
   qaIndex?: number;
   qaQuery?: string;
+  proposalVersionSource?: ProposalVersionSource;
+  markSubmittedAfterCapture?: boolean;
   confidence?: "high" | "medium" | "low";
   replyText?: string;
   source?: "llm" | "fallback";
@@ -383,6 +388,12 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
       source: "fallback",
     };
   }
+  if (/\b(?:show|send|post|what'?s)\b.*\bfinal\s+submitted\s+version\b/i.test(commandText)) {
+    return { type: "draft_preview", rawText: normalized, proposalVersionSource: "final_submitted", source: "fallback" };
+  }
+  if (/\b(?:what did you put in upwork|show(?: me)? what you put in upwork|show(?: me)? the upwork draft|cover\s*letter used|cv used)\b/i.test(commandText)) {
+    return { type: "draft_preview", rawText: normalized, proposalVersionSource: "upwork_inserted", source: "fallback" };
+  }
   if (matchesDraftPreviewIntent(normalized) || matchesDraftPreviewIntent(commandText)) {
     return { type: "draft_preview", rawText: normalized, source: "fallback" };
   }
@@ -434,6 +445,15 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
     return { type: "prep_issue_report", rawText: normalized, source: "fallback" };
   }
 
+  if (/\b(?:i edited it|i edited the draft|re-?read the draft|re-?read the application|re-?read the cover\s*letter|save this version|learn from this version|this is the final version|save the current version)\b/i.test(normalized)) {
+    return {
+      type: "reread_application",
+      rawText: normalized,
+      proposalVersionSource: "human_edit_reread",
+      source: "fallback",
+    };
+  }
+
   const retryMatch = commandText.match(/^retry(?:\s+(?:preparation|prep))?(?:\s+(\d+))?$/i);
   if (retryMatch) {
     return {
@@ -443,7 +463,14 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
     };
   }
 
-  if (/^(?:mark\s+submitted|submitted|i\s+sent\s+it|sent\s+it|i\s+submitted\s+it|it'?s\s+submitted)$/i.test(commandText)) return { type: "mark_submitted", rawText: normalized };
+  if (/^(?:mark\s+submitted|submitted|i\s+sent\s+it|sent\s+it|i\s+submitted\s+it|it'?s\s+submitted|it\s+is\s+submitted|submitted\s+after\s+editing)$/i.test(commandText)) {
+    return {
+      type: "mark_submitted",
+      rawText: normalized,
+      proposalVersionSource: "final_submitted",
+      markSubmittedAfterCapture: true,
+    };
+  }
 
   const outcomeCommand = parseOutcomeCommand(commandText, normalized);
   if (outcomeCommand) return outcomeCommand;
@@ -1117,25 +1144,96 @@ export function queuePrepareDraftFromSlackThread(input: { channelId: string; thr
   };
 }
 
-export function buildDraftPreviewFromSlackThread(input: { channelId: string; threadTs: string }): { ok: boolean; text: string } {
+function latestApplySnapshotUrl(jobId: string, fallbackUrl: string): string {
+  const latestQaAction = listBrowserActions(null, 1000)
+    .filter((action) => action.jobId === jobId && action.actionType === "prepare_application_review")
+    .slice(-1)[0] as { payload?: { qaHold?: { applyUrl?: string }; applyPlan?: { applyUrl?: string }; url?: string } } | undefined;
+  return latestQaAction?.payload?.qaHold?.applyUrl ?? latestQaAction?.payload?.applyPlan?.applyUrl ?? latestQaAction?.payload?.url ?? fallbackUrl;
+}
+
+export function queueApplicationSnapshotFromSlackThread(input: {
+  channelId: string;
+  threadTs: string;
+  source: ProposalVersionSource;
+  markSubmittedAfterCapture?: boolean;
+  note?: string;
+}): { ok: boolean; text: string; actionId?: number } {
+  const state = getSlackThreadStateByThreadTs(input.channelId, input.threadTs);
+  if (!state?.jobId) {
+    return { ok: false, text: "I cannot re-read the application without a tracked job id for this thread." };
+  }
+  const url = latestApplySnapshotUrl(state.jobId, state.upworkUrl);
+  const action = enqueueBrowserActionDeduped({
+    jobId: state.jobId,
+    actionType: "capture_application_snapshot",
+    payload: {
+      url,
+      channelId: state.channelId,
+      threadTs: state.threadTs,
+      messageTs: state.messageTs,
+      applicationId: state.jobId,
+      proposalVersionSource: input.source,
+      markSubmittedAfterCapture: Boolean(input.markSubmittedAfterCapture),
+      notes: input.note ?? "Read current remote Chrome application text for proposal audit trail. Do not fill or submit.",
+    },
+  });
+  if (input.markSubmittedAfterCapture) {
+    updateApplicationStatus(state.jobId, "submitted", "Marked submitted from Slack after Steve submitted manually; queued read-only final page capture.");
+  }
+  updateSlackThreadStateStatus(state.channelId, state.threadTs, input.markSubmittedAfterCapture ? "submitted_marked" : "status_checked");
+  return {
+    ok: true,
+    actionId: action.id,
+    text: input.markSubmittedAfterCapture
+      ? `I queued a read-only final version capture for ${humanApplicationLabel(state.jobId)} before recording the submitted outcome. Final submit remains manual on my side.`
+      : `I queued a read-only re-read of the remote Chrome application for ${humanApplicationLabel(state.jobId)}. I’ll save the current cover letter/screening text as a new version if the page is readable.`,
+  };
+}
+
+export function buildDraftPreviewFromSlackThread(input: {
+  channelId: string;
+  threadTs: string;
+  source?: ProposalVersionSource;
+}): { ok: boolean; text: string } {
   const state = getSlackThreadStateByThreadTs(input.channelId, input.threadTs);
   if (!state?.jobId) {
     return { ok: false, text: "I cannot show a draft preview without a tracked job id for this thread." };
   }
   const draft = getApplicationDraft(state.jobId);
   const scoredJob = getScoredJobForSlackPreview(state.jobId);
-  if (!draft?.proposalText.trim()) {
+  const requestedVersion = input.source ? getLatestProposalVersion(state.jobId, input.source) : null;
+  const latestVersion = requestedVersion ?? getLatestProposalVersion(state.jobId);
+  const textToShow = requestedVersion?.proposalText ?? (!input.source ? draft?.proposalText.trim() : latestVersion?.proposalText) ?? "";
+  if (!textToShow.trim()) {
     return { ok: false, text: "Quick blocker: I do not have the generated draft for this lead yet, so I have not filled the Upwork form." };
   }
+  const previewVersion = input.source
+    ? requestedVersion
+    : recordProposalVersion({
+        jobId: state.jobId,
+        source: "slack_preview",
+        proposalText: textToShow,
+        screeningAnswers: draft?.structuredProposal?.clientRequestAnswers ?? latestVersion?.screeningAnswers ?? [],
+        note: "Slack draft/CV preview shown to Steve.",
+      });
   updateSlackThreadStateStatus(state.channelId, state.threadTs, "draft_preview_sent");
+  const label = requestedVersion?.label ?? previewVersion?.label ?? latestVersion?.label ?? "current draft";
+  const sourceLine = input.source && !requestedVersion
+    ? `I do not have a ${input.source.replace(/_/g, " ")} capture yet; showing the latest captured draft instead (${label}).`
+    : `Version: ${label}`;
   return {
     ok: true,
     text: [
       `Draft preview for ${scoredJob?.title ?? state.jobId}:`,
+      sourceLine,
       "",
-      draft.proposalText.trim(),
+      textToShow,
       "",
-      "I have not filled the Upwork form yet.",
+      input.source === "final_submitted"
+        ? "I only call this final submitted text when Steve marked it submitted or the page was captured before that outcome update."
+        : !input.source
+          ? "I have not filled the Upwork form yet."
+        : "I have not filled the Upwork form yet unless an Upwork inserted/QA version is shown above.",
       "Reply \"use this\", \"looks good\", or \"put it in Upwork\" when you want me to fill the remote Chrome apply page.",
       "Final submit remains manual.",
     ].join("\n"),
@@ -1260,16 +1358,7 @@ async function executeConversationPlan(params: {
   if (params.plan.actions.includes("send_draft_preview")) {
     const result = buildDraftPreviewFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs });
     if (!result.ok) updateSlackThreadStateStatus(params.state.channelId, params.state.threadTs, "error");
-    const draft = params.state.jobId ? getApplicationDraft(params.state.jobId)?.proposalText.trim() : "";
-    const text = await userFacingSlackCopy({
-      deterministicText: result.text,
-      userMessage: params.userMessage,
-      intent: params.plan.intent,
-      context: { jobId: params.state.jobId, threadStatus: params.state.status },
-      preservePhrases: draft ? [draft, "Final submit remains manual."] : ["Final submit remains manual."],
-      copyProvider: params.copyProvider,
-    });
-    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    await postThreadReply(params.client, params.channelId, params.threadTs, result.text);
     return;
   }
   if (params.plan.actions.includes("queue_prepare_application") || params.plan.actions.includes("retry_prepare_after_files")) {
@@ -1317,13 +1406,15 @@ async function executeConversationPlan(params: {
     await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
-  const draft = params.state.jobId && params.plan.intent === "show_cover_letter" ? getApplicationDraft(params.state.jobId)?.proposalText.trim() : "";
+  if (params.plan.intent === "show_cover_letter") {
+    await postThreadReply(params.client, params.channelId, params.threadTs, params.plan.reply);
+    return;
+  }
   const text = await userFacingSlackCopy({
     deterministicText: params.plan.reply,
     userMessage: params.userMessage,
     intent: params.plan.intent,
     context: { jobId: params.state.jobId, threadStatus: params.state.status },
-    preservePhrases: draft ? [draft] : [],
     copyProvider: params.copyProvider,
   });
   await postThreadReply(params.client, params.channelId, params.threadTs, text);
@@ -1907,7 +1998,7 @@ export async function handleThreadCommand(params: {
     return;
   }
 
-  if (!state.jobId && ["approve", "reject", "revise", "proof_revision", "approve_prepare", "prepare_draft", "draft_preview", "prep_issue_report", "mark_submitted", "record_outcome", "retry_action"].includes(command.type)) {
+  if (!state.jobId && ["approve", "reject", "revise", "proof_revision", "approve_prepare", "prepare_draft", "draft_preview", "prep_issue_report", "reread_application", "mark_submitted", "record_outcome", "retry_action"].includes(command.type)) {
     const response = `This thread tracks ${state.upworkUrl} but no job id was parsed. ${
       command.type === "approve_prepare" || command.type === "prepare_draft" || command.type === "draft_preview" ? "I can’t prep it until I have the job id. Send the Upwork listing link here and I’ll pick it up." : "Please share a supported Upwork job URL first."
     }`;
@@ -1983,20 +2074,15 @@ export async function handleThreadCommand(params: {
   }
 
   if (command.type === "draft_preview") {
-    const result = buildDraftPreviewFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs });
+    const result = buildDraftPreviewFromSlackThread({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      source: command.proposalVersionSource,
+    });
     if (!result.ok) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
     }
-    const draft = state.jobId ? getApplicationDraft(state.jobId)?.proposalText.trim() : "";
-    const text = await userFacingSlackCopy({
-      deterministicText: result.text,
-      userMessage: params.text,
-      intent: "draft_preview",
-      context: { jobId: state.jobId, threadStatus: state.status },
-      preservePhrases: draft ? [draft, "Final submit remains manual."] : ["Final submit remains manual."],
-      copyProvider: params.copyProvider,
-    });
-    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    await postThreadReply(params.client, params.channelId, params.threadTs, result.text);
     return;
   }
 
@@ -2059,6 +2145,26 @@ export async function handleThreadCommand(params: {
     return;
   }
 
+  if (command.type === "reread_application") {
+    const result = queueApplicationSnapshotFromSlackThread({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      source: command.proposalVersionSource ?? "human_edit_reread",
+      note: command.rawText,
+    });
+    if (!result.ok) updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
+    const text = await userFacingSlackCopy({
+      deterministicText: result.text,
+      userMessage: params.text,
+      intent: "reread_application",
+      context: { jobId: state.jobId, queued: result.ok },
+      preservePhrases: result.text.includes("read-only") ? ["read-only"] : [],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return;
+  }
+
   if (command.type === "retry_action") {
     const resolved = resolveRetryAction({ state, actionId: command.actionId });
     const action = resolved.action;
@@ -2093,11 +2199,25 @@ export async function handleThreadCommand(params: {
   }
 
   if (command.type === "mark_submitted") {
-    if (state.jobId) {
-      updateApplicationStatus(state.jobId, "submitted", "Marked submitted from Slack after Steve submitted manually.");
+    const result = queueApplicationSnapshotFromSlackThread({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      source: command.proposalVersionSource ?? "final_submitted",
+      markSubmittedAfterCapture: true,
+      note: "Steve said the application was submitted; capture current remote Chrome text first when possible.",
+    });
+    if (!result.ok && state.jobId) {
+      updateApplicationStatus(state.jobId, "submitted", "Marked submitted from Slack after Steve submitted manually. Current remote Chrome text could not be queued; final version is last captured QA version if available.");
+      updateSlackThreadStateStatus(state.channelId, state.threadTs, "submitted_marked");
     }
-    updateSlackThreadStateStatus(state.channelId, state.threadTs, "submitted_marked");
-    await postThreadReply(params.client, params.channelId, params.threadTs, `I marked ${humanApplicationLabel(state.jobId)} as submitted in local state. Final submit remains manual.`);
+    await postThreadReply(
+      params.client,
+      params.channelId,
+      params.threadTs,
+      result.ok
+        ? result.text
+        : `I marked ${humanApplicationLabel(state.jobId)} as submitted in local state. I could not queue a final page capture, so the final version is the last captured QA version if available. Final submit remains manual.`
+    );
     return;
   }
 
