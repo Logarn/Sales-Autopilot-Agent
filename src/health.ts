@@ -47,7 +47,7 @@ function browserStateFindings(): HealthFinding[] {
     .map((action) => ({
       key: `browser-action-${action.id}`,
       severity: "warning" as const,
-      message: `Browser action #${action.id} requires attention: ${action.lastError}; retry: npm run browser:retry -- --id ${action.id}`,
+      message: `A browser step requires attention: ${action.lastError}. Clear the visible remote Chrome issue, then reply “retry” in the relevant Slack thread. Ask for debug details if you need the raw action id.`,
     })),
   ];
 }

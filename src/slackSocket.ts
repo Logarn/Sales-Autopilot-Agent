@@ -38,9 +38,55 @@ import { classifySlackThreadWithLlm, type SlackThreadBrainProvider, type SlackTh
 import { planSlackConversation, type SlackConversationPlan } from "./slackConversationPlanner";
 import { formatSlackFileIntakeReply, ingestSlackFilesForThread, type SlackFileLike } from "./slackFileIntake";
 import { looksLikeProofPlanRevision, parseProofPlanOverrides, reviseProofPlanOverrides } from "./proofPlanOverrides";
+import {
+  canQueueNewQaPreparation,
+  focusProtectedQaApplicationTab,
+  formatProtectedQaQueueReply,
+  getProtectedQaQueueItems,
+  type ProtectedQaFocusResult,
+} from "./browserQaWorkspace";
 import type { ApplicationStatus } from "./types";
 
 const THREAD_MENTIONS = "<@U0A2X5BCNKC> <@U0AHJFYV42K>";
+const SLACK_EVENT_DEDUPE_TTL_MS = 10 * 60 * 1000;
+const SLACK_EVENT_DEDUPE_MAX_KEYS = 1000;
+const processedSlackEventKeys = new Map<string, number>();
+
+function cleanupSlackEventDedupe(now = Date.now()): void {
+  for (const [key, seenAt] of processedSlackEventKeys.entries()) {
+    if (now - seenAt > SLACK_EVENT_DEDUPE_TTL_MS || processedSlackEventKeys.size > SLACK_EVENT_DEDUPE_MAX_KEYS) {
+      processedSlackEventKeys.delete(key);
+    }
+  }
+}
+
+function slackEventDedupeKeys(event: SlackSocketTextEvent, normalizedText: string): string[] {
+  const threadTs = event.thread_ts ?? event.ts;
+  return [
+    event.event_id ? `event:${event.event_id}` : null,
+    event.client_msg_id ? `client:${event.channel}:${event.client_msg_id}` : null,
+    event.ts ? `ts:${event.channel}:${event.ts}` : null,
+    event.event_ts ? `event_ts:${event.channel}:${event.event_ts}` : null,
+    normalizedText ? `text:${event.channel}:${threadTs}:${event.ts}:${normalizedText}` : null,
+  ].filter((key): key is string => Boolean(key));
+}
+
+export function resetSlackSocketEventDedupeForTests(): void {
+  processedSlackEventKeys.clear();
+}
+
+function shouldSkipDuplicateSlackEvent(event: SlackSocketTextEvent, normalizedText: string): boolean {
+  const now = Date.now();
+  cleanupSlackEventDedupe(now);
+  const keys = slackEventDedupeKeys(event, normalizedText);
+  if (keys.some((key) => processedSlackEventKeys.has(key))) {
+    return true;
+  }
+  for (const key of keys) {
+    processedSlackEventKeys.set(key, now);
+  }
+  return false;
+}
 
 export type SlackSocketParsedCommandType =
   | "status"
@@ -51,6 +97,8 @@ export type SlackSocketParsedCommandType =
   | "approve_prepare"
   | "prepare_draft"
   | "draft_preview"
+  | "qa_queue"
+  | "focus_qa_tab"
   | "prep_issue_report"
   | "retry_action"
   | "mark_submitted"
@@ -64,6 +112,8 @@ export interface ParsedSlackSocketCommand {
   rawText: string;
   instruction?: string;
   actionId?: number;
+  qaIndex?: number;
+  qaQuery?: string;
   confidence?: "high" | "medium" | "low";
   replyText?: string;
   source?: "llm" | "fallback";
@@ -115,7 +165,7 @@ function matchesDraftPreviewIntent(value: string): boolean {
 export function shouldAskClarifyingThreadQuestion(text: string): boolean {
   const normalized = normalizeSlackTextInput(text).toLowerCase();
   return hasSlackMention(text) ||
-    /\b(?:prep|prepare|draft|apply|listing|link|connects|rate|proof|file|red flags?|risk|why|status|next|should|can you|please|reply|replied|interview|hired|lost|outcome|submitted)\b/.test(normalized);
+    /\b(?:prep|prepare|draft|cover\s*letter|apply|listing|link|connects|rate|proof|file|red flags?|risk|why|status|next|should|can you|please|reply|replied|interview|hired|lost|outcome|submitted|ready|qa queue|blocked|everything)\b/.test(normalized);
 }
 
 function parseUrlSafely(value: string): ParsedUpworkUrl | null {
@@ -215,6 +265,34 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
   const mentioned = hasSlackMention(text);
   const normalized = normalizeSlackTextInput(text).trim();
   const commandText = normalized.replace(/[.!?]+$/g, "").trim();
+  const qaQueueMatch = /\b(?:what[’']?s ready|what is ready|show qa queue|qa queue|what is blocked|what[’']?s blocked)\b/i.test(commandText);
+  if (qaQueueMatch) {
+    return { type: "qa_queue", rawText: normalized, source: "fallback" };
+  }
+  const focusIndexMatch = commandText.match(/^(?:open|bring up|show|focus|retry)\s+(?:the\s+)?(?:(first|second|third|fourth|fifth)|#?(\d+))(?:\s+(?:one|application|draft|in chrome))?$/i);
+  const ordinalIndex: Record<string, number> = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5 };
+  if (focusIndexMatch && !/^retry\b/i.test(commandText)) {
+    return {
+      type: "focus_qa_tab",
+      rawText: normalized,
+      qaIndex: focusIndexMatch[1] ? ordinalIndex[focusIndexMatch[1].toLowerCase()] : Number.parseInt(focusIndexMatch[2] ?? "", 10),
+      source: "fallback",
+    };
+  }
+  const focusThisMatch = /^(?:open this(?: in chrome)?|open this one(?: in chrome)?|bring this(?: one)? up|show me the application page|show the application page|open draft in chrome|focus the draft|bring up the application page)$/i.test(commandText);
+  if (focusThisMatch) {
+    return { type: "focus_qa_tab", rawText: normalized, source: "fallback" };
+  }
+  const focusNamedMatch = commandText.match(/^(?:open|bring up|focus)\s+(.+?)(?:\s+(?:in chrome|application|application page|draft))?$/i) ??
+    commandText.match(/^show\s+(.+?)\s+(?:application page|in chrome)$/i);
+  if (focusNamedMatch && !matchesDraftPreviewIntent(commandText) && /\b(?:chrome|application|draft|shopify|klaviyo|qa)\b/i.test(commandText)) {
+    return {
+      type: "focus_qa_tab",
+      rawText: normalized,
+      qaQuery: focusNamedMatch[1]?.replace(/\b(?:the|application|page|draft|in chrome)\b/gi, "").trim(),
+      source: "fallback",
+    };
+  }
   if (matchesDraftPreviewIntent(normalized) || matchesDraftPreviewIntent(commandText)) {
     return { type: "draft_preview", rawText: normalized, source: "fallback" };
   }
@@ -223,7 +301,7 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
   if (statusMatch) return { type: "status", rawText: normalized };
 
   if (/^(approve)$/i.test(commandText)) return { type: "approve", rawText: normalized };
-  if (/^(reject|skip|skip this one|pass|decline)$/i.test(commandText)) return { type: "reject", rawText: normalized };
+  if (/^(reject|skip|skip this one|pass|decline|close this|close this one|archive this|archive this one)$/i.test(commandText)) return { type: "reject", rawText: normalized };
 
   if (looksLikeProofPlanRevision(normalized)) {
     return {
@@ -410,7 +488,7 @@ function describeQueuedBrowserDraft(jobId: string): string {
   }
 
   const latest = activeDraftActions[activeDraftActions.length - 1];
-  return `Browser draft needs update: yes - browser action #${latest.id} is ${latest.status}. Re-run prepare draft after reviewing this revision.`;
+  return `Browser draft needs update: yes - current browser prep is ${latest.status}. Re-run prepare draft after reviewing this revision.`;
 }
 
 function buildThreadStatusDetails(state: NonNullable<ReturnType<typeof getSlackThreadStateByThreadTs>>): string[] {
@@ -574,7 +652,6 @@ export function buildPrepareDraftQueueReply(input: {
   duplicateStatus?: string | null;
   requeued?: boolean;
   ackText?: string | null;
-  queueStatus?: string | null;
 }): string {
   const ack = input.ackText?.trim() || "Got it — I’ll prep this now and come back here when it’s ready for QA.";
   return [
@@ -583,23 +660,9 @@ export function buildPrepareDraftQueueReply(input: {
       : input.duplicate
       ? input.ackText?.trim() || "Already on it — I already have this queued and I’ll come back here when it’s ready for QA."
       : ack,
-    input.queueStatus,
     "I’ll fill what’s safe on Upwork and stop before submit.",
     `Listing: ${input.upworkUrl}`,
   ].filter((line): line is string => Boolean(line)).join("\n");
-}
-
-function browserQueueStatusForAction(actionId: number): string | null {
-  const active = listBrowserActions(null, 1000)
-    .filter((action) =>
-      ["pending", "in_progress"].includes(action.status) &&
-      ["capture_job_from_url", "prepare_application_review", "open_job", "open_apply_page"].includes(action.actionType)
-    );
-  const index = active.findIndex((action) => action.id === actionId);
-  if (index < 0) return null;
-  const action = active[index]!;
-  const prefix = action.status === "in_progress" ? "Browser status" : "Browser queue";
-  return `${prefix}: ${index + 1} of ${active.length} active Upwork action${active.length === 1 ? "" : "s"} (${action.status}).`;
 }
 
 export function queuePrepareDraftFromSlackThread(input: { channelId: string; threadTs: string; ackText?: string | null; forceRetryPaused?: boolean }): { ok: boolean; text: string; actionId?: number } {
@@ -612,6 +675,13 @@ export function queuePrepareDraftFromSlackThread(input: { channelId: string; thr
   const scoredJob = getScoredJobForSlackPreview(state.jobId);
   if (!draft || !scoredJob || !draft.proposalText.trim()) {
     return { ok: false, text: "Quick blocker: I don’t have the generated draft for this lead yet, so I can’t prep the Upwork page. Send the listing link again or retry once capture finishes." };
+  }
+  const qaCapacity = canQueueNewQaPreparation(state.jobId);
+  if (!qaCapacity.ok) {
+    return {
+      ok: false,
+      text: `I have ${qaCapacity.count} applications waiting for QA. I’ll pause new prep until you submit/skip one.`,
+    };
   }
   const browserSession = getBrowserSessionStatus();
   if (browserSession.blocked) {
@@ -648,7 +718,6 @@ export function queuePrepareDraftFromSlackThread(input: { channelId: string; thr
       duplicateStatus: requeuedPaused ? "pending" : duplicateAction?.status ?? null,
       requeued: requeuedPaused,
       ackText: input.ackText,
-      queueStatus: browserQueueStatusForAction(action.id),
     }),
   };
 }
@@ -805,6 +874,9 @@ export interface SlackSocketTextEvent {
   ts: string;
   text?: string;
   thread_ts?: string;
+  event_ts?: string;
+  event_id?: string;
+  client_msg_id?: string;
   bot_id?: string;
   subtype?: string;
   files?: SlackFileLike[];
@@ -823,6 +895,9 @@ export async function handleSlackSocketTextEvent(rawEvent: SlackSocketTextEvent,
   }
 
   const text = rawEvent.text?.trim() ?? "";
+  if (shouldSkipDuplicateSlackEvent(rawEvent, text)) {
+    return;
+  }
   const threadTs = rawEvent.thread_ts ?? rawEvent.ts;
   const mappedThread = getSlackThreadStateByThreadTs(channelId, threadTs);
   const upworkUrl = parseUpworkJobUrlFromText(text);
@@ -860,12 +935,69 @@ export async function handleSlackSocketTextEvent(rawEvent: SlackSocketTextEvent,
   }
 }
 
+type SlackThreadStateForRetry = NonNullable<ReturnType<typeof getSlackThreadStateByThreadTs>>;
+type BrowserActionRecord = NonNullable<ReturnType<typeof getBrowserActionById>>;
+
+function actionMatchesSlackThread(action: BrowserActionRecord, state: SlackThreadStateForRetry): boolean {
+  const payload = action.payload as { channelId?: string; threadTs?: string; applicationId?: string };
+  const matchesThread = payload.channelId === state.channelId && payload.threadTs === state.threadTs;
+  const matchesJob = action.jobId === state.jobId || payload.applicationId === state.jobId;
+  return Boolean(matchesThread || matchesJob);
+}
+
+function threadBrowserActions(state: SlackThreadStateForRetry) {
+  if (!state.jobId) return [];
+  return listBrowserActions(null, 1000)
+    .filter((candidate) => {
+      if (!["capture_job_from_url", "prepare_application_review"].includes(candidate.actionType)) return false;
+      return actionMatchesSlackThread(candidate, state);
+    });
+}
+
+function resolveRetryAction(input: {
+  state: SlackThreadStateForRetry;
+  actionId?: number;
+}): { action: BrowserActionRecord; reason?: never } | { action: null; reason: string } {
+  if (input.actionId) {
+    const direct = getBrowserActionById(input.actionId);
+    if (direct && (input.actionId > 20 || actionMatchesSlackThread(direct, input.state))) {
+      if (direct.status === "paused" || direct.status === "failed") {
+        return { action: direct };
+      }
+      return { action: null, reason: `I found that browser work, but it is ${direct.status}, so there is nothing to retry. If you want a new pass, ask me to prepare it again.` };
+    }
+    const queueItem = getProtectedQaQueueItems(1000).find((item) => item.index === input.actionId);
+    if (queueItem) {
+      if (queueItem.action.status === "paused" || queueItem.action.status === "failed") {
+        return { action: queueItem.action };
+      }
+      return { action: null, reason: `QA item ${input.actionId} is ${queueItem.state}, not paused or failed. Ask me to open it or request a change instead.` };
+    }
+    if (direct) {
+      return { action: null, reason: "I found that browser action, but it does not belong to this Slack thread. Ask for debug details if you want the raw queue state." };
+    }
+    return { action: null, reason: "I could not find that browser action anymore. It may already have been cleared or archived." };
+  }
+
+  const candidates = threadBrowserActions(input.state);
+  const retryable = candidates.filter((candidate) => candidate.status === "paused" || candidate.status === "failed").slice(-1)[0] ?? null;
+  if (retryable) {
+    return { action: retryable };
+  }
+  const latest = candidates.slice(-1)[0] ?? null;
+  if (latest) {
+    return { action: null, reason: `I found the latest browser work for this thread, but it is ${latest.status}, so there is nothing to retry. If you want a fresh pass, ask me to prepare it again.` };
+  }
+  return { action: null, reason: "I do not have a paused or failed browser step tied to this thread yet. If this is a prepared application, ask “what’s ready?” and then “retry 1” for the blocked queue item." };
+}
+
 export async function handleThreadCommand(params: {
   channelId: string;
   threadTs: string;
   text: string;
   client: App["client"];
   intentProvider?: SlackThreadBrainProvider;
+  focusQaTab?: (input: { jobId?: string | null; index?: number; query?: string | null }) => Promise<ProtectedQaFocusResult>;
 }): Promise<void> {
   const state = getSlackThreadStateByThreadTs(params.channelId, params.threadTs);
   const command = await resolveSlackThreadCommand({
@@ -877,6 +1009,40 @@ export async function handleThreadCommand(params: {
   });
 
   if (command.type === "ignore") {
+    return;
+  }
+
+  if (command.type === "qa_queue") {
+    await postThreadReply(params.client, params.channelId, params.threadTs, formatProtectedQaQueueReply());
+    return;
+  }
+
+  if (command.type === "focus_qa_tab") {
+    const focus = await (params.focusQaTab ?? focusProtectedQaApplicationTab)({
+      jobId: state?.jobId ?? null,
+      index: command.qaIndex,
+      query: command.qaQuery,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, focus.text);
+    if (focus.ok && state) {
+      updateSlackThreadStateStatus(state.channelId, state.threadTs, "status_checked");
+    }
+    return;
+  }
+
+  if (command.type === "retry_action" && !state && command.actionId) {
+    const queueItem = getProtectedQaQueueItems(1000).find((item) => item.index === command.actionId);
+    const action = queueItem?.action ?? getBrowserActionById(command.actionId);
+    if (!action) {
+      await postThreadReply(params.client, params.channelId, params.threadTs, "I could not find that browser step or QA queue item anymore. Ask “what’s ready?” to refresh the queue.");
+      return;
+    }
+    if (action.status !== "paused" && action.status !== "failed") {
+      await postThreadReply(params.client, params.channelId, params.threadTs, `That browser work is ${action.status}, so there is nothing to retry. Ask “what’s ready?” to see the current queue.`);
+      return;
+    }
+    updateBrowserActionStatus(action.id, "pending", "Slack socket queue retry request.");
+    await postThreadReply(params.client, params.channelId, params.threadTs, "Retry queued — I’ll re-check the remote Chrome page and stop before submit.");
     return;
   }
 
@@ -1037,31 +1203,10 @@ export async function handleThreadCommand(params: {
   }
 
   if (command.type === "retry_action") {
-    const action = command.actionId
-      ? getBrowserActionById(command.actionId)
-      : state.jobId
-        ? listBrowserActions(null, 1000)
-          .filter((candidate) => {
-            const payload = candidate.payload as { channelId?: string; threadTs?: string; applicationId?: string };
-            const matchesThread = payload.channelId === state.channelId && payload.threadTs === state.threadTs;
-            const matchesJob = candidate.jobId === state.jobId || payload.applicationId === state.jobId;
-            return (matchesJob || matchesThread) &&
-              ["capture_job_from_url", "prepare_application_review"].includes(candidate.actionType) &&
-              ["paused", "failed"].includes(candidate.status);
-          })
-          .slice(-1)[0] ?? null
-        : null;
+    const resolved = resolveRetryAction({ state, actionId: command.actionId });
+    const action = resolved.action;
     if (!action) {
-      await postThreadReply(params.client, params.channelId, params.threadTs, command.actionId ? `No browser action found for id=${command.actionId}.` : "No paused or failed browser action found for this thread.");
-      return;
-    }
-    if (action.status !== "paused" && action.status !== "failed") {
-      await postThreadReply(
-        params.client,
-        params.channelId,
-        params.threadTs,
-        `Action #${action.id} is currently ${action.status}; retry is usually used for paused/failed actions.`
-      );
+      await postThreadReply(params.client, params.channelId, params.threadTs, resolved.reason);
       return;
     }
     updateBrowserActionStatus(action.id, "pending", "Slack socket retry request.");
@@ -1071,7 +1216,7 @@ export async function handleThreadCommand(params: {
       logger.info(`Cleared browser manual attention for action #${action.id}; state=${clearResult.state}.`);
     }
     updateSlackThreadStateStatus(state.channelId, state.threadTs, "retry_requested");
-    await postThreadReply(params.client, params.channelId, params.threadTs, `Retry requested for browser action #${action.id}. Run the worker when ready.`);
+    await postThreadReply(params.client, params.channelId, params.threadTs, "Retry queued — I’ll re-check the remote Chrome page and stop before submit.");
     return;
   }
 

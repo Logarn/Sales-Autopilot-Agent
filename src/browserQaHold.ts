@@ -7,6 +7,7 @@ export interface BrowserQaHoldPayload {
   status?: ApplicationStatus;
   state?: string;
   reason?: string;
+  doNotReuse?: boolean;
   createdAt?: string;
 }
 
@@ -34,6 +35,7 @@ export function readBrowserQaHoldPayload(action: BrowserAction): BrowserQaHoldPa
     status: typeof qaHold.status === "string" ? qaHold.status as ApplicationStatus : undefined,
     state: typeof qaHold.state === "string" ? qaHold.state : undefined,
     reason: typeof qaHold.reason === "string" ? qaHold.reason : undefined,
+    doNotReuse: qaHold.doNotReuse === true || qaHold.do_not_reuse === true,
     createdAt: typeof qaHold.createdAt === "string" ? qaHold.createdAt : undefined,
   };
 }

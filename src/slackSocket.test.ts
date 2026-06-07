@@ -48,12 +48,12 @@ async function runTests(): Promise<void> {
   process.env.PROOF_ASSET_ROOT = proofRoot;
   process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
 
-  const { applySlackThreadRevision, buildDraftPreviewFromSlackThread, buildSlackSocketStartupError, handleSlackSocketTextEvent, handleThreadCommand, parseSlackThreadCommand, parseUpworkJobUrlFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread } = require("./slackSocket") as {
+  const { applySlackThreadRevision, buildDraftPreviewFromSlackThread, buildSlackSocketStartupError, handleSlackSocketTextEvent, handleThreadCommand, parseSlackThreadCommand, parseUpworkJobUrlFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread, resetSlackSocketEventDedupeForTests } = require("./slackSocket") as {
     applySlackThreadRevision: (input: { channelId: string; threadTs: string; instruction: string }) => { ok: boolean; text: string; proposalVersion?: number };
     buildDraftPreviewFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string };
     buildSlackSocketStartupError: (input: { socketEnabled: boolean; botToken: string; appToken: string }) => string | null;
-    handleSlackSocketTextEvent: (event: { channel: string; ts: string; text?: string; thread_ts?: string; bot_id?: string; subtype?: string; files?: any[] }, client: any) => Promise<void>;
-    handleThreadCommand: (input: { channelId: string; threadTs: string; text: string; client: any; intentProvider?: any }) => Promise<void>;
+    handleSlackSocketTextEvent: (event: { channel: string; ts: string; text?: string; thread_ts?: string; client_msg_id?: string; event_id?: string; event_ts?: string; bot_id?: string; subtype?: string; files?: any[] }, client: any) => Promise<void>;
+    handleThreadCommand: (input: { channelId: string; threadTs: string; text: string; client: any; intentProvider?: any; focusQaTab?: any }) => Promise<void>;
     parseSlackThreadCommand: (value: string) => {
       type: string;
       rawText: string;
@@ -64,8 +64,9 @@ async function runTests(): Promise<void> {
     parseUpworkJobUrlFromText: (value: string) => { originalUrl: string; normalizedUrl: string; canonicalJobUrl: string; jobId: string } | null;
     queueCaptureFromSlackUrl: (input: { channelId: string; messageTs: string; threadTs: string; text: string }) => { parsed: any; state: any; action: any } | null;
     queuePrepareDraftFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string; actionId?: number };
+    resetSlackSocketEventDedupeForTests: () => void;
   };
-  const { closeDb, getApplicationDraft, getApplicationProofPlanOverrides, getApplicationStatus, getBrowserActionById, getSlackThreadStateByThreadTs, listApplicationAssets, markJobSeen, upsertSlackThreadState, listBrowserActions, updateBrowserActionStatus } = require("./db") as {
+  const { closeDb, getApplicationDraft, getApplicationProofPlanOverrides, getApplicationStatus, getBrowserActionById, getSlackThreadStateByThreadTs, listApplicationAssets, markJobSeen, mergeBrowserActionPayload, upsertSlackThreadState, listBrowserActions, updateApplicationStatus, updateBrowserActionStatus } = require("./db") as {
     closeDb: () => void;
     getApplicationDraft: (jobId: string) => { proposalText: string } | null;
     getApplicationProofPlanOverrides: (jobId: string) => any;
@@ -74,8 +75,10 @@ async function runTests(): Promise<void> {
     getSlackThreadStateByThreadTs: (channelId: string, threadTs: string) => { status: string } | null;
     listApplicationAssets: (jobId: string) => Array<{ originalName: string; relativePath: string | null; source: string }>;
     markJobSeen: (job: any, notified: boolean) => void;
+    mergeBrowserActionPayload: (id: number, patch: Record<string, unknown>) => unknown;
     upsertSlackThreadState: (input: any) => unknown;
     listBrowserActions: (status?: string | null, limit?: number) => Array<{ id: number; actionType: string; jobId: string; status: string }>;
+    updateApplicationStatus: (jobId: string, status: string, note?: string) => boolean;
     updateBrowserActionStatus: (id: number, status: string, lastError?: string) => boolean;
   };
   const { recordBrowserManualAttention } = require("./browserSession") as {
@@ -84,6 +87,7 @@ async function runTests(): Promise<void> {
   const { buildApplicationDraft } = require("./agent") as { buildApplicationDraft: (job: any) => any };
   const { buildBrowserApplyPlan } = require("./browserApply") as { buildBrowserApplyPlan: (jobId: string) => { plan: any } };
   const { scoreJob } = require("./filter") as { scoreJob: (job: any) => any };
+  resetSlackSocketEventDedupeForTests();
   const fakeIntentProvider = (decision: Record<string, unknown>) => ({
     isAvailable: () => true,
     completeJson: async () => ({ ok: true, data: decision }),
@@ -170,6 +174,9 @@ async function runTests(): Promise<void> {
       { name: "natural use this", input: "use this", expectType: "approve_prepare" },
       { name: "natural put it in Upwork", input: "put it in Upwork", expectType: "approve_prepare" },
       { name: "natural apply", input: "apply", expectType: "approve_prepare" },
+      { name: "qa queue", input: "what’s ready?", expectType: "qa_queue" },
+      { name: "focus current application", input: "open this", expectType: "focus_qa_tab" },
+      { name: "focus indexed application", input: "open 1", expectType: "focus_qa_tab" },
       { name: "prep issue cover letter empty", input: "I do not see the cover letter filled in.", expectType: "prep_issue_report" },
       { name: "prep issue empty", input: "it’s empty", expectType: "prep_issue_report" },
       { name: "prep issue not attached", input: "The file is not attached.", expectType: "prep_issue_report" },
@@ -244,6 +251,22 @@ async function runTests(): Promise<void> {
     assert(mentionedUrlReplies.some((reply) => reply.includes("Got the Upwork link")), "Mentioned URL should be captured and acknowledged.");
     assert(listBrowserActions(null, 1000).some((action) => action.jobId.includes("033053866890130225260") && action.actionType === "capture_job_from_url"), "Mentioned URL should queue capture.");
 
+    const duplicateEventReplies: string[] = [];
+    const duplicateEvent = {
+      channel: "C456",
+      ts: "333.888",
+      event_ts: "333.888",
+      client_msg_id: "dup-client-msg-1",
+      text: "<@UAGENT> prep this https://www.upwork.com/jobs/~055053866890130225260",
+    };
+    await handleSlackSocketTextEvent(duplicateEvent, {
+      chat: { postMessage: async (payload: { text: string }) => duplicateEventReplies.push(payload.text) },
+    });
+    await handleSlackSocketTextEvent(duplicateEvent, {
+      chat: { postMessage: async (payload: { text: string }) => duplicateEventReplies.push(payload.text) },
+    });
+    assert(duplicateEventReplies.length === 1, "Duplicate Slack message/app_mention delivery should only produce one reply.");
+
     const trackedThreadUrlReplies: string[] = [];
     await handleSlackSocketTextEvent({
       channel: "C456",
@@ -303,8 +326,21 @@ async function runTests(): Promise<void> {
         },
       },
     });
-    assert(fileQuestionReplies.some((reply) => reply.includes("Attach the PDFs/images in this thread")), "File capability question should get a direct useful answer.");
+    assert(fileQuestionReplies.some((reply) => reply.includes("For reusable proof") && reply.includes("attach them in this Slack thread")), "File capability question should get a direct useful answer.");
+    assert(fileQuestionReplies.some((reply) => reply.includes("For this job")), "File capability answer should describe this job's reusable proof state.");
     assert(!fileQuestionReplies.join("\n").includes("Want me to prep it"), "File capability answer must not fall back to the old command menu.");
+    assert(!fileQuestionReplies.join("\n").includes("I can help with the draft, files, proof, boost, or status"), "File capability answer must not show the generic command menu.");
+
+    const coverLetterReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "Show me the cover letter you used here.",
+      client: { chat: { postMessage: async (payload: { text: string }) => coverLetterReplies.push(payload.text) } },
+    });
+    assert(coverLetterReplies.some((reply) => reply.includes("Here’s the cover letter I drafted.")), "Cover-letter question should answer directly.");
+    assert(coverLetterReplies.some((reply) => reply.includes(prepareJob.applicationDraft.proposalText.slice(0, 80))), "Cover-letter reply should include the draft text.");
+    assert(!coverLetterReplies.join("\n").includes("I can help with the draft, files, proof, boost, or status"), "Cover-letter question must not show the generic command menu.");
 
     const fileIntakeReplies: string[] = [];
     const originalFetch = global.fetch;
@@ -466,7 +502,7 @@ async function runTests(): Promise<void> {
     assert(typeof prepareResult.actionId === "number", "Prepare draft should return an action id.");
     assert(prepareResult.text.includes("Got it"), "Prepare draft reply should acknowledge natural approval concisely.");
     assert(prepareResult.text.includes("ready for QA"), "Prepare draft reply should promise a QA update.");
-    assert(prepareResult.text.includes("Browser queue:"), "Prepare draft reply should include queue position/status.");
+    assert(!prepareResult.text.includes("Browser queue:"), "Prepare draft reply should not include queue internals by default.");
     assert(prepareResult.text.includes("stop before submit"), "Prepare draft reply should keep manual submit boundary.");
     assert(!prepareResult.text.toLowerCase().includes("copy/paste"), "Prepare draft reply must not introduce copy/paste workflow.");
     assert(!prepareResult.text.includes("Auto-attach assets:"), "Prepare draft reply should not dump proof inventory.");
@@ -558,7 +594,8 @@ async function runTests(): Promise<void> {
       .filter((action) => action.actionType === "prepare_application_review" && action.jobId.startsWith("multi-approval-job-"));
     assert(multiApprovalActions.length === 3, "Three approvals in separate Slack threads should queue three prepare_application_review actions.");
     assert(multiApprovalActions.every((action) => action.status === "pending"), "Multiple Slack approvals should queue pending browser work, not run it inline.");
-    assert(multiApprovalReplies.filter((reply) => reply.includes("Browser queue:")).length === 3, "Each queued approval should acknowledge queue status.");
+    assert(multiApprovalReplies.filter((reply) => reply.includes("stop before submit")).length === 3, "Each queued approval should acknowledge the manual-submit boundary.");
+    assert(!multiApprovalReplies.join("\n").includes("Browser queue:"), "Queued approvals should not dump queue internals by default.");
 
     await recordBrowserManualAttention({ reason: "captcha_or_security_challenge", actionId: prepareResult.actionId, jobId: prepareJob.id, url: prepareJob.url, title: "Just a moment..." });
     const blockedReplies: string[] = [];
@@ -607,7 +644,119 @@ async function runTests(): Promise<void> {
       },
     });
     assert(getBrowserActionById(prepareResult.actionId!)?.status === "pending", "Natural retry preparation should route to the latest failed action in the thread.");
-    assert(retryReplies.some((reply) => reply.includes(`Retry requested for browser action #${prepareResult.actionId}`)), "Natural retry should reply in the same tracked thread.");
+    assert(retryReplies.some((reply) => reply.includes("Retry queued") && reply.includes("stop before submit")), "Natural retry should reply in plain English in the same tracked thread.");
+    assert(!retryReplies.join("\n").includes(String(prepareResult.actionId)), "Natural retry should not expose raw action ids by default.");
+
+    updateBrowserActionStatus(prepareResult.actionId!, "failed", "field_preparation_incomplete");
+    const directRetryReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: `retry ${prepareResult.actionId}`,
+      client: { chat: { postMessage: async (payload: { text: string }) => directRetryReplies.push(payload.text) } },
+    });
+    assert(getBrowserActionById(prepareResult.actionId!)?.status === "pending", "Retry with the action id previously exposed by the bot should still work in-thread.");
+    assert(directRetryReplies.some((reply) => reply.includes("Retry queued")), "Direct retry should still answer conversationally.");
+
+    updateBrowserActionStatus(prepareResult.actionId!, "completed", "Prepared for QA.");
+    updateApplicationStatus(prepareJob.id, "prepared_for_qa", "Test protected QA hold.");
+    mergeBrowserActionPayload(prepareResult.actionId!, {
+      qaHold: {
+        protected: true,
+        doNotReuse: true,
+        do_not_reuse: true,
+        jobId: prepareJob.id,
+        applyUrl: "https://www.upwork.com/ab/proposals/job/~preparejob123456/apply/",
+        status: "prepared_for_qa",
+      },
+    });
+
+    const focusReplies: string[] = [];
+    const focusCalls: Array<{ jobId?: string | null; index?: number; query?: string | null }> = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "open this",
+      focusQaTab: async (input: { jobId?: string | null; index?: number; query?: string | null }) => {
+        focusCalls.push(input);
+        return { ok: true, text: "Done — I brought the remote Chrome application tab to the front. Review it in VNC. Final submit is still untouched." };
+      },
+      client: { chat: { postMessage: async (payload: { text: string }) => focusReplies.push(payload.text) } },
+    });
+    assert(focusCalls[0]?.jobId === prepareJob.id, "Open-this should focus the protected apply tab for the current thread job.");
+    assert(focusReplies.some((reply) => reply.includes("remote Chrome application tab") && reply.includes("Final submit is still untouched")), "Open-this should produce the expected VNC handoff.");
+
+    const qaQueueReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "what’s ready?",
+      client: { chat: { postMessage: async (payload: { text: string }) => qaQueueReplies.push(payload.text) } },
+    });
+    assert(qaQueueReplies.some((reply) => reply.includes("QA queue") && reply.includes("Say \"open 1\"")), "QA queue should list protected applications with open-index guidance.");
+    assert(!qaQueueReplies.join("\n").includes("action #"), "QA queue should not expose raw action ids.");
+
+    for (let i = 2; i <= 5; i += 1) {
+      const qaJob = scoreJob({
+        ...prepareJob,
+        id: `qa-full-job-${i}`,
+        title: `QA full job ${i}`,
+        url: `https://www.upwork.com/jobs/~qafulljob${i}`,
+      });
+      qaJob.applicationDraft = buildApplicationDraft(qaJob);
+      markJobSeen(qaJob, false);
+      upsertSlackThreadState({
+        channelId: "CQA",
+        messageTs: `700.${i}`,
+        threadTs: `700.${i}`,
+        upworkUrl: qaJob.url,
+        jobId: qaJob.id,
+        status: "packet_sent",
+      });
+      const qaPrep = queuePrepareDraftFromSlackThread({ channelId: "CQA", threadTs: `700.${i}` });
+      assert(qaPrep.ok && typeof qaPrep.actionId === "number", `QA protected setup ${i} should queue before cap.`);
+      updateBrowserActionStatus(qaPrep.actionId!, i === 5 ? "paused" : "completed", i === 5 ? "captcha_or_security_challenge" : "Prepared for QA.");
+      updateApplicationStatus(qaJob.id, i === 5 ? "needs_review" : "prepared_for_qa", "Test protected QA hold.");
+      mergeBrowserActionPayload(qaPrep.actionId!, {
+        qaHold: {
+          protected: true,
+          doNotReuse: true,
+          do_not_reuse: true,
+          jobId: qaJob.id,
+          applyUrl: `https://www.upwork.com/ab/proposals/job/~qafulljob${i}/apply/`,
+          status: i === 5 ? "needs_review" : "prepared_for_qa",
+        },
+      });
+    }
+
+    const cappedJob = scoreJob({
+      ...prepareJob,
+      id: "qa-capped-job",
+      title: "QA capped job",
+      url: "https://www.upwork.com/jobs/~qacappedjob",
+    });
+    cappedJob.applicationDraft = buildApplicationDraft(cappedJob);
+    markJobSeen(cappedJob, false);
+    upsertSlackThreadState({
+      channelId: "CQA",
+      messageTs: "701.001",
+      threadTs: "701.001",
+      upworkUrl: cappedJob.url,
+      jobId: cappedJob.id,
+      status: "packet_sent",
+    });
+    const cappedPrep = queuePrepareDraftFromSlackThread({ channelId: "CQA", threadTs: "701.001" });
+    assert(!cappedPrep.ok, "Sixth protected QA prep should pause instead of queueing another apply tab.");
+    assert(cappedPrep.text.includes("5 applications waiting for QA"), "Max protected QA tabs message should tell Steve to submit/skip one.");
+
+    const queueRetryReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "CQA",
+      threadTs: "701.002",
+      text: "retry 5",
+      client: { chat: { postMessage: async (payload: { text: string }) => queueRetryReplies.push(payload.text) } },
+    });
+    assert(queueRetryReplies.some((reply) => reply.includes("Retry queued")), "Queue-index retry should find the blocked QA item without a raw action id.");
 
     const statusReplies: string[] = [];
     await handleThreadCommand({

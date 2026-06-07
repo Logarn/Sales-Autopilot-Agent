@@ -31,9 +31,19 @@ const fileQuestion = planSlackConversation({
 });
 assert.equal(fileQuestion.intent, "answer_file_capability_question");
 assert.equal(fileQuestion.clarificationNeeded, false);
-assert(fileQuestion.reply.includes("Attach the PDFs/images in this thread"));
+assert(fileQuestion.reply.includes("For reusable proof"));
+assert(fileQuestion.reply.includes("attach them in this Slack thread"));
 assert(fileQuestion.reply.includes("design-case-studies-steve-logarn.pdf"));
 assert(!fileQuestion.reply.includes("Want me to prep it"));
+
+const coverLetter = planSlackConversation({ ...baseInput, latestMessage: "Show me the cover letter you used here." });
+assert.equal(coverLetter.intent, "show_cover_letter");
+assert(coverLetter.reply.includes("Here’s the cover letter I drafted."));
+assert(coverLetter.reply.includes("Draft text"));
+
+const noDraftCoverLetter = planSlackConversation({ ...baseInput, draft: null, latestMessage: "Show me the cover letter you used here." });
+assert.equal(noDraftCoverLetter.intent, "show_cover_letter");
+assert(noDraftCoverLetter.reply.includes("I haven’t generated the cover letter yet."));
 
 const status = planSlackConversation({ ...baseInput, latestMessage: "status" });
 assert.equal(status.intent, "status_summary");
@@ -64,5 +74,15 @@ const proofRevision = planSlackConversation({ ...baseInput, latestMessage: "Use 
 assert.equal(proofRevision.intent, "revise_proof_plan");
 assert.deepEqual(proofRevision.actions, ["queue_proof_recheck"]);
 assert(!proofRevision.clarificationNeeded);
+
+const everything = planSlackConversation({ ...baseInput, latestMessage: "Everything that needs to be done." });
+assert.equal(everything.intent, "prepare_application");
+assert.deepEqual(everything.actions, ["queue_prepare_application"]);
+assert(everything.reply.includes("all safe prep steps"));
+assert(everything.reply.includes("stop before submit"));
+
+const ambiguous = planSlackConversation({ ...baseInput, latestMessage: "Something else." });
+assert.equal(ambiguous.intent, "unknown_clarify");
+assert(!ambiguous.reply.includes("I can help with the draft, files, proof, boost, or status."));
 
 console.log("slack conversation planner tests passed");

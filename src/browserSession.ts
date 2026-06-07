@@ -124,7 +124,6 @@ async function maybeSendManualAttentionAlert(record: BrowserSessionRecord, event
     return record;
   }
 
-  const retryCommand = event.actionId ? `npm run browser:retry -- --id ${event.actionId}` : "npm run browser:list";
   const jobLine = event.jobId ? `\nJob: ${event.jobTitle ?? "Unknown title"} (${event.jobId})` : "";
   const sent = await sendSlackMessage({
     text: "Upwork needs manual browser attention",
@@ -137,10 +136,9 @@ async function maybeSendManualAttentionAlert(record: BrowserSessionRecord, event
             `⚠️ *Upwork needs manual browser attention.*\n` +
             `I paused safely and did not submit anything.${jobLine}\n` +
             `Reason: ${event.reason}\n` +
-            `Action: ${event.actionId ? `#${event.actionId}` : "n/a"}\n` +
             `Page: ${event.title ?? "unknown"}\n` +
-            `Please resolve the visible browser page manually, then retry with:\n\`${retryCommand}\`\n` +
-            `Then run the worker separately when ready.`,
+            `Please resolve the visible browser page manually, then reply “retry” in the relevant Slack thread.\n` +
+            `Ask for debug details only if you need the raw action state.`,
         },
       },
     ],

@@ -75,6 +75,7 @@ import {
 } from "./browserSessionControl";
 import { isUpworkFindWorkFeedUrl, isUpworkWorkTabUrl } from "./browserSessionInspector";
 import { listProtectedQaApplyUrls } from "./browserQaHold";
+import { canQueueNewQaPreparation } from "./browserQaWorkspace";
 import { proofAssetExists, resolveProofAssetPath } from "./proofAssets";
 
 type DetectedBrowserState =
@@ -314,8 +315,6 @@ interface ApplyPreparationDiagnostics {
   blockedByUiFields: string[];
   skippedByStrategyFields: string[];
 }
-
-const QA_MENTIONS = "<@U0A2X5BCNKC> <@U0AHJFYV42K>";
 
 function humanSlackPrepDetail(value: string): string {
   return value
@@ -967,8 +966,6 @@ function buildPrepareDraftStatusMessage(input: {
   const screeningVerification = getVerification(fieldVerification, "screeningAnswers");
   const attachmentVerification = getVerification(fieldVerification, "attachments");
   const highlightVerification = getVerification(fieldVerification, "profileHighlights");
-  const rateVerification = getVerification(fieldVerification, "rate");
-  const boostVerification = getVerification(fieldVerification, "boostConnects");
   const targetTabVerification = getVerification(fieldVerification, "targetTab");
   const needsManualReview = diagnostics.validationIssues.some((issue) => issue.severity === "warning" || issue.severity === "error") ||
     diagnostics.missingLocalAssets.length > 0 ||
@@ -976,50 +973,31 @@ function buildPrepareDraftStatusMessage(input: {
     diagnostics.connectsDecision !== "safe_apply" ||
     hasUnverifiedRequiredApplyFields(fieldVerification);
   const readyForFinalManualSubmit = diagnostics.state === "apply_page_loaded" && diagnostics.stopBeforeSubmit && !needsManualReview;
-  const connectsSummary = diagnostics.requiredConnects === null
-    ? "unknown"
-    : `${diagnostics.requiredConnects} required${diagnostics.boostConnects ? `, ${diagnostics.boostConnects} boost` : ", no boost set"}`;
   const coverLetterSummary = coverLetterVerification?.status === "verified"
-    ? "verified filled"
+    ? "filled"
     : coverLetterVerification?.status === "attempted_unverified"
       ? "attempted, not verified"
       : coverLetterVerification?.status === "blocked_by_upwork_ui"
         ? "blocked by Upwork UI"
         : "not verified";
   const screeningSummary = screeningVerification?.status === "verified"
-    ? screeningVerification.detail
+    ? "filled"
     : screeningVerification?.status === "skipped_by_strategy"
       ? "none generated"
-      : screeningVerification?.detail ?? "not verified";
-  const proofSummary = attachmentVerification?.status === "verified"
-    ? attachmentVerification.detail
-    : attachmentVerification?.status === "missing_local_file"
-      ? attachmentVerification.detail
-      : attachmentVerification?.status === "skipped_by_strategy"
-        ? "No files selected by strategy."
-        : attachmentVerification?.detail ?? "not verified";
-  const profileProofSummary = highlightVerification?.status === "verified"
-    ? highlightVerification.detail
-    : highlightVerification?.status === "unavailable_on_page"
-      ? "Unavailable on page; Upwork shows add portfolio/certificate controls."
-      : highlightVerification?.status === "skipped_by_strategy"
-        ? "No profile highlights selected by strategy."
-        : highlightVerification?.detail ?? "not verified";
-  const rateSummary = rateVerification?.status === "verified"
-    ? rateVerification.detail
-    : diagnostics.rate ? `attempted ${diagnostics.rate}, not verified` : "left alone";
-  const boostSummary = boostVerification?.detail ?? (diagnostics.boostConnects ? `${diagnostics.boostConnects} boost planned, not verified` : "No boost set.");
+      : "needs QA";
   const selectedFiles = (diagnostics.filesAttached ?? []).length > 0
     ? (diagnostics.filesAttached ?? []).map((item) => path.basename(item)).slice(0, 3)
     : (diagnostics.selectedAttachments ?? []).slice(0, 3);
-  const selectedPortfolio = (diagnostics.selectedHighlights ?? []).slice(0, 2);
-  const usedProofParts = [
-    selectedPortfolio.length > 0 ? `portfolio: ${selectedPortfolio.join(", ")}` : null,
-    selectedFiles.length > 0 ? `files: ${selectedFiles.join(", ")}` : null,
+  const selectedPortfolio = (diagnostics.selectedHighlights ?? diagnostics.profileHighlights ?? diagnostics.portfolioHighlights ?? []).slice(0, 2);
+  const plannedProofParts = [
+    selectedPortfolio.length > 0 ? `Portfolio: ${selectedPortfolio.join(", ")}` : null,
+    selectedFiles.length > 0 ? `Files: ${selectedFiles.join(", ")}` : null,
   ].filter((item): item is string => Boolean(item));
-  const usedProofSummary = usedProofParts.length > 0
-    ? `I used ${usedProofParts.join("; ")}.`
-    : "I did not select portfolio proof or files for this one.";
+  const plannedProofSummary = plannedProofParts.length > 0 ? plannedProofParts.join("; ") : "none selected";
+  const attachmentsVerified = selectedFiles.length === 0 || attachmentVerification?.status === "verified";
+  const portfolioVerified = selectedPortfolio.length === 0 || highlightVerification?.status === "verified";
+  const proofVerified = plannedProofParts.length > 0 && attachmentsVerified && portfolioVerified;
+  const proofLabel = proofVerified ? "Proof verified" : "Proof planned";
   const correctionLine = "You can correct proof here in Slack: “Use Fly Boutique instead”, “Remove the intro PDF”, “Attach Design Case Studies too”, “Use Truly + Lifely”, “Don’t attach screenshots”, or “Use portfolio only”.";
   const missingFiles = diagnostics.missingLocalAssets.map((asset) => path.basename(asset)).slice(0, 2);
   const manualFields = [
@@ -1036,50 +1014,52 @@ function buildPrepareDraftStatusMessage(input: {
   ].filter((item): item is string => Boolean(item));
   const reviewText = reviewItems.length > 0 ? reviewItems.slice(0, 3).map(humanSlackPrepDetail).join("; ") : "none";
   const submitLabel = diagnostics.requiredConnects === null ? "Submit" : `Send for ${diagnostics.requiredConnects} Connects`;
-  const actionLine = readyForFinalManualSubmit
-    ? `Review it through remote Chrome/VNC and manually click *${submitLabel}* if it looks good.`
-    : "Please check the item above, then reply “retry” when it’s cleared.";
-  const locationLine = readyForFinalManualSubmit
-    ? "Draft is ready in the remote Chrome session. Opening the apply URL in Safari or another local browser may not show unsaved Upwork form fields."
-    : "I checked the remote Chrome apply page and stopped before submit.";
-  const coverLetterBlock = readyForFinalManualSubmit && diagnostics.coverLetterPreview
-    ? ["", "*Cover letter draft:*", diagnostics.coverLetterPreview].join("\n")
-    : "";
-  const screeningBlock = readyForFinalManualSubmit
-    ? [
-        "",
-        "*Screening answers filled:*",
-        diagnostics.screeningAnswers.length > 0
-          ? diagnostics.screeningAnswers.map((answer, index) => `${index + 1}. ${boundedExcerpt(answer, 700)}`).join("\n")
-          : "None generated.",
-      ].join("\n")
-    : "";
+  const connectsSummary = diagnostics.requiredConnects === null ? "unknown" : `${diagnostics.requiredConnects} required`;
+  const boostSummary = diagnostics.boostConnects && diagnostics.boostConnects > 0
+    ? `${diagnostics.boostConnects} selected, under your 50 cap`
+    : "not set yet";
+
+  if (readyForFinalManualSubmit) {
+    return [
+      "✅ *Ready for QA*",
+      "",
+      "I prepared this in remote Chrome and stopped before submit.",
+      "",
+      [
+        `• *Cover letter:* ${coverLetterSummary}`,
+        `• *Screening answers:* ${screeningSummary}`,
+        `• *${proofLabel}:* ${plannedProofSummary}`,
+        `• *Connects:* ${connectsSummary}`,
+        `• *Boost:* ${boostSummary}`,
+        "• *Submit:* untouched",
+      ].join("\n"),
+      "",
+      correctionLine,
+      "",
+      `*Next:* review in VNC. Reply with changes, or manually click *${submitLabel}* if it looks good.`,
+    ].join("\n");
+  }
+
+  const blockerReason = diagnostics.state === "captcha_or_security_challenge" || diagnostics.state === "login_required" || diagnostics.state === "two_factor_required"
+    ? "Upwork showed a browser check before I could verify the draft."
+    : reviewText === "none"
+      ? "Upwork needs a human check before I can verify the draft."
+      : `I need a human check before QA: ${reviewText}.`;
   return [
-    readyForFinalManualSubmit ? "✅ *Draft ready for QA*" : "⚠️ *I hit a blocker on the apply page*",
+    "⚠️ *Blocked before QA*",
     "",
-    `Hey ${QA_MENTIONS} — ${locationLine}`,
+    `I reached the Upwork apply page, but ${blockerReason}`,
     "",
-    "Here’s what I can verify on the apply page:",
-    "",
+    "What I planned:",
     [
-      `• *Cover letter:* ${coverLetterSummary}`,
-      `• *Screening answers:* ${screeningSummary}`,
-      `• *Rate:* ${rateSummary}`,
+      `• *Cover letter:* ${diagnostics.coverLetterPresent ? "drafted" : "not generated yet"}`,
+      `• *${proofLabel}:* ${plannedProofSummary}`,
       `• *Connects:* ${connectsSummary}`,
       `• *Boost:* ${boostSummary}`,
-      `• *Files:* ${proofSummary}`,
-      `• *Profile/proof:* ${profileProofSummary}`,
-      `• *Needs review:* ${readyForFinalManualSubmit ? "none" : reviewText}`,
+      "• *Submit:* untouched",
     ].join("\n"),
-    coverLetterBlock,
-    screeningBlock,
     "",
-    `*Proof I used:* ${usedProofSummary}`,
-    correctionLine,
-    "",
-    `*Next:* ${actionLine}`,
-    "",
-    `*Apply URL:* ${diagnostics.applyUrl ?? diagnostics.sourceUrl ?? "Upwork application URL unavailable"}`,
+    `*Next:* clear the remote Chrome issue, then reply “retry”.`,
   ].join("\n");
 }
 
@@ -1264,7 +1244,16 @@ export function decideAutoPrepareDraft(
       shouldQueue: false,
       category: "blocked_no_manual_override",
       reason: "browser needs attention",
-      note: "Not auto-preparing because Upwork needs manual browser attention. Resolve the browser issue first, then use `retry <action-id>` or `status`. I did not submit anything.",
+      note: "Not auto-preparing because Upwork needs manual browser attention. Resolve the browser issue first, then reply `retry` in the Slack thread. I did not submit anything.",
+    };
+  }
+  const qaCapacity = canQueueNewQaPreparation(job.id);
+  if (!qaCapacity.ok) {
+    return {
+      shouldQueue: false,
+      category: "blocked_no_manual_override",
+      reason: "protected QA workspace full",
+      note: `I have ${qaCapacity.count} applications waiting for QA. I’ll pause new prep until you submit/skip one.`,
     };
   }
   if (hasHardRedFlags(job)) {
@@ -1311,8 +1300,8 @@ function queuePrepareDraftAction(
     category: action.duplicate ? "duplicate_existing_action" : "eligible_auto_prepare",
     reason: action.duplicate ? "duplicate prepare action exists" : "eligible",
     note: action.duplicate
-      ? `Draft preparation is already queued/paused as browser action #${action.id}${duplicateAction?.status ? ` (${duplicateAction.status})` : ""}. No duplicate was created.`
-      : `Strong fit. I’m preparing the Upwork draft now. Final submit remains manual. Browser action #${action.id}.`,
+      ? `Draft preparation is already ${duplicateAction?.status ?? "queued"}. No duplicate was created.`
+      : "Strong fit. I’m preparing the Upwork draft now. Final submit remains manual.",
     actionId: action.id,
     duplicate: action.duplicate,
     duplicateStatus: duplicateAction?.status ?? null,
@@ -2571,6 +2560,8 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
             status: qaStatus,
             state,
             reason: state === "apply_page_loaded" ? "awaiting_human_qa" : "needs_review",
+            doNotReuse: true,
+            do_not_reuse: true,
             createdAt: new Date().toISOString(),
           },
         });
@@ -2630,7 +2621,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
                 `Current URL: ${snapshot?.url ?? url}`,
                 `Current title: ${snapshot?.title ?? "n/a"}`,
                 inspectionDiagnostics ? `Detector: ${inspectionDiagnostics.finalDetection.source}${inspectionDiagnostics.finalDetection.matchedText ? ` (${inspectionDiagnostics.finalDetection.matchedText})` : ""}` : "Detector: n/a",
-                `Retry command: npm run browser:retry -- --id ${action.id}`, 
+                "Next: clear the remote Chrome issue, then reply “retry” in this Slack thread.",
               ].join("\n"),
             });
           }
@@ -2670,7 +2661,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
                 `Current URL: ${snapshot?.url ?? url}`,
                 `Current title: ${snapshot?.title ?? "n/a"}`,
                 `Extraction diagnostics: ${JSON.stringify(extractionDiagnostics)}`,
-                `Retry command: npm run browser:retry -- --id ${action.id}`,
+                "Next: reply “retry” in this Slack thread after the page is readable.",
               ].join("\n"),
             });
           }

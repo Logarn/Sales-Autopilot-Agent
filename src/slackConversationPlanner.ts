@@ -3,6 +3,8 @@ import { looksLikeProofPlanRevision } from "./proofPlanOverrides";
 
 export type SlackConversationIntent =
   | "answer_file_capability_question"
+  | "show_cover_letter"
+  | "show_qa_queue"
   | "prepare_application"
   | "draft_preview_first"
   | "attach_uploaded_files"
@@ -73,11 +75,17 @@ function conciseJobLabel(job: ScoredJob | null): string {
 }
 
 function fileCapabilityReply(input: SlackConversationPlannerInput): string {
+  const reusable = fileNames(input.proofPlan.files);
   const missing = fileNames(input.missingFiles);
-  if (missing.length > 0) {
-    return `Yes. Attach the PDFs/images in this thread and I can ingest them for this application. I’m currently missing: ${missing.slice(0, 4).join(", ")}.`;
-  }
-  return "Yes. Attach the PDFs/images in this thread and I can ingest them for this application, then use them when I prepare the Upwork page.";
+  const reusableLine = reusable.length > 0
+    ? `For this job, I already have these reusable files available: ${reusable.slice(0, 4).join(", ")}.`
+    : "For this job, I do not have a reusable file selected yet.";
+  const missingLine = missing.length > 0 ? ` I’m currently missing: ${missing.slice(0, 4).join(", ")}.` : "";
+  return [
+    "Yes. For reusable proof, I can use files already in my proof-assets folder.",
+    "For one-off files, attach them in this Slack thread and I can ingest them when Slack files access is enabled.",
+    reusableLine + missingLine,
+  ].join(" ");
 }
 
 function statusReply(input: SlackConversationPlannerInput): string {
@@ -114,6 +122,26 @@ function boostReply(input: SlackConversationPlannerInput): string {
     return input.connects.boostReason || "No boost is set. I only boost high-fit jobs when the visible table shows a safe top-4 bid under 50 Connects.";
   }
   return `Boost is planned at ${input.connects.boost} Connects. I will never set optional boost above 50, and final submit remains manual.`;
+}
+
+function coverLetterReply(input: SlackConversationPlannerInput): string {
+  const draft = input.draft?.proposalText?.trim();
+  if (!draft) {
+    return "I haven’t generated the cover letter yet. I can draft it here first, then wait for your approval before filling Upwork.";
+  }
+  const verificationLine = input.currentBrowserAction?.status === "paused" || input.currentBrowserAction?.status === "failed"
+    ? "I have not verified it on the Upwork page yet because the browser prep is paused."
+    : input.currentBrowserAction?.status === "completed"
+      ? "The last remote Chrome prep completed, but final submit is still manual."
+      : "I have not filled Upwork unless you explicitly told me to put it in the remote Chrome page.";
+  return [
+    "Here’s the cover letter I drafted.",
+    verificationLine,
+    "",
+    draft,
+    "",
+    "Want me to revise it before filling or retrying remote Chrome?",
+  ].join("\n");
 }
 
 export function planSlackConversation(input: SlackConversationPlannerInput): SlackConversationPlan {
@@ -154,6 +182,30 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
     };
   }
 
+  if (/\b(show|send|post|what'?s|where'?s)\b.*\bcover\s*letter\b/.test(text) ||
+    /\b(show|send|post)\b.*\bdraft\b.*\b(used|wrote|filled)\b/.test(text) ||
+    /\bcover\s*letter\b.*\b(used|drafted|wrote|show|send|post)\b/.test(text)) {
+    return {
+      intent: "show_cover_letter",
+      confidence: "high",
+      reply: coverLetterReply(input),
+      actions: ["none"],
+      clarificationNeeded: false,
+      debugRequested: false,
+    };
+  }
+
+  if (/\b(what[’']?s ready|show qa queue|qa queue|what is blocked|what[’']?s blocked)\b/.test(text)) {
+    return {
+      intent: "show_qa_queue",
+      confidence: "high",
+      reply: "I’ll show the current QA queue.",
+      actions: ["none"],
+      clarificationNeeded: false,
+      debugRequested: false,
+    };
+  }
+
   if (looksLikeProofPlanRevision(input.latestMessage)) {
     return {
       intent: "revise_proof_plan",
@@ -173,6 +225,17 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
       confidence: "high",
       reply: "I’ll show the draft here first and won’t fill Upwork yet.",
       actions: ["send_draft_preview"],
+      clarificationNeeded: false,
+      debugRequested: false,
+    };
+  }
+
+  if (/\b(everything that needs to be done|do everything|all safe prep|handle everything)\b/.test(text)) {
+    return {
+      intent: "prepare_application",
+      confidence: "high",
+      reply: "Got it — I’ll do all safe prep steps: draft, files, portfolio, Connects, and boost. I’ll still stop before submit.",
+      actions: ["queue_prepare_application"],
       clarificationNeeded: false,
       debugRequested: false,
     };
@@ -270,7 +333,7 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
   return {
     intent: "unknown_clarify",
     confidence: "low",
-    reply: "I can help with the draft, files, proof, boost, or status. What should I do next?",
+    reply: "I’m not sure which part you want changed. Tell me the specific draft, proof, file, boost, or QA update and I’ll apply it.",
     actions: ["none"],
     clarificationNeeded: true,
     debugRequested: false,

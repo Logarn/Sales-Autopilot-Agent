@@ -1017,21 +1017,19 @@ async function runTests(): Promise<void> {
       },
     );
     assert(prepCompletionPost === "posted", "Prepared browser application should post final-review Slack thread reply");
-    assert(prepCompletionText.includes("✅ *Draft ready for QA*"), "Prep completion alert should use concise ready-for-QA wording");
-    assert(prepCompletionText.includes("remote Chrome session"), "Prep completion alert should say the draft is in remote Chrome");
+    assert(prepCompletionText.includes("✅ *Ready for QA*"), "Prep completion alert should use concise ready-for-QA wording");
+    assert(prepCompletionText.includes("remote Chrome"), "Prep completion alert should say the draft is in remote Chrome");
     assert(prepCompletionText.includes("VNC"), "Prep completion alert should direct QA to remote Chrome/VNC");
-    assert(prepCompletionText.includes("Safari"), "Prep completion alert should not imply local Safari will show unsaved form fields");
-    assert(prepCompletionText.includes(`${beautyJob.url}/apply`), "Prep completion alert should include apply URL");
-    assert(prepCompletionText.includes("• *Cover letter:* verified filled"), "Prep completion alert should only claim verified cover-letter fill");
-    assert(prepCompletionText.includes("• *Screening answers:* 2/2 screening answers are present."), "Prep completion alert should summarize verified screening answers");
-    assert(prepCompletionText.includes("*Cover letter draft:*"), "Prep completion alert should include a cover letter preview for Slack QA");
-    assert(prepCompletionText.includes("I can help turn these Klaviyo campaign emails"), "Prep completion alert should include the actual cover letter preview");
-    assert(prepCompletionText.includes("*Screening answers filled:*"), "Prep completion alert should include filled screening answers");
-    assert(prepCompletionText.includes("I would audit the current segments"), "Prep completion alert should include screening answer text");
-    assert(prepCompletionText.includes("• *Connects:* 4 required, no boost set"), "Prep completion alert should summarize Connects");
-    assert(prepCompletionText.includes("• *Boost:* No boost set."), "Prep completion alert should report no boost set honestly");
-    assert(prepCompletionText.includes("• *Needs review:* none"), "Prep completion alert should explicitly mark no extra manual issues");
-    assert(prepCompletionText.includes("*Proof I used:*"), "Prep completion alert should summarize selected proof in natural language");
+    assert(!prepCompletionText.includes("Safari"), "Prep completion alert should not push URL copy/paste into local Safari");
+    assert(!prepCompletionText.includes("*Apply URL:*"), "Prep completion alert should not require URL copy/paste into VNC");
+    assert(prepCompletionText.includes("• *Cover letter:* filled"), "Prep completion alert should only claim filled cover letter when verified");
+    assert(prepCompletionText.includes("• *Screening answers:* filled"), "Prep completion alert should summarize verified screening answers compactly");
+    assert(!prepCompletionText.includes("*Cover letter draft:*"), "Prep completion alert should keep QA handoff compact; draft is available by asking in Slack.");
+    assert(!prepCompletionText.includes("*Screening answers filled:*"), "Prep completion alert should keep QA handoff compact.");
+    assert(prepCompletionText.includes("• *Connects:* 4 required"), "Prep completion alert should summarize Connects");
+    assert(prepCompletionText.includes("• *Boost:* not set yet"), "Prep completion alert should report no boost set honestly");
+    assert(prepCompletionText.includes("*Proof verified:*"), "Prep completion alert should use verified proof wording only after page verification");
+    assert(!prepCompletionText.includes("*Proof I used:*"), "Prep completion alert must not use old proof wording");
     assert(prepCompletionText.includes("You can correct proof here in Slack"), "Prep completion alert should explain natural proof corrections");
     assert(prepCompletionText.includes("manually click *Send for 4 Connects*"), "Prep completion alert should preserve final submit safety");
     assert(!prepCompletionText.includes("Fields filled:"), "Prep completion alert should not include internal field inventory");
@@ -1117,13 +1115,13 @@ async function runTests(): Promise<void> {
       },
     );
     assert(blockedPrepCompletionPost === "posted", "Blocked browser application diagnostics should post into the job thread");
-    assert(blockedPrepCompletionText.includes("⚠️ *I hit a blocker on the apply page*"), "Blocked prep diagnostics should use human blocker heading");
+    assert(blockedPrepCompletionText.includes("⚠️ *Blocked before QA*"), "Blocked prep diagnostics should use human blocker heading");
     assert(!blockedPrepCompletionText.includes("filled the cover letter"), "Blocked prep diagnostics must not claim the cover letter was filled unless verified.");
-    assert(blockedPrepCompletionText.includes("• *Cover letter:* blocked by Upwork UI"), "Blocked prep diagnostics should report cover letter status truthfully.");
-    assert(blockedPrepCompletionText.includes("• *Needs review:*"), "Blocked prep diagnostics should show the actionable review line");
+    assert(blockedPrepCompletionText.includes("• *Cover letter:* drafted"), "Blocked prep diagnostics should describe planned draft without claiming verification.");
+    assert(blockedPrepCompletionText.includes("*Proof planned:*"), "Blocked prep diagnostics should use planned proof wording until verification succeeds.");
     assert(blockedPrepCompletionText.includes("truly-beauty-case-study.pdf"), "Blocked prep diagnostics should list the missing file name");
-    assert(blockedPrepCompletionText.includes("Not verified:"), "Blocked prep diagnostics should list unverified fields without false success claims");
     assert(blockedPrepCompletionText.includes("reply “retry”"), "Blocked prep diagnostics should give a concise next step");
+    assert(!blockedPrepCompletionText.includes("*Proof I used:*"), "Blocked prep diagnostics must not use verified/used proof wording.");
     assert(!blockedPrepCompletionText.includes("Stop before submit:"), "Blocked prep diagnostics should not include internal submit-guard debug lines");
     for (const noisy of ["manual review", "platformEligibility", "lead decision", "packet", "source context", "action id"]) {
       assert(!blockedPrepCompletionText.toLowerCase().includes(noisy.toLowerCase()), `Blocked prep alert should hide ${noisy}`);
@@ -1144,7 +1142,7 @@ async function runTests(): Promise<void> {
       },
     );
     assert(globalBlockerPost === "posted", "Global blocker without job thread may post as a standalone alert");
-    assert(globalBlockerText.includes("⚠️ *I hit a blocker on the apply page*"), "Standalone global blocker should stay concise");
+    assert(globalBlockerText.includes("⚠️ *Blocked before QA*"), "Standalone global blocker should stay concise");
 
     const designJob = scoreJob({
       id: "design-job-1",

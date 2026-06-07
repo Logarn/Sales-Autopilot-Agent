@@ -165,7 +165,7 @@ function handleStatusIntent(intent: SlackConversationIntent): SlackConversationH
     const browserAction = shouldEnqueueBrowserApply(intent) ? enqueueBrowserApply(intent) ?? undefined : undefined;
     return {
       ok: true,
-      message: `Application ${intent.jobId} approved.${browserAction ? ` Browser review action #${browserAction.id} ${browserAction.duplicate ? "already exists; duplicate not queued" : "queued"}.` : ""}`,
+      message: `Application ${intent.jobId} approved.${browserAction ? ` Browser review ${browserAction.duplicate ? "is already queued; no duplicate was created" : "queued"}.` : ""}`,
       intent,
       browserActionId: browserAction?.id,
     };
@@ -193,7 +193,7 @@ function handleStatusIntent(intent: SlackConversationIntent): SlackConversationH
     const browserAction = enqueueBrowserApply(intent);
     return {
       ok: true,
-      message: `Browser review action #${browserAction?.id} ${browserAction?.duplicate ? "already exists; duplicate not queued" : "queued"} for ${intent.jobId}. Human review required before applying.`,
+      message: `Browser review ${browserAction?.duplicate ? "is already queued; no duplicate was created" : "queued"} for ${intent.jobId}. Human review required before applying.`,
       intent,
       browserActionId: browserAction?.id,
     };

@@ -9,6 +9,7 @@ import {
   DISCOVERY_MAX_SCROLLS_PER_RUN,
   DISCOVERY_SCHEDULER_ENABLED,
   DISCOVERY_SKIP_IF_PENDING_CAPTURE_COUNT_GT,
+  BROWSER_QA_MAX_PROTECTED_TABS,
 } from "./config";
 import { runDiscoveryConfiguredSources, DiscoveryBestMatchesResult } from "./browserDiscoveryTool";
 import { inspectBrowserSession } from "./browserSessionInspector";
@@ -27,6 +28,7 @@ export interface DiscoverySchedulerConfig {
   maxJobsPerRun: number;
   maxScrollsPerRun: number;
   skipIfPendingCaptureCountGt: number;
+  maxProtectedQaTabs: number;
 }
 
 export interface DiscoverySchedulerRunResult {
@@ -117,6 +119,7 @@ export function getDiscoverySchedulerConfig(): DiscoverySchedulerConfig {
     maxJobsPerRun: DISCOVERY_MAX_JOBS_PER_RUN,
     maxScrollsPerRun: DISCOVERY_MAX_SCROLLS_PER_RUN,
     skipIfPendingCaptureCountGt: DISCOVERY_SKIP_IF_PENDING_CAPTURE_COUNT_GT,
+    maxProtectedQaTabs: BROWSER_QA_MAX_PROTECTED_TABS,
   };
 }
 
@@ -187,11 +190,11 @@ export async function runDiscoverySchedulerCycle(
 
     const actions = deps.listActions?.() ?? [];
     const protectedQaApplyCount = countProtectedQaApplyActions(actions, deps.getApplicationStatus ?? getApplicationStatus);
-    if (protectedQaApplyCount > 0) {
+    if (protectedQaApplyCount >= config.maxProtectedQaTabs) {
       const result = skippedResult({
         runType,
         sessionState: inspection.sessionState,
-        reason: "prepared_application_awaiting_qa",
+        reason: "protected_qa_workspace_full",
         nextRunInMs,
         lockAcquired: true,
         manualAttentionRequired: inspection.manualAttentionRequired,
