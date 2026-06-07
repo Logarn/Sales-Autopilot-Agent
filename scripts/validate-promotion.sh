@@ -17,6 +17,7 @@ run npm run test:slack-socket
 run npx tsx src/soul.test.ts
 run npx tsx src/slackThreadBrain.test.ts
 run npx tsx src/slackConversationBrain.test.ts
+run npx tsx src/slackReasoningGateway.test.ts
 run npx tsx src/salesLearningMemory.test.ts
 run npx tsx src/salesLearningRetrieval.test.ts
 run npx tsx src/memoryConsolidation.test.ts
