@@ -79,6 +79,7 @@ function validateSlackCopy(text: string, request: SlackCopyRequest): string | nu
   if (!trimmed) return "empty copy";
   if (containsOldMenu(trimmed)) return "old command menu";
   if (containsRawIds(trimmed)) return "raw ids in non-debug copy";
+  if (/\bthe agent\b/i.test(trimmed)) return "third-person agent language";
   if (violatesSubmitBoundary(trimmed)) return "submit boundary violation";
   if (violatesProofWording(trimmed, request.deterministicText)) return "proof wording drift";
   if (preservedPhrasesMissing(trimmed, request.preservePhrases)) return "required verbatim text missing";

@@ -29,6 +29,7 @@ async function run(): Promise<void> {
   assert(kimi.requests[0]?.messages.some((message) => message.content.includes("Return JSON only")), "Kimi copywriter prompt should require structured JSON.");
   assert(kimi.requests[0]?.messages.some((message) => message.content.includes("Operating constitution from soul.md")), "Kimi copywriter prompt should include soul.md.");
   assert(kimi.requests[0]?.messages.some((message) => message.content.includes("Fucking Lead Closer")), "Kimi copywriter prompt should include the soul.md identity.");
+  assert(kimi.requests[0]?.messages.some((message) => message.content.includes("Say \"I.\"")), "Kimi copywriter prompt should include first-person teammate guidance.");
 
   const leadPacket = fakeProvider("🚀 This one is worth a real shot. I’ll prep it and stop before submit. Final submit remains manual.");
   const leadPacketCopy = await rewriteSlackCopyWithKimi({
@@ -71,6 +72,16 @@ async function run(): Promise<void> {
   }, missingDraft.provider);
   assert.equal(draftFallback.usedLlm, false);
   assert.equal(draftFallback.text.includes("Exact draft text."), true);
+
+  const thirdPerson = fakeProvider("The agent can handle that and stop before submit.");
+  const thirdPersonFallback = await rewriteSlackCopyWithKimi({
+    path: "conversation_reply",
+    deterministicText: "I can handle that and stop before submit.",
+    userMessage: "Can you handle it?",
+    intent: "status_summary",
+  }, thirdPerson.provider);
+  assert.equal(thirdPersonFallback.usedLlm, false);
+  assert.equal(thirdPersonFallback.text.includes("The agent"), false);
 
   console.log("slack copywriter tests passed");
 }

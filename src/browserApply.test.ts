@@ -442,6 +442,68 @@ async function runTests(): Promise<void> {
     assert(!webhookPostedText.includes("Screening answers"), "Initial lead alert must not include screening answers");
     assert(!webhookPostedText.includes("Proposal preview"), "Initial lead alert must not include proposal preview");
 
+    const kimiLeadRequests: any[] = [];
+    let kimiLeadText = "";
+    const kimiLeadJob = {
+      ...beautyJob,
+      id: "beauty-job-kimi-lead-copy-v1",
+      applicationDraft: {
+        ...beautyJob.applicationDraft,
+        jobId: "beauty-job-kimi-lead-copy-v1",
+        jobIntelligence: klaviyoIntel(),
+      },
+    };
+    const kimiLeadDiscovery = await postDiscoveryCapturePacket(
+      {
+        action: {
+          id: 5021,
+          jobId: kimiLeadJob.id,
+          actionType: "capture_job_from_url",
+          status: "pending",
+          attempts: 0,
+          payload: {
+            url: kimiLeadJob.url,
+            discovery: {
+              sourceType: "best_matches",
+              sourceLabel: "Best Matches",
+            },
+          },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        scored: kimiLeadJob,
+        upworkUrl: kimiLeadJob.url,
+        applicationQuestions: [],
+        questionAnswers: [],
+        autoPrepareDecision: {
+          shouldQueue: true,
+          category: "eligible_auto_prepare",
+          reason: "eligible",
+          note: "Strong fit. I’m preparing the Upwork draft now. Final submit remains manual.",
+          actionId: 5021,
+          duplicate: false,
+        },
+      },
+      {
+        copyProvider: {
+          isAvailable: () => true,
+          completeJson: async (request: any) => {
+            kimiLeadRequests.push(request);
+            return { ok: true, data: { text: `Kimi lead: This one is worth a real shot.\n${kimiLeadJob.url}\nFinal submit remains manual.` } };
+          },
+        },
+        postChannelMessage: async (payload) => {
+          kimiLeadText = String(payload.text ?? "");
+          return { ok: true, ts: "999.110", channel: "C123" };
+        },
+      },
+    );
+    assert(kimiLeadDiscovery.status === "posted", "Lead packet should still post through the normal discovery Slack path.");
+    assert(kimiLeadText.startsWith("Kimi lead:"), "Lead packet should use Kimi copy when the provider is available and safe.");
+    assert(kimiLeadRequests.some((request) => request.messages?.[1]?.content?.includes("\"path\":\"lead_packet\"")), "Lead packet copy request should use the lead_packet path.");
+    assert(kimiLeadRequests.some((request) => JSON.stringify(request).includes("Operating constitution from soul.md")), "Lead packet copy request should include soul.md context.");
+    assert(kimiLeadText.includes("Final submit remains manual"), "Lead packet copy must preserve final-submit safety wording.");
+
     let queuedPrepPostAttempted = false;
     const queuedPrepJob = {
       ...beautyJob,
@@ -1155,6 +1217,7 @@ async function runTests(): Promise<void> {
     assert(kimiQaPost === "posted", "Kimi QA handoff should still post through the normal Slack path.");
     assert(kimiQaHandoffText.startsWith("Kimi QA:"), "QA handoff should use Kimi copy when the provider is available and safe.");
     assert(kimiQaRequests.some((request) => request.messages?.[1]?.content?.includes("\"path\":\"qa_handoff\"")), "Kimi QA handoff request should use the qa_handoff path.");
+    assert(kimiQaRequests.some((request) => JSON.stringify(request).includes("Operating constitution from soul.md")), "Kimi QA handoff request should include soul.md context.");
     assert(kimiQaHandoffText.includes("*Proof planned:*"), "Kimi QA handoff must preserve planned proof wording.");
     assert(kimiQaHandoffText.includes("• *Submit:* untouched"), "Kimi QA handoff must preserve submit untouched.");
 

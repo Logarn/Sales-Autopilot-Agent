@@ -37,6 +37,8 @@ async function runTests(): Promise<void> {
   const prompt = JSON.stringify(approveProvider.request);
   assert.match(prompt, /must never mean final submit/i, "LLM router prompt should preserve the final-submit boundary");
   assert.match(prompt, /yeah, prep drafts/i, "LLM router prompt should include the live failing phrase");
+  assert.match(prompt, /Operating constitution from soul\.md/i, "Legacy Slack thread prompt should include soul.md.");
+  assert.match(prompt, /legacy_slack_thread_classifier/i, "Legacy Slack thread prompt should identify its soul surface.");
 
   const statusProvider = new FakeProvider({
     intent: "status",

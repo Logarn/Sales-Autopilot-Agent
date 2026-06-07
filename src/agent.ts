@@ -3,6 +3,7 @@ import { evaluateConnectsStrategy, formatConnectsStrategy } from "./connectsStra
 import { buildDeterministicJobIntelligence } from "./jobIntelligenceParser";
 import { loadConnectsRules, loadFreelancerProfile, loadPortfolioLibrary } from "./profile";
 import { loadProfileKnowledge } from "./profileKnowledge";
+import { buildSoulRuntimeGuidance } from "./soul";
 import {
   ApplicationDraft,
   FreelancerProfile,
@@ -155,6 +156,7 @@ function buildStructuredProposalDraft(args: {
   proposalText: string;
   suggestedConnects: number;
   suggestedBoostConnects: number;
+  soulGuidance: string[];
 }): StructuredProposalDraft {
   const attachments = args.portfolioItems.map((item) => item.name);
   const highlights = args.portfolioItems.map((item) => item.result).filter(Boolean).slice(0, 3);
@@ -173,7 +175,7 @@ function buildStructuredProposalDraft(args: {
     suggestedHighlights: highlights,
     browserFillNotes: {
       approvedText: args.proposalText,
-      profileNotes: [args.profile.title, args.profile.location].filter(Boolean),
+      profileNotes: [args.profile.title, args.profile.location, ...args.soulGuidance].filter(Boolean),
       rate: args.rateRetainerAnswer,
       attachments,
       highlights,
@@ -334,6 +336,7 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   const proofKnowledge = selectRelevantKnowledge(knowledge.byType.proof, job, 2);
   const portfolioKnowledge = selectRelevantKnowledge(knowledge.byType.portfolio, job, 2);
   const bidRuleKnowledge = selectRelevantKnowledge(knowledge.byType.bid_rules, job, 2);
+  const soulGuidance = buildSoulRuntimeGuidance("proposal_draft_generation");
   const proofPoints = selectProofPoints(profile, job, proofKnowledge);
   const portfolioItems = selectPortfolioItems(job);
   const fitReasons = [
@@ -344,7 +347,9 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   ].slice(0, 8);
 
   const opening = inferPainLine(job);
-  const diagnosis = "What I would look at first: where first-time buyers are dropping off, which flows are missing or stale, whether segmentation is doing any real work, and whether campaigns are driving repeat purchase or just adding noise.";
+  const diagnosis = soulGuidance.length > 0
+    ? "First thing I would look at: where first-time buyers are dropping off, which lifecycle moments are leaking money, and whether the current messaging is driving repeat purchase or just adding noise."
+    : "What I would look at first: where first-time buyers are dropping off, which flows are missing or stale, whether segmentation is doing any real work, and whether campaigns are driving repeat purchase or just adding noise.";
   const proofSentence = proofPoints.length
     ? `Relevant background: ${proofPoints.slice(0, job.matchLevel === "high" ? 3 : 2).join("; ")}.`
     : `My background is closest to ${profile.niche || "retention and lifecycle marketing"}.`;
@@ -357,7 +362,9 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   const portfolioKnowledgeSentence = portfolioKnowledge.length
     ? `Additional relevant example: ${portfolioKnowledge.map((artifact) => artifact.summary).join(" ")}`
     : "";
-  const workPlan = "For this kind of project, I would keep the work practical: find the leaks, rebuild the highest-impact lifecycle moments, tighten the messaging, and make retention a growth lever instead of another channel on the checklist.";
+  const workPlan = soulGuidance.length > 0
+    ? "For this kind of project, I would keep the work practical and commercially pointed: find the leaks, fix the highest-impact lifecycle moments first, tighten the messaging, and tie the work back to repeat purchase."
+    : "For this kind of project, I would keep the work practical: find the leaks, rebuild the highest-impact lifecycle moments, tighten the messaging, and make retention a growth lever instead of another channel on the checklist.";
   const closingLine = voiceClosingLine(voiceKnowledge) ?? "If useful, send me the store URL and a quick sense of what is working/not working in Klaviyo now. I can tell you where I would start.";
 
   const proposal = cleanProposal(
@@ -406,6 +413,7 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
       proposalText: truncatedProposal,
       suggestedConnects: job.connects?.requiredConnects ?? job.connectsCost,
       suggestedBoostConnects: connects.suggestedBoostConnects,
+      soulGuidance,
     }),
     generatedAt: new Date().toISOString(),
   };
