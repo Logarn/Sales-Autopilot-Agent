@@ -61,7 +61,7 @@ async function runTests(): Promise<void> {
     buildDraftPreviewFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string };
     buildSlackSocketStartupError: (input: { socketEnabled: boolean; botToken: string; appToken: string }) => string | null;
     handleSlackSocketTextEvent: (event: { channel: string; ts: string; text?: string; thread_ts?: string; client_msg_id?: string; event_id?: string; event_ts?: string; bot_id?: string; subtype?: string; files?: any[] }, client: any) => Promise<void>;
-    handleThreadCommand: (input: { channelId: string; threadTs: string; text: string; client: any; intentProvider?: any; conversationProvider?: any; copyProvider?: any; focusQaTab?: any }) => Promise<void>;
+    handleThreadCommand: (input: { channelId: string; threadTs: string; text: string; client: any; intentProvider?: any; conversationProvider?: any; copyProvider?: any; focusQaTab?: any; operatorDeps?: any }) => Promise<void>;
     parseSlackThreadCommand: (value: string) => {
       type: string;
       rawText: string;
@@ -201,10 +201,14 @@ async function runTests(): Promise<void> {
       { name: "natural put it in Upwork", input: "put it in Upwork", expectType: "approve_prepare" },
       { name: "natural apply", input: "apply", expectType: "approve_prepare" },
       { name: "qa queue", input: "what’s ready?", expectType: "qa_queue" },
+      { name: "what needs me", input: "what needs me?", expectType: "qa_queue" },
       { name: "show QA queue", input: "show QA queue.", expectType: "qa_queue" },
       { name: "focus current application", input: "open this", expectType: "focus_qa_tab" },
+      { name: "focus current application in chrome", input: "open this in Chrome", expectType: "focus_qa_tab" },
       { name: "show application page", input: "show me the application page.", expectType: "focus_qa_tab" },
       { name: "focus indexed application", input: "open 1", expectType: "focus_qa_tab" },
+      { name: "focus numbered application", input: "open number 2", expectType: "focus_qa_tab" },
+      { name: "focus blocked page", input: "focus the blocked page", expectType: "focus_qa_tab" },
       { name: "prep issue cover letter empty", input: "I do not see the cover letter filled in.", expectType: "prep_issue_report" },
       { name: "prep issue empty", input: "it’s empty", expectType: "prep_issue_report" },
       { name: "prep issue not attached", input: "The file is not attached.", expectType: "prep_issue_report" },
@@ -220,6 +224,7 @@ async function runTests(): Promise<void> {
       { name: "what got blocked", input: "what got blocked?", expectType: "discovery_block_status" },
       { name: "cleared Chrome", input: "I cleared Chrome", expectType: "discovery_clear_browser" },
       { name: "mark submitted", input: "mark submitted", expectType: "mark_submitted" },
+      { name: "i sent it", input: "I sent it", expectType: "mark_submitted" },
       { name: "got reply outcome", input: "got reply", expectType: "record_outcome", outcomeStatus: "replied" },
       { name: "client replied outcome", input: "client replied", expectType: "record_outcome", outcomeStatus: "replied" },
       { name: "interview booked outcome", input: "interview booked", expectType: "record_outcome", outcomeStatus: "interview" },
@@ -1052,6 +1057,23 @@ async function runTests(): Promise<void> {
     const revisedDraft = getApplicationDraft(prepareJob.id);
     assert(Boolean(revisedDraft?.proposalText.includes("highest-leverage retention work")), "Stored draft should be updated with deterministic revision text.");
 
+    const submittedReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "I sent it",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            submittedReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(getApplicationStatus(prepareJob.id) === "submitted", "Slack submitted command should mark local state submitted after Steve manually sends it.");
+    assert(submittedReplies.some((reply) => reply.includes("I marked") && reply.includes("submitted") && reply.includes("Final submit remains manual")), "Submitted reply should acknowledge local state only and preserve final-submit safety.");
+    assert(!submittedReplies.join("\n").includes(prepareJob.id), "Submitted reply should hide raw job ids in normal Slack output.");
+
     const outcomeReplies: string[] = [];
     await handleThreadCommand({
       channelId: "C123",
@@ -1066,7 +1088,8 @@ async function runTests(): Promise<void> {
       },
     });
     assert(getApplicationStatus(prepareJob.id) === "replied", "Slack got reply command should update application status to replied.");
-    assert(outcomeReplies.some((reply) => reply.includes("Outcome recorded") && reply.includes("replied")), "Slack outcome command should acknowledge the recorded reply.");
+    assert(outcomeReplies.some((reply) => reply.includes("Outcome recorded") && reply.includes("reply received")), "Slack outcome command should acknowledge the recorded reply.");
+    assert(!outcomeReplies.join("\n").includes(prepareJob.id), "Outcome replies should hide raw job ids in normal Slack output.");
 
     await handleThreadCommand({
       channelId: "C123",
@@ -1110,6 +1133,23 @@ async function runTests(): Promise<void> {
     });
     assert(getApplicationStatus(prepareJob.id) === "lost", "Slack lost command should update application status to lost.");
     assert(getSlackThreadStateByThreadTs("C123", "111.222")?.status === "outcome_recorded", "Slack outcome command should mark the thread outcome recorded.");
+
+    const closeReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "close this",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            closeReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(getApplicationStatus(prepareJob.id) === "rejected", "Slack close/skip command should archive the application from the active flow.");
+    assert(closeReplies.some((reply) => reply.includes("I archived")), "Slack close/skip command should acknowledge the archive in human language.");
+    assert(!closeReplies.join("\n").includes(prepareJob.id), "Close/skip reply should hide raw job ids in normal Slack output.");
 
     const envError = buildSlackSocketStartupError({ socketEnabled: false, botToken: "", appToken: "" });
     assert(typeof envError === "string", "Expected an error when socket mode is disabled.");

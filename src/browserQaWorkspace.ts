@@ -105,7 +105,7 @@ export function getProtectedQaQueueItems(limit = BROWSER_QA_MAX_PROTECTED_TABS):
         files: basenameList(files, 2),
         connects: required === null ? "unknown" : `${required}`,
         boost: boost && boost > 0 ? `${boost}` : "none",
-        nextAction: state === "blocked" ? `clear Chrome, then reply "retry" (${reason})` : "review in VNC, ask for changes, or manually submit",
+        nextAction: state === "blocked" ? `clear Chrome, then reply "retry" (${reason})` : "review in remote Chrome, ask for changes, or manually submit",
       };
     });
 }
@@ -152,7 +152,15 @@ export function findProtectedQaQueueItem(input: { jobId?: string | null; index?:
   }
   const query = input.query?.trim().toLowerCase();
   if (query) {
-    return items.find((item) => item.title.toLowerCase().includes(query) || item.jobId.toLowerCase().includes(query)) ?? null;
+    if (query === "blocked") return items.find((item) => item.state === "blocked") ?? null;
+    if (query === "ready") return items.find((item) => item.state === "ready") ?? null;
+    return items.find((item) =>
+      item.title.toLowerCase().includes(query) ||
+      item.state === query ||
+      item.status.toLowerCase().includes(query) ||
+      item.nextAction.toLowerCase().includes(query) ||
+      item.jobId.toLowerCase().includes(query)
+    ) ?? null;
   }
   return null;
 }
@@ -212,7 +220,7 @@ export async function focusProtectedQaApplicationTab(input: {
     return {
       ok: true,
       item,
-      text: "Done — I brought the remote Chrome application tab to the front. Review it in VNC. Final submit is still untouched.",
+      text: "Done — I brought the remote Chrome application tab to the front. Review it in remote Chrome. Final submit is still untouched.",
     };
   } finally {
     await handle.close();

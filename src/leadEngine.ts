@@ -15,6 +15,7 @@ import { BrowserSessionStatus, clearBrowserManualAttention, getBrowserSessionSta
 import { inspectLiveBrowserSessionFromCdp } from "./browserLiveSession";
 import { BrowserSessionInspection } from "./browserSessionInspector";
 import { writeHeartbeat } from "./heartbeat";
+import { readHuntingControlState } from "./operatorControlState";
 
 const LEAD_ENGINE_ACTION_TYPES = ["capture_job_from_url", "prepare_application_review"] as const;
 
@@ -211,6 +212,22 @@ export async function runLeadEngineCycle(
     const listActions = deps.listActions ?? listBrowserActions;
     const runDiscovery = deps.runDiscovery ?? runDiscoveryOnceFromCdp;
     const runWorker = deps.runWorker ?? runControlledWorkerLoop;
+    const controlState = readHuntingControlState();
+    if (controlState.huntingPaused) {
+      const summary: LeadEngineCycleSummary = makeSummary(input, {
+        status: "paused",
+        stoppedReason: controlState.reason ?? "hunting_paused_from_slack",
+        nextSleepMs: computeJitteredDelay(AGENT_ENGINE_INTERVAL_MS, AGENT_ENGINE_JITTER_PCT, random),
+      });
+      writeState(summary);
+      writeHeartbeat({
+        worker: "lead-engine",
+        status: "success",
+        error: null,
+        metadata: { status: summary.status, stoppedReason: summary.stoppedReason },
+      });
+      return summary;
+    }
     const storedSession = getSessionStatus();
     const session = await resolveLeadEngineBrowserSession(input, storedSession, deps);
     const pendingBefore = listActions("pending", 1000).length;

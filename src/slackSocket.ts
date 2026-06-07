@@ -76,6 +76,11 @@ import {
   type ProtectedQaFocusResult,
 } from "./browserQaWorkspace";
 import { rewriteSlackCopyWithKimi, type SlackCopyProvider } from "./slackCopywriter";
+import {
+  parseSlackOperatorIntent,
+  tryHandleSlackOperatorCommand,
+  type SlackOperatorControlDeps,
+} from "./slackOperatorControlPlane";
 import type { ApplicationStatus } from "./types";
 
 const THREAD_MENTIONS = "<@U0A2X5BCNKC> <@U0AHJFYV42K>";
@@ -331,7 +336,7 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
       source: "fallback",
     };
   }
-  const qaQueueMatch = /\b(?:what[’']?s ready|what is ready|show qa queue|qa queue|what is blocked|what[’']?s blocked)\b/i.test(commandText);
+  const qaQueueMatch = /\b(?:what[’']?s ready|what is ready|what needs me|what needs my review|what needs review|show qa queue|qa queue|what is blocked|what[’']?s blocked|what needs unblocking)\b/i.test(commandText);
   if (qaQueueMatch) {
     return { type: "qa_queue", rawText: normalized, source: "fallback" };
   }
@@ -350,7 +355,7 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
   if (/\b(?:i cleared chrome|chrome is clear|cleared chrome|remote browser is clear|browser is clear|done clearing chrome)\b/i.test(commandText)) {
     return { type: "discovery_clear_browser", rawText: normalized, source: "fallback" };
   }
-  const focusIndexMatch = commandText.match(/^(?:open|bring up|show|focus|retry)\s+(?:the\s+)?(?:(first|second|third|fourth|fifth)|#?(\d+))(?:\s+(?:one|application|draft|in chrome))?$/i);
+  const focusIndexMatch = commandText.match(/^(?:open|bring up|show|focus|retry)\s+(?:the\s+)?(?:number\s+)?(?:(first|second|third|fourth|fifth)|#?(\d+))(?:\s+(?:one|application|draft|in chrome))?$/i);
   const ordinalIndex: Record<string, number> = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5 };
   if (focusIndexMatch && !/^retry\b/i.test(commandText)) {
     return {
@@ -360,7 +365,10 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
       source: "fallback",
     };
   }
-  const focusThisMatch = /^(?:open this(?: in chrome)?|open this one(?: in chrome)?|bring this(?: one)? up|show me the application page|show the application page|open draft in chrome|focus the draft|bring up the application page)$/i.test(commandText);
+  if (/^(?:focus|open|bring up|show)\s+(?:the\s+)?blocked\s+(?:page|application|draft)$/i.test(commandText)) {
+    return { type: "focus_qa_tab", rawText: normalized, qaQuery: "blocked", source: "fallback" };
+  }
+  const focusThisMatch = /^(?:open this(?: in chrome)?|open this one(?: in chrome)?|bring this(?: one)? up|show me the application page|show the application page|open (?:the )?draft(?: in chrome)?|focus the draft|bring up the application page)$/i.test(commandText);
   if (focusThisMatch) {
     return { type: "focus_qa_tab", rawText: normalized, source: "fallback" };
   }
@@ -434,7 +442,7 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
     };
   }
 
-  if (/^mark\s+submitted$/i.test(commandText)) return { type: "mark_submitted", rawText: normalized };
+  if (/^(?:mark\s+submitted|submitted|i\s+sent\s+it|sent\s+it|i\s+submitted\s+it|it'?s\s+submitted)$/i.test(commandText)) return { type: "mark_submitted", rawText: normalized };
 
   const outcomeCommand = parseOutcomeCommand(commandText, normalized);
   if (outcomeCommand) return outcomeCommand;
@@ -679,6 +687,12 @@ function buildShortStatusReply(state: NonNullable<ReturnType<typeof getSlackThre
       ? "Say “put it in Upwork” when you want me to fill remote Chrome."
       : "I still need a generated draft before I can prep Upwork.";
   return `${job?.title ?? state.jobId}: ${draft?.proposalText ? "draft ready" : "draft not ready"}; ${connects}; ${missing.length} missing file${missing.length === 1 ? "" : "s"}. ${next}`;
+}
+
+function humanApplicationLabel(jobId: string | null | undefined): string {
+  if (!jobId) return "this application";
+  const job = getScoredJobForSlackPreview(jobId);
+  return job?.title?.trim() || "this application";
 }
 
 function buildConversationPlanForThread(input: {
@@ -1338,7 +1352,6 @@ export async function handleSlackSocketTextEvent(rawEvent: SlackSocketTextEvent,
   }
   const threadTs = rawEvent.thread_ts ?? rawEvent.ts;
   const mappedThread = getSlackThreadStateByThreadTs(channelId, threadTs);
-  const upworkUrl = parseUpworkJobUrlFromText(text);
   const botMentioned = hasSlackMention(text);
 
   if (files.length > 0 && mappedThread) {
@@ -1352,6 +1365,17 @@ export async function handleSlackSocketTextEvent(rawEvent: SlackSocketTextEvent,
     return;
   }
 
+  if ((mappedThread || botMentioned) && parseSlackOperatorIntent(text)) {
+    await handleThreadCommand({
+      channelId,
+      threadTs,
+      text,
+      client,
+    });
+    return;
+  }
+
+  const upworkUrl = parseUpworkJobUrlFromText(text);
   if (upworkUrl && (botMentioned || mappedThread)) {
     await handleUrlMessage({
       channelId,
@@ -1612,8 +1636,20 @@ export async function handleThreadCommand(params: {
   conversationProvider?: SlackConversationBrainProvider;
   copyProvider?: SlackCopyProvider;
   focusQaTab?: (input: { jobId?: string | null; index?: number; query?: string | null }) => Promise<ProtectedQaFocusResult>;
+  operatorDeps?: SlackOperatorControlDeps;
 }): Promise<void> {
   const state = getSlackThreadStateByThreadTs(params.channelId, params.threadTs);
+  const handledOperator = await tryHandleSlackOperatorCommand({
+    text: params.text,
+    channelId: params.channelId,
+    threadTs: params.threadTs,
+    client: params.client,
+    deps: params.operatorDeps,
+  });
+  if (handledOperator) {
+    return;
+  }
+
   learnFromSlackMessage({
     channelId: params.channelId,
     threadTs: params.threadTs,
@@ -1861,7 +1897,7 @@ export async function handleThreadCommand(params: {
       params.client,
       params.channelId,
       params.threadTs,
-      `Thread marked approved${state.jobId ? ` for ${state.jobId}` : ""}.`
+      `I marked ${humanApplicationLabel(state.jobId)} approved.`
     );
     return;
   }
@@ -1871,7 +1907,7 @@ export async function handleThreadCommand(params: {
       updateApplicationStatus(state.jobId, "rejected", "Rejected from Slack socket thread command.");
     }
     updateSlackThreadStateStatus(state.channelId, state.threadTs, "reject_requested");
-    await postThreadReply(params.client, params.channelId, params.threadTs, `Thread marked rejected${state.jobId ? ` for ${state.jobId}` : ""}.`);
+    await postThreadReply(params.client, params.channelId, params.threadTs, `I archived ${humanApplicationLabel(state.jobId)} from the active QA flow.`);
     return;
   }
 
@@ -2030,10 +2066,10 @@ export async function handleThreadCommand(params: {
 
   if (command.type === "mark_submitted") {
     if (state.jobId) {
-      updateApplicationStatus(state.jobId, "applied", "Marked submitted from Slack socket thread command.");
+      updateApplicationStatus(state.jobId, "submitted", "Marked submitted from Slack after Steve submitted manually.");
     }
     updateSlackThreadStateStatus(state.channelId, state.threadTs, "submitted_marked");
-    await postThreadReply(params.client, params.channelId, params.threadTs, `Marked ${state.jobId} as submitted in local state.`);
+    await postThreadReply(params.client, params.channelId, params.threadTs, `I marked ${humanApplicationLabel(state.jobId)} as submitted in local state. Final submit remains manual.`);
     return;
   }
 
@@ -2048,7 +2084,7 @@ export async function handleThreadCommand(params: {
     }
     if (!maybeJobStatus) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
-      await postThreadReply(params.client, params.channelId, params.threadTs, `I found job ${state.jobId}, but there is no application record to update yet.`);
+      await postThreadReply(params.client, params.channelId, params.threadTs, "I found the thread, but there is no application record to update yet.");
       return;
     }
 
@@ -2059,7 +2095,7 @@ export async function handleThreadCommand(params: {
     );
     if (!updated) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
-      await postThreadReply(params.client, params.channelId, params.threadTs, `I couldn’t record that outcome for ${state.jobId}.`);
+      await postThreadReply(params.client, params.channelId, params.threadTs, "I couldn’t record that outcome for this application.");
       return;
     }
 
@@ -2083,7 +2119,7 @@ export async function handleThreadCommand(params: {
       params.client,
       params.channelId,
       params.threadTs,
-      `Outcome recorded: ${state.jobId} is now ${outcomeLabel} (${command.outcomeStatus}). I’ll use that signal in future fit/proof learning.`
+      `Outcome recorded: ${humanApplicationLabel(state.jobId)} is now ${outcomeLabel}. I’ll use that signal in future fit/proof learning.`
     );
     return;
   }
