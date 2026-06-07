@@ -50,6 +50,7 @@ export interface PlaywrightPageLike {
   goto(url: string, options?: { waitUntil?: string; timeout?: number }): Promise<unknown>;
   url(): string;
   title(): Promise<string>;
+  bringToFront?(): Promise<unknown>;
   locator(selector: string): PlaywrightLocatorLike;
 }
 

@@ -123,13 +123,26 @@ export const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL ?? "";
 export const LMSTUDIO_API_KEY = process.env.LMSTUDIO_API_KEY ?? "";
 export const LMSTUDIO_BASE_URL = process.env.LMSTUDIO_BASE_URL ?? "http://localhost:1234/v1";
 export const LMSTUDIO_MODEL = process.env.LMSTUDIO_MODEL ?? "qwen/qwen3.5-9b";
+export const XAI_API_KEY = process.env.XAI_API_KEY ?? process.env.GROK_API_KEY ?? "";
+export const XAI_BASE_URL = process.env.XAI_BASE_URL ?? process.env.GROK_BASE_URL ?? "https://api.x.ai/v1";
+export const XAI_MODEL = process.env.XAI_MODEL ?? process.env.GROK_MODEL ?? "grok-4.3";
+export const MOONSHOT_API_KEY = process.env.MOONSHOT_API_KEY ?? process.env.KIMI_API_KEY ?? "";
+export const MOONSHOT_BASE_URL = process.env.MOONSHOT_BASE_URL ?? process.env.KIMI_BASE_URL ?? "https://api.moonshot.ai/v1";
+export const MOONSHOT_MODEL = process.env.MOONSHOT_MODEL ?? process.env.KIMI_MODEL ?? "kimi-k2.5";
 export const LLM_NORMALIZATION_ENABLED = parseBoolean(process.env.LLM_NORMALIZATION_ENABLED, false);
 export const LLM_REQUEST_TIMEOUT_MS = Math.max(1000, parseInteger(process.env.LLM_REQUEST_TIMEOUT_MS, 30_000));
 export const JOB_INTELLIGENCE_ENABLED = parseBoolean(process.env.JOB_INTELLIGENCE_ENABLED, false);
-export const JOB_INTELLIGENCE_MODEL = process.env.JOB_INTELLIGENCE_MODEL ?? LLM_MODEL;
+export const JOB_INTELLIGENCE_PROVIDER = process.env.JOB_INTELLIGENCE_PROVIDER ?? (XAI_API_KEY ? "xai" : LLM_PROVIDER);
+export const JOB_INTELLIGENCE_MODEL = process.env.JOB_INTELLIGENCE_MODEL ?? (JOB_INTELLIGENCE_PROVIDER.toLowerCase() === "xai" || JOB_INTELLIGENCE_PROVIDER.toLowerCase() === "grok" ? XAI_MODEL : LLM_MODEL);
 export const JOB_INTELLIGENCE_TEMPERATURE = Number.isFinite(Number.parseFloat(process.env.JOB_INTELLIGENCE_TEMPERATURE ?? ""))
   ? Number.parseFloat(process.env.JOB_INTELLIGENCE_TEMPERATURE ?? "")
   : 0;
+export const SLACK_COPY_LLM_ENABLED = parseBoolean(process.env.SLACK_COPY_LLM_ENABLED, true);
+export const SLACK_COPY_PROVIDER = process.env.SLACK_COPY_PROVIDER ?? "kimi";
+export const SLACK_COPY_MODEL = process.env.SLACK_COPY_MODEL ?? (SLACK_COPY_PROVIDER.toLowerCase() === "kimi" || SLACK_COPY_PROVIDER.toLowerCase() === "moonshot" ? MOONSHOT_MODEL : LLM_MODEL);
+export const SLACK_COPY_TEMPERATURE = Number.isFinite(Number.parseFloat(process.env.SLACK_COPY_TEMPERATURE ?? ""))
+  ? Number.parseFloat(process.env.SLACK_COPY_TEMPERATURE ?? "")
+  : 0.25;
 export const BROWSER_WORKER_ENABLED = parseBoolean(process.env.BROWSER_WORKER_ENABLED, false);
 export const BROWSER_HEADLESS = parseBoolean(process.env.BROWSER_HEADLESS, true);
 export const BROWSER_SESSION_MODE = process.env.BROWSER_SESSION_MODE === "cdp" ? "cdp" : "launch";
@@ -144,6 +157,7 @@ export const BROWSER_LIVE_ACTION_LIMIT = Math.max(1, parseInteger(process.env.BR
 export const BROWSER_MANUAL_ATTENTION_ALERT_COOLDOWN_MS = parseInteger(process.env.BROWSER_MANUAL_ATTENTION_ALERT_COOLDOWN_MS, 60 * 60 * 1000);
 export const BROWSER_SESSION_CHALLENGE_THRESHOLD = Math.max(1, parseInteger(process.env.BROWSER_SESSION_CHALLENGE_THRESHOLD, 2));
 export const BROWSER_SESSION_CHALLENGE_WINDOW_MS = parseInteger(process.env.BROWSER_SESSION_CHALLENGE_WINDOW_MS, 60 * 60 * 1000);
+export const BROWSER_QA_MAX_PROTECTED_TABS = Math.max(1, parseInteger(process.env.BROWSER_QA_MAX_PROTECTED_TABS, 5));
 export const AUTO_PREPARE_DRAFT_ENABLED = parseBoolean(process.env.AUTO_PREPARE_DRAFT_ENABLED, true);
 export const AGENT_ENGINE_ENABLED = parseBoolean(process.env.AGENT_ENGINE_ENABLED, false);
 export const AGENT_ENGINE_INTERVAL_MS = Math.max(60_000, parseInteger(process.env.AGENT_ENGINE_INTERVAL_MS, 5 * 60 * 1000));

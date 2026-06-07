@@ -2,9 +2,8 @@ import {
   JOB_INTELLIGENCE_ENABLED,
   JOB_INTELLIGENCE_MODEL,
   JOB_INTELLIGENCE_TEMPERATURE,
-  LLM_PROVIDER,
 } from "./config";
-import { OpenAiCompatibleProvider, getLlmProviderConfig, type LlmJsonResult } from "./llm/provider";
+import { OpenAiCompatibleProvider, getJobIntelligenceProviderConfig, type LlmJsonResult } from "./llm/provider";
 import type { ApplicationDraft, JobIntelligence, JobPosting, PlatformPreferenceTier } from "./types";
 
 export interface JobIntelligenceInput {
@@ -347,12 +346,12 @@ function buildJobIntelligenceMessages(input: JobIntelligenceInput) {
 }
 
 function defaultJobIntelligenceClient(): JobIntelligenceClient {
-  const providerConfig = getLlmProviderConfig();
+  const providerConfig = getJobIntelligenceProviderConfig();
   return new OpenAiCompatibleProvider({
     enabled: JOB_INTELLIGENCE_ENABLED,
-    provider: LLM_PROVIDER,
+    provider: providerConfig.provider,
     apiKey: providerConfig.apiKey,
-    model: JOB_INTELLIGENCE_MODEL,
+    model: providerConfig.model || JOB_INTELLIGENCE_MODEL,
     baseUrl: providerConfig.baseUrl,
   });
 }

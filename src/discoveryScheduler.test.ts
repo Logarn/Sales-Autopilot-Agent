@@ -9,6 +9,7 @@ const config: DiscoverySchedulerConfig = {
   maxJobsPerRun: 3,
   maxScrollsPerRun: 4,
   skipIfPendingCaptureCountGt: 3,
+  maxProtectedQaTabs: 5,
 };
 
 function action(id: number, status: BrowserAction["status"], actionType: BrowserAction["actionType"] = "capture_job_from_url"): BrowserAction {
@@ -102,15 +103,37 @@ async function runTests(): Promise<void> {
   assert.equal(tooMany.skippedReason, "too_many_pending_capture_actions");
   assert.equal(tooMany.pendingCaptureCount, 4);
 
-  const qaHold = await runDiscoverySchedulerCycle(config, {
+  const qaUnderCap = await runDiscoverySchedulerCycle(config, {
     inspectSession: async () => ({ sessionState: "logged_in", manualAttentionRequired: false, blocked: false }),
     listActions: () => [protectedPrepareAction(33), action(5, "pending")],
     getApplicationStatus: () => "prepared_for_qa",
-    runDiscovery: async () => { throw new Error("discovery must not navigate away from a prepared-for-QA application"); },
+    runDiscovery: async () => ({
+      ok: true,
+      tool: "discovery.best-matches",
+      sessionState: "logged_in",
+      manualAttentionRequired: false,
+      blocked: false,
+      jobsFound: 1,
+      jobsQueued: 1,
+      duplicatesSkipped: 0,
+      alreadyHandledSkipped: 0,
+      invalidSkipped: 0,
+      scrollsPerformed: 1,
+      queuedActionIds: [44],
+    }),
+  });
+  assert.equal(qaUnderCap.skipped, undefined, "Discovery can continue while protected QA workspace is under cap.");
+  assert.equal(qaUnderCap.jobsQueued, 1);
+
+  const qaHold = await runDiscoverySchedulerCycle(config, {
+    inspectSession: async () => ({ sessionState: "logged_in", manualAttentionRequired: false, blocked: false }),
+    listActions: () => [protectedPrepareAction(1), protectedPrepareAction(2), protectedPrepareAction(3), protectedPrepareAction(4), protectedPrepareAction(5)],
+    getApplicationStatus: () => "prepared_for_qa",
+    runDiscovery: async () => { throw new Error("discovery must pause when the protected QA workspace is full"); },
   });
   assert.equal(qaHold.skipped, true);
-  assert.equal(qaHold.skippedReason, "prepared_application_awaiting_qa");
-  assert.equal(qaHold.protectedQaApplyCount, 1);
+  assert.equal(qaHold.skippedReason, "protected_qa_workspace_full");
+  assert.equal(qaHold.protectedQaApplyCount, 5);
 
   let firstResolve!: (value: any) => void;
   const firstRun = runDiscoverySchedulerCycle(config, {

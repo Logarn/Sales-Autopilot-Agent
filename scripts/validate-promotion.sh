@@ -15,6 +15,7 @@ run bash scripts/browser-session-scripts.test.sh
 run npm run test:capture
 run npm run test:slack-socket
 run npx tsx src/slackThreadBrain.test.ts
+run npx tsx src/slackConversationBrain.test.ts
 run npx tsx src/slackConversationPlanner.test.ts
 run npx tsx src/leadDecision.test.ts
 run npx tsx src/platformEligibility.test.ts
@@ -30,6 +31,7 @@ run npx tsx src/health.test.ts
 run npx tsx src/controlledWorkerLoop.test.ts
 run npx tsx src/connectsStrategy.test.ts
 run npx tsx src/llm/provider.test.ts
+run npx tsx src/slackCopywriter.test.ts
 run npx tsx src/critic.test.ts
 run npx tsx src/intelligenceScoring.test.ts
 run npx tsx src/jobIntelligenceParser.test.ts

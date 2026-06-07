@@ -114,7 +114,7 @@ const DEFAULT_COMMAND_HINTS = [
   "mark submitted — update status after you manually submit",
 ];
 
-const RETRY_COMMAND_HINT = "retry <action-id> — retry a browser step if needed";
+const RETRY_COMMAND_HINT = "retry — retry the latest paused browser step for this thread";
 
 const LEAD_MENTIONS = "<@U0A2X5BCNKC> <@U0AHJFYV42K>";
 
