@@ -333,6 +333,100 @@ export interface SlackThreadState {
   updatedAt: string;
 }
 
+export type SlackBehaviorMemoryType =
+  | "operator_preference"
+  | "failed_intent"
+  | "proof_preference"
+  | "draft_style_preference"
+  | "retry_rule"
+  | "lead_packet_style_rule";
+
+export type SlackBehaviorMemoryConfidence = "high" | "medium" | "low";
+
+interface SlackBehaviorMemoryRow {
+  id: number;
+  type: SlackBehaviorMemoryType;
+  rule: string;
+  scope: string;
+  source: string;
+  thread_channel_id: string | null;
+  thread_ts: string | null;
+  job_id: string | null;
+  confidence: SlackBehaviorMemoryConfidence;
+  active: number;
+  metadata: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SlackBehaviorMemory {
+  id: number;
+  type: SlackBehaviorMemoryType;
+  rule: string;
+  scope: string;
+  source: string;
+  threadChannelId: string | null;
+  threadTs: string | null;
+  jobId: string | null;
+  confidence: SlackBehaviorMemoryConfidence;
+  active: boolean;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpsertSlackBehaviorMemoryInput {
+  type: SlackBehaviorMemoryType;
+  rule: string;
+  scope?: string;
+  source?: string;
+  threadChannelId?: string | null;
+  threadTs?: string | null;
+  jobId?: string | null;
+  confidence?: SlackBehaviorMemoryConfidence;
+  metadata?: Record<string, unknown>;
+}
+
+interface SlackFailureReflectionRow {
+  id: number;
+  channel_id: string | null;
+  thread_ts: string | null;
+  job_id: string | null;
+  user_message: string;
+  what_happened: string;
+  why_it_failed: string;
+  next_behavior: string;
+  fix_type: string;
+  proposed_task: string | null;
+  created_at: string;
+}
+
+export interface SlackFailureReflection {
+  id: number;
+  channelId: string | null;
+  threadTs: string | null;
+  jobId: string | null;
+  userMessage: string;
+  whatHappened: string;
+  whyItFailed: string;
+  nextBehavior: string;
+  fixType: string;
+  proposedTask: string | null;
+  createdAt: string;
+}
+
+export interface RecordSlackFailureReflectionInput {
+  channelId?: string | null;
+  threadTs?: string | null;
+  jobId?: string | null;
+  userMessage: string;
+  whatHappened: string;
+  whyItFailed: string;
+  nextBehavior: string;
+  fixType: "memory" | "prompt" | "config" | "code_pr";
+  proposedTask?: string | null;
+}
+
 interface ApplicationDraftRow {
   job_id: string;
   status: ApplicationStatus;
@@ -429,6 +523,43 @@ CREATE TABLE IF NOT EXISTS slack_thread_state (
 );
 CREATE INDEX IF NOT EXISTS idx_slack_thread_state_channel_thread ON slack_thread_state(channel_id, thread_ts);
 CREATE INDEX IF NOT EXISTS idx_slack_thread_state_job_id ON slack_thread_state(job_id);
+
+CREATE TABLE IF NOT EXISTS slack_behavior_memory (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL,
+  rule TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'global',
+  source TEXT NOT NULL DEFAULT 'slack_correction',
+  thread_channel_id TEXT,
+  thread_ts TEXT,
+  job_id TEXT,
+  confidence TEXT NOT NULL DEFAULT 'medium',
+  active INTEGER NOT NULL DEFAULT 1,
+  metadata TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(type, rule, scope)
+);
+
+CREATE INDEX IF NOT EXISTS idx_slack_behavior_memory_active ON slack_behavior_memory(active, updated_at);
+CREATE INDEX IF NOT EXISTS idx_slack_behavior_memory_type ON slack_behavior_memory(type);
+
+CREATE TABLE IF NOT EXISTS slack_failure_reflections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id TEXT,
+  thread_ts TEXT,
+  job_id TEXT,
+  user_message TEXT NOT NULL,
+  what_happened TEXT NOT NULL,
+  why_it_failed TEXT NOT NULL,
+  next_behavior TEXT NOT NULL,
+  fix_type TEXT NOT NULL,
+  proposed_task TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_slack_failure_reflections_thread ON slack_failure_reflections(channel_id, thread_ts);
+CREATE INDEX IF NOT EXISTS idx_slack_failure_reflections_created_at ON slack_failure_reflections(created_at);
 
 CREATE TABLE IF NOT EXISTS applications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -697,6 +828,62 @@ const listSlackThreadStatesStmt = db.prepare<[string, number], SlackThreadStateR
    ORDER BY updated_at DESC
    LIMIT ?`
 );
+const upsertSlackBehaviorMemoryStmt = db.prepare(
+  `INSERT INTO slack_behavior_memory (
+    type,
+    rule,
+    scope,
+    source,
+    thread_channel_id,
+    thread_ts,
+    job_id,
+    confidence,
+    active,
+    metadata,
+    updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, datetime('now'))
+  ON CONFLICT(type, rule, scope) DO UPDATE SET
+    source = excluded.source,
+    thread_channel_id = COALESCE(excluded.thread_channel_id, slack_behavior_memory.thread_channel_id),
+    thread_ts = COALESCE(excluded.thread_ts, slack_behavior_memory.thread_ts),
+    job_id = COALESCE(excluded.job_id, slack_behavior_memory.job_id),
+    confidence = excluded.confidence,
+    active = 1,
+    metadata = excluded.metadata,
+    updated_at = datetime('now')`
+);
+const getSlackBehaviorMemoryByKeyStmt = db.prepare<[SlackBehaviorMemoryType, string, string], SlackBehaviorMemoryRow>(
+  `SELECT id, type, rule, scope, source, thread_channel_id, thread_ts, job_id, confidence, active, metadata, created_at, updated_at
+   FROM slack_behavior_memory
+   WHERE type = ? AND rule = ? AND scope = ?
+   LIMIT 1`
+);
+const listActiveSlackBehaviorMemoriesStmt = db.prepare<[number], SlackBehaviorMemoryRow>(
+  `SELECT id, type, rule, scope, source, thread_channel_id, thread_ts, job_id, confidence, active, metadata, created_at, updated_at
+   FROM slack_behavior_memory
+   WHERE active = 1
+   ORDER BY updated_at DESC, id DESC
+   LIMIT ?`
+);
+const insertSlackFailureReflectionStmt = db.prepare(
+  `INSERT INTO slack_failure_reflections (
+    channel_id,
+    thread_ts,
+    job_id,
+    user_message,
+    what_happened,
+    why_it_failed,
+    next_behavior,
+    fix_type,
+    proposed_task
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+);
+const listRecentSlackFailureReflectionsStmt = db.prepare<[number], SlackFailureReflectionRow>(
+  `SELECT id, channel_id, thread_ts, job_id, user_message, what_happened, why_it_failed, next_behavior, fix_type, proposed_task, created_at
+   FROM slack_failure_reflections
+   ORDER BY created_at DESC, id DESC
+   LIMIT ?`
+);
 const insertBrowserActionStmt = db.prepare(
   `INSERT INTO browser_actions (job_id, action_type, status, payload, attempts, last_error, updated_at)
    VALUES (?, ?, 'pending', ?, 0, NULL, datetime('now'))`
@@ -835,6 +1022,40 @@ function rowToSlackThreadState(row: SlackThreadStateRow): SlackThreadState {
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function rowToSlackBehaviorMemory(row: SlackBehaviorMemoryRow): SlackBehaviorMemory {
+  return {
+    id: row.id,
+    type: row.type,
+    rule: row.rule,
+    scope: row.scope,
+    source: row.source,
+    threadChannelId: row.thread_channel_id,
+    threadTs: row.thread_ts,
+    jobId: row.job_id,
+    confidence: row.confidence,
+    active: row.active === 1,
+    metadata: parseJsonObject<Record<string, unknown>>(row.metadata) ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToSlackFailureReflection(row: SlackFailureReflectionRow): SlackFailureReflection {
+  return {
+    id: row.id,
+    channelId: row.channel_id,
+    threadTs: row.thread_ts,
+    jobId: row.job_id,
+    userMessage: row.user_message,
+    whatHappened: row.what_happened,
+    whyItFailed: row.why_it_failed,
+    nextBehavior: row.next_behavior,
+    fixType: row.fix_type,
+    proposedTask: row.proposed_task,
+    createdAt: row.created_at,
   };
 }
 
@@ -1727,6 +1948,65 @@ export function updateSlackThreadStateStatus(
 
 export function listSlackThreadStates(channelId: string, limit = 100): SlackThreadState[] {
   return listSlackThreadStatesStmt.all(channelId, limit).map(rowToSlackThreadState);
+}
+
+export function upsertSlackBehaviorMemory(input: UpsertSlackBehaviorMemoryInput): SlackBehaviorMemory {
+  const rule = input.rule.replace(/\s+/g, " ").trim();
+  if (!rule) {
+    throw new Error("Slack behavior memory rule cannot be empty.");
+  }
+  const scope = input.scope?.trim() || "global";
+  const confidence = input.confidence ?? "medium";
+  upsertSlackBehaviorMemoryStmt.run(
+    input.type,
+    rule,
+    scope,
+    input.source?.trim() || "slack_correction",
+    input.threadChannelId ?? null,
+    input.threadTs ?? null,
+    input.jobId ?? null,
+    confidence,
+    JSON.stringify(input.metadata ?? {})
+  );
+  const row = getSlackBehaviorMemoryByKeyStmt.get(input.type, rule, scope);
+  if (!row) {
+    throw new Error(`Failed to persist Slack behavior memory: ${input.type}/${scope}`);
+  }
+  return rowToSlackBehaviorMemory(row);
+}
+
+export function listActiveSlackBehaviorMemories(limit = 25): SlackBehaviorMemory[] {
+  return listActiveSlackBehaviorMemoriesStmt.all(Math.max(1, limit)).map(rowToSlackBehaviorMemory);
+}
+
+export function recordSlackFailureReflection(input: RecordSlackFailureReflectionInput): SlackFailureReflection {
+  const userMessage = input.userMessage.replace(/\s+/g, " ").trim();
+  const whatHappened = input.whatHappened.replace(/\s+/g, " ").trim();
+  const whyItFailed = input.whyItFailed.replace(/\s+/g, " ").trim();
+  const nextBehavior = input.nextBehavior.replace(/\s+/g, " ").trim();
+  if (!userMessage || !whatHappened || !whyItFailed || !nextBehavior) {
+    throw new Error("Slack failure reflection requires message, happened, why, and next behavior.");
+  }
+  insertSlackFailureReflectionStmt.run(
+    input.channelId ?? null,
+    input.threadTs ?? null,
+    input.jobId ?? null,
+    userMessage,
+    whatHappened,
+    whyItFailed,
+    nextBehavior,
+    input.fixType,
+    input.proposedTask?.trim() || null
+  );
+  const row = listRecentSlackFailureReflectionsStmt.get(1);
+  if (!row) {
+    throw new Error("Failed to persist Slack failure reflection.");
+  }
+  return rowToSlackFailureReflection(row);
+}
+
+export function listRecentSlackFailureReflections(limit = 25): SlackFailureReflection[] {
+  return listRecentSlackFailureReflectionsStmt.all(Math.max(1, limit)).map(rowToSlackFailureReflection);
 }
 
 export function recordHeartbeat(input: HeartbeatWriteInput): HeartbeatRecord {

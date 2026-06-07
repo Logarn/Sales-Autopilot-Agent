@@ -10,10 +10,13 @@ import {
   getBrowserActionById,
   getScoredJobForSlackPreview,
   getSlackThreadStateByThreadTs,
+  listActiveSlackBehaviorMemories,
   listBrowserActions,
+  recordSlackFailureReflection,
   updateApplicationStatus,
   updateSlackThreadStateStatus,
   upsertSlackThreadState,
+  upsertSlackBehaviorMemory,
   recordApplicationRevisionRequest,
   updateBrowserActionStatus,
   updateApplicationProofPlanOverrides,
@@ -36,6 +39,14 @@ import { buildProposalContextPack } from "./skills/profileContextSkill";
 import { formatConnectsStrategy } from "./connectsStrategy";
 import { classifySlackThreadWithLlm, type SlackThreadBrainProvider, type SlackThreadBrainDecision } from "./slackThreadBrain";
 import { planSlackConversation, type SlackConversationPlan } from "./slackConversationPlanner";
+import {
+  planSlackConversationWithLlm,
+  SLACK_CONVERSATION_ALLOWED_ACTIONS,
+  SLACK_CONVERSATION_HARD_SAFETY_RULES,
+  type SlackConversationBrainDecision,
+  type SlackConversationBrainProvider,
+  type SlackConversationBrainInput,
+} from "./slackConversationBrain";
 import { formatSlackFileIntakeReply, ingestSlackFilesForThread, type SlackFileLike } from "./slackFileIntake";
 import { looksLikeProofPlanRevision, parseProofPlanOverrides, reviseProofPlanOverrides } from "./proofPlanOverrides";
 import {
@@ -577,6 +588,198 @@ function buildConversationPlanForThread(input: {
   });
 }
 
+function compactBrainText(value: string | null | undefined, limit = 1800): string | null {
+  const trimmed = value?.replace(/\s+/g, " ").trim();
+  if (!trimmed) return null;
+  return trimmed.length > limit ? `${trimmed.slice(0, limit)}...` : trimmed;
+}
+
+function buildSlackConversationBrainInput(input: {
+  state: ReturnType<typeof getSlackThreadStateByThreadTs>;
+  text: string;
+  hasSlackFiles?: boolean;
+}): SlackConversationBrainInput {
+  const state = input.state;
+  const job = state?.jobId ? getScoredJobForSlackPreview(state.jobId) : null;
+  const draft = state?.jobId ? getApplicationDraft(state.jobId) : null;
+  const applicationStatus = state?.jobId ? getApplicationStatus(state.jobId) : null;
+  const applyPlan = state?.jobId ? buildBrowserApplyPlan(state.jobId).plan : null;
+  const latestAction = state?.jobId ? latestBrowserActionForJob(state.jobId) : null;
+  const qaQueue = getProtectedQaQueueItems(1000).map((item) => ({
+    index: item.index,
+    title: item.title,
+    state: item.state,
+    proof: item.proof,
+    files: item.files,
+    connects: item.connects,
+    boost: item.boost,
+    nextAction: item.nextAction,
+  }));
+  const behaviorMemories = listActiveSlackBehaviorMemories(25).map((memory) => ({
+    type: memory.type,
+    rule: memory.rule,
+    scope: memory.scope,
+    confidence: memory.confidence,
+  }));
+  const proofVerified = Boolean(latestAction?.status === "completed" && applicationStatus === "prepared_for_qa");
+  return {
+    latestUserMessage: input.text,
+    threadHistory: [],
+    thread: state ? {
+      channelId: state.channelId,
+      threadTs: state.threadTs,
+      status: state.status,
+      jobId: state.jobId,
+      upworkUrl: state.upworkUrl,
+    } : null,
+    job: job ? {
+      id: job.id,
+      title: job.title,
+      url: job.url,
+      score: job.score,
+      matchLevel: job.matchLevel,
+      reasons: job.scoreBreakdown.reasons.slice(0, 5),
+      risks: job.scoreBreakdown.risks.slice(0, 5),
+    } : null,
+    application: { status: applicationStatus },
+    draft: {
+      exists: Boolean(draft?.proposalText.trim()),
+      status: draft?.status ?? null,
+      proposalText: compactBrainText(draft?.proposalText),
+      proposalVersion: (draft as { proposalVersion?: number } | null)?.proposalVersion ?? null,
+    },
+    proof: {
+      files: applyPlan?.attachments.map((attachment) => attachment.filePath) ?? [],
+      portfolioHighlights: applyPlan?.profileHighlights ?? [],
+      certificates: [],
+      mentionOnly: applyPlan?.mentionOnlyProof ?? [],
+      verified: proofVerified,
+      missingFiles: applyPlan?.missingLocalAssets ?? [],
+    },
+    connects: {
+      required: applyPlan?.connects.required ?? draft?.connectsStrategy?.requiredConnects ?? null,
+      boost: applyPlan?.connects.boost ?? draft?.connectsStrategy?.suggestedBoostConnects ?? null,
+      total: applyPlan?.connects.total ?? draft?.connectsStrategy?.totalConnects ?? null,
+    },
+    browserAction: latestAction ? {
+      actionType: latestAction.actionType,
+      status: latestAction.status,
+      retryable: latestAction.status === "paused" || latestAction.status === "failed",
+      lastError: latestAction.lastError,
+    } : null,
+    qaQueue,
+    behaviorMemories,
+    allowedActions: SLACK_CONVERSATION_ALLOWED_ACTIONS,
+    hardSafetyRules: SLACK_CONVERSATION_HARD_SAFETY_RULES,
+  };
+}
+
+function learnFromSlackMessage(input: {
+  channelId: string;
+  threadTs: string;
+  text: string;
+  state: ReturnType<typeof getSlackThreadStateByThreadTs>;
+}): void {
+  const text = normalizeSlackTextInput(input.text);
+  const lower = text.toLowerCase();
+  const base = {
+    threadChannelId: input.channelId,
+    threadTs: input.threadTs,
+    jobId: input.state?.jobId ?? null,
+    source: "slack_message",
+    confidence: "high" as const,
+  };
+  if (/\bcv\b/.test(lower) && /\b(show|send|post|need|used|draft|proposal|cover|wtf|what the fuck|just need)\b/.test(lower)) {
+    upsertSlackBehaviorMemory({
+      ...base,
+      type: "operator_preference",
+      rule: "When Steve says CV in an Upwork Slack thread, interpret it as the cover letter/proposal draft and show the draft or explain that no draft exists.",
+      metadata: { trigger: "cv_cover_letter" },
+    });
+  }
+  if (/\b(everything that needs to be done|do everything|handle everything|all safe prep)\b/.test(lower)) {
+    upsertSlackBehaviorMemory({
+      ...base,
+      type: "operator_preference",
+      rule: "When Steve says everything that needs to be done, treat it as approval for full safe prep: draft, files, proof, portfolio, Connects, and boost, but stop before submit.",
+      metadata: { trigger: "full_safe_prep" },
+    });
+  }
+  if (/^retry\b/.test(lower)) {
+    upsertSlackBehaviorMemory({
+      ...base,
+      type: "retry_rule",
+      rule: "When Steve says retry in a blocker thread, find the most recent paused or failed browser action for that Slack thread; do not require raw action ids.",
+      metadata: { trigger: "thread_retry" },
+    });
+  }
+  if (/\b(can|could|are you able to|would you be able to)\b.*\b(upload|attach|use)\b.*\b(file|files|pdf|pdfs|asset|assets)\b/.test(lower)) {
+    upsertSlackBehaviorMemory({
+      ...base,
+      type: "failed_intent",
+      rule: "Answer Slack file upload capability questions directly with reusable proof assets, Slack file intake requirements, and the next safe action; never show a command menu.",
+      metadata: { trigger: "file_capability_question" },
+    });
+  }
+  if (/\bproof i used\b/.test(lower) || /\bproof planned\b/.test(lower) || /\bproof verified\b/.test(lower)) {
+    upsertSlackBehaviorMemory({
+      ...base,
+      type: "proof_preference",
+      rule: "Use Proof planned until remote Chrome verifies uploaded filenames and selected portfolio labels; use Proof verified only after deterministic verification.",
+      metadata: { trigger: "proof_wording" },
+    });
+  }
+  if (/\b(wtf|what the fuck|just need)\b/.test(lower)) {
+    recordSlackFailureReflection({
+      channelId: input.channelId,
+      threadTs: input.threadTs,
+      jobId: input.state?.jobId ?? null,
+      userMessage: text,
+      whatHappened: "Steve corrected a Slack response that did not answer the actual draft/CV request.",
+      whyItFailed: "The conversation layer treated a natural correction as an unknown command instead of resolving it against the thread draft state.",
+      nextBehavior: "Acknowledge the bad response briefly, treat CV as the cover letter/proposal draft, and show the draft or explain that no draft exists.",
+      fixType: "memory",
+    });
+  }
+}
+
+function persistConversationBrainLearning(input: {
+  channelId: string;
+  threadTs: string;
+  text: string;
+  state: ReturnType<typeof getSlackThreadStateByThreadTs>;
+  decision: SlackConversationBrainDecision;
+}): void {
+  const memory = input.decision.memoryUpdate;
+  if (memory) {
+    upsertSlackBehaviorMemory({
+      type: memory.type,
+      rule: memory.rule,
+      scope: memory.scope ?? "global",
+      source: "slack_conversation_brain",
+      threadChannelId: input.channelId,
+      threadTs: input.threadTs,
+      jobId: input.state?.jobId ?? null,
+      confidence: memory.confidence ?? input.decision.confidence,
+      metadata: { intent: input.decision.intent, actions: input.decision.actions },
+    });
+  }
+  const reflection = input.decision.failureReflection;
+  if (reflection) {
+    recordSlackFailureReflection({
+      channelId: input.channelId,
+      threadTs: input.threadTs,
+      jobId: input.state?.jobId ?? null,
+      userMessage: normalizeSlackTextInput(input.text),
+      whatHappened: reflection.whatHappened,
+      whyItFailed: reflection.whyItFailed,
+      nextBehavior: reflection.nextBehavior,
+      fixType: reflection.fixType,
+      proposedTask: reflection.proposedTask,
+    });
+  }
+}
+
 export function applySlackThreadRevision(input: {
   channelId: string;
   threadTs: string;
@@ -1058,16 +1261,228 @@ function resolveRetryAction(input: {
   return { action: null, reason: "I do not have a paused or failed browser step tied to this thread yet. If this is a prepared application, ask “what’s ready?” and then “retry 1” for the blocked queue item." };
 }
 
+async function executeConversationBrainDecision(params: {
+  decision: SlackConversationBrainDecision;
+  state: ReturnType<typeof getSlackThreadStateByThreadTs>;
+  channelId: string;
+  threadTs: string;
+  text: string;
+  client: App["client"];
+  copyProvider?: SlackCopyProvider;
+  focusQaTab?: (input: { jobId?: string | null; index?: number; query?: string | null }) => Promise<ProtectedQaFocusResult>;
+}): Promise<boolean> {
+  const { decision } = params;
+  if (decision.intent === "ignore") {
+    return true;
+  }
+  if (decision.confidence === "low" && decision.intent !== "clarify") {
+    return false;
+  }
+
+  if (decision.intent === "qa_queue" || decision.actions.includes("show_qa_queue")) {
+    const text = await userFacingSlackCopy({
+      deterministicText: formatProtectedQaQueueReply(),
+      userMessage: params.text,
+      intent: "qa_queue",
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return true;
+  }
+
+  if (decision.intent === "focus_qa_tab" || decision.actions.includes("focus_qa_tab")) {
+    const focus = await (params.focusQaTab ?? focusProtectedQaApplicationTab)({
+      jobId: params.state?.jobId ?? null,
+      index: decision.qaIndex ?? undefined,
+      query: decision.qaQuery ?? null,
+    });
+    const text = await userFacingSlackCopy({
+      deterministicText: focus.text,
+      userMessage: params.text,
+      intent: "focus_qa_tab",
+      context: { jobId: params.state?.jobId ?? null, ok: focus.ok },
+      preservePhrases: focus.text.includes("Final submit is still untouched") ? ["Final submit is still untouched."] : [],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    if (focus.ok && params.state) {
+      updateSlackThreadStateStatus(params.state.channelId, params.state.threadTs, "status_checked");
+    }
+    return true;
+  }
+
+  if (decision.intent === "retry_action" || decision.actions.includes("retry_browser_action")) {
+    if (!params.state && decision.actionId) {
+      const queueItem = getProtectedQaQueueItems(1000).find((item) => item.index === decision.actionId);
+      const action = queueItem?.action ?? getBrowserActionById(decision.actionId);
+      if (!action) {
+        const text = await userFacingSlackCopy({
+          deterministicText: "I could not find that browser step or QA queue item anymore. Ask “what’s ready?” to refresh the queue.",
+          userMessage: params.text,
+          intent: "retry_action",
+          copyProvider: params.copyProvider,
+        });
+        await postThreadReply(params.client, params.channelId, params.threadTs, text);
+        return true;
+      }
+      if (action.status !== "paused" && action.status !== "failed") {
+        const text = await userFacingSlackCopy({
+          deterministicText: `That browser work is ${action.status}, so there is nothing to retry. Ask “what’s ready?” to see the current queue.`,
+          userMessage: params.text,
+          intent: "retry_action",
+          context: { actionStatus: action.status },
+          copyProvider: params.copyProvider,
+        });
+        await postThreadReply(params.client, params.channelId, params.threadTs, text);
+        return true;
+      }
+      updateBrowserActionStatus(action.id, "pending", "Slack conversation brain queue retry request.");
+      const text = await userFacingSlackCopy({
+        deterministicText: "Retry queued — I’ll re-check the remote Chrome page and stop before submit.",
+        userMessage: params.text,
+        intent: "retry_action",
+        preservePhrases: ["stop before submit"],
+        copyProvider: params.copyProvider,
+      });
+      await postThreadReply(params.client, params.channelId, params.threadTs, text);
+      return true;
+    }
+
+    if (!params.state) {
+      return false;
+    }
+    const resolved = resolveRetryAction({ state: params.state, actionId: decision.actionId ?? undefined });
+    const action = resolved.action;
+    if (!action) {
+      const text = await userFacingSlackCopy({
+        deterministicText: resolved.reason,
+        userMessage: params.text,
+        intent: "retry_action",
+        context: { jobId: params.state.jobId, threadStatus: params.state.status },
+        copyProvider: params.copyProvider,
+      });
+      await postThreadReply(params.client, params.channelId, params.threadTs, text);
+      return true;
+    }
+    updateBrowserActionStatus(action.id, "pending", "Slack conversation brain retry request.");
+    const session = getBrowserSessionStatus();
+    if (session.blocked) {
+      const clearResult = await clearBrowserManualAttention(action.id);
+      logger.info(`Cleared browser manual attention for action #${action.id}; state=${clearResult.state}.`);
+    }
+    updateSlackThreadStateStatus(params.state.channelId, params.state.threadTs, "retry_requested");
+    const text = await userFacingSlackCopy({
+      deterministicText: "Retry queued — I’ll re-check the remote Chrome page and stop before submit.",
+      userMessage: params.text,
+      intent: "retry_action",
+      context: { jobId: params.state.jobId, threadStatus: params.state.status },
+      preservePhrases: ["stop before submit"],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return true;
+  }
+
+  if (!params.state) {
+    return false;
+  }
+
+  if (decision.intent === "revise_proof_plan" || decision.actions.includes("queue_proof_recheck")) {
+    return false;
+  }
+  if (decision.intent === "revise_draft" || decision.actions.includes("revise_draft")) {
+    return false;
+  }
+  if (decision.intent === "debug_details" || decision.actions.includes("show_debug_details")) {
+    return false;
+  }
+  if (decision.intent === "reject" || decision.actions.includes("mark_skip")) {
+    return false;
+  }
+  if (decision.intent === "mark_submitted" || decision.actions.includes("mark_submitted")) {
+    return false;
+  }
+  if (decision.intent === "record_outcome" || decision.actions.includes("record_outcome")) {
+    return false;
+  }
+
+  if (
+    decision.intent === "answer_file_capability_question" ||
+    decision.intent === "show_cover_letter" ||
+    decision.intent === "full_safe_prep" ||
+    decision.intent === "draft_preview_first" ||
+    decision.intent === "status_summary" ||
+    decision.intent === "explain_risk" ||
+    decision.intent === "explain_proof" ||
+    decision.intent === "explain_boost" ||
+    decision.intent === "clarify" ||
+    decision.actions.includes("queue_prepare_application") ||
+    decision.actions.includes("send_draft_preview")
+  ) {
+    const plan = buildConversationPlanForThread({ state: params.state, text: params.text });
+    await executeConversationPlan({
+      plan,
+      state: params.state,
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      client: params.client,
+      userMessage: params.text,
+      copyProvider: params.copyProvider,
+    });
+    return true;
+  }
+
+  return false;
+}
+
 export async function handleThreadCommand(params: {
   channelId: string;
   threadTs: string;
   text: string;
   client: App["client"];
   intentProvider?: SlackThreadBrainProvider;
+  conversationProvider?: SlackConversationBrainProvider;
   copyProvider?: SlackCopyProvider;
   focusQaTab?: (input: { jobId?: string | null; index?: number; query?: string | null }) => Promise<ProtectedQaFocusResult>;
 }): Promise<void> {
   const state = getSlackThreadStateByThreadTs(params.channelId, params.threadTs);
+  learnFromSlackMessage({
+    channelId: params.channelId,
+    threadTs: params.threadTs,
+    text: params.text,
+    state,
+  });
+
+  const conversationBrain = await planSlackConversationWithLlm(
+    buildSlackConversationBrainInput({
+      state,
+      text: params.text,
+    }),
+    params.conversationProvider,
+  );
+  if (conversationBrain.ok) {
+    persistConversationBrainLearning({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      text: params.text,
+      state,
+      decision: conversationBrain.decision,
+    });
+    const handled = await executeConversationBrainDecision({
+      decision: conversationBrain.decision,
+      state,
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      text: params.text,
+      client: params.client,
+      copyProvider: params.copyProvider,
+      focusQaTab: params.focusQaTab,
+    });
+    if (handled) {
+      return;
+    }
+  }
+
   const command = await resolveSlackThreadCommand({
     channelId: params.channelId,
     threadTs: params.threadTs,

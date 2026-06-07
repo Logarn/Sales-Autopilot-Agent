@@ -53,7 +53,7 @@ async function runTests(): Promise<void> {
     buildDraftPreviewFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string };
     buildSlackSocketStartupError: (input: { socketEnabled: boolean; botToken: string; appToken: string }) => string | null;
     handleSlackSocketTextEvent: (event: { channel: string; ts: string; text?: string; thread_ts?: string; client_msg_id?: string; event_id?: string; event_ts?: string; bot_id?: string; subtype?: string; files?: any[] }, client: any) => Promise<void>;
-    handleThreadCommand: (input: { channelId: string; threadTs: string; text: string; client: any; intentProvider?: any; copyProvider?: any; focusQaTab?: any }) => Promise<void>;
+    handleThreadCommand: (input: { channelId: string; threadTs: string; text: string; client: any; intentProvider?: any; conversationProvider?: any; copyProvider?: any; focusQaTab?: any }) => Promise<void>;
     parseSlackThreadCommand: (value: string) => {
       type: string;
       rawText: string;
@@ -66,14 +66,16 @@ async function runTests(): Promise<void> {
     queuePrepareDraftFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string; actionId?: number };
     resetSlackSocketEventDedupeForTests: () => void;
   };
-  const { closeDb, getApplicationDraft, getApplicationProofPlanOverrides, getApplicationStatus, getBrowserActionById, getSlackThreadStateByThreadTs, listApplicationAssets, markJobSeen, mergeBrowserActionPayload, upsertSlackThreadState, listBrowserActions, updateApplicationStatus, updateBrowserActionStatus } = require("./db") as {
+  const { closeDb, getApplicationDraft, getApplicationProofPlanOverrides, getApplicationStatus, getBrowserActionById, getSlackThreadStateByThreadTs, listActiveSlackBehaviorMemories, listApplicationAssets, listRecentSlackFailureReflections, markJobSeen, mergeBrowserActionPayload, upsertSlackThreadState, listBrowserActions, updateApplicationStatus, updateBrowserActionStatus } = require("./db") as {
     closeDb: () => void;
     getApplicationDraft: (jobId: string) => { proposalText: string } | null;
     getApplicationProofPlanOverrides: (jobId: string) => any;
     getApplicationStatus: (jobId: string) => string | null;
     getBrowserActionById: (id: number) => { payload: Record<string, unknown>; status: string } | null;
     getSlackThreadStateByThreadTs: (channelId: string, threadTs: string) => { status: string } | null;
+    listActiveSlackBehaviorMemories: (limit?: number) => Array<{ type: string; rule: string; source: string }>;
     listApplicationAssets: (jobId: string) => Array<{ originalName: string; relativePath: string | null; source: string }>;
+    listRecentSlackFailureReflections: (limit?: number) => Array<{ whatHappened: string; whyItFailed: string; nextBehavior: string; proposedTask?: string | null }>;
     markJobSeen: (job: any, notified: boolean) => void;
     mergeBrowserActionPayload: (id: number, patch: Record<string, unknown>) => unknown;
     upsertSlackThreadState: (input: any) => unknown;
@@ -377,6 +379,37 @@ async function runTests(): Promise<void> {
     assert(frustratedCvReplies.some((reply) => reply.includes(prepareJob.applicationDraft.proposalText.slice(0, 80))), "Frustrated CV reply should include the stored draft.");
     assert(!frustratedCvReplies.join("\n").includes("I can help with the draft, files, proof, boost, or status"), "Frustrated CV reply must not show the generic command menu.");
     assert(!/action\s*#?\d+|Channel message:|Thread:/i.test(frustratedCvReplies.join("\n")), "Frustrated CV reply must not expose raw ids.");
+    assert(listActiveSlackBehaviorMemories(20).some((memory) => memory.rule.includes("When Steve says CV")), "Frustrated CV correction should persist a behavior memory.");
+    assert(listRecentSlackFailureReflections(20).some((reflection) => reflection.nextBehavior.includes("treat CV as the cover letter")), "Frustrated CV correction should persist a failure reflection.");
+
+    const brainCvReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "Wtf? I just need the CV you used.",
+      conversationProvider: fakeIntentProvider({
+        intent: "show_cover_letter",
+        confidence: "high",
+        reply: "You’re right — I should have shown the draft.",
+        actions: ["none"],
+        memoryUpdate: {
+          type: "operator_preference",
+          rule: "LLM brain: CV means cover letter/proposal draft in Upwork Slack threads.",
+          scope: "global",
+          confidence: "high",
+        },
+        failureReflection: {
+          whatHappened: "Steve corrected an unhelpful command-router reply.",
+          whyItFailed: "The bot did not resolve CV against the stored draft state.",
+          nextBehavior: "Show the draft directly, then offer revision or retry.",
+          fixType: "memory",
+        },
+      }),
+      client: { chat: { postMessage: async (payload: { text: string }) => brainCvReplies.push(payload.text) } },
+    });
+    assert(brainCvReplies.some((reply) => reply.includes(prepareJob.applicationDraft.proposalText.slice(0, 80))), "Conversation brain show-cover-letter decision should still return the stored draft.");
+    assert(listActiveSlackBehaviorMemories(50).some((memory) => memory.rule.includes("LLM brain: CV means cover letter")), "Conversation brain memory update should be persisted.");
+    assert(listRecentSlackFailureReflections(50).some((reflection) => reflection.whatHappened.includes("command-router reply")), "Conversation brain failure reflection should be persisted.");
 
     const everythingJob = {
       ...prepareJob,
@@ -404,6 +437,47 @@ async function runTests(): Promise<void> {
     });
     assert(everythingReplies.some((reply) => reply.includes("all safe prep steps") && reply.includes("stop before submit")), "Everything-that-needs-to-be-done should authorize safe prep and preserve submit boundary.");
     assert(listBrowserActions(null, 1000).some((action) => action.jobId === everythingJob.id && action.actionType === "prepare_application_review"), "Everything-that-needs-to-be-done should queue prepare_application_review.");
+    assert(listActiveSlackBehaviorMemories(50).some((memory) => memory.rule.includes("everything that needs to be done")), "Everything safe-prep approval should persist a behavior memory.");
+
+    const brainEverythingJob = {
+      ...prepareJob,
+      id: "everything-brain-safe-prep-job",
+      applicationDraft: {
+        ...prepareJob.applicationDraft,
+        jobId: "everything-brain-safe-prep-job",
+      },
+    };
+    markJobSeen(brainEverythingJob, false);
+    upsertSlackThreadState({
+      channelId: "CBRAIN",
+      messageTs: "119.001",
+      threadTs: "119.001",
+      upworkUrl: brainEverythingJob.url,
+      jobId: brainEverythingJob.id,
+      status: "packet_sent",
+    });
+    const brainEverythingReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "CBRAIN",
+      threadTs: "119.001",
+      text: "Everything that needs to be done.",
+      conversationProvider: fakeIntentProvider({
+        intent: "full_safe_prep",
+        confidence: "high",
+        reply: "Got it — I’ll do all safe prep and stop before submit.",
+        actions: ["queue_prepare_application"],
+        memoryUpdate: {
+          type: "operator_preference",
+          rule: "LLM brain: everything means full safe prep, never final submit.",
+          scope: "global",
+          confidence: "high",
+        },
+      }),
+      client: { chat: { postMessage: async (payload: { text: string }) => brainEverythingReplies.push(payload.text) } },
+    });
+    assert(brainEverythingReplies.some((reply) => reply.includes("all safe prep steps") && reply.includes("stop before submit")), "Conversation brain full-safe-prep should use the safe prep wording.");
+    assert(listBrowserActions(null, 1000).some((action) => action.jobId === brainEverythingJob.id && action.actionType === "prepare_application_review"), "Conversation brain full-safe-prep should queue prepare_application_review.");
+    assert(listActiveSlackBehaviorMemories(50).some((memory) => memory.rule.includes("LLM brain: everything means full safe prep")), "Conversation brain full-safe-prep memory update should be persisted.");
 
     const fileIntakeReplies: string[] = [];
     const originalFetch = global.fetch;
@@ -721,6 +795,7 @@ async function runTests(): Promise<void> {
     assert(getBrowserActionById(prepareResult.actionId!)?.status === "pending", "Exact Retry should find the latest failed browser action for the thread.");
     assert(exactRetryReplies.some((reply) => reply.includes("Retry queued") && reply.includes("stop before submit")), "Exact Retry should not say no paused action found when one exists.");
     assert(!/No paused|No paused or failed|action\s*#?\d+/i.test(exactRetryReplies.join("\n")), "Exact Retry should avoid the old failure wording and raw ids.");
+    assert(listActiveSlackBehaviorMemories(50).some((memory) => memory.type === "retry_rule" && memory.rule.includes("most recent paused or failed browser action")), "Retry correction should persist the thread retry rule.");
 
     updateBrowserActionStatus(prepareResult.actionId!, "failed", "field_preparation_incomplete");
     const directRetryReplies: string[] = [];
