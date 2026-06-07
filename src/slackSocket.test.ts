@@ -120,6 +120,22 @@ async function runTests(): Promise<void> {
     },
   };
 
+  const operatorCopyReplies: string[] = [];
+  fakeCopyRequests.length = 0;
+  await handleThreadCommand({
+    channelId: "C123",
+    threadTs: "operator.001",
+    text: "pause hunting",
+    copyProvider: fakeCopyProvider,
+    operatorDeps: {
+      setHuntingPaused: () => ({ huntingPaused: true, reason: "Paused from Slack.", updatedAt: new Date(0).toISOString() }),
+    },
+    client: { chat: { postMessage: async (payload: { text: string }) => operatorCopyReplies.push(payload.text) } },
+  });
+  assert(operatorCopyReplies.some((reply) => reply.startsWith("Kimi copy:") && reply.includes("I paused hunting")), "Operator-control replies should route through the Slack copywriter.");
+  const operatorCopyPayload = JSON.parse((fakeCopyRequests[fakeCopyRequests.length - 1] as any).messages[1].content);
+  assert(operatorCopyPayload.intent === "operator_pause_hunting", "Operator-control copywriter request should preserve the operator intent.");
+
   try {
     const urlTests: TestCase[] = [
       {

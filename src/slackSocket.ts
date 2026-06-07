@@ -78,8 +78,8 @@ import {
 } from "./browserQaWorkspace";
 import { rewriteSlackCopyWithKimi, type SlackCopyProvider } from "./slackCopywriter";
 import {
+  buildSlackOperatorReply,
   parseSlackOperatorIntent,
-  tryHandleSlackOperatorCommand,
   type SlackOperatorControlDeps,
 } from "./slackOperatorControlPlane";
 import type { ApplicationStatus } from "./types";
@@ -1651,14 +1651,30 @@ export async function handleThreadCommand(params: {
   operatorDeps?: SlackOperatorControlDeps;
 }): Promise<void> {
   const state = getSlackThreadStateByThreadTs(params.channelId, params.threadTs);
-  const handledOperator = await tryHandleSlackOperatorCommand({
-    text: params.text,
-    channelId: params.channelId,
-    threadTs: params.threadTs,
-    client: params.client,
-    deps: params.operatorDeps,
-  });
-  if (handledOperator) {
+  const operatorIntent = parseSlackOperatorIntent(params.text);
+  if (operatorIntent) {
+    const deterministicText = await buildSlackOperatorReply(operatorIntent, params.operatorDeps);
+    const preservePhrases = [
+      deterministicText.includes("Final submit remains manual") ? "Final submit remains manual" : null,
+      deterministicText.includes("did not click through login, CAPTCHA, security checks, or submit anything")
+        ? "did not click through login, CAPTCHA, security checks, or submit anything"
+        : null,
+      deterministicText.includes("did not paste through VNC or click submit")
+        ? "did not paste through VNC or click submit"
+        : null,
+    ].filter((phrase): phrase is string => Boolean(phrase));
+    const text = await userFacingSlackCopy({
+      deterministicText,
+      userMessage: params.text,
+      intent: `operator_${operatorIntent.type}`,
+      context: {
+        operatorIntent: operatorIntent.type,
+        hasTrackedThread: Boolean(state),
+      },
+      preservePhrases,
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
