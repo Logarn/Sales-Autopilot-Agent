@@ -204,13 +204,17 @@ async function runTests(): Promise<void> {
       { name: "interview booked outcome", input: "interview booked", expectType: "record_outcome", outcomeStatus: "interview" },
       { name: "hired outcome", input: "hired", expectType: "record_outcome", outcomeStatus: "hired" },
       { name: "lost outcome", input: "lost", expectType: "record_outcome", outcomeStatus: "lost" },
+      { name: "memory query", input: "what did you learn?", expectType: "memory_query" },
+      { name: "proof memory query", input: "what proof is working?", expectType: "memory_query" },
+      { name: "remember sales learning", input: "remember this: fashion Klaviyo jobs should check Fly Boutique first", expectType: "memory_remember", instruction: "fashion Klaviyo jobs should check Fly Boutique first" },
+      { name: "forget sales learning", input: "forget that", expectType: "memory_forget", instruction: "latest relevant memory" },
       { name: "unknown", input: "something else", expectType: "unknown" },
     ];
 
     for (const t of commandTests) {
       const parsed = parseSlackThreadCommand(t.input);
       assert(parsed.type === t.expectType, `${t.name}: expected type=${t.expectType}, got=${parsed.type}`);
-      if (t.expectType === "revise" || t.expectType === "proof_revision") {
+      if (t.expectType === "revise" || t.expectType === "proof_revision" || t.expectType === "memory_remember" || t.expectType === "memory_forget") {
         assert(parsed.instruction === t.instruction, `${t.name}: expected instruction=${t.instruction}, got=${parsed.instruction}`);
       }
       if (t.expectType === "retry_action") {

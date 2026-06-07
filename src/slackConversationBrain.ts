@@ -150,6 +150,19 @@ export interface SlackConversationBrainInput {
     scope: string;
     confidence: SlackConversationBrainConfidence;
   }>;
+  salesLearning?: {
+    relevantMemories: Array<{
+      type: string;
+      scope: string;
+      subject: string;
+      hypothesis: string;
+      confidence: string;
+      evidenceCount: number;
+      status: string;
+      updatedAt: string;
+    }>;
+    guidance: string[];
+  };
   allowedActions: SlackConversationBrainAction[];
   hardSafetyRules: string[];
 }
@@ -399,6 +412,7 @@ function buildPromptInput(input: SlackConversationBrainInput): Record<string, un
     browserAction: input.browserAction,
     qaQueue: input.qaQueue.slice(0, 5),
     behaviorMemories: input.behaviorMemories.slice(0, 25),
+    salesLearning: input.salesLearning ?? { relevantMemories: [], guidance: [] },
     allowedActions: input.allowedActions,
     hardSafetyRules: input.hardSafetyRules,
     soul: buildSoulPromptContext("slack_conversation"),
@@ -438,6 +452,8 @@ export async function planSlackConversationWithLlm(
           "Never click, promise, or claim final submit. Final submit remains manual.",
           "Never bypass CAPTCHA/security/browser checks.",
           "If Steve corrects you, include a concise memoryUpdate rule. If code is needed, include failureReflection with fixType code_pr and proposedTask.",
+          "Use salesLearning memories as evidence-weighted hypotheses for sales judgment, not rigid rules.",
+          "Current user instructions override learned preferences unless they conflict with hard safety.",
           buildSoulPromptSection("slack_conversation"),
         ].join("\n"),
       },

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { JobPosting, ScoredJob } from "../types";
 import { buildSoulRuntimeGuidance } from "../soul";
+import { buildSalesLearningPromptContext } from "../salesLearningMemory";
 
 export type AssetSafety = boolean | "needs_review";
 
@@ -69,6 +70,7 @@ export interface PortfolioSelectionResult {
   selectedVideoLinks: PortfolioLink[];
   warnings: string[];
   soulGuidance?: string[];
+  salesLearningGuidance?: string[];
 }
 
 interface ProofBankFile {
@@ -261,6 +263,12 @@ export function selectPortfolioAssetsForJob(job: JobPosting | ScoredJob): Portfo
   const assets = loadPortfolioAssets();
   const figmaLinks = loadFigmaLinks();
   const videoLinks = loadVideoLinks();
+  const salesLearning = buildSalesLearningPromptContext({
+    job: "score" in job ? job : null,
+    text: [job.title, job.description, job.skills.join(" ")].join("\n"),
+    types: ["proof_preference", "proposal_style", "source_quality"],
+    limit: 5,
+  });
 
   const result: PortfolioSelectionResult = {
     matchedThemes: [],
@@ -274,6 +282,7 @@ export function selectPortfolioAssetsForJob(job: JobPosting | ScoredJob): Portfo
     selectedVideoLinks: [],
     warnings: [],
     soulGuidance: buildSoulRuntimeGuidance("proof_portfolio_selection"),
+    salesLearningGuidance: salesLearning.relevantMemories.map((memory) => `${memory.type}: ${memory.hypothesis}`),
   };
 
   const addTheme = (theme: string) => {

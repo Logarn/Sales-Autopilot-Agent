@@ -10,6 +10,10 @@ import {
   updateApplicationStatus,
 } from "./db";
 import { logger } from "./logger";
+import {
+  recordApplicationOutcomeLearning,
+  recordBoostDecisionSignal,
+} from "./salesLearningMemory";
 import { ApplicationStatus } from "./types";
 
 const VALID_STATUSES: ApplicationStatus[] = [
@@ -145,6 +149,12 @@ function setStatus(): void {
     process.exitCode = 1;
     return;
   }
+  recordApplicationOutcomeLearning({
+    jobId,
+    outcome: status,
+    note: note ?? `Status updated from application CLI to ${status}.`,
+    source: "application_cli_status",
+  });
   logger.info(`Updated ${jobId} -> ${status}`);
 }
 
@@ -217,6 +227,20 @@ function recordSubmission(): void {
     process.exitCode = 1;
     return;
   }
+  recordBoostDecisionSignal({
+    jobId,
+    requiredConnects,
+    boostConnects,
+    totalConnects: requiredConnects + boostConnects,
+    boostRank,
+    source: "application_cli_submission",
+  });
+  recordApplicationOutcomeLearning({
+    jobId,
+    outcome: "applied",
+    note: note ?? "Application submission recorded from CLI.",
+    source: "application_cli_submission",
+  });
   logger.info(`Recorded application submission for ${jobId}`);
 }
 

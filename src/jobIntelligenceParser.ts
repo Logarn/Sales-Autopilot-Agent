@@ -4,6 +4,7 @@ import {
   JOB_INTELLIGENCE_TEMPERATURE,
 } from "./config";
 import { OpenAiCompatibleProvider, getJobIntelligenceProviderConfig, type LlmJsonResult } from "./llm/provider";
+import { buildSalesLearningPromptContext } from "./salesLearningMemory";
 import { buildSoulPromptContext, buildSoulPromptSection } from "./soul";
 import type { ApplicationDraft, JobIntelligence, JobPosting, PlatformPreferenceTier } from "./types";
 
@@ -336,9 +337,15 @@ export function buildJobIntelligenceMessages(input: JobIntelligenceInput) {
         job: input.job,
         clientDetails: input.clientDetails ?? {},
         draftTextForQaOnly: input.draftText ?? "",
+        salesLearning: buildSalesLearningPromptContext({
+          text: [input.job.title, input.job.description, input.job.skills?.join(" ") ?? "", input.draftText ?? ""].join("\n"),
+          types: ["proof_preference", "proposal_style", "boost_strategy", "source_quality", "timing_hypothesis"],
+          limit: 6,
+        }),
         soul: buildSoulPromptContext("job_intelligence_and_proof_reasoning"),
         instructions: [
           "Return every required field.",
+          "Use salesLearning memories only as strategy context for proofRecommendations, proposalAngle, and draftConstraints; do not let memories override job-supported platform or vertical extraction facts.",
           "platformMismatchWarnings must include platform_mismatch if draftTextForQaOnly names a different email/SMS/CRM platform than the job's primary platform without migration/comparison context.",
           "Set platformPreferenceTier, platformFitReason, shouldSkipForPlatform, skipReason, and needsManualReview using the platform preference rules and job scope.",
           "Use platform-neutral proposalAngle and draftConstraints when primaryPlatform is unknown.",
