@@ -28,6 +28,12 @@ import {
   extractUpworkJobIdFromUrl,
   isSupportedUpworkJobUrl,
 } from "./browserCapture";
+import { buildConfiguredDiscoverySources } from "./browserDiscoveryTool";
+import {
+  clearPausedDiscoverySourceHealth,
+  formatDiscoverySourceHealthForSlack,
+  pauseDiscoverySources,
+} from "./browserDiscoverySourceHealth";
 import {
   SLACK_APP_TOKEN,
   SLACK_BOT_TOKEN,
@@ -126,6 +132,11 @@ export type SlackSocketParsedCommandType =
   | "focus_qa_tab"
   | "prep_issue_report"
   | "retry_action"
+  | "discovery_keep_hunting"
+  | "discovery_retry_sources"
+  | "discovery_best_matches_only"
+  | "discovery_block_status"
+  | "discovery_clear_browser"
   | "mark_submitted"
   | "record_outcome"
   | "memory_query"
@@ -323,6 +334,21 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
   const qaQueueMatch = /\b(?:what[’']?s ready|what is ready|show qa queue|qa queue|what is blocked|what[’']?s blocked)\b/i.test(commandText);
   if (qaQueueMatch) {
     return { type: "qa_queue", rawText: normalized, source: "fallback" };
+  }
+  if (/\b(?:keep hunting|continue hunting|keep looking|keep searching|keep going)\b/i.test(commandText)) {
+    return { type: "discovery_keep_hunting", rawText: normalized, source: "fallback" };
+  }
+  if (/\b(?:try|retry)\b.*\b(?:search|searches|blocked search|blocked searches)\b/i.test(commandText)) {
+    return { type: "discovery_retry_sources", rawText: normalized, source: "fallback" };
+  }
+  if (/\b(?:what got blocked|what is blocked|what's blocked|blocked search|blocked searches|which search|which searches)\b/i.test(commandText)) {
+    return { type: "discovery_block_status", rawText: normalized, source: "fallback" };
+  }
+  if (/\b(?:stick to|use only|only use|best matches only|just use)\b.*\bbest matches\b/i.test(commandText)) {
+    return { type: "discovery_best_matches_only", rawText: normalized, source: "fallback" };
+  }
+  if (/\b(?:i cleared chrome|chrome is clear|cleared chrome|remote browser is clear|browser is clear|done clearing chrome)\b/i.test(commandText)) {
+    return { type: "discovery_clear_browser", rawText: normalized, source: "fallback" };
   }
   const focusIndexMatch = commandText.match(/^(?:open|bring up|show|focus|retry)\s+(?:the\s+)?(?:(first|second|third|fourth|fifth)|#?(\d+))(?:\s+(?:one|application|draft|in chrome))?$/i);
   const ordinalIndex: Record<string, number> = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5 };
@@ -576,6 +602,64 @@ function latestBrowserActionForJob(jobId: string) {
 
 function isDebugStatusRequest(value: string): boolean {
   return /\b(debug|details|technical details|raw status|full details|dump)\b/i.test(value);
+}
+
+function isDiscoveryHuntingCommand(type: SlackSocketParsedCommandType): boolean {
+  return type === "discovery_keep_hunting" ||
+    type === "discovery_retry_sources" ||
+    type === "discovery_best_matches_only" ||
+    type === "discovery_block_status" ||
+    type === "discovery_clear_browser";
+}
+
+async function handleDiscoveryHuntingCommand(params: {
+  command: ParsedSlackSocketCommand;
+  text: string;
+  channelId: string;
+  threadTs: string;
+  client: App["client"];
+}): Promise<void> {
+  if (params.command.type === "discovery_block_status") {
+    await postThreadReply(params.client, params.channelId, params.threadTs, formatDiscoverySourceHealthForSlack({ debug: isDebugStatusRequest(params.text) }));
+    return;
+  }
+
+  if (params.command.type === "discovery_keep_hunting") {
+    await postThreadReply(
+      params.client,
+      params.channelId,
+      params.threadTs,
+      "I’ll keep hunting from the safer feed. If Upwork checks one search page, I’m leaving that one alone for now."
+    );
+    return;
+  }
+
+  if (params.command.type === "discovery_best_matches_only") {
+    pauseDiscoverySources(buildConfiguredDiscoverySources(), {
+      exceptSourceTypes: ["best_matches"],
+      reason: "operator_requested_best_matches_only",
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, "I’ll stick to Best Matches for now and leave the other searches alone.");
+    return;
+  }
+
+  if (params.command.type === "discovery_clear_browser") {
+    clearPausedDiscoverySourceHealth();
+    const session = getBrowserSessionStatus();
+    if (session.blocked) {
+      clearBrowserManualAttention();
+    }
+    await postThreadReply(
+      params.client,
+      params.channelId,
+      params.threadTs,
+      "Got it — I’ll try the blocked search again and keep hunting. Chrome itself is clear, and final submit remains manual."
+    );
+    return;
+  }
+
+  clearPausedDiscoverySourceHealth();
+  await postThreadReply(params.client, params.channelId, params.threadTs, "I’ll try the searches again and keep hunting from Best Matches if one checks out.");
 }
 
 function buildShortStatusReply(state: NonNullable<ReturnType<typeof getSlackThreadStateByThreadTs>>): string {
@@ -1602,6 +1686,17 @@ export async function handleThreadCommand(params: {
     if (focus.ok && state) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "status_checked");
     }
+    return;
+  }
+
+  if (isDiscoveryHuntingCommand(command.type)) {
+    await handleDiscoveryHuntingCommand({
+      command,
+      text: params.text,
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      client: params.client,
+    });
     return;
   }
 

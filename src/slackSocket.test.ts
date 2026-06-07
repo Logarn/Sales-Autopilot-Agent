@@ -29,6 +29,14 @@ function cleanupDatabase(path: string): void {
       // ignore cleanup failures
     }
   }
+  const sourceHealthPath = resolve(dirname(path), "browser-discovery-source-health.json");
+  if (existsSync(sourceHealthPath)) {
+    try {
+      unlinkSync(sourceHealthPath);
+    } catch {
+      // ignore cleanup failures
+    }
+  }
   const dir = dirname(path);
   if (existsSync(dir)) {
     try {
@@ -86,6 +94,9 @@ async function runTests(): Promise<void> {
   const { recordBrowserManualAttention } = require("./browserSession") as {
     recordBrowserManualAttention: (input: { reason: string; actionId?: number; jobId?: string; url?: string | null; title?: string | null }) => Promise<unknown>;
   };
+  const { markDiscoverySourceChallenge } = require("./browserDiscoverySourceHealth") as {
+    markDiscoverySourceChallenge: (source: { sourceType: string; sourceLabel: string; url: string }, reason: string, now?: Date) => unknown;
+  };
   const { buildApplicationDraft } = require("./agent") as { buildApplicationDraft: (job: any) => any };
   const { buildBrowserApplyPlan } = require("./browserApply") as { buildBrowserApplyPlan: (jobId: string) => { plan: any } };
   const { scoreJob } = require("./filter") as { scoreJob: (job: any) => any };
@@ -94,6 +105,10 @@ async function runTests(): Promise<void> {
     isAvailable: () => true,
     completeJson: async () => ({ ok: true, data: decision }),
   });
+  const unavailableProvider = {
+    isAvailable: () => false,
+    completeJson: async () => ({ ok: false, error: "disabled" }),
+  };
   const fakeCopyRequests: unknown[] = [];
   const fakeCopyProvider = {
     isAvailable: () => true,
@@ -198,6 +213,12 @@ async function runTests(): Promise<void> {
       { name: "retry action", input: "retry 123", expectType: "retry_action", actionId: 123 },
       { name: "natural retry exact", input: "Retry.", expectType: "retry_action" },
       { name: "natural retry preparation", input: "Retry preparation.", expectType: "retry_action" },
+      { name: "keep hunting", input: "keep hunting", expectType: "discovery_keep_hunting" },
+      { name: "try searches again", input: "try the searches again", expectType: "discovery_retry_sources" },
+      { name: "retry blocked search", input: "retry the blocked search", expectType: "discovery_retry_sources" },
+      { name: "stick to Best Matches", input: "stick to Best Matches", expectType: "discovery_best_matches_only" },
+      { name: "what got blocked", input: "what got blocked?", expectType: "discovery_block_status" },
+      { name: "cleared Chrome", input: "I cleared Chrome", expectType: "discovery_clear_browser" },
       { name: "mark submitted", input: "mark submitted", expectType: "mark_submitted" },
       { name: "got reply outcome", input: "got reply", expectType: "record_outcome", outcomeStatus: "replied" },
       { name: "client replied outcome", input: "client replied", expectType: "record_outcome", outcomeStatus: "replied" },
@@ -754,6 +775,59 @@ async function runTests(): Promise<void> {
       },
     });
     assert(blockedReplies.some((reply) => reply.includes("Quick blocker: Upwork is asking for a human check")), "Blocked prep should explain the browser blocker in-thread.");
+
+    const blockedSearchSource = {
+      sourceType: "saved_search",
+      sourceLabel: "Saved Search - Klaviyo DTC",
+      url: "https://www.upwork.com/nx/search/jobs/?q=Klaviyo+DTC&sort=recency",
+    };
+    markDiscoverySourceChallenge(blockedSearchSource, "captcha_or_security_challenge", new Date());
+    const sourceStatusReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "CDISC",
+      threadTs: "900.100",
+      text: "what got blocked?",
+      conversationProvider: unavailableProvider,
+      intentProvider: unavailableProvider,
+      client: { chat: { postMessage: async (payload: { text: string }) => sourceStatusReplies.push(payload.text) } },
+    });
+    assert(sourceStatusReplies.some((reply) => reply.includes("Upwork checked one search page")), "Blocked-search status should use human copy.");
+    assert(sourceStatusReplies.some((reply) => reply.includes("I’ll keep hunting from the safer feed")), "Blocked-search status should promise continued safer hunting.");
+    assert(!/source cooldown|manual_attention_required|sourceId|https?:\/\/|retry Klaviyo DTC/i.test(sourceStatusReplies.join("\n")), "Normal blocked-search Slack copy must not expose backend jargon or raw URLs.");
+
+    const sourceDebugReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "CDISC",
+      threadTs: "900.100",
+      text: "what got blocked? debug details",
+      conversationProvider: unavailableProvider,
+      intentProvider: unavailableProvider,
+      client: { chat: { postMessage: async (payload: { text: string }) => sourceDebugReplies.push(payload.text) } },
+    });
+    assert(/sourceId=|url=https:\/\/www\.upwork\.com\/nx\/search\/jobs\//i.test(sourceDebugReplies.join("\n")), "Debug blocked-search Slack copy may expose technical source details.");
+
+    const clearChromeReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "CDISC",
+      threadTs: "900.100",
+      text: "I cleared Chrome",
+      conversationProvider: unavailableProvider,
+      intentProvider: unavailableProvider,
+      client: { chat: { postMessage: async (payload: { text: string }) => clearChromeReplies.push(payload.text) } },
+    });
+    assert(clearChromeReplies.some((reply) => reply.includes("try the blocked search again")), "Manual clear should reset blocked search state in human copy.");
+    assert(clearChromeReplies.some((reply) => reply.includes("final submit remains manual")), "Manual clear copy should preserve final-submit safety.");
+
+    const keepHuntingReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "CDISC",
+      threadTs: "900.100",
+      text: "keep hunting",
+      conversationProvider: unavailableProvider,
+      intentProvider: unavailableProvider,
+      client: { chat: { postMessage: async (payload: { text: string }) => keepHuntingReplies.push(payload.text) } },
+    });
+    assert(keepHuntingReplies.some((reply) => reply.includes("keep hunting from the safer feed")), "Keep-hunting command should acknowledge continued safer hunting.");
 
     const issueReportReplies: string[] = [];
     await handleThreadCommand({

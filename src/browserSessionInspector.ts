@@ -372,7 +372,13 @@ export function selectRelevantBrowserPage(pages: InspectorPageLike[]): { page: I
   if (upworkOrGoogle.length === 1) {
     return { page: upworkOrGoogle[0]!, ambiguous: false, reason: "Selected the only Upwork/Google tab." };
   }
-  const feed = upworkOrGoogle.find((page) => isUpworkFindWorkFeedUrl(page.url()));
+  const feed = upworkOrGoogle.find((page) => {
+    try {
+      return new URL(page.url()).pathname.toLowerCase().replace(/\/+$/, "") === "/nx/find-work/best-matches";
+    } catch {
+      return false;
+    }
+  }) ?? upworkOrGoogle.find((page) => isUpworkFindWorkFeedUrl(page.url()));
   if (feed) {
     return { page: feed, ambiguous: false, reason: "Selected the stable Upwork feed/search tab." };
   }

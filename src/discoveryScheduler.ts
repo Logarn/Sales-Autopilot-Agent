@@ -11,8 +11,9 @@ import {
   DISCOVERY_SKIP_IF_PENDING_CAPTURE_COUNT_GT,
   BROWSER_QA_MAX_PROTECTED_TABS,
 } from "./config";
-import { runDiscoveryConfiguredSources, DiscoveryBestMatchesResult } from "./browserDiscoveryTool";
+import { isNonBestMatchesDiscoverySearchUrl, runDiscoveryConfiguredSources, DiscoveryBestMatchesResult } from "./browserDiscoveryTool";
 import { inspectBrowserSession } from "./browserSessionInspector";
+import type { BrowserSessionInspection } from "./browserSessionInspector";
 import { acquireBrowserSession, findChromeExecutable, PlaywrightChromiumLike } from "./browserSessionControl";
 import { closeDb, getApplicationStatus, listBrowserActions } from "./db";
 import { BrowserAction, ApplicationStatus } from "./types";
@@ -76,6 +77,19 @@ const DEFAULT_RESULT_COUNTS = {
 };
 
 let runInProgress = false;
+
+function normalizeDiscoveryPrecheckInspection(
+  inspection: BrowserSessionInspection,
+): { sessionState: string; manualAttentionRequired: boolean; blocked: boolean } {
+  if (
+    inspection.blocked &&
+    inspection.manualAttentionReason === "captcha_or_security_challenge" &&
+    isNonBestMatchesDiscoverySearchUrl(inspection.currentUrl)
+  ) {
+    return { sessionState: "logged_in", manualAttentionRequired: false, blocked: false };
+  }
+  return { sessionState: inspection.sessionState, manualAttentionRequired: inspection.manualAttentionRequired, blocked: inspection.blocked };
+}
 
 function compactResult(result: DiscoverySchedulerRunResult): DiscoverySchedulerRunResult {
   const compact: DiscoverySchedulerRunResult = {
@@ -291,7 +305,7 @@ export async function runDiscoveryOnceFromCdp(config = getDiscoverySchedulerConf
   return withCdpContext(async (context) => runDiscoverySchedulerCycle(config, {
     inspectSession: async () => {
       const inspection = await inspectBrowserSession(context);
-      return { sessionState: inspection.sessionState, manualAttentionRequired: inspection.manualAttentionRequired, blocked: inspection.blocked };
+      return normalizeDiscoveryPrecheckInspection(inspection);
     },
     listActions: () => listBrowserActions(null, 1000),
     runDiscovery: (options) => runDiscoveryConfiguredSources(context as never, { maxJobs: options.maxJobs, maxScrolls: options.maxScrolls, now: options.now }),
@@ -310,7 +324,7 @@ async function runContinuousScheduler(config = getDiscoverySchedulerConfig()): P
     const result = await withCdpContext(async (context) => runDiscoverySchedulerCycle(config, {
       inspectSession: async () => {
         const inspection = await inspectBrowserSession(context);
-        return { sessionState: inspection.sessionState, manualAttentionRequired: inspection.manualAttentionRequired, blocked: inspection.blocked };
+        return normalizeDiscoveryPrecheckInspection(inspection);
       },
       listActions: () => listBrowserActions(null, 1000),
       runDiscovery: (options) => runDiscoveryConfiguredSources(context as never, { maxJobs: options.maxJobs, maxScrolls: options.maxScrolls, now: options.now }),

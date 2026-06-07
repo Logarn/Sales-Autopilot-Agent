@@ -3,7 +3,20 @@ import * as path from "node:path";
 import { canonicalizeUpworkJobUrl, deriveCaptureThreadJobId, extractUpworkJobIdFromUrl } from "./browserCapture";
 import { SAVED_SEARCHES_CONFIG_PATH } from "./config";
 import { enqueueBrowserActionDeduped, getApplicationStatus, listBrowserActions } from "./db";
-import { BrowserSessionInspection, InspectorLocatorLike, inspectBrowserSession, isUpworkFindWorkFeedUrl, isUpworkWorkTabUrl } from "./browserSessionInspector";
+import {
+  BrowserSessionInspection,
+  InspectorLocatorLike,
+  buildSessionPageSnapshot,
+  classifyBrowserSessionSnapshot,
+  isUpworkFindWorkFeedUrl,
+  isUpworkWorkTabUrl,
+} from "./browserSessionInspector";
+import {
+  isDiscoverySourceTemporarilyPaused,
+  markDiscoverySourceBrowserCheck,
+  markDiscoverySourceChallenge,
+  markDiscoverySourceSuccess,
+} from "./browserDiscoverySourceHealth";
 import { BrowserAction } from "./types";
 
 export const BEST_MATCHES_URL = "https://www.upwork.com/nx/find-work/best-matches/";
@@ -73,6 +86,8 @@ export interface DiscoveryBestMatchesResult {
   retryAllowedAfterManualFix?: boolean;
   queuedActionIds?: number[];
   sourcesChecked?: string[];
+  sourcePausedUntil?: string;
+  sourceAvoided?: boolean;
   error?: string;
 }
 
@@ -401,7 +416,7 @@ function blockedResult(
   };
 }
 
-function isCurrentDiscoverySourceUrl(currentUrl: string, sourceUrl: string): boolean {
+export function isCurrentDiscoverySourceUrl(currentUrl: string, sourceUrl: string): boolean {
   try {
     const current = new URL(currentUrl);
     const target = new URL(sourceUrl);
@@ -411,6 +426,54 @@ function isCurrentDiscoverySourceUrl(currentUrl: string, sourceUrl: string): boo
   } catch {
     return false;
   }
+}
+
+export function isBestMatchesDiscoverySourceUrl(currentUrl: string): boolean {
+  return isCurrentDiscoverySourceUrl(currentUrl, DISCOVERY_SOURCES.best_matches.url);
+}
+
+export function isNonBestMatchesDiscoverySearchUrl(currentUrl: string): boolean {
+  return isUpworkFindWorkFeedUrl(currentUrl) && !isBestMatchesDiscoverySourceUrl(currentUrl);
+}
+
+async function inspectDiscoverySourcePage(page: DiscoveryPageLike): Promise<BrowserSessionInspection> {
+  const snapshot = await buildSessionPageSnapshot(page);
+  return classifyBrowserSessionSnapshot(snapshot);
+}
+
+async function inspectFirstBlockedDiscoveryPage(context: DiscoveryContextLike): Promise<BrowserSessionInspection | null> {
+  const pages = context.pages?.() ?? [];
+  for (const page of pages) {
+    const inspection = await inspectDiscoverySourcePage(page);
+    if (inspection.blocked || inspection.manualAttentionRequired || inspection.sessionState === "browser_session_unhealthy") {
+      return inspection;
+    }
+  }
+  return null;
+}
+
+function sourcePausedResult(
+  source: DiscoverySourceConfig,
+  pausedUntil: string | undefined,
+  tool: typeof DISCOVERY_BEST_MATCHES_TOOL | typeof DISCOVERY_MULTI_SOURCE_TOOL,
+): DiscoveryBestMatchesResult {
+  return {
+    ok: true,
+    tool,
+    sessionState: "logged_in",
+    manualAttentionRequired: false,
+    blocked: false,
+    jobsFound: 0,
+    jobsQueued: 0,
+    duplicatesSkipped: 0,
+    alreadyHandledSkipped: 0,
+    invalidSkipped: 0,
+    scrollsPerformed: 0,
+    queuedActionIds: [],
+    sourcesChecked: [source.sourceLabel],
+    sourcePausedUntil: pausedUntil,
+    sourceAvoided: true,
+  };
 }
 
 export function getActiveDiscoverySourceLabelForUrl(currentUrl: string, sources = buildConfiguredDiscoverySources()): string | null {
@@ -487,6 +550,10 @@ export async function runDiscoverySource(
 ): Promise<DiscoveryBestMatchesResult> {
   const maxJobs = Math.max(1, Math.floor(options.maxJobs));
   const tool = toolForSource(source);
+  const pausedSource = isDiscoverySourceTemporarilyPaused(source, options.now);
+  if (pausedSource) {
+    return sourcePausedResult(source, pausedSource.pauseUntil, tool);
+  }
   if (!isAllowedDiscoverySourceConfig(source)) {
     return {
       ok: false,
@@ -503,17 +570,16 @@ export async function runDiscoverySource(
       error: `Discovery source is not allowed or not configured safely: ${source.sourceLabel}`,
     };
   }
-  const inspection = await inspectBrowserSession(context);
-  if (inspection.blocked || inspection.manualAttentionRequired || inspection.sessionState === "browser_session_unhealthy") {
-    return blockedResult(inspection, tool);
-  }
-
   const selected = await selectAllowedDiscoveryPage(context, source);
   if (!selected.page) {
+    if (source.sourceType === "best_matches") {
+      const blocked = await inspectFirstBlockedDiscoveryPage(context);
+      if (blocked) return blockedResult(blocked, tool);
+    }
     return {
       ok: false,
       tool,
-      sessionState: inspection.sessionState,
+      sessionState: "unknown",
       manualAttentionRequired: false,
       blocked: false,
       jobsFound: 0,
@@ -530,7 +596,7 @@ export async function runDiscoverySource(
     return {
       ok: false,
       tool,
-      sessionState: inspection.sessionState,
+      sessionState: "unknown",
       manualAttentionRequired: false,
       blocked: false,
       jobsFound: 0,
@@ -541,6 +607,16 @@ export async function runDiscoverySource(
       scrollsPerformed: 0,
       error: `Selected page is not the configured discovery source. source=${source.url} actual=${page.url()}`,
     };
+  }
+
+  markDiscoverySourceBrowserCheck(source, options.now);
+  const inspection = await inspectDiscoverySourcePage(page);
+  if (inspection.blocked || inspection.manualAttentionRequired || inspection.sessionState === "browser_session_unhealthy") {
+    if (source.sourceType === "best_matches") {
+      return blockedResult(inspection, tool);
+    }
+    const paused = markDiscoverySourceChallenge(source, String(inspection.manualAttentionReason ?? inspection.sessionState), options.now);
+    return sourcePausedResult(source, paused.pauseUntil, tool);
   }
 
   const maxScrolls = Math.max(0, Math.floor(options.maxScrolls ?? 3));
@@ -557,9 +633,13 @@ export async function runDiscoverySource(
   const seenLinks = new Map<string, DiscoveryJobLink>();
 
   for (let pass = 0; pass <= maxScrolls; pass += 1) {
-    const inspectionAfterScroll = pass === 0 ? inspection : await inspectBrowserSession(context);
+    const inspectionAfterScroll = pass === 0 ? inspection : await inspectDiscoverySourcePage(page);
     if (inspectionAfterScroll.blocked || inspectionAfterScroll.manualAttentionRequired || inspectionAfterScroll.sessionState === "browser_session_unhealthy") {
-      return blockedResult(inspectionAfterScroll, tool);
+      if (source.sourceType === "best_matches") {
+        return blockedResult(inspectionAfterScroll, tool);
+      }
+      const paused = markDiscoverySourceChallenge(source, String(inspectionAfterScroll.manualAttentionReason ?? inspectionAfterScroll.sessionState), options.now);
+      return sourcePausedResult(source, paused.pauseUntil, tool);
     }
 
     const html = await page.evaluate(() => (globalThis as unknown as { document: { documentElement: { outerHTML: string } } }).document.documentElement.outerHTML);
@@ -649,6 +729,7 @@ export async function runDiscoverySource(
     });
   }
 
+  markDiscoverySourceSuccess(source, { jobsCaptured: seenLinks.size, goodLeadsFound: queuedActionIds.length, now: options.now });
   return {
     ok: true,
     tool,
