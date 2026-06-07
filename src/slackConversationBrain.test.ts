@@ -117,6 +117,9 @@ async function runTests(): Promise<void> {
   assert.match(prompt, /CV in an Upwork thread/i, "Brain prompt should include behavior memories.");
   assert.match(prompt, /Final submit remains manual/i, "Brain prompt should include hard safety rules.");
   assert.match(prompt, /Return JSON only/i, "Brain prompt should require structured JSON.");
+  assert.match(prompt, /Operating constitution from soul\.md/i, "Brain prompt should include soul.md.");
+  assert.match(prompt, /Fucking Lead Closer/i, "Brain prompt should include the soul.md identity.");
+  assert.match(prompt, /Never refer to yourself as/i, "Brain prompt should include first-person teammate guidance.");
 
   const unsafeProvider = new FakeProvider({
     intent: "full_safe_prep",

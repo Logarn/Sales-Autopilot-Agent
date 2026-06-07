@@ -5,6 +5,7 @@ import {
   type LlmJsonRequest,
   type LlmJsonResult,
 } from "./llm/provider";
+import { buildSoulPromptContext, buildSoulPromptSection } from "./soul";
 
 export type SlackCopyPath =
   | "conversation_reply"
@@ -114,6 +115,7 @@ export async function rewriteSlackCopyWithKimi(
           "Use Proof planned until verification is explicit. Use Proof verified only when the deterministic text already says Proof verified. Never say Proof I used.",
           "If preservePhrases are provided, include each phrase exactly as written.",
           "Return JSON only: {\"text\":\"...\"}.",
+          buildSoulPromptSection(`slack_copy:${request.path}`),
         ].join("\n"),
       },
       {
@@ -125,6 +127,7 @@ export async function rewriteSlackCopyWithKimi(
           deterministicText: request.deterministicText,
           context: request.context ?? {},
           preservePhrases: request.preservePhrases ?? [],
+          soul: buildSoulPromptContext(`slack_copy:${request.path}`),
         }),
       },
     ],

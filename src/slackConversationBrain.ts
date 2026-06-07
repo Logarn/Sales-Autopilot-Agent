@@ -6,6 +6,7 @@ import {
   type LlmJsonResult,
 } from "./llm/provider";
 import type { SlackBehaviorMemoryType } from "./db";
+import { buildSoulPromptContext, buildSoulPromptSection } from "./soul";
 
 export type SlackConversationBrainIntent =
   | "answer_file_capability_question"
@@ -399,6 +400,7 @@ function buildPromptInput(input: SlackConversationBrainInput): Record<string, un
     behaviorMemories: input.behaviorMemories.slice(0, 25),
     allowedActions: input.allowedActions,
     hardSafetyRules: input.hardSafetyRules,
+    soul: buildSoulPromptContext("slack_conversation"),
   };
 }
 
@@ -435,6 +437,7 @@ export async function planSlackConversationWithLlm(
           "Never click, promise, or claim final submit. Final submit remains manual.",
           "Never bypass CAPTCHA/security/browser checks.",
           "If Steve corrects you, include a concise memoryUpdate rule. If code is needed, include failureReflection with fixType code_pr and proposedTask.",
+          buildSoulPromptSection("slack_conversation"),
         ].join("\n"),
       },
       {

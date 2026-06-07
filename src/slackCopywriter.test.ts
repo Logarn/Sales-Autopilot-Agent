@@ -27,6 +27,18 @@ async function run(): Promise<void> {
   assert.equal(rewritten.usedLlm, true);
   assert.equal(rewritten.provider, "kimi");
   assert(kimi.requests[0]?.messages.some((message) => message.content.includes("Return JSON only")), "Kimi copywriter prompt should require structured JSON.");
+  assert(kimi.requests[0]?.messages.some((message) => message.content.includes("Operating constitution from soul.md")), "Kimi copywriter prompt should include soul.md.");
+  assert(kimi.requests[0]?.messages.some((message) => message.content.includes("Fucking Lead Closer")), "Kimi copywriter prompt should include the soul.md identity.");
+
+  const leadPacket = fakeProvider("🚀 This one is worth a real shot. I’ll prep it and stop before submit. Final submit remains manual.");
+  const leadPacketCopy = await rewriteSlackCopyWithKimi({
+    path: "lead_packet",
+    deterministicText: "New lead: Klaviyo Shopify work. Final submit remains manual.",
+    intent: "new_lead_packet",
+    preservePhrases: ["Final submit remains manual"],
+  }, leadPacket.provider);
+  assert.equal(leadPacketCopy.usedLlm, true);
+  assert(leadPacket.requests[0]?.messages.some((message) => message.content.includes("slack_copy:lead_packet")), "Lead packet copy prompt should include soul.md lead-packet context.");
 
   const rawId = fakeProvider("Retry browser action #123 in thread 111.222.");
   const rawFallback = await rewriteSlackCopyWithKimi({
@@ -67,4 +79,3 @@ run().catch((error) => {
   console.error(`slack copywriter tests failed: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 });
-
