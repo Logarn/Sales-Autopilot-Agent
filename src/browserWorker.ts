@@ -98,6 +98,7 @@ type DetectedBrowserState =
   | "job_page_loaded"
   | "apply_page_loaded"
   | "page_loaded"
+  | "connects_not_verified"
   | "field_preparation_incomplete"
   | "submit_guard_failed"
   | "source_context_unavailable"
@@ -350,6 +351,22 @@ function humanSlackPrepDetail(value: string): string {
     .trim();
 }
 
+function isBrowserChallengeState(state: ApplyPreparationDiagnostics["state"] | DetectedBrowserState): boolean {
+  return state === "captcha_or_security_challenge" || state === "login_required" || state === "two_factor_required";
+}
+
+function isConnectsNotVerified(diagnostics: Pick<ApplyPreparationDiagnostics, "state" | "requiredConnects" | "fieldVerification" | "connectsDecision">): boolean {
+  if (isBrowserChallengeState(diagnostics.state)) return false;
+  const requiredVerification = getVerification(diagnostics.fieldVerification ?? [], "requiredConnects");
+  return diagnostics.state === "connects_not_verified" ||
+    (diagnostics.requiredConnects === null && requiredVerification?.status === "attempted_unverified") ||
+    (diagnostics.requiredConnects === null && diagnostics.connectsDecision !== "safe_apply");
+}
+
+function getUnverifiedRequiredApplyFields(results: ApplyFieldVerification[]): string[] {
+  const required = ["targetTab", "coverLetter", "requiredConnects"];
+  return required.filter((field) => getVerification(results, field)?.status !== "verified");
+}
 
 function loadOptions(): BrowserWorkerOptions {
   return {
@@ -985,6 +1002,7 @@ function buildPrepareDraftStatusMessage(input: {
   const attachmentVerification = getVerification(fieldVerification, "attachments");
   const highlightVerification = getVerification(fieldVerification, "profileHighlights");
   const targetTabVerification = getVerification(fieldVerification, "targetTab");
+  const connectsNotVerified = isConnectsNotVerified(diagnostics);
   const needsManualReview = diagnostics.validationIssues.some((issue) => issue.severity === "warning" || issue.severity === "error") ||
     diagnostics.missingLocalAssets.length > 0 ||
     diagnostics.manualFields.some((field) => field !== "finalSubmit") ||
@@ -1022,17 +1040,17 @@ function buildPrepareDraftStatusMessage(input: {
     ...(diagnostics.unverifiedFields ?? []),
     ...(diagnostics.unavailableFields ?? []),
     ...(diagnostics.blockedByUiFields ?? []),
-  ].filter((field) => field !== "finalSubmit").slice(0, 5);
+  ].filter((field) => field !== "finalSubmit" && !(connectsNotVerified && field === "requiredConnects")).slice(0, 5);
   const reviewItems = [
     missingFiles.length > 0 ? `${missingFiles.length} missing file${missingFiles.length === 1 ? "" : "s"}: ${missingFiles.join(", ")}` : null,
     targetTabVerification && targetTabVerification.status !== "verified" ? targetTabVerification.detail : null,
     manualFields.length > 0 ? `Not verified: ${manualFields.join(", ")}` : null,
-    diagnostics.connectsDecision !== "safe_apply" ? "Connects need a quick look" : null,
+    diagnostics.connectsDecision !== "safe_apply" ? (connectsNotVerified ? "Connects not verified" : "Connects need a quick look") : null,
     diagnostics.validationIssues.find((issue) => issue.severity === "error")?.message,
   ].filter((item): item is string => Boolean(item));
   const reviewText = reviewItems.length > 0 ? reviewItems.slice(0, 3).map(humanSlackPrepDetail).join("; ") : "none";
   const submitLabel = diagnostics.requiredConnects === null ? "Submit" : `Send for ${diagnostics.requiredConnects} Connects`;
-  const connectsSummary = diagnostics.requiredConnects === null ? "unknown" : `${diagnostics.requiredConnects} required`;
+  const connectsSummary = diagnostics.requiredConnects === null ? "not verified" : `${diagnostics.requiredConnects} required`;
   const boostSummary = diagnostics.boostConnects && diagnostics.boostConnects > 0
     ? `${diagnostics.boostConnects} selected, under your 50 cap`
     : "not set yet";
@@ -1058,15 +1076,40 @@ function buildPrepareDraftStatusMessage(input: {
     ].join("\n");
   }
 
-  const blockerReason = diagnostics.state === "captcha_or_security_challenge" || diagnostics.state === "login_required" || diagnostics.state === "two_factor_required"
-    ? "Upwork showed a browser check before I could verify the draft."
+  if (connectsNotVerified) {
+    return [
+      "⚠️ *I couldn’t verify the Connects cost yet.*",
+      "",
+      "I can see the proposal page, but the Connects section isn’t readable right now. I left submit untouched and skipped boost for now.",
+      "",
+      "What I planned:",
+      [
+        `• *Cover letter:* ${coverLetterSummary}`,
+        `• *Screening answers:* ${screeningSummary}`,
+        `• *${proofLabel}:* ${plannedProofSummary}`,
+        "• *Connects:* not verified",
+        "• *Boost:* not set yet",
+        "• *Submit:* untouched",
+      ].join("\n"),
+      "",
+      `*Next:* I’ll keep the application open in remote Chrome. Reply “retry” after the page finishes loading, or “open it” and I’ll bring the tab forward.`,
+    ].join("\n");
+  }
+
+  const blockerReason = isBrowserChallengeState(diagnostics.state)
+    ? "Upwork is asking for a browser check."
     : reviewText === "none"
-      ? "Upwork needs a human check before I can verify the draft."
-      : `I need a human check before QA: ${reviewText}.`;
+      ? "Something on the apply page still needs a quick QA look before I call it ready."
+      : `Some apply-page fields still need QA: ${reviewText}.`;
+  const nextStep = isBrowserChallengeState(diagnostics.state)
+    ? "clear it in remote Chrome, then reply “retry” and I’ll pick this back up."
+    : "reply “retry” after the page finishes loading, or “open it” and I’ll bring the tab forward.";
   return [
     "⚠️ *Blocked before QA*",
     "",
-    `I reached the Upwork apply page, but ${blockerReason}`,
+    isBrowserChallengeState(diagnostics.state)
+      ? blockerReason
+      : `I reached the Upwork apply page, but ${blockerReason}`,
     "",
     "What I planned:",
     [
@@ -1077,7 +1120,7 @@ function buildPrepareDraftStatusMessage(input: {
       "• *Submit:* untouched",
     ].join("\n"),
     "",
-    `*Next:* clear the remote Chrome issue, then reply “retry”.`,
+    `*Next:* ${nextStep}`,
   ].join("\n");
 }
 
@@ -1102,9 +1145,16 @@ export async function postPrepareDraftStatus(
     intent: "prepare_application_review_status",
     context: {
       browserState: input.diagnostics.state,
+      blockerType: isConnectsNotVerified(input.diagnostics)
+        ? "connects_not_verified"
+        : isBrowserChallengeState(input.diagnostics.state)
+          ? "browser_check"
+          : "apply_page_needs_review",
       stopBeforeSubmit: input.diagnostics.stopBeforeSubmit,
       filesAttachedCount: input.diagnostics.filesAttached?.length ?? 0,
       selectedHighlightsCount: input.diagnostics.selectedHighlights?.length ?? 0,
+      connectsVerified: input.diagnostics.requiredConnects !== null,
+      boostVerified: Boolean(input.diagnostics.boostConnects && input.diagnostics.boostConnects > 0),
     },
     preservePhrases: [
       "• *Submit:* untouched",
@@ -1611,9 +1661,25 @@ function verifyApplyPageConnects(plan: BrowserApplyFillPlan, bodyText: string): 
   const extracted = extractConnectsFromVisibleText(bodyText);
   if (extracted.requiredConnects === null) {
     const issue = {
-      severity: "error" as const,
+      severity: "warning" as const,
       code: "required_connects_unverified_on_apply_page",
-      message: "Required Connects were still not visible after opening the apply page; pause for manual review before filling or submitting.",
+      message: "Required Connects were not visible on the apply page yet; leave boost unset and verify Connects during QA.",
+    };
+    plan.connects.required = null;
+    plan.connects.boost = 0;
+    plan.connects.total = null;
+    plan.connects.approvalRequired = true;
+    plan.connects.notes = [
+      "Connects not verified on the apply page.",
+      "Boost skipped until the Connects and boost table are readable.",
+    ];
+    plan.connectsStrategy.suggestedBoostConnects = 0;
+    plan.connectsStrategy.totalConnects = null;
+    plan.connectsStrategy.decision = "manual_review";
+    plan.connectsStrategy.sourceBackedConnects = {
+      ...extracted,
+      boostConnects: null,
+      totalConnects: null,
     };
     issues.push(issue);
     return [issue];
@@ -2078,8 +2144,7 @@ function getVerification(results: ApplyFieldVerification[], field: string): Appl
 
 function hasUnverifiedRequiredApplyFields(results: ApplyFieldVerification[]): boolean {
   if (results.length === 0) return false;
-  const required = ["targetTab", "coverLetter", "requiredConnects"];
-  return required.some((field) => getVerification(results, field)?.status !== "verified");
+  return getUnverifiedRequiredApplyFields(results).length > 0;
 }
 
 async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillPlan, bodyText: string): Promise<ApplyFillResult> {
@@ -2280,24 +2345,15 @@ async function inspectWithBrowser(
     }
     let fields: ApplyFillResult = { attemptedFields: [], skippedFields: [], manualFields: [], fieldVerification: [] };
     if (plan && state === "apply_page_loaded") {
-      const connectsIssues = verifyApplyPageConnects(plan, bodyText);
-      if (connectsIssues.some((validationIssue) => validationIssue.severity === "error")) {
-        state = "field_preparation_incomplete";
-        fields = {
-          attemptedFields: [],
-          skippedFields: [],
-          manualFields: ["connects", "finalSubmit"],
-          fieldVerification: [
-            verification("requiredConnects", "attempted_unverified", "Required Connects could not be verified on the apply page."),
-            verification("finalSubmit", "skipped_by_strategy", "Final submit/send button was intentionally not clicked."),
-          ],
-        };
-      } else {
-        fields = await fillApplyFields(page!, plan, bodyText);
-      }
+      verifyApplyPageConnects(plan, bodyText);
+      fields = await fillApplyFields(page!, plan, bodyText);
     }
     if (plan && state === "apply_page_loaded" && (getRequiredSkippedFields(fields).length > 0 || hasUnverifiedRequiredApplyFields(fields.fieldVerification ?? []))) {
-      state = "field_preparation_incomplete";
+      const skippedRequired = getRequiredSkippedFields(fields);
+      const unverifiedRequired = getUnverifiedRequiredApplyFields(fields.fieldVerification ?? []);
+      state = skippedRequired.length === 0 && unverifiedRequired.length === 1 && unverifiedRequired[0] === "requiredConnects"
+        ? "connects_not_verified"
+        : "field_preparation_incomplete";
     }
     const inspectionDiagnostics: BrowserInspectionDiagnostics = {
       actionId: action.id,
@@ -2379,7 +2435,7 @@ function extractProofRecommendations(draft?: { selectedPortfolioItems?: { name: 
 }
 
 function terminalStatusForState(state: DetectedBrowserState): "completed" | "paused" {
-  if (["login_required", "two_factor_required", "captcha_or_security_challenge", "browser_unavailable", "browser_profile_in_use", "cdp_unavailable", "field_preparation_incomplete", "submit_guard_failed"].includes(state)) {
+  if (["login_required", "two_factor_required", "captcha_or_security_challenge", "browser_unavailable", "browser_profile_in_use", "cdp_unavailable", "connects_not_verified", "field_preparation_incomplete", "submit_guard_failed"].includes(state)) {
     return "paused";
   }
   return "completed";
@@ -2400,6 +2456,9 @@ function stateStatusMessage(state: DetectedBrowserState): string {
   }
   if (state === "captcha_or_security_challenge" || state === "login_required" || state === "two_factor_required") {
     return `Detected state: ${state}. Resolve the browser page in the visible Chrome session, then retry.`;
+  }
+  if (state === "connects_not_verified") {
+    return "Connects not verified on the apply page. The application page stays open for QA; boost was skipped and final submit was not clicked.";
   }
   return `Detected state: ${state}; stop-before-submit enforced.`;
 }
@@ -2756,7 +2815,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       const diagnostics = buildApplyDiagnostics(action, plan, applyPlanResult?.issues ?? [], state, fields);
       saveApplyDiagnostics(options, action, diagnostics);
       const coverLetterVerification = getVerification(fields.fieldVerification ?? [], "coverLetter");
-      if (plan && applicationSnapshot && (state === "apply_page_loaded" || state === "field_preparation_incomplete") && coverLetterVerification?.status === "verified") {
+      if (plan && applicationSnapshot && (state === "apply_page_loaded" || state === "connects_not_verified" || state === "field_preparation_incomplete") && coverLetterVerification?.status === "verified") {
         const persisted = persistApplicationSnapshot({
           jobId: action.jobId,
           snapshot: applicationSnapshot,
@@ -2770,9 +2829,11 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       }
       if (state === "field_preparation_incomplete") {
         logger.warn(`Required fields not filled confidently for browser action #${action.id}: ${getRequiredSkippedFields(fields).join(", ")}`);
+      } else if (state === "connects_not_verified") {
+        logger.warn(`Connects not verified for browser action #${action.id}; boost skipped and final submit remains manual.`);
       }
       updateBrowserActionStatus(action.id, terminalStatusForState(state), stateStatusMessage(state));
-      if (["login_required", "two_factor_required", "captcha_or_security_challenge", "field_preparation_incomplete"].includes(state)) {
+      if (["login_required", "two_factor_required", "captcha_or_security_challenge"].includes(state)) {
         await recordBrowserManualAttention({
           actionId: action.id,
           jobId: action.jobId,
@@ -2781,7 +2842,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           reason: state,
         });
       }
-      if (state === "apply_page_loaded" || state === "field_preparation_incomplete") {
+      if (state === "apply_page_loaded" || state === "connects_not_verified" || state === "field_preparation_incomplete") {
         const qaStatus = state === "apply_page_loaded" ? "prepared_for_qa" : "needs_review";
         const holdApplyUrl = snapshot?.url ?? diagnostics.applyUrl ?? url;
         updateApplicationStatus(
@@ -2798,7 +2859,11 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
             applyUrl: holdApplyUrl,
             status: qaStatus,
             state,
-            reason: state === "apply_page_loaded" ? "awaiting_human_qa" : "needs_review",
+            reason: state === "apply_page_loaded"
+              ? "awaiting_human_qa"
+              : state === "connects_not_verified"
+                ? "connects_not_verified"
+                : "needs_review",
             doNotReuse: true,
             do_not_reuse: true,
             createdAt: new Date().toISOString(),
@@ -2894,17 +2959,15 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
               threadTs: thread.threadTs,
               text: [
                 "⚠️ Browser capture is blocked.",
-                `State: ${threadStatus}`,
                 threadStatus === "browser_profile_in_use"
-                  ? "Chrome profile is already open. Use CDP mode or close Chrome before retrying."
+                  ? "Remote Chrome is already using the shared profile, so I paused this capture safely."
                   : threadStatus === "cdp_unavailable"
-                    ? "Persistent Chrome session is not running. Start it with npm run browser:session."
-                    : "I paused because the current page still appears to require manual browser attention.",
-                `Current URL: ${snapshot?.url ?? url}`,
-                `Current title: ${snapshot?.title ?? "n/a"}`,
-                inspectionDiagnostics ? `Detector: ${inspectionDiagnostics.finalDetection.source}${inspectionDiagnostics.finalDetection.matchedText ? ` (${inspectionDiagnostics.finalDetection.matchedText})` : ""}` : "Detector: n/a",
-                "Next: clear the remote Chrome issue, then reply “retry” in this Slack thread.",
-              ].join("\n"),
+                    ? "Remote Chrome is not reachable right now, so I paused this capture safely."
+                    : "Upwork is asking for a browser check. I paused safely and did not submit anything.",
+                snapshot?.title ? `Page: ${snapshot.title}` : null,
+                "Next: clear the visible remote Chrome issue, then reply “retry” in this Slack thread.",
+                "Ask for debug details if you need the raw browser state.",
+              ].filter((line): line is string => Boolean(line)).join("\n"),
             });
           }
           if (["login_required", "two_factor_required", "captcha_or_security_challenge"].includes(threadStatus)) {

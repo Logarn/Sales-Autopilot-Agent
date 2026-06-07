@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { runBrowserSessionClear } from "./browserSessionCli";
 import { getChromeProfileProcessDiagnostics } from "./browserSessionControl";
-import { BrowserSessionStatus } from "./browserSession";
+import { BrowserSessionStatus, buildManualAttentionSlackText } from "./browserSession";
 import { BrowserSessionInspection } from "./browserSessionInspector";
 import { BrowserAction } from "./types";
 
@@ -104,6 +104,19 @@ async function runTests(): Promise<void> {
   assert.equal(result.result.reason, "visible_browser_still_requires_manual_attention");
   assert.equal(result.result.visibleSessionState, "manual_attention_required");
   assert.equal(result.clearCalls, 0);
+
+  const manualAttentionCopy = buildManualAttentionSlackText({
+    at: "2026-05-13T00:00:00.000Z",
+    actionId: 9,
+    jobId: "manual:upwork-9",
+    jobTitle: "Klaviyo Expert for Beauty Marketplace",
+    url: "https://www.upwork.com/jobs/~9abcdefghi",
+    title: "Just a moment...",
+    reason: "captcha_or_security_challenge",
+  });
+  assert.match(manualAttentionCopy, /browser check/i, "Actual security challenges should use browser-check wording.");
+  assert.match(manualAttentionCopy, /I paused safely and did not submit anything/i, "Browser-check copy should preserve submit safety.");
+  assert.doesNotMatch(manualAttentionCopy, /manual:upwork|captcha_or_security_challenge|manual_attention_required|field_preparation_incomplete|action\s*#?\d+/i, "Normal browser-check copy should hide raw ids and internal states.");
 
   result = await call({ visible: visible({ internalState: "unknown", sessionState: "unknown", currentUrl: "https://www.upwork.com/?__cf_chl_tk=abc", title: "Challenge" }) });
   assert.equal(result.result.reason, "visible_browser_still_requires_manual_attention", "unknown visible pages with restricted markers are refused");

@@ -1240,6 +1240,125 @@ async function runTests(): Promise<void> {
     assert(globalBlockerPost === "posted", "Global blocker without job thread may post as a standalone alert");
     assert(globalBlockerText.includes("⚠️ *Blocked before QA*"), "Standalone global blocker should stay concise");
 
+    const connectsMissingDiagnostics = {
+      ...blockedPrepDiagnostics,
+      actionId: 709,
+      jobId: "manual:upwork-connects-hidden",
+      state: "connects_not_verified",
+      validationIssues: [
+        {
+          severity: "warning",
+          code: "required_connects_unverified_on_apply_page",
+          message: "Required Connects were not visible on the apply page yet; leave boost unset and verify Connects during QA.",
+        },
+      ],
+      missingLocalAssets: [],
+      warnings: ["[warning] required_connects_unverified_on_apply_page: Required Connects were not visible on the apply page yet."],
+      requiredConnects: null,
+      boostConnects: 0,
+      totalConnects: null,
+      connectsDecision: "manual_review",
+      connectsConfidence: "unknown",
+      attemptedFields: ["coverLetter", "rate", "attachments", "highlights"],
+      skippedFields: [],
+      manualFields: ["finalSubmit"],
+      fieldVerification: [
+        { field: "targetTab", status: "verified", detail: "Apply tab matches target job URL." },
+        { field: "coverLetter", status: "verified", detail: "Cover letter field contains the intended text." },
+        { field: "screeningAnswers", status: "verified", detail: "2/2 screening answers are present." },
+        { field: "rate", status: "verified", detail: "Rate field contains $72/hr." },
+        { field: "requiredConnects", status: "attempted_unverified", detail: "Required Connects are still unknown." },
+        { field: "boostConnects", status: "skipped_by_strategy", detail: "No boost set." },
+        { field: "attachments", status: "attempted_unverified", detail: "File upload was attempted but not verified." },
+        { field: "profileHighlights", status: "attempted_unverified", detail: "Portfolio selector entry is visible, but selected proof is not verified yet." },
+        { field: "finalSubmit", status: "skipped_by_strategy", detail: "Final submit/send button was intentionally not clicked." },
+      ],
+      verifiedFields: ["targetTab", "coverLetter", "screeningAnswers", "rate"],
+      unverifiedFields: ["requiredConnects", "attachments", "profileHighlights"],
+      unavailableFields: [],
+      missingFileFields: [],
+      blockedByUiFields: [],
+      skippedByStrategyFields: ["boostConnects", "finalSubmit"],
+    };
+    let connectsCopyText = "";
+    const connectsCopyPost = await postPrepareDraftStatus(
+      {
+        thread: { channelId: "C123", messageTs: "999.333", threadTs: "999.333" },
+        heading: "⚠️ Draft preparation paused.",
+        diagnostics: connectsMissingDiagnostics,
+      },
+      {
+        postThreadMessage: async (payload) => {
+          connectsCopyText = String(payload.text ?? "");
+          return true;
+        },
+      },
+    );
+    assert(connectsCopyPost === "posted", "Connects-not-verified handoff should post into the job thread.");
+    assert(connectsCopyText.includes("I couldn’t verify the Connects cost yet"), "Missing required Connects should use connects-not-verified copy.");
+    assert(connectsCopyText.includes("Connects:* not verified") || connectsCopyText.includes("Connects:* unknown"), "Connects should be marked not verified, not claimed.");
+    assert(connectsCopyText.includes("Boost:* not set yet"), "Unknown Connects should prevent boost.");
+    assert(connectsCopyText.includes("*Proof planned:*"), "Unverified proof should stay planned.");
+    assert(connectsCopyText.includes("• *Submit:* untouched"), "Connects-not-verified handoff should preserve submit safety.");
+    assert(connectsCopyText.includes("“open it”"), "Connects-not-verified handoff should offer tab focus.");
+    assert(!connectsCopyText.includes("clear the remote Chrome issue"), "Connects-not-verified copy should not tell Steve to clear Chrome.");
+    assert(!/field_preparation_incomplete|manual_attention_required|manual browser attention|manual:upwork/i.test(connectsCopyText), "Connects-not-verified copy should hide backend state and raw job ids.");
+
+    const connectsKimiRequests: any[] = [];
+    await postPrepareDraftStatus(
+      {
+        thread: { channelId: "C123", messageTs: "999.444", threadTs: "999.444" },
+        heading: "⚠️ Draft preparation paused.",
+        diagnostics: connectsMissingDiagnostics,
+      },
+      {
+        copyProvider: {
+          isAvailable: () => true,
+          completeJson: async (request: any) => {
+            connectsKimiRequests.push(request);
+            const payload = JSON.parse(request.messages[1].content);
+            return { ok: true, data: { text: payload.deterministicText } };
+          },
+        },
+        postThreadMessage: async () => true,
+      },
+    );
+    const connectsKimiPayload = JSON.parse(connectsKimiRequests[0].messages[1].content);
+    assert(connectsKimiPayload.context.blockerType === "connects_not_verified", "LLM copywriter should receive structured connects-not-verified facts.");
+    assert(connectsKimiPayload.context.connectsVerified === false, "LLM copywriter should receive authoritative Connects verification state.");
+    assert(connectsKimiPayload.context.boostVerified === false, "LLM copywriter should receive authoritative boost verification state.");
+
+    const browserChallengeDiagnostics = {
+      ...connectsMissingDiagnostics,
+      state: "captcha_or_security_challenge",
+      requiredConnects: null,
+      validationIssues: [],
+      fieldVerification: [
+        { field: "targetTab", status: "attempted_unverified", detail: "Upwork showed a browser check." },
+        { field: "finalSubmit", status: "skipped_by_strategy", detail: "Final submit/send button was intentionally not clicked." },
+      ],
+      verifiedFields: [],
+      unverifiedFields: ["targetTab"],
+      skippedByStrategyFields: ["finalSubmit"],
+    };
+    let browserChallengeText = "";
+    await postPrepareDraftStatus(
+      {
+        thread: { channelId: "C123", messageTs: "999.555", threadTs: "999.555" },
+        heading: "⚠️ Draft preparation paused.",
+        diagnostics: browserChallengeDiagnostics,
+      },
+      {
+        postThreadMessage: async (payload) => {
+          browserChallengeText = String(payload.text ?? "");
+          return true;
+        },
+      },
+    );
+    assert(browserChallengeText.includes("Upwork is asking for a browser check"), "Actual security challenges should keep browser-check copy.");
+    assert(browserChallengeText.includes("clear it in remote Chrome"), "Actual security challenges should ask Steve to clear Chrome.");
+    assert(!/captcha_or_security_challenge|manual_attention_required|manual:upwork/i.test(browserChallengeText), "Browser-check copy should hide raw challenge state.");
+
     const designJob = scoreJob({
       id: "design-job-1",
       title: "Email design + Figma specialist for DTC brand",
