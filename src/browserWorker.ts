@@ -262,10 +262,18 @@ export interface ApplyFieldVerification {
   detail: string;
 }
 
-interface ApplyVerificationSnapshot {
+export interface ApplyVerificationSnapshot {
   url: string;
   visibleText: string;
   inputValues: string[];
+  fieldValues: Array<{
+    kind: "input" | "textarea";
+    label: string;
+    name: string | null;
+    ariaLabel: string | null;
+    placeholder: string | null;
+    value: string;
+  }>;
   checkedLabels: string[];
   fileNames: string[];
 }
@@ -1700,6 +1708,54 @@ function bestMatchingValue(values: string[], expected: string | null | undefined
   return values.find((value) => normalizeVerificationValue(value).includes(significant)) ?? null;
 }
 
+function longestValue(values: string[]): string | null {
+  return [...values].sort((a, b) => b.length - a.length)[0] ?? null;
+}
+
+function fieldDescriptor(field: ApplyVerificationSnapshot["fieldValues"][number]): string {
+  return [field.kind, field.label, field.name, field.ariaLabel, field.placeholder].filter(Boolean).join(" ").toLowerCase();
+}
+
+function bestCoverLetterValue(snapshot: ApplyVerificationSnapshot, expected: string | null | undefined): string | null {
+  const fieldValues = snapshot.fieldValues.map((field) => field.value).filter((value) => value.trim().length > 0);
+  const allValues = uniqueNonEmpty([...fieldValues, ...snapshot.inputValues]);
+  const matched = bestMatchingValue(allValues, expected);
+  if (matched) return matched;
+
+  const coverLike = snapshot.fieldValues
+    .filter((field) => /\b(?:cover|letter|proposal|message)\b/i.test(fieldDescriptor(field)))
+    .map((field) => field.value)
+    .filter((value) => value.trim().length > 0);
+  if (coverLike.length > 0) return longestValue(coverLike);
+
+  const textareas = snapshot.fieldValues
+    .filter((field) => field.kind === "textarea")
+    .map((field) => field.value)
+    .filter((value) => value.trim().length > 0);
+  if (textareas.length > 0) return longestValue(textareas);
+
+  return null;
+}
+
+function screeningValuesForIndex(snapshot: ApplyVerificationSnapshot, coverLetter: string, index: number): string[] {
+  const nonCoverFields = snapshot.fieldValues.filter((field) => {
+    if (field.value === coverLetter) return false;
+    return !/\b(?:cover|letter|proposal|message)\b/i.test(fieldDescriptor(field));
+  });
+  const questionNumberPattern = new RegExp(`\\b(?:question|answer)\\s*${index + 1}\\b`, "i");
+  const exactIndex = nonCoverFields
+    .filter((field) => questionNumberPattern.test(fieldDescriptor(field)))
+    .map((field) => field.value)
+    .filter((value) => value.trim().length > 0);
+  if (exactIndex.length > 0) return exactIndex;
+
+  const likelyScreening = nonCoverFields
+    .filter((field) => field.kind === "textarea" || /\b(?:question|answer|screening)\b/i.test(fieldDescriptor(field)))
+    .map((field) => field.value)
+    .filter((value) => value.trim().length > 0);
+  return likelyScreening;
+}
+
 function textDiffers(left: string | null | undefined, right: string | null | undefined): boolean {
   const a = normalizeVerificationValue(left ?? "");
   const b = normalizeVerificationValue(right ?? "");
@@ -1718,7 +1774,7 @@ function proposalVersionSourceFromPayload(value: unknown): ProposalVersionSource
     : "human_edit_reread";
 }
 
-function persistApplicationSnapshot(input: {
+export function persistApplicationSnapshot(input: {
   jobId: string;
   snapshot: ApplyVerificationSnapshot;
   plan?: BrowserApplyFillPlan | null;
@@ -1730,12 +1786,12 @@ function persistApplicationSnapshot(input: {
   const plannedCover = input.plan?.coverLetter ?? draft?.proposalText ?? "";
   const plannedScreening = input.plan?.screeningAnswers ?? draft?.structuredProposal?.clientRequestAnswers ?? [];
   const values = uniqueNonEmpty(input.snapshot.inputValues);
-  const coverLetter = bestMatchingValue(values, plannedCover) ?? [...values].sort((a, b) => b.length - a.length)[0] ?? null;
+  const coverLetter = bestCoverLetterValue(input.snapshot, plannedCover);
   if (!coverLetter || coverLetter.length < 20) {
     if (input.markSubmittedAfterCapture) {
       updateApplicationStatus(
         input.jobId,
-        "applied",
+        "submitted",
         "Steve said submitted, but the page no longer exposed readable proposal text. Final version is the last captured QA version if available."
       );
     }
@@ -1746,7 +1802,14 @@ function persistApplicationSnapshot(input: {
   }
 
   const remainingValues = values.filter((value) => value !== coverLetter);
-  const screeningAnswers = plannedScreening.map((answer, index) => bestMatchingValue(remainingValues, answer) ?? remainingValues[index] ?? answer);
+  const screeningAnswers = plannedScreening.map((answer, index) => {
+    const fieldCandidates = screeningValuesForIndex(input.snapshot, coverLetter, index);
+    return bestMatchingValue(fieldCandidates, answer) ??
+      fieldCandidates[fieldCandidates.length - 1] ??
+      bestMatchingValue(remainingValues, answer) ??
+      remainingValues[index] ??
+      answer;
+  });
   const beforeVersion = getLatestProposalVersion(input.jobId);
   const version = recordProposalVersion({
     jobId: input.jobId,
@@ -1796,7 +1859,7 @@ function persistApplicationSnapshot(input: {
     });
   }
   if (input.markSubmittedAfterCapture) {
-    updateApplicationStatus(input.jobId, "applied", "Steve said submitted; captured current remote Chrome text as final submitted version when possible.");
+    updateApplicationStatus(input.jobId, "submitted", "Steve said submitted; captured current remote Chrome text as final submitted version when possible.");
   }
   return { ok: true, label: version.label };
 }
@@ -1821,6 +1884,7 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
       url: page.url(),
       visibleText: fallbackBodyText,
       inputValues: [],
+      fieldValues: [],
       checkedLabels: [],
       fileNames: [],
     };
@@ -1833,6 +1897,7 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
         type?: string;
         name?: string;
         files?: ArrayLike<{ name?: string }>;
+        tagName?: string;
         getAttribute?: (name: string) => string | null;
         closest?: (selector: string) => { textContent?: string | null } | null;
       };
@@ -1846,6 +1911,17 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
       const inputValues = nodes
         .map((node) => typeof node.value === "string" ? node.value : "")
         .filter((value) => value.trim().length > 0);
+      const fieldValues = nodes
+        .map((node) => {
+          const value = typeof node.value === "string" ? node.value : "";
+          const label = node.closest?.("label")?.textContent ?? "";
+          const ariaLabel = node.getAttribute?.("aria-label") ?? null;
+          const placeholder = node.getAttribute?.("placeholder") ?? null;
+          const name = node.name ?? node.getAttribute?.("name") ?? null;
+          const kind: "input" | "textarea" = String(node.tagName ?? "").toLowerCase() === "textarea" ? "textarea" : "input";
+          return { kind, label, name, ariaLabel, placeholder, value };
+        })
+        .filter((field) => field.value.trim().length > 0);
       const checkedLabels = nodes
         .filter((node) => Boolean(node.checked))
         .map((node) => {
@@ -1861,6 +1937,7 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
       return {
         visibleText: documentLike?.body?.innerText ?? "",
         inputValues,
+        fieldValues,
         checkedLabels,
         fileNames,
       };
@@ -1869,6 +1946,7 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
       url: page.url(),
       visibleText: snapshot.visibleText || fallbackBodyText,
       inputValues: snapshot.inputValues ?? [],
+      fieldValues: snapshot.fieldValues ?? [],
       checkedLabels: snapshot.checkedLabels ?? [],
       fileNames: snapshot.fileNames ?? [],
     };
@@ -1877,6 +1955,7 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
       url: page.url(),
       visibleText: fallbackBodyText,
       inputValues: [],
+      fieldValues: [],
       checkedLabels: [],
       fileNames: [],
     };
@@ -2257,7 +2336,7 @@ async function inspectWithBrowser(
       targetJobId,
       currentPageUrlBeforeCapture,
     };
-    const applicationSnapshot = action.actionType === "capture_application_snapshot" && page
+    const applicationSnapshot = (action.actionType === "capture_application_snapshot" || action.actionType === "prepare_application_review") && page
       ? await readApplyVerificationSnapshot(page, bodyText)
       : undefined;
     logger.info(
@@ -2676,28 +2755,17 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
     if (action.actionType === "prepare_application_review") {
       const diagnostics = buildApplyDiagnostics(action, plan, applyPlanResult?.issues ?? [], state, fields);
       saveApplyDiagnostics(options, action, diagnostics);
-      if (plan && (state === "apply_page_loaded" || state === "field_preparation_incomplete") && plan.coverLetter.trim()) {
-        recordProposalVersion({
+      const coverLetterVerification = getVerification(fields.fieldVerification ?? [], "coverLetter");
+      if (plan && applicationSnapshot && (state === "apply_page_loaded" || state === "field_preparation_incomplete") && coverLetterVerification?.status === "verified") {
+        const persisted = persistApplicationSnapshot({
           jobId: action.jobId,
+          snapshot: applicationSnapshot,
+          plan,
           source: "upwork_inserted",
-          proposalText: plan.coverLetter,
-          screeningAnswers: plan.screeningAnswers,
-          note: "Browser worker inserted planned draft into Upwork apply page. Final submit was not clicked.",
+          note: "Browser worker verified inserted draft text on the Upwork apply page. Final submit was not clicked.",
         });
-        recordPlannedScreeningCoverage(action.jobId, [], plan.screeningAnswers);
-        const screeningVerification = getVerification(fields.fieldVerification ?? [], "screeningAnswers");
-        for (let index = 0; index < plan.screeningAnswers.length; index += 1) {
-          upsertScreeningCoverageItem({
-            jobId: action.jobId,
-            questionIndex: index + 1,
-            questionText: null,
-            plannedAnswer: plan.screeningAnswers[index] ?? null,
-            filledAnswer: plan.screeningAnswers[index] ?? null,
-            verifiedAnswer: screeningVerification?.status === "verified" ? plan.screeningAnswers[index] ?? null : null,
-            humanEditedAnswer: null,
-            finalAnswer: null,
-            status: screeningVerification?.status === "verified" ? "verified" : "filled",
-          });
+        if (!persisted.ok) {
+          logger.warn(`Verified cover letter could not be persisted for browser action #${action.id}: ${persisted.fallbackReason ?? "unknown readback issue"}`);
         }
       }
       if (state === "field_preparation_incomplete") {

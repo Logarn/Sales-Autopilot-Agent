@@ -1177,13 +1177,16 @@ export function queueApplicationSnapshotFromSlackThread(input: {
       notes: input.note ?? "Read current remote Chrome application text for proposal audit trail. Do not fill or submit.",
     },
   });
+  if (input.markSubmittedAfterCapture) {
+    updateApplicationStatus(state.jobId, "submitted", "Marked submitted from Slack after Steve submitted manually; queued read-only final page capture.");
+  }
   updateSlackThreadStateStatus(state.channelId, state.threadTs, input.markSubmittedAfterCapture ? "submitted_marked" : "status_checked");
   return {
     ok: true,
     actionId: action.id,
     text: input.markSubmittedAfterCapture
-      ? `I queued a read-only final version capture for ${state.jobId} before recording the submitted outcome. Final submit remains manual on my side.`
-      : `I queued a read-only re-read of the remote Chrome application for ${state.jobId}. I’ll save the current cover letter/screening text as a new version if the page is readable.`,
+      ? `I queued a read-only final version capture for ${humanApplicationLabel(state.jobId)} before recording the submitted outcome. Final submit remains manual on my side.`
+      : `I queued a read-only re-read of the remote Chrome application for ${humanApplicationLabel(state.jobId)}. I’ll save the current cover letter/screening text as a new version if the page is readable.`,
   };
 }
 
@@ -1224,7 +1227,7 @@ export function buildDraftPreviewFromSlackThread(input: {
       `Draft preview for ${scoredJob?.title ?? state.jobId}:`,
       sourceLine,
       "",
-      textToShow.trim(),
+      textToShow,
       "",
       input.source === "final_submitted"
         ? "I only call this final submitted text when Steve marked it submitted or the page was captured before that outcome update."

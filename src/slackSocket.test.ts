@@ -75,7 +75,7 @@ async function runTests(): Promise<void> {
     queuePrepareDraftFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string; actionId?: number };
     resetSlackSocketEventDedupeForTests: () => void;
   };
-  const { closeDb, getApplicationDraft, getApplicationProofPlanOverrides, getApplicationStatus, getBrowserActionById, getSlackThreadStateByThreadTs, listActiveSlackBehaviorMemories, listApplicationAssets, listProposalVersions, listRecentSlackFailureReflections, markJobSeen, mergeBrowserActionPayload, upsertSlackThreadState, listBrowserActions, updateApplicationStatus, updateBrowserActionStatus } = require("./db") as {
+  const { closeDb, getApplicationDraft, getApplicationProofPlanOverrides, getApplicationStatus, getBrowserActionById, getSlackThreadStateByThreadTs, listActiveSlackBehaviorMemories, listApplicationAssets, listProposalVersions, listRecentSlackFailureReflections, markJobSeen, mergeBrowserActionPayload, recordProposalVersion, upsertSlackThreadState, listBrowserActions, updateApplicationStatus, updateBrowserActionStatus } = require("./db") as {
     closeDb: () => void;
     getApplicationDraft: (jobId: string) => { proposalText: string } | null;
     getApplicationProofPlanOverrides: (jobId: string) => any;
@@ -88,6 +88,7 @@ async function runTests(): Promise<void> {
     listRecentSlackFailureReflections: (limit?: number) => Array<{ whatHappened: string; whyItFailed: string; nextBehavior: string; proposedTask?: string | null }>;
     markJobSeen: (job: any, notified: boolean) => void;
     mergeBrowserActionPayload: (id: number, patch: Record<string, unknown>) => unknown;
+    recordProposalVersion: (input: { jobId: string; source: string; proposalText: string; screeningAnswers?: string[]; note?: string | null }) => unknown;
     upsertSlackThreadState: (input: any) => unknown;
     listBrowserActions: (status?: string | null, limit?: number) => Array<{ id: number; actionType: string; jobId: string; status: string }>;
     updateApplicationStatus: (jobId: string, status: string, note?: string) => boolean;
@@ -1098,6 +1099,30 @@ async function runTests(): Promise<void> {
     const revisedDraft = getApplicationDraft(prepareJob.id);
     assert(Boolean(revisedDraft?.proposalText.includes("highest-leverage retention work")), "Stored draft should be updated with deterministic revision text.");
 
+    const exactUpworkVersion = "  Exact Upwork cover letter used.\n\nThis came from the verified inserted version.  ";
+    recordProposalVersion({
+      jobId: prepareJob.id,
+      source: "upwork_inserted",
+      proposalText: exactUpworkVersion,
+      screeningAnswers: ["Exact screening answer used."],
+      note: "Test verified inserted version.",
+    });
+    const cvUsedReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "show me CV used",
+      client: {
+        chat: {
+          postMessage: async (payload: { text: string }) => {
+            cvUsedReplies.push(payload.text);
+          },
+        },
+      },
+    });
+    assert(cvUsedReplies.some((reply) => reply.includes(exactUpworkVersion)), "Show me CV used should return the exact Upwork-inserted version.");
+    assert(!cvUsedReplies.join("\n").includes("I can help with the draft, files, proof, boost, or status"), "Show me CV used must not fall back to a command menu.");
+
     const submittedReplies: string[] = [];
     await handleThreadCommand({
       channelId: "C123",
@@ -1112,7 +1137,7 @@ async function runTests(): Promise<void> {
       },
     });
     assert(getApplicationStatus(prepareJob.id) === "submitted", "Slack submitted command should mark local state submitted after Steve manually sends it.");
-    assert(submittedReplies.some((reply) => reply.includes("I marked") && reply.includes("submitted") && reply.includes("Final submit remains manual")), "Submitted reply should acknowledge local state only and preserve final-submit safety.");
+    assert(submittedReplies.some((reply) => reply.includes("final version capture") && reply.includes("Final submit remains manual")), "Submitted reply should queue final readback and preserve final-submit safety.");
     assert(!submittedReplies.join("\n").includes(prepareJob.id), "Submitted reply should hide raw job ids in normal Slack output.");
 
     const outcomeReplies: string[] = [];

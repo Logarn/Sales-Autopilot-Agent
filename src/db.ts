@@ -3018,7 +3018,7 @@ function rowToProposalVersion(row: ApplicationProposalVersionRow): ProposalVersi
 }
 
 export function recordProposalVersion(input: RecordProposalVersionInput): ProposalVersionSnapshot {
-  const cleanProposalText = input.proposalText.trim();
+  const proposalText = input.proposalText;
   const versionNumber = input.versionNumber ?? ((getLatestProposalVersionNumberStmt.get(input.jobId)?.version_number ?? 0) + 1);
   const label = input.label ?? proposalVersionLabel(input.source, versionNumber);
   insertProposalVersionStmt.run(
@@ -3026,7 +3026,7 @@ export function recordProposalVersion(input: RecordProposalVersionInput): Propos
     versionNumber,
     input.source,
     label,
-    cleanProposalText,
+    proposalText,
     JSON.stringify(input.screeningAnswers ?? []),
     input.note ?? null
   );
