@@ -56,6 +56,31 @@ function discoveryContext(html: string, initialUrl = "https://www.upwork.com/nx/
   return { pages: () => [page] };
 }
 
+function multiSourceDiscoveryContext(htmlByUrl: Record<string, string>, initialUrl = "https://www.upwork.com/nx/find-work/best-matches/") {
+  let currentUrl = initialUrl;
+  const navigations: string[] = [];
+  const page = {
+    url: () => currentUrl,
+    title: async () => {
+      const html = htmlByUrl[currentUrl] ?? "";
+      return /just\s+a\s+moment|captcha|cloudflare|security\s+check/i.test(html) ? "Just a moment..." : "Best Matches - Upwork";
+    },
+    locator: () => ({
+      count: async () => 1,
+      textContent: async () => htmlByUrl[currentUrl] ?? "",
+      first() {
+        return this;
+      },
+    }),
+    goto: async (url: string) => {
+      currentUrl = url;
+      navigations.push(url);
+    },
+    evaluate: async <R>() => (htmlByUrl[currentUrl] ?? "") as unknown as R,
+  };
+  return { pages: () => [page], navigations };
+}
+
 function workOnlyDiscoveryContext(html: string, options: { canOpenNewPage: boolean; workUrl?: string; sourceUrl?: string }) {
   const workPage = {
     url: () => options.workUrl ?? "https://www.upwork.com/jobs/~022054121212121212121",
@@ -145,6 +170,11 @@ async function runTests(): Promise<void> {
     runDiscoveryConfiguredSources,
     runDiscoverySource,
   } = await import("./browserDiscoveryTool");
+  const {
+    clearPausedDiscoverySourceHealth,
+    formatDiscoverySourceHealthForSlack,
+    isDiscoverySourceTemporarilyPaused,
+  } = await import("./browserDiscoverySourceHealth");
   const { closeDb, listBrowserActions } = await import("./db");
 
   try {
@@ -306,6 +336,57 @@ async function runTests(): Promise<void> {
     assert.equal(savedPayload?.discoveredAt, discoveredAt.toISOString());
     assert.equal(savedPayload?.canonicalJobUrl, "https://www.upwork.com/jobs/~022056222222222222222");
     assert(savedQueued && hasAllowedCaptureSourceMetadata(savedQueued), "queued saved-search capture should carry allowed source metadata");
+
+    clearPausedDiscoverySourceHealth();
+    const bestOnlyJob = `<article><a href="/jobs/~022056777777777777777">Best Matches safe role</a><span>Posted 2 minutes ago</span></article>`;
+    const blockedSavedSearchHtml = "Just a moment... Checking if the site connection is secure Cloudflare CAPTCHA";
+    const sourceBlockedContext = multiSourceDiscoveryContext({
+      [DISCOVERY_SOURCES.best_matches.url]: bestOnlyJob,
+      [savedSearch.url]: blockedSavedSearchHtml,
+    });
+    const oneBlockedSearch = await runDiscoveryConfiguredSources(
+      sourceBlockedContext,
+      { maxJobs: 3, now: discoveredAt },
+      [DISCOVERY_SOURCES.best_matches, savedSearch]
+    );
+    assert.equal(oneBlockedSearch.ok, true, "one blocked search source should not fail the whole discovery run");
+    assert.equal(oneBlockedSearch.blocked, false, "one blocked search source should not mark the browser globally blocked");
+    assert.equal(oneBlockedSearch.manualAttentionRequired, false, "source-level search checks should not become manual browser attention");
+    assert.equal(oneBlockedSearch.jobsQueued, 1, "Best Matches should continue when it is clean");
+    const pausedSavedSearch = isDiscoverySourceTemporarilyPaused(savedSearch, discoveredAt);
+    assert(pausedSavedSearch, "blocked saved search should be paused in source health");
+    assert.equal(pausedSavedSearch.humanLabel, "Saved Search - Klaviyo DTC");
+    assert.equal(pausedSavedSearch.challengeCheckCount, 1);
+    assert(pausedSavedSearch.pauseUntil, "blocked saved search should have a backoff timestamp");
+
+    const avoidedContext = multiSourceDiscoveryContext({
+      [savedSearch.url]: `<article><a href="/jobs/~022056888888888888888">Should wait for backoff</a><span>Posted 1 minute ago</span></article>`,
+    }, savedSearch.url);
+    const avoidedSavedSearch = await runDiscoverySource(avoidedContext, savedSearch, { maxJobs: 3, now: discoveredAt });
+    assert.equal(avoidedSavedSearch.ok, true);
+    assert.equal(avoidedSavedSearch.sourceAvoided, true, "repeated checked search page should be avoided temporarily");
+    assert.equal(avoidedSavedSearch.jobsQueued, 0);
+    assert.equal(avoidedContext.navigations.length, 0, "temporarily avoided search should not be hammered with a new navigation");
+
+    const normalCopy = formatDiscoverySourceHealthForSlack({ now: discoveredAt });
+    assert.match(normalCopy, /Upwork checked one search page/);
+    assert.match(normalCopy, /I’ll keep hunting from the safer feed/);
+    assert.doesNotMatch(normalCopy, /source cooldown|manual_attention_required|sourceId|retry Klaviyo DTC|https?:\/\//i, "normal Slack copy should avoid backend jargon and raw URLs");
+    const debugCopy = formatDiscoverySourceHealthForSlack({ debug: true, now: discoveredAt });
+    assert.match(debugCopy, /sourceId=/, "debug copy may include technical source ids");
+    assert.match(debugCopy, /url=https:\/\/www\.upwork\.com\/nx\/search\/jobs\//, "debug copy may include raw source URLs");
+
+    clearPausedDiscoverySourceHealth();
+    assert.equal(isDiscoverySourceTemporarilyPaused(savedSearch, discoveredAt), null, "manual clear should reset blocked source state");
+    const retriedSavedSearch = await runDiscoverySource(
+      multiSourceDiscoveryContext({
+        [savedSearch.url]: `<article><a href="/jobs/~022056999999999999999">Recovered saved search role</a><span>Posted 1 minute ago</span></article>`,
+      }, savedSearch.url),
+      savedSearch,
+      { maxJobs: 3, now: discoveredAt }
+    );
+    assert.equal(retriedSavedSearch.ok, true);
+    assert.equal(retriedSavedSearch.jobsQueued, 1, "cleared search source should be retried normally");
 
     const multiSourceDiscovery = await runDiscoveryConfiguredSources(
       discoveryContext(`<article><a href="/jobs/~022056333333333333333">Multi source duplicate role</a><span>Posted 4 minutes ago</span></article>`),
