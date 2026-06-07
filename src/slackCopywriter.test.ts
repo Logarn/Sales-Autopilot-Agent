@@ -31,15 +31,41 @@ async function run(): Promise<void> {
   assert(kimi.requests[0]?.messages.some((message) => message.content.includes("Fucking Lead Closer")), "Kimi copywriter prompt should include the soul.md identity.");
   assert(kimi.requests[0]?.messages.some((message) => message.content.includes("Say \"I.\"")), "Kimi copywriter prompt should include first-person teammate guidance.");
 
-  const leadPacket = fakeProvider("🚀 This one is worth a real shot. I’ll prep it and stop before submit. Final submit remains manual.");
+  const leadPacket = fakeProvider("🚀 This one is worth a real shot. Review it in VNC when ready; I’ll stop before submit.\nhttps://www.upwork.com/jobs/~1234567890");
   const leadPacketCopy = await rewriteSlackCopyWithKimi({
     path: "lead_packet",
-    deterministicText: "New lead: Klaviyo Shopify work. Final submit remains manual.",
+    deterministicText: "New lead: Klaviyo Shopify work. Next: review it. I’ll stop before submit.\nhttps://www.upwork.com/jobs/~1234567890",
     intent: "new_lead_packet",
-    preservePhrases: ["Final submit remains manual"],
+    context: { upworkUrl: "https://www.upwork.com/jobs/~1234567890" },
+    preservePhrases: ["stop before submit", "https://www.upwork.com/jobs/~1234567890"],
   }, leadPacket.provider);
   assert.equal(leadPacketCopy.usedLlm, true);
   assert(leadPacket.requests[0]?.messages.some((message) => message.content.includes("slack_copy:lead_packet")), "Lead packet copy prompt should include soul.md lead-packet context.");
+  assert(leadPacket.requests[0]?.messages.some((message) => message.content.includes("sales memories")), "Lead packet copy prompt should include memory guidance.");
+
+  const missingLeadLink = fakeProvider("🚀 This one is worth a real shot. Reply “prep it” and I’ll stop before submit.");
+  const linkFallback = await rewriteSlackCopyWithKimi({
+    path: "lead_packet",
+    deterministicText: "New lead: Klaviyo Shopify work. Next: reply prep it. I’ll stop before submit.\nhttps://www.upwork.com/jobs/~1234567890",
+    intent: "new_lead_packet",
+    context: { title: "Klaviyo Shopify work", matchLevel: "high", upworkUrl: "https://www.upwork.com/jobs/~1234567890" },
+    preservePhrases: ["stop before submit", "https://www.upwork.com/jobs/~1234567890"],
+  }, missingLeadLink.provider);
+  assert.equal(linkFallback.usedLlm, false);
+  assert(linkFallback.text.includes("https://www.upwork.com/jobs/~1234567890"), "Lead fallback should keep the Upwork link.");
+  assert(linkFallback.text.includes("stop before submit"), "Lead fallback should keep the submit boundary.");
+  assert(!linkFallback.text.includes("packet_sent"), "Lead fallback must not expose raw packet fields.");
+
+  const repeatedOpening = fakeProvider("This is worth prepping. Reply “prep it” and I’ll stop before submit.\nhttps://www.upwork.com/jobs/~1234567890");
+  const repeatedOpeningFallback = await rewriteSlackCopyWithKimi({
+    path: "lead_packet",
+    deterministicText: "New lead: Klaviyo Shopify work. Next: reply prep it. I’ll stop before submit.\nhttps://www.upwork.com/jobs/~1234567890",
+    intent: "new_lead_packet",
+    context: { title: "Klaviyo Shopify work", matchLevel: "high", upworkUrl: "https://www.upwork.com/jobs/~1234567890" },
+    recentPhrases: ["This is worth prepping."],
+    preservePhrases: ["stop before submit", "https://www.upwork.com/jobs/~1234567890"],
+  }, repeatedOpening.provider);
+  assert.equal(repeatedOpeningFallback.usedLlm, false, "Lead copy should reject identical recent openings.");
 
   const rawId = fakeProvider("Retry browser action #123 in thread 111.222.");
   const rawFallback = await rewriteSlackCopyWithKimi({
