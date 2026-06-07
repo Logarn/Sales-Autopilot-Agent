@@ -54,6 +54,7 @@ function containsRawIds(text: string): boolean {
     /\b(?:browser\s+)?action\s*#?\s*\d+\b/i,
     /\b(?:channel\s+(?:id|ts)|thread\s+(?:id|ts)|client_msg_id|event_ts|queue internals)\b/i,
     /\bjob id\s*[:#]\s*[A-Za-z0-9._~:-]+/i,
+    /\bmanual:upwork-[^\s)]+/i,
   ].some((pattern) => pattern.test(text));
 }
 
@@ -63,6 +64,9 @@ function containsRawInternalFields(text: string): boolean {
     /\bplatformEligibility\b/i,
     /\binternalSkipReason\b/i,
     /\bsource_context_unavailable\b/i,
+    /\bfield_preparation_incomplete\b/i,
+    /\bmanual_attention_required\b/i,
+    /\bbrowser_attention_required\b/i,
     /\blead decision\b/i,
     /\bqueue internals\b/i,
   ].some((pattern) => pattern.test(text));
@@ -81,6 +85,14 @@ function violatesProofWording(text: string, deterministicText: string): boolean 
   if (/Proof I used/i.test(text)) return true;
   if (/Proof planned/i.test(deterministicText) && !/Proof planned/i.test(text)) return true;
   if (/Proof verified/i.test(deterministicText) && !/Proof verified/i.test(text)) return true;
+  return false;
+}
+
+function violatesConnectsWording(text: string, deterministicText: string): boolean {
+  const connectsUnknown = /Connects(?:\*?:)?\s*(?:not verified|unknown)|couldn[’']t verify the Connects|Connects section isn[’']t readable/i.test(deterministicText);
+  if (!connectsUnknown) return false;
+  if (/\bConnects verified\b|\bverified Connects\b|Required Connects verified|Connects:\s*\d+\s*(?:required|Connects)?/i.test(text)) return true;
+  if (/\bBoost:\s*(?!not set|skipped)|\bboost\s+\d+\s*(?:selected|Connects)?/i.test(text)) return true;
   return false;
 }
 
@@ -152,6 +164,7 @@ function validateSlackCopy(text: string, request: SlackCopyRequest): string | nu
   if (/\bthe agent\b/i.test(trimmed)) return "third-person agent language";
   if (violatesSubmitBoundary(trimmed)) return "submit boundary violation";
   if (violatesProofWording(trimmed, request.deterministicText)) return "proof wording drift";
+  if (violatesConnectsWording(trimmed, request.deterministicText)) return "connects verification drift";
   if (preservedPhrasesMissing(trimmed, request.preservePhrases)) return "required verbatim text missing";
   if (repeatsRecentOpening(trimmed, request)) return "repeated recent opening";
   if (request.path === "lead_packet") {

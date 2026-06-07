@@ -77,6 +77,27 @@ async function run(): Promise<void> {
   assert.equal(rawFallback.usedLlm, false);
   assert.equal(rawFallback.text, "Retry queued — I’ll re-check the remote Chrome page and stop before submit.");
 
+  const rawInternal = fakeProvider("Upwork needs manual browser attention. Job: manual:upwork-123. Reason: field_preparation_incomplete.");
+  const rawInternalFallback = await rewriteSlackCopyWithKimi({
+    path: "qa_handoff",
+    deterministicText: "⚠️ *I couldn’t verify the Connects cost yet.*\n\n• *Connects:* not verified\n• *Boost:* not set yet\n• *Submit:* untouched",
+    intent: "prepare_application_review_status",
+    preservePhrases: ["• *Submit:* untouched"],
+  }, rawInternal.provider);
+  assert.equal(rawInternalFallback.usedLlm, false);
+  assert(!/manual:upwork|field_preparation_incomplete|manual_attention_required/i.test(rawInternalFallback.text), "Fallback should hide raw internal apply-prep states.");
+
+  const connectsDrift = fakeProvider("Connects verified: 12 required. Boost: 18 selected. Submit untouched.");
+  const connectsFallback = await rewriteSlackCopyWithKimi({
+    path: "qa_handoff",
+    deterministicText: "⚠️ *I couldn’t verify the Connects cost yet.*\n\nI can see the proposal page, but the Connects section isn’t readable right now. I left submit untouched and skipped boost for now.\n\n• *Connects:* not verified\n• *Boost:* not set yet\n• *Submit:* untouched",
+    intent: "prepare_application_review_status",
+    preservePhrases: ["• *Submit:* untouched"],
+  }, connectsDrift.provider);
+  assert.equal(connectsFallback.usedLlm, false, "LLM copy must not upgrade unknown Connects or boost into verified facts.");
+  assert(connectsFallback.text.includes("Connects:* not verified"), "Fallback should keep Connects not verified.");
+  assert(connectsFallback.text.includes("Boost:* not set yet"), "Fallback should keep boost unset.");
+
   const proofDrift = fakeProvider("Proof I used: Fly Boutique.");
   const proofFallback = await rewriteSlackCopyWithKimi({
     path: "qa_handoff",

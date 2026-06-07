@@ -108,6 +108,27 @@ function alertKey(event: BrowserManualAttentionEvent): string {
   return `${event.reason}:${event.actionId ?? "none"}:${event.jobId ?? "none"}`;
 }
 
+function humanBrowserAttentionReason(reason: string): string {
+  if (reason === "captcha_or_security_challenge") return "Upwork is asking for a browser check.";
+  if (reason === "login_required") return "Upwork needs the remote Chrome session logged back in.";
+  if (reason === "two_factor_required") return "Upwork is asking for a two-factor check.";
+  if (reason === "browser_unavailable" || reason === "cdp_unavailable") return "Remote Chrome is not reachable right now.";
+  if (reason === "browser_profile_in_use") return "Remote Chrome is already open with the shared profile.";
+  if (reason === "browser_session_unhealthy") return "Remote Chrome has hit repeated browser checks and needs a human look.";
+  return "Remote Chrome needs a human look before I can keep working safely.";
+}
+
+export function buildManualAttentionSlackText(event: BrowserManualAttentionEvent): string {
+  const jobLine = event.jobTitle ? `\nJob: ${event.jobTitle}` : "";
+  const pageLine = event.title ? `\nPage: ${event.title}` : "";
+  return [
+    "⚠️ *Upwork needs a browser check.*",
+    `${humanBrowserAttentionReason(event.reason)} I paused safely and did not submit anything.${jobLine}${pageLine}`,
+    "Clear it in remote Chrome, then reply “retry” in the relevant Slack thread and I’ll pick this back up.",
+    "Ask for debug details only if you need the raw action state.",
+  ].join("\n");
+}
+
 function recentChallengeEvents(events: BrowserManualAttentionEvent[], now: Date): BrowserManualAttentionEvent[] {
   const cutoff = now.getTime() - BROWSER_SESSION_CHALLENGE_WINDOW_MS;
   return events.filter((event) => Date.parse(event.at) >= cutoff);
@@ -124,21 +145,15 @@ async function maybeSendManualAttentionAlert(record: BrowserSessionRecord, event
     return record;
   }
 
-  const jobLine = event.jobId ? `\nJob: ${event.jobTitle ?? "Unknown title"} (${event.jobId})` : "";
+  const text = buildManualAttentionSlackText(event);
   const sent = await sendSlackMessage({
-    text: "Upwork needs manual browser attention",
+    text: "Upwork needs a browser check",
     blocks: [
       {
         type: "section",
         text: {
           type: "mrkdwn",
-          text:
-            `⚠️ *Upwork needs manual browser attention.*\n` +
-            `I paused safely and did not submit anything.${jobLine}\n` +
-            `Reason: ${event.reason}\n` +
-            `Page: ${event.title ?? "unknown"}\n` +
-            `Please resolve the visible browser page manually, then reply “retry” in the relevant Slack thread.\n` +
-            `Ask for debug details only if you need the raw action state.`,
+          text,
         },
       },
     ],
