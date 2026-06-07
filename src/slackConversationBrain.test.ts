@@ -133,6 +133,16 @@ async function runTests(): Promise<void> {
   assert.deepEqual(unsafe.ok && unsafe.decision.actions, ["queue_prepare_application"], "Unknown unsafe actions should be filtered.");
   assert.equal(unsafe.ok && unsafe.decision.safety.browserChecksBypassAllowed, false);
 
+  const thirdPersonProvider = new FakeProvider({
+    intent: "status_summary",
+    confidence: "high",
+    reply: "The agent can do that and stop before submit.",
+    actions: ["none"],
+  });
+  const thirdPerson = await planSlackConversationWithLlm(baseInput, thirdPersonProvider);
+  assert.equal(thirdPerson.ok, true);
+  assert.equal(thirdPerson.ok && thirdPerson.decision.reply, null, "Conversation brain should reject third-person agent copy.");
+
   const unavailable = await planSlackConversationWithLlm(baseInput, new FakeProvider(null, false));
   assert.equal(unavailable.ok, false, "Unavailable provider should fall back cleanly.");
 

@@ -14,6 +14,7 @@ run npm run build
 run bash scripts/browser-session-scripts.test.sh
 run npm run test:capture
 run npm run test:slack-socket
+run npx tsx src/soul.test.ts
 run npx tsx src/slackThreadBrain.test.ts
 run npx tsx src/slackConversationBrain.test.ts
 run npx tsx src/slackConversationPlanner.test.ts

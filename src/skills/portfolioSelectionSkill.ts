@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { JobPosting, ScoredJob } from "../types";
+import { buildSoulRuntimeGuidance } from "../soul";
 
 export type AssetSafety = boolean | "needs_review";
 
@@ -67,6 +68,7 @@ export interface PortfolioSelectionResult {
   selectedFigmaLinks: PortfolioLink[];
   selectedVideoLinks: PortfolioLink[];
   warnings: string[];
+  soulGuidance?: string[];
 }
 
 interface ProofBankFile {
@@ -271,6 +273,7 @@ export function selectPortfolioAssetsForJob(job: JobPosting | ScoredJob): Portfo
     selectedFigmaLinks: [],
     selectedVideoLinks: [],
     warnings: [],
+    soulGuidance: buildSoulRuntimeGuidance("proof_portfolio_selection"),
   };
 
   const addTheme = (theme: string) => {

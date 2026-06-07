@@ -283,6 +283,7 @@ function cleanText(value: unknown, limit = 1200, options: { rawIdsAllowed?: bool
   if (!trimmed) return null;
   if (hasOldCommandMenu(trimmed)) return null;
   if (!options.rawIdsAllowed && hasRawIds(trimmed)) return null;
+  if (!options.rawIdsAllowed && /\bthe agent\b/i.test(trimmed)) return null;
   if (violatesSubmitBoundary(trimmed)) return null;
   if (/Proof I used/i.test(trimmed)) return null;
   return trimmed.slice(0, limit);

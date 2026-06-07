@@ -47,6 +47,7 @@ import {
   type SlackConversationBrainProvider,
   type SlackConversationBrainInput,
 } from "./slackConversationBrain";
+import { buildSoulRuntimeGuidance } from "./soul";
 import { formatSlackFileIntakeReply, ingestSlackFilesForThread, type SlackFileLike } from "./slackFileIntake";
 import { looksLikeProofPlanRevision, parseProofPlanOverrides, reviseProofPlanOverrides } from "./proofPlanOverrides";
 import {
@@ -761,7 +762,11 @@ function persistConversationBrainLearning(input: {
       threadTs: input.threadTs,
       jobId: input.state?.jobId ?? null,
       confidence: memory.confidence ?? input.decision.confidence,
-      metadata: { intent: input.decision.intent, actions: input.decision.actions },
+      metadata: {
+        intent: input.decision.intent,
+        actions: input.decision.actions,
+        soulGuidance: buildSoulRuntimeGuidance("self_improvement_memory"),
+      },
     });
   }
   const reflection = input.decision.failureReflection;

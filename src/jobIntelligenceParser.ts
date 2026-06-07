@@ -4,6 +4,7 @@ import {
   JOB_INTELLIGENCE_TEMPERATURE,
 } from "./config";
 import { OpenAiCompatibleProvider, getJobIntelligenceProviderConfig, type LlmJsonResult } from "./llm/provider";
+import { buildSoulPromptContext, buildSoulPromptSection } from "./soul";
 import type { ApplicationDraft, JobIntelligence, JobPosting, PlatformPreferenceTier } from "./types";
 
 export interface JobIntelligenceInput {
@@ -306,7 +307,7 @@ export function validateJobIntelligence(raw: unknown, draftText = ""): { valid: 
   return { valid: true, intelligence, errors: [] };
 }
 
-function buildJobIntelligenceMessages(input: JobIntelligenceInput) {
+export function buildJobIntelligenceMessages(input: JobIntelligenceInput) {
   return [
     {
       role: "system" as const,
@@ -319,6 +320,7 @@ function buildJobIntelligenceMessages(input: JobIntelligenceInput) {
         "Migration into a core or secondary platform should not be skipped purely because the source platform is non-core; migration away from core into non-core should usually need manual review or skip depending on scope.",
         "If a job explicitly names one platform, proposal guidance must not substitute a different platform unless this is migration, comparison, or multi-platform work.",
         "If platform is ambiguous or absent, set primaryPlatform to unknown and needsManualReview true with platform-neutral draftConstraints.",
+        buildSoulPromptSection("job_intelligence_and_proof_reasoning"),
       ].join(" "),
     },
     {
@@ -334,6 +336,7 @@ function buildJobIntelligenceMessages(input: JobIntelligenceInput) {
         job: input.job,
         clientDetails: input.clientDetails ?? {},
         draftTextForQaOnly: input.draftText ?? "",
+        soul: buildSoulPromptContext("job_intelligence_and_proof_reasoning"),
         instructions: [
           "Return every required field.",
           "platformMismatchWarnings must include platform_mismatch if draftTextForQaOnly names a different email/SMS/CRM platform than the job's primary platform without migration/comparison context.",

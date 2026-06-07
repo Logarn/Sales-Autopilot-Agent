@@ -11,6 +11,7 @@ import {
 import { OpenAiCompatibleProvider } from "./llm/provider";
 import { logger } from "./logger";
 import { buildJobBlocks, sendSlackPreviewMessage } from "./slack";
+import { buildSoulPromptContext, buildSoulPromptSection } from "./soul";
 import { SlackConversationIntent, SlackConversationIntentType } from "./types";
 
 const INTENT_ALIASES: Array<{ type: SlackConversationIntentType; patterns: RegExp[] }> = [
@@ -107,12 +108,15 @@ async function reviseProposalWithLlm(jobId: string, instruction: string): Promis
     messages: [
       {
         role: "system",
-        content:
+        content: [
           "You revise Upwork proposal drafts. Preserve truthful claims, human-in-control wording, concise tone, and all facts from the original draft unless the instruction explicitly changes wording. Return JSON only with proposalText.",
+          "Never add final-submit claims or unverifiable proof/file/portfolio claims.",
+          buildSoulPromptSection("proposal_revision"),
+        ].join("\n"),
       },
       {
         role: "user",
-        content: JSON.stringify({ jobId, instruction, currentProposalText: draft.proposalText }),
+        content: JSON.stringify({ jobId, instruction, currentProposalText: draft.proposalText, soul: buildSoulPromptContext("proposal_revision") }),
       },
     ],
   });

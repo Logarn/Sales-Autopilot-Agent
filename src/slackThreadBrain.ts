@@ -1,4 +1,5 @@
 import { OpenAiCompatibleProvider, type LlmJsonRequest, type LlmJsonResult } from "./llm/provider";
+import { buildSoulPromptContext, buildSoulPromptSection } from "./soul";
 import type { ApplicationStatus } from "./types";
 
 export type SlackThreadBrainIntent =
@@ -111,6 +112,7 @@ export async function classifySlackThreadWithLlm(
           "Outcome updates like got reply, client replied, interview booked, hired, won, lost, or closed lost are record_outcome. Set outcomeStatus to replied, interview, hired, or lost.",
           "Casual discussion with no instruction is ignore. If the user seems to need the agent but intent is unclear, use clarify.",
           "replyText should be short, casual, and human. Do not use internal jargon. Do not mention final submit except to say it remains manual.",
+          buildSoulPromptSection("legacy_slack_thread_classifier"),
         ].join("\n"),
       },
       {
@@ -122,6 +124,7 @@ export async function classifySlackThreadWithLlm(
           jobId: input.jobId ?? null,
           upworkUrl: input.upworkUrl ?? null,
           threadStatus: input.threadStatus ?? null,
+          soul: buildSoulPromptContext("legacy_slack_thread_classifier"),
         }),
       },
     ],
