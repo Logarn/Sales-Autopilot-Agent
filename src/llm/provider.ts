@@ -8,10 +8,22 @@ import {
   LMSTUDIO_API_KEY,
   LMSTUDIO_BASE_URL,
   LMSTUDIO_MODEL,
+  JOB_INTELLIGENCE_ENABLED,
+  JOB_INTELLIGENCE_MODEL,
+  JOB_INTELLIGENCE_PROVIDER,
+  MOONSHOT_API_KEY,
+  MOONSHOT_BASE_URL,
+  MOONSHOT_MODEL,
   OPENAI_API_KEY,
   OPENROUTER_API_KEY,
   OPENROUTER_BASE_URL,
   OPENROUTER_MODEL,
+  SLACK_COPY_LLM_ENABLED,
+  SLACK_COPY_MODEL,
+  SLACK_COPY_PROVIDER,
+  XAI_API_KEY,
+  XAI_BASE_URL,
+  XAI_MODEL,
 } from "../config";
 
 export interface LlmProviderConfig {
@@ -108,6 +120,64 @@ export function getLlmProviderConfig(): LlmProviderConfig {
     model: process.env.LLM_MODEL || LLM_MODEL,
     baseUrl: (process.env.LLM_BASE_URL || LLM_BASE_URL).replace(/\/$/, ""),
   };
+}
+
+function baseOpenAiCompatibleConfig(input: {
+  enabled: boolean;
+  provider: string;
+  model: string;
+  genericProvider?: LlmProviderConfig;
+}): LlmProviderConfig {
+  const provider = input.provider.trim().toLowerCase();
+  if (provider === "xai" || provider === "grok") {
+    return {
+      enabled: input.enabled,
+      provider: "xai",
+      apiKey: process.env.XAI_API_KEY || process.env.GROK_API_KEY || XAI_API_KEY,
+      model: input.model || process.env.XAI_MODEL || process.env.GROK_MODEL || XAI_MODEL,
+      baseUrl: (process.env.XAI_BASE_URL || process.env.GROK_BASE_URL || XAI_BASE_URL).replace(/\/$/, ""),
+    };
+  }
+  if (provider === "kimi" || provider === "moonshot") {
+    return {
+      enabled: input.enabled,
+      provider: "moonshot",
+      apiKey: process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY || MOONSHOT_API_KEY,
+      model: input.model || process.env.MOONSHOT_MODEL || process.env.KIMI_MODEL || MOONSHOT_MODEL,
+      baseUrl: (process.env.MOONSHOT_BASE_URL || process.env.KIMI_BASE_URL || MOONSHOT_BASE_URL).replace(/\/$/, ""),
+    };
+  }
+  const generic = input.genericProvider ?? getLlmProviderConfig();
+  return {
+    ...generic,
+    enabled: input.enabled,
+    model: input.model || generic.model,
+  };
+}
+
+function runtimeBoolean(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) return fallback;
+  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+}
+
+export function getJobIntelligenceProviderConfig(): LlmProviderConfig {
+  const generic = getLlmProviderConfig();
+  return baseOpenAiCompatibleConfig({
+    enabled: runtimeBoolean(process.env.JOB_INTELLIGENCE_ENABLED, JOB_INTELLIGENCE_ENABLED),
+    provider: process.env.JOB_INTELLIGENCE_PROVIDER || JOB_INTELLIGENCE_PROVIDER || generic.provider,
+    model: process.env.JOB_INTELLIGENCE_MODEL || JOB_INTELLIGENCE_MODEL,
+    genericProvider: generic,
+  });
+}
+
+export function getSlackCopyProviderConfig(): LlmProviderConfig {
+  const generic = getLlmProviderConfig();
+  return baseOpenAiCompatibleConfig({
+    enabled: runtimeBoolean(process.env.SLACK_COPY_LLM_ENABLED, SLACK_COPY_LLM_ENABLED),
+    provider: process.env.SLACK_COPY_PROVIDER || SLACK_COPY_PROVIDER || "kimi",
+    model: process.env.SLACK_COPY_MODEL || SLACK_COPY_MODEL,
+    genericProvider: generic,
+  });
 }
 
 function redactSecret(value: string): string {

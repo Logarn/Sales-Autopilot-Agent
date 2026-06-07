@@ -85,6 +85,7 @@ function fileCapabilityReply(input: SlackConversationPlannerInput): string {
     "Yes. For reusable proof, I can use files already in my proof-assets folder.",
     "For one-off files, attach them in this Slack thread and I can ingest them when Slack files access is enabled.",
     reusableLine + missingLine,
+    "Next, I can attach the available proof in remote Chrome or ingest files you add here, then stop before submit.",
   ].join(" ");
 }
 
@@ -127,15 +128,19 @@ function boostReply(input: SlackConversationPlannerInput): string {
 function coverLetterReply(input: SlackConversationPlannerInput): string {
   const draft = input.draft?.proposalText?.trim();
   if (!draft) {
-    return "I haven’t generated the cover letter yet. I can draft it here first, then wait for your approval before filling Upwork.";
+    return "I haven’t generated the cover letter/CV draft yet. I can draft it here first, then wait for your approval before filling Upwork.";
   }
+  const frustrated = /\b(wtf|what the fuck|just need|need the cv|cv you used)\b/i.test(input.latestMessage);
+  const intro = frustrated
+    ? "You’re right — here’s the draft/CV I have for this thread."
+    : "Here’s the cover letter I drafted.";
   const verificationLine = input.currentBrowserAction?.status === "paused" || input.currentBrowserAction?.status === "failed"
     ? "I have not verified it on the Upwork page yet because the browser prep is paused."
     : input.currentBrowserAction?.status === "completed"
       ? "The last remote Chrome prep completed, but final submit is still manual."
       : "I have not filled Upwork unless you explicitly told me to put it in the remote Chrome page.";
   return [
-    "Here’s the cover letter I drafted.",
+    intro,
     verificationLine,
     "",
     draft,
@@ -184,7 +189,9 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
 
   if (/\b(show|send|post|what'?s|where'?s)\b.*\bcover\s*letter\b/.test(text) ||
     /\b(show|send|post)\b.*\bdraft\b.*\b(used|wrote|filled)\b/.test(text) ||
-    /\bcover\s*letter\b.*\b(used|drafted|wrote|show|send|post)\b/.test(text)) {
+    /\bcover\s*letter\b.*\b(used|drafted|wrote|show|send|post)\b/.test(text) ||
+    /\b(?:cv|proposal)\b.*\b(?:used|show|send|post|need|wrote|drafted)\b/.test(text) ||
+    /\b(?:show|send|post|need)\b.*\b(?:cv|proposal)\b/.test(text)) {
     return {
       intent: "show_cover_letter",
       confidence: "high",

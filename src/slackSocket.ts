@@ -45,6 +45,7 @@ import {
   getProtectedQaQueueItems,
   type ProtectedQaFocusResult,
 } from "./browserQaWorkspace";
+import { rewriteSlackCopyWithKimi, type SlackCopyProvider } from "./slackCopywriter";
 import type { ApplicationStatus } from "./types";
 
 const THREAD_MENTIONS = "<@U0A2X5BCNKC> <@U0AHJFYV42K>";
@@ -165,7 +166,8 @@ function matchesDraftPreviewIntent(value: string): boolean {
 export function shouldAskClarifyingThreadQuestion(text: string): boolean {
   const normalized = normalizeSlackTextInput(text).toLowerCase();
   return hasSlackMention(text) ||
-    /\b(?:prep|prepare|draft|cover\s*letter|apply|listing|link|connects|rate|proof|file|red flags?|risk|why|status|next|should|can you|please|reply|replied|interview|hired|lost|outcome|submitted|ready|qa queue|blocked|everything)\b/.test(normalized);
+    /\b(?:prep|prepare|draft|cover\s*letter|apply|listing|link|connects|rate|proof|file|red flags?|risk|why|status|next|should|can you|please|reply|replied|interview|hired|lost|outcome|submitted|ready|qa queue|blocked|everything)\b/.test(normalized) ||
+    /\b(?:cv|proposal)\b/.test(normalized);
 }
 
 function parseUrlSafely(value: string): ParsedUpworkUrl | null {
@@ -751,6 +753,25 @@ async function postThreadReply(client: App["client"], channel: string, threadTs:
   await client.chat.postMessage({ channel, thread_ts: threadTs, text });
 }
 
+async function userFacingSlackCopy(input: {
+  deterministicText: string;
+  userMessage?: string | null;
+  intent?: string | null;
+  context?: Record<string, unknown>;
+  preservePhrases?: string[];
+  copyProvider?: SlackCopyProvider;
+}): Promise<string> {
+  const result = await rewriteSlackCopyWithKimi({
+    path: "conversation_reply",
+    deterministicText: input.deterministicText,
+    userMessage: input.userMessage,
+    intent: input.intent,
+    context: input.context,
+    preservePhrases: input.preservePhrases,
+  }, input.copyProvider);
+  return result.text;
+}
+
 export function queueCaptureFromSlackUrl(input: {
   channelId: string;
   messageTs: string;
@@ -840,22 +861,52 @@ async function executeConversationPlan(params: {
   channelId: string;
   threadTs: string;
   client: App["client"];
+  userMessage: string;
+  copyProvider?: SlackCopyProvider;
 }): Promise<void> {
   if (params.plan.actions.includes("send_draft_preview")) {
     const result = buildDraftPreviewFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs });
     if (!result.ok) updateSlackThreadStateStatus(params.state.channelId, params.state.threadTs, "error");
-    await postThreadReply(params.client, params.channelId, params.threadTs, result.text);
+    const draft = params.state.jobId ? getApplicationDraft(params.state.jobId)?.proposalText.trim() : "";
+    const text = await userFacingSlackCopy({
+      deterministicText: result.text,
+      userMessage: params.userMessage,
+      intent: params.plan.intent,
+      context: { jobId: params.state.jobId, threadStatus: params.state.status },
+      preservePhrases: draft ? [draft, "Final submit remains manual."] : ["Final submit remains manual."],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
   if (params.plan.actions.includes("queue_prepare_application") || params.plan.actions.includes("retry_prepare_after_files")) {
+    const ackText = await userFacingSlackCopy({
+      deterministicText: params.plan.reply,
+      userMessage: params.userMessage,
+      intent: params.plan.intent,
+      context: { jobId: params.state.jobId, threadStatus: params.state.status },
+      preservePhrases: params.plan.reply.toLowerCase().includes("stop before submit") ? ["stop before submit"] : [],
+      copyProvider: params.copyProvider,
+    });
     const result = queuePrepareDraftFromSlackThread({
       channelId: params.channelId,
       threadTs: params.threadTs,
-      ackText: params.plan.reply,
+      ackText,
       forceRetryPaused: params.plan.actions.includes("retry_prepare_after_files"),
     });
     if (!result.ok) updateSlackThreadStateStatus(params.state.channelId, params.state.threadTs, "error");
-    await postThreadReply(params.client, params.channelId, params.threadTs, result.text);
+    const text = await userFacingSlackCopy({
+      deterministicText: result.text,
+      userMessage: params.userMessage,
+      intent: params.plan.intent,
+      context: { jobId: params.state.jobId, threadStatus: params.state.status, queued: result.ok },
+      preservePhrases: [
+        ...(params.state.upworkUrl ? [params.state.upworkUrl] : []),
+        ...(result.text.toLowerCase().includes("stop before submit") ? ["stop before submit"] : []),
+      ],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
   if (params.plan.actions.includes("mark_skip")) {
@@ -863,10 +914,26 @@ async function executeConversationPlan(params: {
       updateApplicationStatus(params.state.jobId, "rejected", "Skipped from Slack conversation planner.");
     }
     updateSlackThreadStateStatus(params.state.channelId, params.state.threadTs, "reject_requested");
-    await postThreadReply(params.client, params.channelId, params.threadTs, params.plan.reply);
+    const text = await userFacingSlackCopy({
+      deterministicText: params.plan.reply,
+      userMessage: params.userMessage,
+      intent: params.plan.intent,
+      context: { jobId: params.state.jobId, threadStatus: params.state.status },
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
-  await postThreadReply(params.client, params.channelId, params.threadTs, params.plan.reply);
+  const draft = params.state.jobId && params.plan.intent === "show_cover_letter" ? getApplicationDraft(params.state.jobId)?.proposalText.trim() : "";
+  const text = await userFacingSlackCopy({
+    deterministicText: params.plan.reply,
+    userMessage: params.userMessage,
+    intent: params.plan.intent,
+    context: { jobId: params.state.jobId, threadStatus: params.state.status },
+    preservePhrases: draft ? [draft] : [],
+    copyProvider: params.copyProvider,
+  });
+  await postThreadReply(params.client, params.channelId, params.threadTs, text);
 }
 
 export interface SlackSocketTextEvent {
@@ -997,6 +1064,7 @@ export async function handleThreadCommand(params: {
   text: string;
   client: App["client"];
   intentProvider?: SlackThreadBrainProvider;
+  copyProvider?: SlackCopyProvider;
   focusQaTab?: (input: { jobId?: string | null; index?: number; query?: string | null }) => Promise<ProtectedQaFocusResult>;
 }): Promise<void> {
   const state = getSlackThreadStateByThreadTs(params.channelId, params.threadTs);
@@ -1023,7 +1091,15 @@ export async function handleThreadCommand(params: {
       index: command.qaIndex,
       query: command.qaQuery,
     });
-    await postThreadReply(params.client, params.channelId, params.threadTs, focus.text);
+    const text = await userFacingSlackCopy({
+      deterministicText: focus.text,
+      userMessage: params.text,
+      intent: "focus_qa_tab",
+      context: { jobId: state?.jobId ?? null, ok: focus.ok },
+      preservePhrases: focus.text.includes("Final submit is still untouched") ? ["Final submit is still untouched."] : [],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     if (focus.ok && state) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "status_checked");
     }
@@ -1034,22 +1110,42 @@ export async function handleThreadCommand(params: {
     const queueItem = getProtectedQaQueueItems(1000).find((item) => item.index === command.actionId);
     const action = queueItem?.action ?? getBrowserActionById(command.actionId);
     if (!action) {
-      await postThreadReply(params.client, params.channelId, params.threadTs, "I could not find that browser step or QA queue item anymore. Ask “what’s ready?” to refresh the queue.");
+      const text = await userFacingSlackCopy({
+        deterministicText: "I could not find that browser step or QA queue item anymore. Ask “what’s ready?” to refresh the queue.",
+        userMessage: params.text,
+        intent: "retry_action",
+        copyProvider: params.copyProvider,
+      });
+      await postThreadReply(params.client, params.channelId, params.threadTs, text);
       return;
     }
     if (action.status !== "paused" && action.status !== "failed") {
-      await postThreadReply(params.client, params.channelId, params.threadTs, `That browser work is ${action.status}, so there is nothing to retry. Ask “what’s ready?” to see the current queue.`);
+      const text = await userFacingSlackCopy({
+        deterministicText: `That browser work is ${action.status}, so there is nothing to retry. Ask “what’s ready?” to see the current queue.`,
+        userMessage: params.text,
+        intent: "retry_action",
+        context: { actionStatus: action.status },
+        copyProvider: params.copyProvider,
+      });
+      await postThreadReply(params.client, params.channelId, params.threadTs, text);
       return;
     }
     updateBrowserActionStatus(action.id, "pending", "Slack socket queue retry request.");
-    await postThreadReply(params.client, params.channelId, params.threadTs, "Retry queued — I’ll re-check the remote Chrome page and stop before submit.");
+    const text = await userFacingSlackCopy({
+      deterministicText: "Retry queued — I’ll re-check the remote Chrome page and stop before submit.",
+      userMessage: params.text,
+      intent: "retry_action",
+      preservePhrases: ["stop before submit"],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
   if (command.type === "clarify") {
     if (state) {
       const plan = buildConversationPlanForThread({ state, text: params.text });
-      await executeConversationPlan({ plan, state, channelId: params.channelId, threadTs: params.threadTs, client: params.client });
+      await executeConversationPlan({ plan, state, channelId: params.channelId, threadTs: params.threadTs, client: params.client, userMessage: params.text, copyProvider: params.copyProvider });
     }
     return;
   }
@@ -1057,7 +1153,7 @@ export async function handleThreadCommand(params: {
   if (command.type === "unknown") {
     if (state && shouldAskClarifyingThreadQuestion(params.text)) {
       const plan = buildConversationPlanForThread({ state, text: params.text });
-      await executeConversationPlan({ plan, state, channelId: params.channelId, threadTs: params.threadTs, client: params.client });
+      await executeConversationPlan({ plan, state, channelId: params.channelId, threadTs: params.threadTs, client: params.client, userMessage: params.text, copyProvider: params.copyProvider });
     }
     return;
   }
@@ -1077,12 +1173,15 @@ export async function handleThreadCommand(params: {
   if (command.type === "status") {
     if (!isDebugStatusRequest(params.text)) {
       const plan = buildConversationPlanForThread({ state, text: params.text });
-      await postThreadReply(
-        params.client,
-        params.channelId,
-        params.threadTs,
-        plan.intent === "unknown_clarify" ? buildShortStatusReply(state) : plan.reply,
-      );
+      const deterministicText = plan.intent === "unknown_clarify" ? buildShortStatusReply(state) : plan.reply;
+      const text = await userFacingSlackCopy({
+        deterministicText,
+        userMessage: params.text,
+        intent: plan.intent,
+        context: { jobId: state.jobId, threadStatus: state.status },
+        copyProvider: params.copyProvider,
+      });
+      await postThreadReply(params.client, params.channelId, params.threadTs, text);
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "status_checked");
       return;
     }
@@ -1163,7 +1262,15 @@ export async function handleThreadCommand(params: {
       forceRetryPaused: true,
     });
     if (!result.ok) updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
-    await postThreadReply(params.client, params.channelId, params.threadTs, result.text);
+    const text = await userFacingSlackCopy({
+      deterministicText: result.text,
+      userMessage: params.text,
+      intent: "proof_revision",
+      context: { jobId: state.jobId, threadStatus: state.status, queued: result.ok },
+      preservePhrases: state.upworkUrl ? [state.upworkUrl] : [],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
@@ -1172,16 +1279,45 @@ export async function handleThreadCommand(params: {
     if (!result.ok) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
     }
-    await postThreadReply(params.client, params.channelId, params.threadTs, result.text);
+    const draft = state.jobId ? getApplicationDraft(state.jobId)?.proposalText.trim() : "";
+    const text = await userFacingSlackCopy({
+      deterministicText: result.text,
+      userMessage: params.text,
+      intent: "draft_preview",
+      context: { jobId: state.jobId, threadStatus: state.status },
+      preservePhrases: draft ? [draft, "Final submit remains manual."] : ["Final submit remains manual."],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
   if (command.type === "approve_prepare" || command.type === "prepare_draft") {
-    const result = queuePrepareDraftFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs, ackText: command.replyText });
+    const ackText = command.replyText
+      ? await userFacingSlackCopy({
+        deterministicText: command.replyText,
+        userMessage: params.text,
+        intent: command.type,
+        context: { jobId: state.jobId, threadStatus: state.status },
+        copyProvider: params.copyProvider,
+      })
+      : undefined;
+    const result = queuePrepareDraftFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs, ackText });
     if (!result.ok) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
     }
-    await postThreadReply(params.client, params.channelId, params.threadTs, result.text);
+    const text = await userFacingSlackCopy({
+      deterministicText: result.text,
+      userMessage: params.text,
+      intent: command.type,
+      context: { jobId: state.jobId, threadStatus: state.status, queued: result.ok },
+      preservePhrases: [
+        ...(state.upworkUrl ? [state.upworkUrl] : []),
+        ...(result.text.toLowerCase().includes("stop before submit") ? ["stop before submit"] : []),
+      ],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
@@ -1194,11 +1330,24 @@ export async function handleThreadCommand(params: {
     });
     if (!result.ok) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
-      const details = buildThreadStatusDetails(state).slice(0, 8).join("\n");
-      await postThreadReply(params.client, params.channelId, params.threadTs, [result.text, details].filter(Boolean).join("\n"));
+      const text = await userFacingSlackCopy({
+        deterministicText: result.text,
+        userMessage: params.text,
+        intent: "prep_issue_report",
+        context: { jobId: state.jobId, threadStatus: state.status, queued: false },
+        copyProvider: params.copyProvider,
+      });
+      await postThreadReply(params.client, params.channelId, params.threadTs, text);
       return;
     }
-    await postThreadReply(params.client, params.channelId, params.threadTs, result.text);
+    const text = await userFacingSlackCopy({
+      deterministicText: result.text,
+      userMessage: params.text,
+      intent: "prep_issue_report",
+      context: { jobId: state.jobId, threadStatus: state.status, queued: result.ok },
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
@@ -1206,7 +1355,14 @@ export async function handleThreadCommand(params: {
     const resolved = resolveRetryAction({ state, actionId: command.actionId });
     const action = resolved.action;
     if (!action) {
-      await postThreadReply(params.client, params.channelId, params.threadTs, resolved.reason);
+      const text = await userFacingSlackCopy({
+        deterministicText: resolved.reason,
+        userMessage: params.text,
+        intent: "retry_action",
+        context: { jobId: state.jobId, threadStatus: state.status },
+        copyProvider: params.copyProvider,
+      });
+      await postThreadReply(params.client, params.channelId, params.threadTs, text);
       return;
     }
     updateBrowserActionStatus(action.id, "pending", "Slack socket retry request.");
@@ -1216,7 +1372,15 @@ export async function handleThreadCommand(params: {
       logger.info(`Cleared browser manual attention for action #${action.id}; state=${clearResult.state}.`);
     }
     updateSlackThreadStateStatus(state.channelId, state.threadTs, "retry_requested");
-    await postThreadReply(params.client, params.channelId, params.threadTs, "Retry queued — I’ll re-check the remote Chrome page and stop before submit.");
+    const text = await userFacingSlackCopy({
+      deterministicText: "Retry queued — I’ll re-check the remote Chrome page and stop before submit.",
+      userMessage: params.text,
+      intent: "retry_action",
+      context: { jobId: state.jobId, threadStatus: state.status },
+      preservePhrases: ["stop before submit"],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 

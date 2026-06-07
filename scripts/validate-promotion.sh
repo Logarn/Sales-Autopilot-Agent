@@ -30,6 +30,7 @@ run npx tsx src/health.test.ts
 run npx tsx src/controlledWorkerLoop.test.ts
 run npx tsx src/connectsStrategy.test.ts
 run npx tsx src/llm/provider.test.ts
+run npx tsx src/slackCopywriter.test.ts
 run npx tsx src/critic.test.ts
 run npx tsx src/intelligenceScoring.test.ts
 run npx tsx src/jobIntelligenceParser.test.ts

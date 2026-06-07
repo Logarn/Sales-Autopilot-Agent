@@ -51,11 +51,12 @@ import {
 import { extractConnectsFromVisibleText } from "./connectsExtraction";
 import { chooseVisibleBoost, extractVisibleBoostBids } from "./connectsStrategy";
 import { guardedClick } from "./browserSafetyGuard";
-import { buildV3CapturePacket, getSlackLeadPostingDecision, SlackPacketV3Context } from "./slackPacketV3";
+import { buildV3CapturePacket, getSlackLeadPostingDecision, SlackPacketV3Context, SlackPacketV3Message } from "./slackPacketV3";
 import { evaluatePlatformEligibility } from "./platformEligibility";
 import { decideLeadHandling } from "./leadDecision";
 import { sendSlackMessage } from "./slack";
 import { postSlackChannelMessage, postSlackThreadMessage } from "./slackThread";
+import { rewriteSlackCopyWithKimi, type SlackCopyProvider } from "./slackCopywriter";
 import type { IncomingWebhookSendArguments } from "@slack/webhook";
 import {
   BrowserSessionStatus,
@@ -942,7 +943,7 @@ export async function postV3CapturePacketToThread(
     );
     return "skipped";
   }
-  const packet = buildV3CapturePacket(job, context);
+  const packet = await rewriteLeadPacketCopyForSlack(buildV3CapturePacket(job, context), job, context);
   const posted = await postThreadMessage({
     channel: thread.channelId,
     threadTs: thread.threadTs,
@@ -953,6 +954,43 @@ export async function postV3CapturePacketToThread(
     updateApplicationStatus(job.id, "sent_to_slack", "Lead packet posted to Slack for review.");
   }
   return posted ? "posted" : "failed";
+}
+
+async function rewriteLeadPacketCopyForSlack(
+  packet: SlackPacketV3Message,
+  job: ScoredJob,
+  context: SlackPacketV3Context,
+  copyProvider?: SlackCopyProvider,
+): Promise<SlackPacketV3Message> {
+  const copy = await rewriteSlackCopyWithKimi({
+    path: "lead_packet",
+    deterministicText: packet.text,
+    intent: "new_lead_packet",
+    context: {
+      jobId: job.id,
+      title: job.title,
+      score: job.score,
+      matchLevel: job.matchLevel,
+      platform: context.jobIntelligence?.primaryPlatform ?? job.applicationDraft?.jobIntelligence?.primaryPlatform ?? null,
+      autoPrepareNote: context.autoPrepareNote ?? null,
+    },
+    preservePhrases: [
+      job.url || context.upworkUrl,
+      "Final submit remains manual",
+    ].filter(Boolean),
+  }, copyProvider);
+  if (!copy.usedLlm) return packet;
+  const blocks = packet.blocks.map((block, index) => {
+    if (index !== 0 || block.type !== "section") return block;
+    return {
+      ...block,
+      text: {
+        type: "mrkdwn",
+        text: copy.text,
+      },
+    };
+  });
+  return { text: copy.text, blocks };
 }
 
 function buildPrepareDraftStatusMessage(input: {
@@ -1074,9 +1112,28 @@ export async function postPrepareDraftStatus(
     postThreadMessage?: typeof postSlackThreadMessage;
     postChannelMessage?: typeof postSlackChannelMessage;
     postWebhookMessage?: typeof sendSlackMessage;
+    copyProvider?: SlackCopyProvider;
   } = {},
 ): Promise<"posted" | "skipped" | "failed"> {
-  const text = buildPrepareDraftStatusMessage(input);
+  const deterministicText = buildPrepareDraftStatusMessage(input);
+  const copy = await rewriteSlackCopyWithKimi({
+    path: "qa_handoff",
+    deterministicText,
+    intent: "prepare_application_review_status",
+    context: {
+      browserState: input.diagnostics.state,
+      stopBeforeSubmit: input.diagnostics.stopBeforeSubmit,
+      filesAttachedCount: input.diagnostics.filesAttached?.length ?? 0,
+      selectedHighlightsCount: input.diagnostics.selectedHighlights?.length ?? 0,
+    },
+    preservePhrases: [
+      "• *Submit:* untouched",
+      ...(deterministicText.includes("Proof planned") ? ["Proof planned"] : []),
+      ...(deterministicText.includes("Proof verified") ? ["Proof verified"] : []),
+      ...(deterministicText.includes("reply “retry”") ? ["reply “retry”"] : []),
+    ],
+  }, deps.copyProvider);
+  const text = copy.text;
   if (input.thread) {
     const posted = await (deps.postThreadMessage ?? postSlackThreadMessage)({
       channel: input.thread.channelId,
@@ -2234,6 +2291,7 @@ export async function postDiscoveryCapturePacket(input: {
   postChannelMessage?: typeof postSlackChannelMessage;
   postThreadMessage?: typeof postSlackThreadMessage;
   postWebhookMessage?: typeof sendSlackMessage;
+  copyProvider?: SlackCopyProvider;
 } = {}): Promise<DiscoveryLeadPostResult> {
   const postChannelMessage = deps.postChannelMessage ?? postSlackChannelMessage;
   const postThreadMessage = deps.postThreadMessage ?? postSlackThreadMessage;
@@ -2255,7 +2313,7 @@ export async function postDiscoveryCapturePacket(input: {
     );
     return { status: "not_discovery", outcome: "not_needed" };
   }
-  const packet = buildV3CapturePacket(input.scored, {
+  const packetContext: SlackPacketV3Context = {
     upworkUrl: input.upworkUrl,
     captureStatus: "packet_sent",
     browserCaptureActionId: input.action.id,
@@ -2271,7 +2329,8 @@ export async function postDiscoveryCapturePacket(input: {
     sourceType: discovery.sourceType,
     sourceLabel: discovery.sourceLabel,
     postedAtText: discovery.postedAtText,
-  });
+  };
+  const packet = await rewriteLeadPacketCopyForSlack(buildV3CapturePacket(input.scored, packetContext), input.scored, packetContext, deps.copyProvider);
   const existingThread = getSlackThreadStateByJobId(input.scored.id);
   if (existingThread) {
     const posted = await postThreadMessage({

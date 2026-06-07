@@ -53,7 +53,7 @@ async function runTests(): Promise<void> {
     buildDraftPreviewFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string };
     buildSlackSocketStartupError: (input: { socketEnabled: boolean; botToken: string; appToken: string }) => string | null;
     handleSlackSocketTextEvent: (event: { channel: string; ts: string; text?: string; thread_ts?: string; client_msg_id?: string; event_id?: string; event_ts?: string; bot_id?: string; subtype?: string; files?: any[] }, client: any) => Promise<void>;
-    handleThreadCommand: (input: { channelId: string; threadTs: string; text: string; client: any; intentProvider?: any; focusQaTab?: any }) => Promise<void>;
+    handleThreadCommand: (input: { channelId: string; threadTs: string; text: string; client: any; intentProvider?: any; copyProvider?: any; focusQaTab?: any }) => Promise<void>;
     parseSlackThreadCommand: (value: string) => {
       type: string;
       rawText: string;
@@ -92,6 +92,15 @@ async function runTests(): Promise<void> {
     isAvailable: () => true,
     completeJson: async () => ({ ok: true, data: decision }),
   });
+  const fakeCopyRequests: unknown[] = [];
+  const fakeCopyProvider = {
+    isAvailable: () => true,
+    completeJson: async (request: any) => {
+      fakeCopyRequests.push(request);
+      const payload = JSON.parse(request.messages[1].content);
+      return { ok: true, data: { text: `Kimi copy: ${payload.deterministicText}` } };
+    },
+  };
 
   try {
     const urlTests: TestCase[] = [
@@ -175,7 +184,9 @@ async function runTests(): Promise<void> {
       { name: "natural put it in Upwork", input: "put it in Upwork", expectType: "approve_prepare" },
       { name: "natural apply", input: "apply", expectType: "approve_prepare" },
       { name: "qa queue", input: "what’s ready?", expectType: "qa_queue" },
+      { name: "show QA queue", input: "show QA queue.", expectType: "qa_queue" },
       { name: "focus current application", input: "open this", expectType: "focus_qa_tab" },
+      { name: "show application page", input: "show me the application page.", expectType: "focus_qa_tab" },
       { name: "focus indexed application", input: "open 1", expectType: "focus_qa_tab" },
       { name: "prep issue cover letter empty", input: "I do not see the cover letter filled in.", expectType: "prep_issue_report" },
       { name: "prep issue empty", input: "it’s empty", expectType: "prep_issue_report" },
@@ -183,6 +194,7 @@ async function runTests(): Promise<void> {
       { name: "live phrasing", input: "yeah, prep drafts and send link to listing", expectType: "approve_prepare" },
       { name: "bot mention raises prep confidence", input: "yeah, prep drafts and send link to listing <@UAGENT>", expectType: "approve_prepare" },
       { name: "retry action", input: "retry 123", expectType: "retry_action", actionId: 123 },
+      { name: "natural retry exact", input: "Retry.", expectType: "retry_action" },
       { name: "natural retry preparation", input: "Retry preparation.", expectType: "retry_action" },
       { name: "mark submitted", input: "mark submitted", expectType: "mark_submitted" },
       { name: "got reply outcome", input: "got reply", expectType: "record_outcome", outcomeStatus: "replied" },
@@ -328,8 +340,20 @@ async function runTests(): Promise<void> {
     });
     assert(fileQuestionReplies.some((reply) => reply.includes("For reusable proof") && reply.includes("attach them in this Slack thread")), "File capability question should get a direct useful answer.");
     assert(fileQuestionReplies.some((reply) => reply.includes("For this job")), "File capability answer should describe this job's reusable proof state.");
+    assert(fileQuestionReplies.some((reply) => reply.includes("Next, I can attach the available proof")), "File capability answer should explain what the agent can do next.");
     assert(!fileQuestionReplies.join("\n").includes("Want me to prep it"), "File capability answer must not fall back to the old command menu.");
     assert(!fileQuestionReplies.join("\n").includes("I can help with the draft, files, proof, boost, or status"), "File capability answer must not show the generic command menu.");
+
+    const kimiFileQuestionReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "Can you upload the files from here? If you had access?",
+      copyProvider: fakeCopyProvider,
+      client: { chat: { postMessage: async (payload: { text: string }) => kimiFileQuestionReplies.push(payload.text) } },
+    });
+    assert(kimiFileQuestionReplies.some((reply) => reply.startsWith("Kimi copy:") && reply.includes("For reusable proof")), "Kimi copy provider should rewrite Slack conversation replies when available.");
+    assert(fakeCopyRequests.some((request: any) => request.messages?.[1]?.content?.includes("answer_file_capability_question")), "Kimi copy request should include the conversation intent.");
 
     const coverLetterReplies: string[] = [];
     await handleThreadCommand({
@@ -341,6 +365,45 @@ async function runTests(): Promise<void> {
     assert(coverLetterReplies.some((reply) => reply.includes("Here’s the cover letter I drafted.")), "Cover-letter question should answer directly.");
     assert(coverLetterReplies.some((reply) => reply.includes(prepareJob.applicationDraft.proposalText.slice(0, 80))), "Cover-letter reply should include the draft text.");
     assert(!coverLetterReplies.join("\n").includes("I can help with the draft, files, proof, boost, or status"), "Cover-letter question must not show the generic command menu.");
+
+    const frustratedCvReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "Wtf? I just need the CV you used.",
+      client: { chat: { postMessage: async (payload: { text: string }) => frustratedCvReplies.push(payload.text) } },
+    });
+    assert(frustratedCvReplies.some((reply) => reply.includes("You’re right") && reply.includes("draft/CV")), "Frustrated CV question should acknowledge and answer directly.");
+    assert(frustratedCvReplies.some((reply) => reply.includes(prepareJob.applicationDraft.proposalText.slice(0, 80))), "Frustrated CV reply should include the stored draft.");
+    assert(!frustratedCvReplies.join("\n").includes("I can help with the draft, files, proof, boost, or status"), "Frustrated CV reply must not show the generic command menu.");
+    assert(!/action\s*#?\d+|Channel message:|Thread:/i.test(frustratedCvReplies.join("\n")), "Frustrated CV reply must not expose raw ids.");
+
+    const everythingJob = {
+      ...prepareJob,
+      id: "everything-safe-prep-job",
+      applicationDraft: {
+        ...prepareJob.applicationDraft,
+        jobId: "everything-safe-prep-job",
+      },
+    };
+    markJobSeen(everythingJob, false);
+    upsertSlackThreadState({
+      channelId: "CEVERY",
+      messageTs: "118.001",
+      threadTs: "118.001",
+      upworkUrl: everythingJob.url,
+      jobId: everythingJob.id,
+      status: "packet_sent",
+    });
+    const everythingReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "CEVERY",
+      threadTs: "118.001",
+      text: "Everything that needs to be done.",
+      client: { chat: { postMessage: async (payload: { text: string }) => everythingReplies.push(payload.text) } },
+    });
+    assert(everythingReplies.some((reply) => reply.includes("all safe prep steps") && reply.includes("stop before submit")), "Everything-that-needs-to-be-done should authorize safe prep and preserve submit boundary.");
+    assert(listBrowserActions(null, 1000).some((action) => action.jobId === everythingJob.id && action.actionType === "prepare_application_review"), "Everything-that-needs-to-be-done should queue prepare_application_review.");
 
     const fileIntakeReplies: string[] = [];
     const originalFetch = global.fetch;
@@ -647,6 +710,18 @@ async function runTests(): Promise<void> {
     assert(retryReplies.some((reply) => reply.includes("Retry queued") && reply.includes("stop before submit")), "Natural retry should reply in plain English in the same tracked thread.");
     assert(!retryReplies.join("\n").includes(String(prepareResult.actionId)), "Natural retry should not expose raw action ids by default.");
 
+    const exactRetryReplies: string[] = [];
+    updateBrowserActionStatus(prepareResult.actionId!, "failed", "field_preparation_incomplete");
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "Retry.",
+      client: { chat: { postMessage: async (payload: { text: string }) => exactRetryReplies.push(payload.text) } },
+    });
+    assert(getBrowserActionById(prepareResult.actionId!)?.status === "pending", "Exact Retry should find the latest failed browser action for the thread.");
+    assert(exactRetryReplies.some((reply) => reply.includes("Retry queued") && reply.includes("stop before submit")), "Exact Retry should not say no paused action found when one exists.");
+    assert(!/No paused|No paused or failed|action\s*#?\d+/i.test(exactRetryReplies.join("\n")), "Exact Retry should avoid the old failure wording and raw ids.");
+
     updateBrowserActionStatus(prepareResult.actionId!, "failed", "field_preparation_incomplete");
     const directRetryReplies: string[] = [];
     await handleThreadCommand({
@@ -686,6 +761,20 @@ async function runTests(): Promise<void> {
     assert(focusCalls[0]?.jobId === prepareJob.id, "Open-this should focus the protected apply tab for the current thread job.");
     assert(focusReplies.some((reply) => reply.includes("remote Chrome application tab") && reply.includes("Final submit is still untouched")), "Open-this should produce the expected VNC handoff.");
 
+    const showApplicationReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "show me the application page.",
+      focusQaTab: async (input: { jobId?: string | null; index?: number; query?: string | null }) => {
+        focusCalls.push(input);
+        return { ok: true, text: "Done — I brought the remote Chrome application tab to the front. Review it in VNC. Final submit is still untouched." };
+      },
+      client: { chat: { postMessage: async (payload: { text: string }) => showApplicationReplies.push(payload.text) } },
+    });
+    assert(focusCalls[focusCalls.length - 1]?.jobId === prepareJob.id, "Show-application-page should focus the protected apply tab for the current thread job.");
+    assert(showApplicationReplies.some((reply) => reply.includes("remote Chrome application tab") && reply.includes("Final submit is still untouched")), "Show-application-page should reply with the bring-to-front handoff.");
+
     const qaQueueReplies: string[] = [];
     await handleThreadCommand({
       channelId: "C123",
@@ -695,6 +784,16 @@ async function runTests(): Promise<void> {
     });
     assert(qaQueueReplies.some((reply) => reply.includes("QA queue") && reply.includes("Say \"open 1\"")), "QA queue should list protected applications with open-index guidance.");
     assert(!qaQueueReplies.join("\n").includes("action #"), "QA queue should not expose raw action ids.");
+
+    const showQaQueueReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C123",
+      threadTs: "111.222",
+      text: "show QA queue.",
+      client: { chat: { postMessage: async (payload: { text: string }) => showQaQueueReplies.push(payload.text) } },
+    });
+    assert(showQaQueueReplies.some((reply) => reply.includes("QA queue") && (reply.includes("blocked") || reply.includes("ready"))), "Show QA queue should return the compact queue.");
+    assert(!/action\s*#?\d+|Channel message:|Thread:/i.test(showQaQueueReplies.join("\n")), "Show QA queue should not expose raw ids.");
 
     for (let i = 2; i <= 5; i += 1) {
       const qaJob = scoreJob({

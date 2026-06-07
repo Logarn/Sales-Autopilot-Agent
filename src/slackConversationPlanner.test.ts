@@ -43,7 +43,13 @@ assert(coverLetter.reply.includes("Draft text"));
 
 const noDraftCoverLetter = planSlackConversation({ ...baseInput, draft: null, latestMessage: "Show me the cover letter you used here." });
 assert.equal(noDraftCoverLetter.intent, "show_cover_letter");
-assert(noDraftCoverLetter.reply.includes("I haven’t generated the cover letter yet."));
+assert(noDraftCoverLetter.reply.includes("I haven’t generated the cover letter/CV draft yet."));
+
+const frustratedCv = planSlackConversation({ ...baseInput, latestMessage: "Wtf? I just need the CV you used." });
+assert.equal(frustratedCv.intent, "show_cover_letter");
+assert(frustratedCv.reply.includes("You’re right"));
+assert(frustratedCv.reply.includes("Draft text"));
+assert(!frustratedCv.reply.includes("I can help with the draft, files, proof, boost, or status."));
 
 const status = planSlackConversation({ ...baseInput, latestMessage: "status" });
 assert.equal(status.intent, "status_summary");

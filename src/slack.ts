@@ -18,6 +18,7 @@ import { logger } from "./logger";
 import { formatConnectsStrategy } from "./connectsStrategy";
 import { DailySummary, ScoredJob } from "./types";
 import { sleep, timeAgo, truncateText, formatInTimezone } from "./utils";
+import { rewriteSlackCopyWithKimi, type SlackCopyProvider } from "./slackCopywriter";
 
 let webhook: IncomingWebhook | null = null;
 if (SLACK_CHANNEL_WEBHOOK_URL) {
@@ -519,7 +520,7 @@ export async function sendHealthAlert(message: string, severity: "warning" | "cr
   });
 }
 
-export async function sendDailySummary(summary: DailySummary): Promise<void> {
+export async function sendDailySummary(summary: DailySummary, deps: { copyProvider?: SlackCopyProvider } = {}): Promise<void> {
   const now = new Date();
   const dayLabel = new Intl.DateTimeFormat("en-KE", {
     timeZone: TIMEZONE,
@@ -528,14 +529,27 @@ export async function sendDailySummary(summary: DailySummary): Promise<void> {
     year: "numeric",
   }).format(now);
 
+  const deterministicText = [
+    `📊 *Daily Upwork Job Summary — ${dayLabel}*`,
+    `High: ${summary.high}; Medium: ${summary.medium}; Low: ${summary.low}; Filtered out: ${summary.filteredOut}.`,
+    summary.topJobTitle ? `Top job: "${summary.topJobTitle}" — Score: ${summary.topJobScore ?? 0}.` : "Top job: no qualifying jobs tracked today.",
+  ].join("\n");
+  const copy = await rewriteSlackCopyWithKimi({
+    path: "daily_digest",
+    deterministicText,
+    intent: "daily_summary",
+    context: summary as unknown as Record<string, unknown>,
+    preservePhrases: [String(summary.high), String(summary.medium), String(summary.low), String(summary.filteredOut)],
+  }, deps.copyProvider);
+
   await sendSlackMessage({
-    text: `📊 Daily Upwork Job Summary — ${dayLabel}`,
+    text: copy.text,
     blocks: [
       {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `📊 *Daily Upwork Job Summary — ${dayLabel}*`,
+          text: copy.text,
         },
       },
       {

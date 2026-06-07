@@ -61,11 +61,13 @@ async function runTests(): Promise<void> {
       postChannelMessage?: (params: any) => Promise<{ ok: boolean; ts?: string; channel?: string }>;
       postThreadMessage?: (params: any) => Promise<boolean>;
       postWebhookMessage?: (params: any) => Promise<boolean>;
+      copyProvider?: any;
     }) => Promise<{ status: "not_discovery" | "missing_channel" | "post_failed" | "posted"; outcome: "not_needed" | "posted" | "failed"; thread?: { channelId: string; messageTs: string; threadTs: string } }>;
     postPrepareDraftStatus: (input: any, deps?: {
       postThreadMessage?: (params: any) => Promise<boolean>;
       postChannelMessage?: (params: any) => Promise<{ ok: boolean; ts?: string; channel?: string }>;
       postWebhookMessage?: (params: any) => Promise<boolean>;
+      copyProvider?: any;
     }) => Promise<"posted" | "skipped" | "failed">;
     postV3CapturePacketToThread: (job: any, thread: { channelId: string; messageTs: string; threadTs: string }, context: any, postThreadMessage?: (params: any) => Promise<boolean>) => Promise<"posted" | "skipped" | "failed">;
     selectPageForBrowserAction: (context: { pages?: () => Array<{ url: () => string }>; newPage: () => Promise<any> }, targetUrl: string, options?: { protectedApplyUrls?: string[] }) => Promise<{ page: any; reusedExistingPage: boolean; reason: string }>;
@@ -1126,6 +1128,35 @@ async function runTests(): Promise<void> {
     for (const noisy of ["manual review", "platformEligibility", "lead decision", "packet", "source context", "action id"]) {
       assert(!blockedPrepCompletionText.toLowerCase().includes(noisy.toLowerCase()), `Blocked prep alert should hide ${noisy}`);
     }
+
+    const kimiQaRequests: any[] = [];
+    let kimiQaHandoffText = "";
+    const kimiQaPost = await postPrepareDraftStatus(
+      {
+        thread: { channelId: "C123", messageTs: "999.222", threadTs: "999.222" },
+        heading: "⚠️ Draft preparation paused for browser action #708.",
+        diagnostics: blockedPrepDiagnostics,
+      },
+      {
+        copyProvider: {
+          isAvailable: () => true,
+          completeJson: async (request: any) => {
+            kimiQaRequests.push(request);
+            const payload = JSON.parse(request.messages[1].content);
+            return { ok: true, data: { text: `Kimi QA:\n${payload.deterministicText}` } };
+          },
+        },
+        postThreadMessage: async (payload) => {
+          kimiQaHandoffText = String(payload.text ?? "");
+          return true;
+        },
+      },
+    );
+    assert(kimiQaPost === "posted", "Kimi QA handoff should still post through the normal Slack path.");
+    assert(kimiQaHandoffText.startsWith("Kimi QA:"), "QA handoff should use Kimi copy when the provider is available and safe.");
+    assert(kimiQaRequests.some((request) => request.messages?.[1]?.content?.includes("\"path\":\"qa_handoff\"")), "Kimi QA handoff request should use the qa_handoff path.");
+    assert(kimiQaHandoffText.includes("*Proof planned:*"), "Kimi QA handoff must preserve planned proof wording.");
+    assert(kimiQaHandoffText.includes("• *Submit:* untouched"), "Kimi QA handoff must preserve submit untouched.");
 
     let globalBlockerText = "";
     const globalBlockerPost = await postPrepareDraftStatus(
