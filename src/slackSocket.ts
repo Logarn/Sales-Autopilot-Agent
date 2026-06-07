@@ -60,7 +60,6 @@ import { buildSoulRuntimeGuidance } from "./soul";
 import {
   buildSalesLearningPromptContext,
   forgetSalesLearning,
-  formatSalesLearningMemoryReply,
   recordApplicationOutcomeLearning,
   recordCodeImprovementTask,
   recordProofPreferenceSignal,
@@ -69,6 +68,7 @@ import {
   rememberSalesLearning,
   retrieveRelevantSalesLearningMemories,
 } from "./salesLearningMemory";
+import { buildSalesLearningInsightReply } from "./salesLearningInsights";
 import { formatSlackFileIntakeReply, ingestSlackFilesForThread, type SlackFileLike } from "./slackFileIntake";
 import { looksLikeProofPlanRevision, parseProofPlanOverrides, reviseProofPlanOverrides } from "./proofPlanOverrides";
 import {
@@ -1892,12 +1892,16 @@ export async function handleThreadCommand(params: {
   }
 
   if (command.type === "memory_query") {
-    const text = formatSalesLearningMemoryReply({
-      jobId: state?.jobId ?? null,
-      text: params.text,
-      limit: 6,
+    const reply = buildSalesLearningInsightReply({
+      question: command.instruction ?? params.text,
+      memories: retrieveRelevantSalesLearningMemories({
+        jobId: state?.jobId ?? null,
+        text: params.text,
+        limit: 20,
+      }),
+      limit: 4,
     });
-    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    await postThreadReply(params.client, params.channelId, params.threadTs, reply.text);
     return;
   }
 

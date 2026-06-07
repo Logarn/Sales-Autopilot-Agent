@@ -1,0 +1,122 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import {
+  buildBoostExpectedValueSignal,
+  buildProposalDiffLearning,
+  buildSourceTimingAttributionSignals,
+  salesLearningSignalsToMemoryInputs,
+} from "./salesLearningSignals";
+
+function assert(condition: boolean, message: string): void {
+  if (!condition) throw new Error(message);
+}
+
+const steveEdit = buildProposalDiffLearning({
+  scope: "fashion:klaviyo",
+  editor: "Steve",
+  generatedDraft: [
+    "I have extensive experience with Klaviyo and would love to help with your email marketing.",
+    "I can create flows and campaigns for your store.",
+    "Let me know if you would like to discuss.",
+  ].join("\n\n"),
+  finalDraft: [
+    "Your post-purchase flow is leaking repeat revenue before the second order.",
+    "Fly Boutique is the closest proof here because we fixed the same retention gap.",
+    "Send me the store URL and I will point to the first two fixes.",
+  ].join("\n\n"),
+});
+
+assert(steveEdit.signals.length === 1, "Steve edit should produce one proposal style signal.");
+const proposalSignal = steveEdit.signals[0]!;
+assert(proposalSignal.type === "proposal_style", "Proposal diff should map to proposal_style.");
+assert(proposalSignal.tags.includes("generic_experience_intro_removed"), "Generic experience intro removal should be detected.");
+assert(proposalSignal.tags.includes("direct_commercial_diagnosis_added"), "Direct commercial diagnosis should be detected.");
+assert(proposalSignal.tags.includes("direct_cta_added"), "Direct CTA changes should be detected.");
+assert(proposalSignal.tags.includes("proof_framing_changed"), "Proof framing changes should be detected.");
+assert(/direct commercial diagnosis/i.test(proposalSignal.hypothesis), "Hypothesis should learn direct commercial diagnosis.");
+assert(steveEdit.memoryInputs[0]?.type === "proposal_style", "Proposal diff should convert to a memory input.");
+
+const boostSignal = buildBoostExpectedValueSignal({
+  scope: "fashion:klaviyo",
+  requiredConnects: 12,
+  boostTable: [
+    { rank: 1, connects: 42 },
+    { rank: 2, connects: 35 },
+    { rank: 3, connects: 28 },
+  ],
+  chosenBoostConnects: 29,
+  outcome: "replied",
+  leadScore: 91,
+  matchLevel: "high",
+});
+
+assert(boostSignal.type === "boost_strategy", "Boost helper should create boost_strategy signal.");
+assert(boostSignal.tags.includes("top_3_visibility_signal"), "Top-3 reply should be preserved as a signal.");
+assert(/top-3 visibility produced a reply/i.test(boostSignal.hypothesis), "Boost hypothesis should say top-3 was enough for a reply.");
+assert(!/always boost 50/i.test(boostSignal.hypothesis), "Boost helper must not encode deterministic always-boost-50 behavior.");
+assert((boostSignal.metadata.chosenBoostConnects as number) <= 50, "Chosen boost metadata must preserve the <=50 cap.");
+assert((boostSignal.metadata.top3ClearConnects as number) <= 50, "Top-3 recommendation metadata must preserve the <=50 cap.");
+
+const overbidSignal = buildBoostExpectedValueSignal({
+  scope: "beauty:klaviyo",
+  requiredConnects: 16,
+  topBids: [61, 31, 24],
+  chosenBoostConnects: 52,
+  chosenRank: 1,
+  outcome: "none",
+});
+
+assert(overbidSignal.tags.includes("over_cap_input_ignored_as_repeatable"), "Over-cap observed boost should be marked non-repeatable.");
+assert((overbidSignal.metadata.chosenBoostConnects as number) === 50, "Over-cap boost should be capped in repeatable metadata.");
+assert((overbidSignal.metadata.top2ClearConnects as number) <= 50, "Top-2 clear estimate should stay under cap.");
+
+const sourceSignals = buildSourceTimingAttributionSignals({
+  sourceLabel: "Saved Search - Klaviyo DTC",
+  sourceType: "saved_search",
+  scans: [
+    {
+      sourceLabel: "Saved Search - Klaviyo DTC",
+      sourceType: "saved_search",
+      scans: 10,
+      goodLeadCount: 1,
+      browserChecks: 8,
+      challenges: 3,
+      outcomes: [{ outcome: "none", count: 9 }],
+    },
+  ],
+});
+const sourceQuality = sourceSignals.find((signal) => signal.type === "source_quality");
+assert(Boolean(sourceQuality), "Source attribution should create a source_quality signal.");
+assert(sourceQuality!.tags.includes("noisy_source_with_browser_checks"), "Noisy saved search with browser checks should be tagged.");
+assert(/down-rank or cooldown/i.test(sourceQuality!.hypothesis), "Noisy source hypothesis should recommend lower priority or cooldown.");
+assert(sourceQuality!.metadata.browserChecks === 8, "Source signal should preserve browser check count.");
+assert(sourceQuality!.metadata.challenges === 3, "Source signal should preserve challenge count.");
+
+const timingSignals = buildSourceTimingAttributionSignals({
+  sourceLabel: "Best Matches",
+  sourceType: "best_matches",
+  timing: {
+    postedAt: "2026-06-07T08:00:00.000Z",
+    discoveredAt: "2026-06-07T08:15:00.000Z",
+    preparedAt: "2026-06-07T08:45:00.000Z",
+    submittedAt: "2026-06-07T09:00:00.000Z",
+    outcome: "replied",
+  },
+});
+const timingSignal = timingSignals.find((signal) => signal.type === "timing_hypothesis");
+assert(Boolean(timingSignal), "Timing attribution should create a timing_hypothesis signal.");
+assert(timingSignal!.tags.includes("fresh_timing_signal"), "Fresh prep should be tagged.");
+assert(/positive freshness evidence/i.test(timingSignal!.hypothesis), "Timing hypothesis should preserve freshness outcome.");
+assert(timingSignal!.metadata.submittedTimestampIsAttributionOnly === true, "Submitted timestamp must be attribution-only metadata.");
+
+const allMemoryInputs = salesLearningSignalsToMemoryInputs([proposalSignal, boostSignal, sourceQuality!, timingSignal!]);
+assert(allMemoryInputs.every((input) => input.status === "tentative"), "Signal memory inputs should remain hypotheses.");
+assert(allMemoryInputs.some((input) => input.type === "source_quality"), "Memory input conversion should preserve source_quality.");
+
+const source = readFileSync(resolve(__dirname, "salesLearningSignals.ts"), "utf8");
+assert(!/from\s+["']\.\/browserApply["']/.test(source), "Signal helper must not import browser apply behavior.");
+assert(!/from\s+["']\.\/applications["']/.test(source), "Signal helper must not import application status mutation behavior.");
+assert(!/\b(updateApplicationStatus|recordSubmission|applyApplicationRevision|queueBrowserApplicationAction)\b/.test(source), "Signal helper must not mutate or queue final-submit/apply behavior.");
+
+console.log("sales learning signals tests passed");
+
