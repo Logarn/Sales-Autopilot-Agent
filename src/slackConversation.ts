@@ -15,6 +15,7 @@ import {
   buildSalesLearningPromptContext,
   recordApplicationOutcomeLearning,
   recordProposalStyleSignal,
+  recordProposalVersionDiffLearning,
 } from "./salesLearningMemory";
 import { buildSoulPromptContext, buildSoulPromptSection } from "./soul";
 import { SlackConversationIntent, SlackConversationIntentType } from "./types";
@@ -258,6 +259,11 @@ export async function handleSlackConversationCommand(text: string): Promise<Slac
       beforeText: originalDraft?.proposalText ?? null,
       afterText: applied.proposalText,
       source: "slack_conversation_cli_revision",
+    });
+    recordProposalVersionDiffLearning({
+      jobId: intent.jobId,
+      source: "slack_conversation_cli_revision_version",
+      editor: "Steve",
     });
 
     let slackPreviewSent = false;

@@ -125,6 +125,20 @@ function containsAny(value: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(value));
 }
 
+function canonicalDraft(value: string): string {
+  return clean(value)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hasMaterialDraftChange(generated: string, final: string): boolean {
+  if (!generated || !final) return false;
+  if (canonicalDraft(generated) === canonicalDraft(final)) return false;
+  return true;
+}
+
 function hoursBetween(left?: string | null, right?: string | null): number | null {
   const leftMs = Date.parse(left ?? "");
   const rightMs = Date.parse(right ?? "");
@@ -208,6 +222,10 @@ export function buildProposalDiffLearning(input: ProposalDiffInput): ProposalDif
   const generatedWords = wordCount(generated);
   const finalWords = wordCount(final);
   const wordDelta = finalWords - generatedWords;
+
+  if (!hasMaterialDraftChange(generated, final)) {
+    return { signals: [], memoryInputs: [], tags: [], wordDelta, finalWordCount: finalWords, generatedWordCount: generatedWords };
+  }
 
   const generatedGenericIntro = containsAny(generatedOpener, GENERIC_INTRO_PATTERNS);
   const finalGenericIntro = containsAny(finalOpener, GENERIC_INTRO_PATTERNS);
@@ -320,7 +338,9 @@ export function buildBoostExpectedValueSignal(input: BoostExpectedValueInput): S
     ? Math.max(0, Math.round(input.chosenBoostConnects))
     : null;
   const cappedChosenBoost = rawChosenBoost === null ? null : Math.min(HARD_OPTIONAL_BOOST_CAP, rawChosenBoost);
-  const inferredRank = input.chosenRank ?? inferBoostRank(cappedChosenBoost, table);
+  const overCapObservedBoost = rawChosenBoost !== null && rawChosenBoost > HARD_OPTIONAL_BOOST_CAP;
+  const observedRank = input.chosenRank ?? inferBoostRank(rawChosenBoost, table);
+  const repeatableRank = overCapObservedBoost ? inferBoostRank(cappedChosenBoost, table) : observedRank;
   const top1 = table.find((bid) => bid.rank === 1)?.connects ?? null;
   const top2 = table.find((bid) => bid.rank === 2)?.connects ?? null;
   const top3 = table.find((bid) => bid.rank === 3)?.connects ?? null;
@@ -330,20 +350,23 @@ export function buildBoostExpectedValueSignal(input: BoostExpectedValueInput): S
   const scope = clean(input.scope) || "boost:global";
   const tags = unique([
     positive ? "positive_outcome" : null,
-    inferredRank === 2 ? "top_2_visibility_signal" : null,
-    inferredRank === 3 ? "top_3_visibility_signal" : null,
-    inferredRank === 1 && top2 !== null && cappedChosenBoost !== null && cappedChosenBoost - top2 >= 8 ? "number_1_likely_overbid" : null,
-    rawChosenBoost !== null && rawChosenBoost > HARD_OPTIONAL_BOOST_CAP ? "over_cap_input_ignored_as_repeatable" : null,
+    observedRank === 2 ? "top_2_visibility_signal" : null,
+    observedRank === 3 ? "top_3_visibility_signal" : null,
+    observedRank === 1 && top2 !== null && rawChosenBoost !== null && rawChosenBoost - top2 >= 8 ? "number_1_likely_overbid" : null,
+    overCapObservedBoost ? "over_cap_input_ignored_as_repeatable" : null,
+    overCapObservedBoost && observedRank !== repeatableRank ? "observed_rank_from_over_cap_bid" : null,
     top3Clear !== null ? "minimum_top_3_estimate" : null,
   ]);
-  const visibilityPhrase = inferredRank && inferredRank <= 3 ? `top-${inferredRank}` : "visible";
+  const visibilityPhrase = observedRank && observedRank <= 3 ? `top-${observedRank}` : "visible";
   const likelyWasteful = tags.includes("number_1_likely_overbid");
-  const enoughPhrase = positive && inferredRank && inferredRank <= 3
+  const enoughPhrase = positive && observedRank && observedRank <= 3
     ? `${visibilityPhrase} visibility produced a ${outcomeLabel(input.outcome)} signal`
     : "use outcome data to test minimum useful visibility";
   const wastePhrase = likelyWasteful
     ? `#1 likely overpaid versus top-2/top-3 thresholds (${top2Clear ?? "unknown"}/${top3Clear ?? "unknown"} Connects, capped at ${HARD_OPTIONAL_BOOST_CAP})`
-    : `do not turn this into an always-boost-${HARD_OPTIONAL_BOOST_CAP} rule`;
+    : overCapObservedBoost
+      ? `raw over-cap visibility is observational only; repeatable recommendations stay capped at ${HARD_OPTIONAL_BOOST_CAP}`
+      : `do not turn this into an always-boost-${HARD_OPTIONAL_BOOST_CAP} rule`;
 
   return {
     kind: "boost_expected_value",
@@ -351,15 +374,15 @@ export function buildBoostExpectedValueSignal(input: BoostExpectedValueInput): S
     scope,
     subject: `${scope}:expected_value`,
     hypothesis: `For similar jobs, ${enoughPhrase}; ${wastePhrase}.`,
-    rationale: `Required=${input.requiredConnects ?? "unknown"}, chosen boost=${rawChosenBoost ?? "unknown"}, capped repeatable boost=${cappedChosenBoost ?? "unknown"}, rank=${inferredRank ?? "unknown"}, top bids=${table.map((bid) => `#${bid.rank}:${bid.connects}`).join(", ") || "unknown"}.`,
-    confidence: positive && inferredRank && inferredRank <= 3 ? "medium" : "low",
+    rationale: `Required=${input.requiredConnects ?? "unknown"}, observed boost=${rawChosenBoost ?? "unknown"}, capped repeatable boost=${cappedChosenBoost ?? "unknown"}, observed rank=${observedRank ?? "unknown"}, repeatable rank=${repeatableRank ?? "unknown"}, top bids=${table.map((bid) => `#${bid.rank}:${bid.connects}`).join(", ") || "unknown"}.`,
+    confidence: positive && observedRank && observedRank <= 3 ? "medium" : "low",
     evidenceCount: 1,
     status: "tentative",
     source: input.source ?? "boost_expected_value",
     examples: unique([
       `required ${input.requiredConnects ?? "unknown"}`,
       cappedChosenBoost === null ? null : `chosen boost ${cappedChosenBoost}`,
-      inferredRank === null ? null : `rank ${inferredRank}`,
+      observedRank === null ? null : `observed rank ${observedRank}`,
       input.outcome ? `outcome ${input.outcome}` : null,
     ]),
     tags,
@@ -368,7 +391,11 @@ export function buildBoostExpectedValueSignal(input: BoostExpectedValueInput): S
       requiredConnects: input.requiredConnects,
       chosenBoostConnects: cappedChosenBoost,
       observedChosenBoostConnects: rawChosenBoost,
-      chosenRank: inferredRank,
+      chosenRank: repeatableRank,
+      observedChosenRank: observedRank,
+      repeatableChosenRank: repeatableRank,
+      observedRankUsedRawBoost: true,
+      observedRankFromOverCapBid: overCapObservedBoost && observedRank !== repeatableRank,
       top1Connects: top1,
       top2Connects: top2,
       top3Connects: top3,
@@ -502,4 +529,3 @@ export function buildSourceTimingAttributionSignals(input: SourceTimingAttributi
 
   return signals;
 }
-

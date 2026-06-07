@@ -89,6 +89,14 @@ function hasVisibleStatus(memory: AgentMemory): boolean {
   return memory.status === "active" || memory.status === "tentative";
 }
 
+function generatedStrategyTitle(memoryType: string, scope: string): string {
+  return `${scope}:${memoryType}:strategy`;
+}
+
+function isGeneratedStrategicMemory(memory: AgentMemory): boolean {
+  return memory.title === generatedStrategyTitle(memory.memoryType, memory.scope);
+}
+
 function confidenceRank(confidence: AgentMemoryConfidence): number {
   if (confidence === "high") return 3;
   if (confidence === "medium") return 2;
@@ -133,6 +141,7 @@ function memoryMatches(input: {
   keywords: Set<string>;
 }): boolean {
   if (!hasVisibleStatus(input.memory)) return false;
+  if (isGeneratedStrategicMemory(input.memory)) return false;
   if (input.memoryTypes.size > 0 && !input.memoryTypes.has(input.memory.memoryType)) return false;
   if (input.scopes.size > 0 && !input.scopes.has(input.memory.scope)) return false;
   if (input.keywords.size === 0) return true;
@@ -217,10 +226,18 @@ export function consolidateRelatedMemories(input: ConsolidateRelatedMemoriesInpu
   const periodStart = input.periodStart ?? now;
   const periodEnd = input.periodEnd ?? now;
   return groups.map((group) => {
-    const strategicMemory = upsertAgentMemory({
+    const strategicTitle = generatedStrategyTitle(group.memoryType, group.scope);
+    const existingStrategicMemory = listAgentMemories(input.limit ?? 500)
+      .find((memory) =>
+        memory.memoryType === group.memoryType &&
+        memory.scope === group.scope &&
+        memory.title === strategicTitle &&
+        memory.summary === group.summary
+      );
+    const strategicMemory = existingStrategicMemory ?? upsertAgentMemory({
       memoryType: group.memoryType,
       scope: group.scope,
-      title: `${group.scope}:${group.memoryType}:strategy`,
+      title: strategicTitle,
       summary: group.summary,
       hypothesisText: group.summary,
       confidence: group.confidence,

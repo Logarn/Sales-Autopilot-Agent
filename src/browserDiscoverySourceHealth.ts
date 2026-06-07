@@ -124,6 +124,35 @@ function pauseMsForChallengeCount(count: number): number {
   return Math.min(SEARCH_PAUSE_MAX_MS, SEARCH_PAUSE_BASE_MS * (2 ** Math.max(0, count - 1)));
 }
 
+function recordSourceHealthLearningSafely(record: DiscoverySourceHealthRecord, source: string): void {
+  try {
+    const { recordSourceHealthLearning } = require("./salesLearningMemory") as {
+      recordSourceHealthLearning: (input: {
+        sourceLabel: string;
+        sourceType?: string | null;
+        scans?: number;
+        goodLeadCount?: number;
+        browserChecks?: number;
+        challenges?: number;
+        lastError?: string | null;
+        source?: string;
+      }) => unknown;
+    };
+    recordSourceHealthLearning({
+      sourceLabel: record.humanLabel,
+      sourceType: record.sourceType,
+      scans: record.jobsCaptured,
+      goodLeadCount: record.goodLeadsFound,
+      browserChecks: record.lastBrowserCheckAt ? Math.max(1, record.challengeCheckCount) : 0,
+      challenges: record.challengeCheckCount,
+      lastError: record.lastError ?? null,
+      source,
+    });
+  } catch {
+    // Source health should never fail browser discovery because learning storage is unavailable.
+  }
+}
+
 export function readDiscoverySourceHealth(): DiscoverySourceHealthRecord[] {
   return readState().sources;
 }
@@ -135,14 +164,16 @@ export function isDiscoverySourceTemporarilyPaused(source: DiscoverySourceHealth
 }
 
 export function markDiscoverySourceBrowserCheck(source: DiscoverySourceHealthSource, now = new Date()): DiscoverySourceHealthRecord {
-  return upsertSourceRecord(source, (record) => ({
+  const updated = upsertSourceRecord(source, (record) => ({
     ...record,
     lastBrowserCheckAt: nowIso(now),
   }));
+  recordSourceHealthLearningSafely(updated, "source_health_browser_check");
+  return updated;
 }
 
 export function markDiscoverySourceChallenge(source: DiscoverySourceHealthSource, reason: string, now = new Date()): DiscoverySourceHealthRecord {
-  return upsertSourceRecord(source, (record) => {
+  const updated = upsertSourceRecord(source, (record) => {
     const challengeCheckCount = record.challengeCheckCount + 1;
     return {
       ...record,
@@ -152,11 +183,13 @@ export function markDiscoverySourceChallenge(source: DiscoverySourceHealthSource
       lastError: reason,
     };
   });
+  recordSourceHealthLearningSafely(updated, "source_health_challenge");
+  return updated;
 }
 
 export function markDiscoverySourceSuccess(source: DiscoverySourceHealthSource, input: { jobsCaptured: number; goodLeadsFound: number; now?: Date }): DiscoverySourceHealthRecord {
   const now = input.now ?? new Date();
-  return upsertSourceRecord(source, (record) => ({
+  const updated = upsertSourceRecord(source, (record) => ({
     ...record,
     lastSuccessAt: nowIso(now),
     lastBrowserCheckAt: nowIso(now),
@@ -166,6 +199,8 @@ export function markDiscoverySourceSuccess(source: DiscoverySourceHealthSource, 
     goodLeadsFound: record.goodLeadsFound + Math.max(0, input.goodLeadsFound),
     lastError: undefined,
   }));
+  recordSourceHealthLearningSafely(updated, "source_health_success");
+  return updated;
 }
 
 export function clearPausedDiscoverySourceHealth(sourceId?: string): number {

@@ -36,6 +36,21 @@ assert(proposalSignal.tags.includes("proof_framing_changed"), "Proof framing cha
 assert(/direct commercial diagnosis/i.test(proposalSignal.hypothesis), "Hypothesis should learn direct commercial diagnosis.");
 assert(steveEdit.memoryInputs[0]?.type === "proposal_style", "Proposal diff should convert to a memory input.");
 
+const unchangedProposal = buildProposalDiffLearning({
+  scope: "fashion:klaviyo",
+  editor: "Steve",
+  generatedDraft: [
+    "Your post-purchase flow is leaking repeat revenue before the second order.",
+    "Fly Boutique is the closest proof here because we fixed the same retention gap.",
+  ].join("\n\n"),
+  finalDraft: [
+    "Your post-purchase flow is leaking repeat revenue before the second order.",
+    "Fly Boutique is the closest proof here because we fixed the same retention gap.",
+  ].join("\n\n"),
+});
+assert(unchangedProposal.signals.length === 0, "Identical proposal readback must not create a proposal_style_signal.");
+assert(unchangedProposal.memoryInputs.length === 0, "Identical proposal readback must not create proposal memory input.");
+
 const boostSignal = buildBoostExpectedValueSignal({
   scope: "fashion:klaviyo",
   requiredConnects: 12,
@@ -69,6 +84,26 @@ const overbidSignal = buildBoostExpectedValueSignal({
 assert(overbidSignal.tags.includes("over_cap_input_ignored_as_repeatable"), "Over-cap observed boost should be marked non-repeatable.");
 assert((overbidSignal.metadata.chosenBoostConnects as number) === 50, "Over-cap boost should be capped in repeatable metadata.");
 assert((overbidSignal.metadata.top2ClearConnects as number) <= 50, "Top-2 clear estimate should stay under cap.");
+
+const rawRankBeforeCapSignal = buildBoostExpectedValueSignal({
+  scope: "fashion:klaviyo",
+  requiredConnects: 12,
+  boostTable: [
+    { rank: 1, connects: 55 },
+    { rank: 2, connects: 49 },
+    { rank: 3, connects: 24 },
+  ],
+  chosenBoostConnects: 56,
+  outcome: "replied",
+});
+assert(rawRankBeforeCapSignal.tags.includes("observed_rank_from_over_cap_bid"), "Over-cap rank evidence should be marked as observational.");
+assert(rawRankBeforeCapSignal.metadata.observedChosenBoostConnects === 56, "Raw observed boost must be retained for attribution.");
+assert(rawRankBeforeCapSignal.metadata.chosenBoostConnects === 50, "Repeatable boost metadata should remain capped.");
+assert(rawRankBeforeCapSignal.metadata.observedChosenRank === 1, "Observed rank should be inferred from the raw boost before cap.");
+assert(rawRankBeforeCapSignal.metadata.repeatableChosenRank === 2, "Repeatable rank should be inferred from the capped boost.");
+assert(rawRankBeforeCapSignal.metadata.chosenRank === 2, "Legacy chosenRank metadata should not claim the capped bid achieved the raw observed rank.");
+assert(/observed rank=1|observed rank=1/i.test(rawRankBeforeCapSignal.rationale.replace(/\s+/g, " ")), "Rationale should preserve observed raw rank.");
+assert(/repeatable rank=2/i.test(rawRankBeforeCapSignal.rationale.replace(/\s+/g, " ")), "Rationale should preserve repeatable capped rank.");
 
 const sourceSignals = buildSourceTimingAttributionSignals({
   sourceLabel: "Saved Search - Klaviyo DTC",
@@ -119,4 +154,3 @@ assert(!/from\s+["']\.\/applications["']/.test(source), "Signal helper must not 
 assert(!/\b(updateApplicationStatus|recordSubmission|applyApplicationRevision|queueBrowserApplicationAction)\b/.test(source), "Signal helper must not mutate or queue final-submit/apply behavior.");
 
 console.log("sales learning signals tests passed");
-

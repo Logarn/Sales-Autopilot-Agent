@@ -95,7 +95,8 @@ function topicTypes(topic: SalesLearningInsightTopic): SalesLearningMemoryType[]
 function selectMemories(memories: SalesLearningMemory[], topic: SalesLearningInsightTopic, limit: number): SalesLearningMemory[] {
   const allowedTypes = topicTypes(topic);
   return memories
-    .filter((memory) => memory.status !== "forgotten")
+    .filter((memory) => memory.status !== "forgotten" && memory.status !== "archived")
+    .filter((memory) => typeof memory.metadata.contradictedByMemoryId !== "number")
     .filter((memory) => !allowedTypes || allowedTypes.includes(memory.type))
     .sort((a, b) => rankMemory(b) - rankMemory(a) || b.evidenceCount - a.evidenceCount || a.subject.localeCompare(b.subject))
     .slice(0, Math.max(1, limit));
@@ -134,14 +135,21 @@ function topicLead(topic: SalesLearningInsightTopic): string {
 function emptyReply(topic: SalesLearningInsightTopic): string {
   switch (topic) {
     case "proof":
-      return "I do not have enough proof outcome data yet. I will keep tracking which assets Steve keeps, swaps, and which ones lead to replies.";
+      return "Evidence level: not enough data. I do not have enough proof outcome data yet. I will keep tracking which assets Steve keeps, swaps, and which ones lead to replies.";
     case "boost":
-      return "I do not have enough boost outcome data yet. I will keep tracking required Connects, visible bids, chosen boost, and outcomes before making stronger calls.";
+      return "Evidence level: not enough data. I do not have enough boost outcome data yet. I will keep tracking required Connects, visible bids, chosen boost, and outcomes before making stronger calls.";
     case "proposal":
-      return "I do not have enough proposal edit data yet. I will learn from Steve and Natalie edits as drafts move through QA.";
+      return "Evidence level: not enough data. I do not have enough proposal edit data yet. I will learn from Steve and Natalie edits as drafts move through QA.";
     default:
-      return "I do not have enough durable learning yet. I will keep logging outcomes, corrections, proof choices, boost decisions, sources, and timing.";
+      return "Evidence level: not enough data. I do not have enough durable learning yet. I will keep logging outcomes, corrections, proof choices, boost decisions, sources, and timing.";
   }
+}
+
+function evidenceLevel(insights: SalesLearningInsight[]): "strong" | "tentative" | "not enough data" {
+  const totalEvidence = insights.reduce((sum, insight) => sum + insight.evidenceCount, 0);
+  if (insights.some((insight) => insight.confidence === "high" && insight.evidenceCount >= 3) || totalEvidence >= 6) return "strong";
+  if (insights.some((insight) => insight.confidence === "medium" || insight.evidenceCount >= 2)) return "tentative";
+  return "not enough data";
 }
 
 function formatInsightLine(insight: SalesLearningInsight, index: number): string {
@@ -169,6 +177,6 @@ export function buildSalesLearningInsightReply(input?: {
   return {
     topic,
     insights,
-    text: `${topicLead(topic)}\n\n${insights.map(formatInsightLine).join("\n")}`,
+    text: `${topicLead(topic)}\nEvidence level: ${evidenceLevel(insights)}\n\n${insights.map(formatInsightLine).join("\n")}`,
   };
 }

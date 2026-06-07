@@ -64,6 +64,7 @@ import {
   recordCodeImprovementTask,
   recordProofPreferenceSignal,
   recordProposalStyleSignal,
+  recordProposalVersionDiffLearning,
   reflectOnSalesOutcomeWithLlm,
   rememberSalesLearning,
   retrieveRelevantSalesLearningMemories,
@@ -286,6 +287,11 @@ function parseOutcomeCommand(commandText: string, rawText: string): ParsedSlackS
       label: "lost",
       pattern: /^(?:lost|closed\s+lost|did\s+not\s+win|didn't\s+win|not\s+hired|mark\s+(?:as\s+)?lost)$/i,
     },
+    {
+      status: "lost",
+      label: "ignored/no reply",
+      pattern: /^(?:ignored|no\s+reply|no\s+response|ghosted|mark\s+(?:as\s+)?ignored)$/i,
+    },
   ];
   const match = outcomePatterns.find((candidate) => candidate.pattern.test(commandText));
   if (!match) return null;
@@ -334,7 +340,7 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
       source: "fallback",
     };
   }
-  if (/\b(?:what did you learn|what have you learned|what patterns are working|what proof is working|what boost strategy is working|why did you choose that|what would you do differently next time)\b/i.test(commandText)) {
+  if (/\b(?:what did you learn|what have you learned|what patterns are working|what proof is working|what boost strategy is working|why did you choose that|what would you do differently next time|what should mayor fix|what should codex fix|what improvement ideas do you have|what failed recently|what has failed recently)\b/i.test(commandText)) {
     return {
       type: "memory_query",
       rawText: normalized,
@@ -922,6 +928,12 @@ function learnFromSlackMessage(input: {
       nextBehavior: "Acknowledge the bad response briefly, treat CV as the cover letter/proposal draft, and show the draft or explain that no draft exists.",
       fixType: "memory",
     });
+    rememberSalesLearning({
+      text: `Frustrated Slack correction: ${text}. Answer the concrete draft/proof/boost/status request directly; do not fall back to a command menu.`,
+      jobId: input.state?.jobId ?? null,
+      channelId: input.channelId,
+      threadTs: input.threadTs,
+    });
   }
 }
 
@@ -1016,6 +1028,13 @@ export function applySlackThreadRevision(input: {
     channelId: state.channelId,
     threadTs: state.threadTs,
     source: "slack_thread_revision",
+  });
+  recordProposalVersionDiffLearning({
+    jobId: state.jobId,
+    source: "slack_thread_revision_version",
+    editor: "Steve",
+    channelId: state.channelId,
+    threadTs: state.threadTs,
   });
 
   return {
@@ -1179,6 +1198,12 @@ export function queueApplicationSnapshotFromSlackThread(input: {
   });
   if (input.markSubmittedAfterCapture) {
     updateApplicationStatus(state.jobId, "submitted", "Marked submitted from Slack after Steve submitted manually; queued read-only final page capture.");
+    recordApplicationOutcomeLearning({
+      jobId: state.jobId,
+      outcome: "submitted",
+      note: "Marked submitted from Slack after Steve submitted manually; queued read-only final page capture.",
+      source: "slack_mark_submitted_command",
+    });
   }
   updateSlackThreadStateStatus(state.channelId, state.threadTs, input.markSubmittedAfterCapture ? "submitted_marked" : "status_checked");
   return {

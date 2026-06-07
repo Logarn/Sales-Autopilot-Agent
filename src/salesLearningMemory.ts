@@ -2,7 +2,10 @@ import {
   forgetSalesLearningMemory,
   listAgentMemories,
   getApplicationDraft,
+  getLatestProposalVersion,
   getScoredJobForSlackPreview,
+  listApplicationAssets,
+  listProposalVersions,
   touchAgentMemory,
   recordSalesLearningEvent,
   upsertSalesLearningMemory,
@@ -10,6 +13,14 @@ import {
   type SalesLearningMemory,
   type SalesLearningMemoryType,
 } from "./db";
+import {
+  buildBoostExpectedValueSignal,
+  buildProposalDiffLearning,
+  buildSourceTimingAttributionSignals,
+  salesLearningSignalsToMemoryInputs,
+  type BoostBid,
+  type StructuredSalesLearningSignal,
+} from "./salesLearningSignals";
 import { JOB_INTELLIGENCE_TEMPERATURE } from "./config";
 import { OpenAiCompatibleProvider, getJobIntelligenceProviderConfig, type LlmJsonRequest, type LlmJsonResult } from "./llm/provider";
 import { buildSoulPromptContext, buildSoulPromptSection } from "./soul";
@@ -189,6 +200,41 @@ function outcomeLabel(status: ApplicationStatus): string {
   if (status === "lost") return "lost";
   if (status === "rejected") return "skipped/rejected";
   return status;
+}
+
+function upsertStructuredSalesLearningSignals(
+  signals: StructuredSalesLearningSignal[],
+  input: { jobId?: string | null; channelId?: string | null; threadTs?: string | null } = {},
+): SalesLearningMemory[] {
+  return salesLearningSignalsToMemoryInputs(signals).map((memoryInput, index) => upsertSalesLearningMemory({
+    ...memoryInput,
+    jobId: input.jobId ?? (typeof signals[index]?.metadata.jobId === "string" ? signals[index].metadata.jobId : null),
+    channelId: input.channelId ?? null,
+    threadTs: input.threadTs ?? null,
+  }));
+}
+
+function selectedProofLabels(jobId: string): string[] {
+  const draft = getApplicationDraft(jobId);
+  const assets = listApplicationAssets(jobId);
+  return unique([
+    ...(draft?.selectedPortfolioItems.map((item) => item.name) ?? []),
+    ...assets.map((asset) => asset.originalName),
+  ]);
+}
+
+function latestProposalVersionForLearning(jobId: string): ReturnType<typeof getLatestProposalVersion> {
+  return getLatestProposalVersion(jobId, "final_submitted")
+    ?? getLatestProposalVersion(jobId, "human_edit_reread")
+    ?? getLatestProposalVersion(jobId, "remote_chrome_qa")
+    ?? getLatestProposalVersion(jobId, "upwork_inserted")
+    ?? getLatestProposalVersion(jobId);
+}
+
+function proposalVersionBaseline(jobId: string, currentVersionNumber: number): ReturnType<typeof getLatestProposalVersion> {
+  return [...listProposalVersions(jobId)]
+    .filter((version) => version.versionNumber < currentVersionNumber)
+    .sort((left, right) => right.versionNumber - left.versionNumber || right.id - left.id)[0] ?? null;
 }
 
 function isSalesMemoryType(value: unknown): value is SalesLearningMemoryType {
@@ -378,10 +424,23 @@ export function recordBoostDecisionSignal(input: {
   boostRank?: number | null;
   decision?: ConnectsStrategySnapshot["decision"] | null;
   reasons?: string[];
+  boostTable?: BoostBid[];
+  outcome?: ApplicationStatus | "reply" | "none" | null;
   source?: string;
 }): SalesLearningMemory {
   const job = getJob(input.jobId);
   const segments = jobSegments(job);
+  const expectedValueSignal = buildBoostExpectedValueSignal({
+    scope: segments.scope,
+    requiredConnects: input.requiredConnects,
+    chosenBoostConnects: input.boostConnects,
+    boostTable: input.boostTable,
+    chosenRank: input.boostRank ?? null,
+    outcome: input.outcome ?? null,
+    source: input.source ?? "connects_strategy",
+    leadScore: job?.score ?? null,
+    matchLevel: job?.matchLevel ?? null,
+  });
   recordSalesLearningEvent({
     eventType: "boost_decision",
     jobId: input.jobId,
@@ -393,6 +452,7 @@ export function recordBoostDecisionSignal(input: {
       boostRank: input.boostRank ?? null,
       decision: input.decision ?? null,
       reasons: input.reasons ?? [],
+      boostTable: input.boostTable ?? [],
       score: job?.score ?? null,
       matchLevel: job?.matchLevel ?? null,
       vertical: segments.vertical,
@@ -403,15 +463,64 @@ export function recordBoostDecisionSignal(input: {
     type: "boost_strategy",
     scope: segments.scope,
     subject: `${segments.scope}:boost`,
-    hypothesis: `For ${segments.scope} jobs, use the minimum boost that creates meaningful visibility and keep optional boost under the hard 50 cap.`,
-    rationale: `Recorded boost decision: required=${input.requiredConnects ?? "unknown"}, boost=${input.boostConnects ?? "unknown"}, total=${input.totalConnects ?? "unknown"}, rank=${input.boostRank ?? "unknown"}.`,
-    confidence: "low",
+    hypothesis: expectedValueSignal.hypothesis,
+    rationale: expectedValueSignal.rationale,
+    confidence: expectedValueSignal.confidence,
     evidenceCount: 1,
     status: "tentative",
     source: input.source ?? "connects_strategy",
     jobId: input.jobId,
     examples: input.reasons?.slice(0, 4) ?? [],
-    metadata: { vertical: segments.vertical, platform: segments.platform, source: segments.source },
+    metadata: { ...expectedValueSignal.metadata, vertical: segments.vertical, platform: segments.platform, source: segments.source },
+  });
+}
+
+export function recordProposalVersionDiffLearning(input: {
+  jobId: string;
+  source?: string;
+  editor?: string;
+  channelId?: string | null;
+  threadTs?: string | null;
+}): SalesLearningMemory[] {
+  const current = latestProposalVersionForLearning(input.jobId);
+  if (!current?.proposalText.trim()) return [];
+  const baseline = proposalVersionBaseline(input.jobId, current.versionNumber);
+  const draft = getApplicationDraft(input.jobId);
+  const beforeText = baseline?.proposalText ?? draft?.proposalText ?? "";
+  if (!beforeText.trim() || clean(beforeText) === clean(current.proposalText)) return [];
+  const job = getJob(input.jobId);
+  const segments = jobSegments(job);
+  const diff = buildProposalDiffLearning({
+    jobId: input.jobId,
+    scope: segments.scope,
+    editor: input.editor ?? (current.source === "final_submitted" ? "Steve" : "operator"),
+    generatedDraft: beforeText,
+    finalDraft: current.proposalText,
+    source: input.source ?? `proposal_version:${current.source}`,
+  });
+  if (diff.signals.length === 0) return [];
+  recordSalesLearningEvent({
+    eventType: "draft_style_signal",
+    jobId: input.jobId,
+    channelId: input.channelId,
+    threadTs: input.threadTs,
+    source: input.source ?? `proposal_version:${current.source}`,
+    payload: {
+      proposalVersionSource: current.source,
+      proposalVersion: current.versionNumber,
+      baselineVersion: baseline?.versionNumber ?? null,
+      tags: diff.tags,
+      generatedWordCount: diff.generatedWordCount,
+      finalWordCount: diff.finalWordCount,
+      wordDelta: diff.wordDelta,
+      vertical: segments.vertical,
+      platform: segments.platform,
+    },
+  });
+  return upsertStructuredSalesLearningSignals(diff.signals, {
+    jobId: input.jobId,
+    channelId: input.channelId,
+    threadTs: input.threadTs,
   });
 }
 
@@ -427,6 +536,15 @@ export function recordApplicationOutcomeLearning(input: {
   const outcome = outcomeLabel(input.outcome);
   const positive = positiveOutcome(input.outcome);
   const negative = negativeOutcome(input.outcome);
+  const versionUsed = latestProposalVersionForLearning(input.jobId);
+  const proofLabels = selectedProofLabels(input.jobId);
+  const sourceBackedConnects = draft?.connectsStrategy?.sourceBackedConnects;
+  const requiredConnects = sourceBackedConnects?.requiredConnects ?? draft?.connectsStrategy?.requiredConnects ?? draft?.suggestedConnects ?? null;
+  const boostConnects = draft?.connectsStrategy?.suggestedBoostConnects ?? draft?.suggestedBoostConnects ?? null;
+  const totalConnects = draft?.connectsStrategy?.totalConnects ?? (
+    typeof requiredConnects === "number" && typeof boostConnects === "number" ? requiredConnects + boostConnects : null
+  );
+  const outcomeAt = new Date().toISOString();
   const memories: SalesLearningMemory[] = [];
 
   recordSalesLearningEvent({
@@ -440,12 +558,23 @@ export function recordApplicationOutcomeLearning(input: {
       platform: segments.platform,
       sourceQuery: segments.source,
       postedAt: job?.postedAt ?? null,
+      discoveredAt: (job as { seenAt?: string } | null)?.seenAt ?? null,
       generatedAt: draft?.generatedAt ?? null,
-      suggestedBoostConnects: draft?.suggestedBoostConnects ?? null,
-      suggestedConnects: draft?.suggestedConnects ?? null,
+      preparedAt: versionUsed?.createdAt ?? draft?.generatedAt ?? null,
+      submittedOrOutcomeAt: outcomeAt,
+      proposalVersionUsed: versionUsed ? {
+        source: versionUsed.source,
+        label: versionUsed.label,
+        versionNumber: versionUsed.versionNumber,
+      } : null,
+      requiredConnects,
+      boostConnects,
+      totalConnects,
+      boostRank: typeof draft?.connectsStrategy?.sourceBackedConnects?.boostConnects === "number" ? null : null,
       selectedPortfolioItems: draft?.selectedPortfolioItems.map((item) => item.name) ?? [],
-      opener: firstSentence(draft?.proposalText ?? ""),
-      cta: lastSentence(draft?.proposalText ?? ""),
+      proofFilesAttached: listApplicationAssets(input.jobId).map((asset) => asset.originalName),
+      opener: firstSentence(versionUsed?.proposalText ?? draft?.proposalText ?? ""),
+      cta: lastSentence(versionUsed?.proposalText ?? draft?.proposalText ?? ""),
     },
   });
 
@@ -464,24 +593,26 @@ export function recordApplicationOutcomeLearning(input: {
       source: input.source ?? "application_outcome",
       jobId: input.jobId,
       examples: unique([job?.title, job?.url]),
-      metadata: { outcome: input.outcome, vertical: segments.vertical, platform: segments.platform },
+      metadata: { outcome: input.outcome, vertical: segments.vertical, platform: segments.platform, source: segments.source },
     }));
   }
 
-  if (draft?.selectedPortfolioItems.length && positive) {
+  if (proofLabels.length && (positive || negative)) {
     memories.push(upsertSalesLearningMemory({
       type: "proof_preference",
       scope: segments.scope,
       subject: `${segments.scope}:proof`,
-      hypothesis: `For ${segments.scope} opportunities, proof like ${draft.selectedPortfolioItems.map((item) => item.name).join(", ")} has positive outcome evidence.`,
+      hypothesis: positive
+        ? `For ${segments.scope} opportunities, proof like ${proofLabels.join(", ")} has positive outcome evidence.`
+        : `For ${segments.scope} opportunities, proof like ${proofLabels.join(", ")} did not produce a win signal here; keep comparing before reusing it by default.`,
       rationale: `Outcome ${outcome} after this proof plan.`,
       confidence: "low",
       evidenceCount: 1,
       status: "tentative",
       source: input.source ?? "application_outcome",
       jobId: input.jobId,
-      examples: draft.selectedPortfolioItems.map((item) => item.name),
-      metadata: { outcome: input.outcome, vertical: segments.vertical, platform: segments.platform },
+      examples: proofLabels,
+      metadata: { outcome: input.outcome, vertical: segments.vertical, platform: segments.platform, jobType: segments.jobType },
     }));
   }
 
@@ -493,14 +624,14 @@ export function recordApplicationOutcomeLearning(input: {
       hypothesis: positive
         ? `For ${segments.scope} jobs, this Connects/boost range has positive outcome evidence; keep testing minimum useful visibility instead of chasing #1.`
         : `For ${segments.scope} jobs, this Connects/boost choice did not produce a win signal; review whether the boost was worth the spend before repeating it.`,
-      rationale: `Outcome ${outcome}; required=${draft.connectsStrategy.requiredConnects ?? "unknown"}, boost=${draft.connectsStrategy.suggestedBoostConnects}, total=${draft.connectsStrategy.totalConnects ?? "unknown"}.`,
+      rationale: `Outcome ${outcome}; required=${requiredConnects ?? "unknown"}, boost=${boostConnects ?? "unknown"}, total=${totalConnects ?? "unknown"}.`,
       confidence: "low",
       evidenceCount: 1,
       status: "tentative",
       source: input.source ?? "application_outcome",
       jobId: input.jobId,
       examples: draft.connectsStrategy.reasons.slice(0, 4),
-      metadata: { outcome: input.outcome, vertical: segments.vertical, platform: segments.platform },
+      metadata: { outcome: input.outcome, vertical: segments.vertical, platform: segments.platform, requiredConnects, boostConnects, totalConnects },
     }));
   }
 
@@ -526,24 +657,39 @@ export function recordApplicationOutcomeLearning(input: {
     }));
   }
 
-  if (draft?.proposalText.trim() && (positive || negative)) {
+  const proposalText = versionUsed?.proposalText ?? draft?.proposalText ?? "";
+  if (proposalText.trim() && (positive || negative)) {
     memories.push(upsertSalesLearningMemory({
       type: "proposal_style",
       scope: segments.scope,
       subject: `${segments.scope}:proposal`,
       hypothesis: positive
-        ? `For ${segments.scope} proposals, openers like "${firstSentence(draft.proposalText)}" have positive outcome evidence.`
+        ? `For ${segments.scope} proposals, openers like "${firstSentence(proposalText)}" have positive outcome evidence.`
         : `For ${segments.scope} proposals, review whether this opener or proof angle underperformed before reusing it.`,
-      rationale: `Outcome ${outcome}; proposal version generated at ${draft.generatedAt}.`,
+      rationale: `Outcome ${outcome}; proposal version ${versionUsed?.label ?? `draft generated at ${draft?.generatedAt ?? "unknown"}`}.`,
       confidence: "low",
       evidenceCount: 1,
       status: "tentative",
       source: input.source ?? "application_outcome",
       jobId: input.jobId,
-      examples: unique([firstSentence(draft.proposalText), lastSentence(draft.proposalText)]),
-      metadata: { outcome: input.outcome, vertical: segments.vertical, platform: segments.platform },
+      examples: unique([firstSentence(proposalText), lastSentence(proposalText)]),
+      metadata: { outcome: input.outcome, vertical: segments.vertical, platform: segments.platform, proposalVersion: versionUsed?.versionNumber ?? draft?.proposalVersion ?? null, proposalVersionSource: versionUsed?.source ?? null },
     }));
   }
+
+  memories.push(...upsertStructuredSalesLearningSignals(buildSourceTimingAttributionSignals({
+    sourceLabel: segments.source,
+    sourceType: "application_source",
+    scope: `source:${segments.source}`,
+    source: input.source ?? "application_outcome",
+    timing: {
+      postedAt: job?.postedAt ?? null,
+      discoveredAt: (job as { seenAt?: string } | null)?.seenAt ?? null,
+      preparedAt: versionUsed?.createdAt ?? draft?.generatedAt ?? null,
+      submittedAt: input.outcome === "submitted" || input.outcome === "applied" ? outcomeAt : null,
+      outcome: input.outcome,
+    },
+  }), { jobId: input.jobId }));
 
   return memories;
 }
@@ -639,13 +785,19 @@ export async function reflectOnSalesOutcomeWithLlm(input: {
 
 export function recordBrowserApplyPlanLearning(plan: BrowserApplyFillPlan, source = "browser_apply_plan"): SalesLearningMemory[] {
   const memories: SalesLearningMemory[] = [];
+  const extendedStrategy = plan.connectsStrategy as ConnectsStrategySnapshot & {
+    visibleBoostBids?: BoostBid[];
+    chosenBoostRank?: number | null;
+  };
   memories.push(recordBoostDecisionSignal({
     jobId: plan.jobId,
     requiredConnects: plan.connects.required,
     boostConnects: plan.connects.boost,
     totalConnects: plan.connects.total,
+    boostRank: extendedStrategy.chosenBoostRank ?? null,
     decision: plan.connectsStrategy.decision,
     reasons: plan.connectsStrategy.reasons,
+    boostTable: extendedStrategy.visibleBoostBids,
     source,
   }));
   memories.push(recordProofPreferenceSignal({
@@ -654,6 +806,93 @@ export function recordBrowserApplyPlanLearning(plan: BrowserApplyFillPlan, sourc
     plannedProofIds: [...plan.attachments.map((attachment) => attachment.name), ...plan.highlights],
     source,
   }));
+  return memories;
+}
+
+export function recordSourceHealthLearning(input: {
+  sourceLabel: string;
+  sourceType?: string | null;
+  scans?: number;
+  goodLeadCount?: number;
+  browserChecks?: number;
+  challenges?: number;
+  lastError?: string | null;
+  source?: string;
+}): SalesLearningMemory[] {
+  const signals = buildSourceTimingAttributionSignals({
+    sourceLabel: input.sourceLabel,
+    sourceType: input.sourceType,
+    source: input.source ?? "source_health",
+    scans: [{
+      sourceLabel: input.sourceLabel,
+      sourceType: input.sourceType,
+      scans: input.scans ?? 0,
+      goodLeadCount: input.goodLeadCount ?? 0,
+      browserChecks: input.browserChecks ?? 0,
+      challenges: input.challenges ?? 0,
+      outcomes: input.lastError ? [{ outcome: "none", count: 1 }] : [],
+    }],
+  });
+  return upsertStructuredSalesLearningSignals(signals);
+}
+
+export function recordApplyPreparationFailureLearning(input: {
+  jobId: string;
+  state: string;
+  reason: string;
+  requiredConnects: number | null;
+  unverifiedFields?: string[];
+  channelId?: string | null;
+  threadTs?: string | null;
+  source?: string;
+}): SalesLearningMemory[] {
+  const job = getJob(input.jobId);
+  const segments = jobSegments(job);
+  const requiredConnectsNotVisible = input.state === "field_preparation_incomplete"
+    && input.requiredConnects === null
+    && input.unverifiedFields?.includes("requiredConnects");
+  recordSalesLearningEvent({
+    eventType: "failure_reflection",
+    jobId: input.jobId,
+    channelId: input.channelId,
+    threadTs: input.threadTs,
+    source: input.source ?? "browser_apply_prep",
+    payload: {
+      state: input.state,
+      reason: input.reason,
+      requiredConnects: input.requiredConnects,
+      unverifiedFields: input.unverifiedFields ?? [],
+      browserBlocked: false,
+    },
+  });
+  const memories: SalesLearningMemory[] = [upsertSalesLearningMemory({
+    type: "failure_pattern",
+    scope: segments.scope,
+    subject: `${segments.scope}:apply_prep:${input.state}`,
+    hypothesis: requiredConnectsNotVisible
+      ? "When Required Connects are not visible during apply prep, describe the blocker as Connects not verified, not as a Chrome/browser issue."
+      : `Apply prep paused at ${input.state}; preserve field-level blocker detail for the next retry.`,
+    rationale: compact(input.reason, 280),
+    confidence: "medium",
+    evidenceCount: 1,
+    status: "tentative",
+    source: input.source ?? "browser_apply_prep",
+    jobId: input.jobId,
+    channelId: input.channelId,
+    threadTs: input.threadTs,
+    examples: unique([input.reason, ...(input.unverifiedFields ?? [])]),
+    metadata: { state: input.state, requiredConnects: input.requiredConnects, unverifiedFields: input.unverifiedFields ?? [], vertical: segments.vertical, platform: segments.platform },
+  })];
+  if (requiredConnectsNotVisible) {
+    memories.push(recordCodeImprovementTask({
+      task: "Keep field_preparation_incomplete/requiredConnects-not-visible diagnostics field-specific; do not route them through generic manual browser attention or Chrome-issue copy unless the browser is actually blocked.",
+      why: input.reason,
+      jobId: input.jobId,
+      channelId: input.channelId,
+      threadTs: input.threadTs,
+      source: input.source ?? "browser_apply_prep",
+    }));
+  }
   return memories;
 }
 
@@ -905,7 +1144,8 @@ export function retrieveRelevantSalesLearningMemoriesWithDebug(input: SalesLearn
   const ranked = listAgentMemories(300)
     .map(agentMemoryToSalesLearningMemory)
     .filter((memory): memory is SalesLearningMemory => Boolean(memory))
-    .filter((memory) => memory.status !== "forgotten")
+    .filter((memory) => memory.status !== "forgotten" && memory.status !== "archived")
+    .filter((memory) => typeof memory.metadata.contradictedByMemoryId !== "number")
     .filter((memory) => types.size === 0 || types.has(memory.type))
     .map((memory) => scoreMemory(memory, input))
     .filter(({ score }) => score > 2)

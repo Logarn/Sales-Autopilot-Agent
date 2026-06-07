@@ -99,6 +99,22 @@ async function runTests(): Promise<void> {
   assert(strategy.consolidationRecord?.sourceMemoryIds.includes(proposalB.id), "consolidation should include all related source ids");
   assert(strategy.consolidationRecord?.sourceMemoryIds.includes(proposalC.id), "consolidation should include the third related source id");
 
+  const firstStrategicMemory = strategy.strategicMemory!;
+  const secondConsolidation = consolidateRelatedMemories({
+    memoryTypes: ["proposal_style"],
+    scopes: ["fashion:klaviyo"],
+    keywords: ["diagnosis"],
+    periodStart: "2026-06-01T00:00:00.000Z",
+    periodEnd: "2026-06-07T23:59:59.000Z",
+  });
+  assert(secondConsolidation.length === 1, "second consolidation over the same source inputs should still return one group");
+  assert(!secondConsolidation[0].group.sourceMemoryIds.includes(firstStrategicMemory.id), "generated strategy memory must not be re-counted as source evidence");
+  assert(secondConsolidation[0].strategicMemory?.id === firstStrategicMemory.id, "identical consolidation should reuse the existing strategy memory");
+  const unchangedStrategicMemory = getAgentMemory(firstStrategicMemory.id);
+  assert(unchangedStrategicMemory?.evidenceCount === firstStrategicMemory.evidenceCount, "running consolidation twice must not inflate evidence count");
+  assert(unchangedStrategicMemory?.importance === firstStrategicMemory.importance, "running consolidation twice must not inflate importance");
+  assert(unchangedStrategicMemory?.version === firstStrategicMemory.version, "running consolidation twice must not create a fresh memory version");
+
   const normalProposal = upsertAgentMemory({
     memoryType: "proposal_style",
     scope: "normal_budget:klaviyo",
