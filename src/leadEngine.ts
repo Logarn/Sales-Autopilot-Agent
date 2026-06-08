@@ -18,6 +18,9 @@ import { writeHeartbeat } from "./heartbeat";
 import { readHuntingControlState } from "./operatorControlState";
 
 const LEAD_ENGINE_ACTION_TYPES = ["capture_job_from_url", "prepare_application_review"] as const;
+const RECOVERABLE_BACKLOG_STOP_REASONS = new Set(["too_many_pending_capture_actions"]);
+const CLEAN_BACKLOG_WORKER_STOP_REASONS = new Set(["completed_batch", "max_actions_reached"]);
+export const RECOVERED_BACKLOG_STOP_REASON = "backlog_drained";
 
 export interface LeadEngineCycleSummary {
   ts: string;
@@ -188,6 +191,26 @@ function makeSummary(input: { mode: "run_once" | "continuous"; dryRun: boolean }
   };
 }
 
+export function isRecoveredBacklogDrain(state: LeadEngineCycleSummary): boolean {
+  const stoppedReasonRecovered = state.stoppedReason === RECOVERED_BACKLOG_STOP_REASON || RECOVERABLE_BACKLOG_STOP_REASONS.has(state.stoppedReason);
+  return stoppedReasonRecovered
+    && state.sessionBlocked === false
+    && state.browserSessionState === "logged_in"
+    && state.queuePendingAfter === 0
+    && state.actionsPaused === 0
+    && state.slackPostFailures === 0
+    && CLEAN_BACKLOG_WORKER_STOP_REASONS.has(state.workerStoppedReason ?? "")
+    && state.workerStoppedReason !== "manual_attention_required"
+    && state.workerStoppedReason !== "browser_session_blocked";
+}
+
+function recoverDrainedBacklog(summary: LeadEngineCycleSummary): void {
+  if (!isRecoveredBacklogDrain(summary)) return;
+  summary.status = "ok";
+  summary.stoppedReason = RECOVERED_BACKLOG_STOP_REASON;
+  summary.queueBackpressure = false;
+}
+
 export async function runLeadEngineCycle(
   input: { mode: "run_once" | "continuous"; dryRun: boolean },
   deps: LeadEngineDeps = {},
@@ -324,6 +347,7 @@ export async function runLeadEngineCycle(
       summary.status = "degraded";
       summary.stoppedReason = "slack_post_failed";
     }
+    recoverDrainedBacklog(summary);
 
     summary.nextSleepMs = computeJitteredDelay(AGENT_ENGINE_INTERVAL_MS, AGENT_ENGINE_JITTER_PCT, random);
     writeState(summary);

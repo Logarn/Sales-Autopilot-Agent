@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { enqueueBrowserAction, listBrowserActions, updateBrowserActionStatus } from "./db";
-import { readLatestState, runLeadEngineCycle } from "./leadEngine";
+import { readLatestState, RECOVERED_BACKLOG_STOP_REASON, runLeadEngineCycle } from "./leadEngine";
 import { BrowserSessionStatus } from "./browserSession";
 import { BrowserSessionInspection, classifyBrowserSessionSnapshot } from "./browserSessionInspector";
 import { readHeartbeat } from "./heartbeat";
@@ -61,6 +61,27 @@ function duplicateOnlyDiscovery() {
     alreadyHandledSkipped: 0,
     invalidSkipped: 0,
     scrollsPerformed: 1,
+    nextRunInMs: null,
+    lockAcquired: true,
+  };
+}
+
+function pendingBacklogDiscovery() {
+  return {
+    ok: true,
+    runType: "discovery.run_once" as const,
+    sessionState: "logged_in",
+    manualAttentionRequired: false,
+    blocked: false,
+    skipped: true,
+    skippedReason: "too_many_pending_capture_actions",
+    pendingCaptureCount: 5,
+    jobsFound: 0,
+    jobsQueued: 0,
+    duplicatesSkipped: 0,
+    alreadyHandledSkipped: 0,
+    invalidSkipped: 0,
+    scrollsPerformed: 0,
     nextRunInMs: null,
     lockAcquired: true,
   };
@@ -182,6 +203,81 @@ async function run(): Promise<void> {
   assert.equal(backpressureDiscoveryCalls, 0);
   assert.equal(backpressureWorkerCalls, 1, "lead engine should still allow the worker to drain existing queue during backpressure");
 
+  const drainedBacklog = await runLeadEngineCycle(
+    { mode: "run_once", dryRun: false },
+    {
+      getSessionStatus: () => sessionStatus(),
+      inspectLiveSession: async () => usableFeedInspection(),
+      listActions: () => Array.from({ length: 5 }, () => ({}) as never),
+      runDiscovery: async () => pendingBacklogDiscovery(),
+      runWorker: async () => ({
+        actionsProcessed: 5,
+        actionsCompleted: 3,
+        actionsPaused: 0,
+        actionsSkipped: 0,
+        slackPostsSucceeded: 0,
+        slackPostFailures: 0,
+        stoppedReason: "completed_batch",
+        remainingPendingCount: 0,
+      }),
+      writeState: () => undefined,
+      random: () => 0,
+    },
+  );
+  assert.equal(drainedBacklog.status, "ok", "drained stale capture backlog should recover instead of blocking startup");
+  assert.equal(drainedBacklog.stoppedReason, RECOVERED_BACKLOG_STOP_REASON);
+  assert.equal(drainedBacklog.queuePendingAfter, 0);
+  assert.equal(drainedBacklog.actionsPaused, 0);
+  assert.equal(drainedBacklog.sessionBlocked, false);
+
+  const backlogStillPending = await runLeadEngineCycle(
+    { mode: "run_once", dryRun: false },
+    {
+      getSessionStatus: () => sessionStatus(),
+      inspectLiveSession: async () => usableFeedInspection(),
+      listActions: () => Array.from({ length: 5 }, () => ({}) as never),
+      runDiscovery: async () => pendingBacklogDiscovery(),
+      runWorker: async () => ({
+        actionsProcessed: 4,
+        actionsCompleted: 3,
+        actionsPaused: 0,
+        actionsSkipped: 0,
+        slackPostsSucceeded: 0,
+        slackPostFailures: 0,
+        stoppedReason: "max_actions_reached",
+        remainingPendingCount: 1,
+      }),
+      writeState: () => undefined,
+      random: () => 0,
+    },
+  );
+  assert.equal(backlogStillPending.status, "degraded", "start gate should remain blocked when drained backlog still has pending actions");
+  assert.equal(backlogStillPending.stoppedReason, "too_many_pending_capture_actions");
+
+  const backlogPausedAction = await runLeadEngineCycle(
+    { mode: "run_once", dryRun: false },
+    {
+      getSessionStatus: () => sessionStatus(),
+      inspectLiveSession: async () => usableFeedInspection(),
+      listActions: () => Array.from({ length: 5 }, () => ({}) as never),
+      runDiscovery: async () => pendingBacklogDiscovery(),
+      runWorker: async () => ({
+        actionsProcessed: 5,
+        actionsCompleted: 3,
+        actionsPaused: 1,
+        actionsSkipped: 0,
+        slackPostsSucceeded: 0,
+        slackPostFailures: 0,
+        stoppedReason: "completed_batch",
+        remainingPendingCount: 0,
+      }),
+      writeState: () => undefined,
+      random: () => 0,
+    },
+  );
+  assert.equal(backlogPausedAction.status, "degraded", "start gate should remain blocked when backlog drain paused an action");
+  assert.equal(backlogPausedAction.stoppedReason, "too_many_pending_capture_actions");
+
   const nonCriticalCaptureFailure = await runLeadEngineCycle(
     { mode: "run_once", dryRun: false },
     {
@@ -292,6 +388,7 @@ async function run(): Promise<void> {
   assert.equal(challenge.stoppedReason, "browser_session_blocked");
   assert.equal(challenge.browserSessionState, "manual_attention_required");
   assert.equal(challenge.sessionBlocked, true);
+  assert.notEqual(challenge.stoppedReason, RECOVERED_BACKLOG_STOP_REASON, "blocked browser session must not be classified as recovered backlog");
   assert.equal(challenge.discoveryRan, false);
   assert.equal(challenge.actionsProcessed, 0);
   assert.equal(challengeDiscoveryCalls, 0);

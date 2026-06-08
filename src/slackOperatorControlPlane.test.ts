@@ -106,6 +106,37 @@ async function runTests(): Promise<void> {
     assert(statusReply.includes("Chrome: connected and ready"), "Health command should include friendly browser status.");
     assert(!/systemd|journalctl|action #|job_id|raw/i.test(statusReply), "Normal health status should not include raw operational dumps.");
 
+    const recoveredBacklogStatus = await buildSlackOperatorReply({ type: "service_status" }, {
+      buildHealthReport: () => ({
+        generatedAt: new Date(0).toISOString(),
+        status: "ok",
+        heartbeats: [],
+        staleHeartbeats: [],
+        findings: [],
+      }),
+      checkCdpEndpoint: async () => ({ reachable: true, browserVersion: "Chrome/Test" }),
+      getBrowserSessionStatus: () => ({
+        state: "healthy",
+        updatedAt: new Date(0).toISOString(),
+        challengeEvents: [],
+        blocked: false,
+        alertCooldownRemainingMs: 0,
+      }),
+      readHeartbeats: () => [{ worker: "lead-engine", status: "success", updatedAt: new Date(0).toISOString() }],
+      readLeadEngineState: () => leadEngineSummary({
+        status: "degraded",
+        stoppedReason: "too_many_pending_capture_actions",
+        queuePendingBefore: 5,
+        queuePendingAfter: 0,
+        actionsProcessed: 5,
+        actionsCompleted: 3,
+        actionsPaused: 0,
+        workerStoppedReason: "completed_batch",
+      }),
+    });
+    assert(recoveredBacklogStatus.includes("I cleared an old capture backlog; browser is clean now."), "Recovered backlog status should use human wording.");
+    assert(!recoveredBacklogStatus.includes("too_many_pending_capture_actions"), "Recovered backlog status should not expose raw stop reason.");
+
     let browserStartCalled = false;
     let pauseSet = false;
     const pauseReply = await buildSlackOperatorReply({ type: "pause_hunting" }, {
