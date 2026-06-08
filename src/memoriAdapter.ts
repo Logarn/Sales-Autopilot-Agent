@@ -32,6 +32,7 @@ export interface MemoriLocalMemory {
   scope: string;
   title: string;
   summary: string;
+  ruleText?: string | null;
   hypothesisText?: string | null;
   confidence: AgentMemoryConfidence;
   evidenceCount: number;
@@ -122,14 +123,18 @@ export interface MemoriClient {
 }
 
 const FINAL_SUBMIT_OVERRIDE_PATTERNS = [
-  /\b(allow|enable|automate|auto[-\s]*click|click|press|tap|override|ignore)\b.*\b(final\s*)?submit\b/i,
-  /\b(allow|enable|automate|auto[-\s]*send|send)\b.*\b(proposal|for\s+\d+\s+connects)\b/i,
+  /\b(allow|enable|automate|auto[-\s]*(?:click|send|submit)|click|press|tap|override|ignore)\b.*\b(?:final\s*)?(?:submit|submission)\b/i,
+  /\b(?:click|press|tap|auto[-\s]*click|automate)\b.*\b(?:send\s+proposal|submit\s+proposal|send\s+for\s+\d+\s+connects)\b/i,
+  /\b(?:send|submit)\s+(?:the\s+)?(?:upwork\s+)?proposal\s+(?:automatically|without\s+(?:steve|human|manual)|on\s+my\s+own)\b/i,
+  /\b(?:send|submit)\s+for\s+\d+\s+connects\b/i,
   /\b(final\s*)?submit\b.*\b(allowed|enabled|automatic|automated|override|ignored)\b/i,
 ];
 
+const SECURITY_VERBS = "(?:bypass|override|ignore|disable|solve|circumvent|evade|get\\s+around|work\\s+around|skip|avoid|pass\\s+through|defeat|clear\\s+automatically)";
+const SECURITY_TARGETS = "(?:captcha|cloudflare|security|2fa|two[-\\s]*factor|passkey|login|screen|challenge)";
 const SECURITY_BYPASS_PATTERNS = [
-  /\b(bypass|override|ignore|disable|solve)\b.*\b(captcha|cloudflare|security|2fa|two[-\s]*factor|passkey|login)\b/i,
-  /\b(captcha|cloudflare|security|2fa|two[-\s]*factor|passkey|login)\b.*\b(bypass|override|ignore|disable|solve)\b/i,
+  new RegExp(`\\b${SECURITY_VERBS}\\b.{0,80}\\b${SECURITY_TARGETS}\\b`, "i"),
+  new RegExp(`\\b${SECURITY_TARGETS}\\b.{0,80}\\b${SECURITY_VERBS}\\b`, "i"),
 ];
 
 const UNVERIFIED_PROOF_PATTERNS = [
@@ -157,6 +162,7 @@ function memoryText(memory: MemoriLocalMemory | null | undefined, metadata?: Rec
   return [
     memory?.title,
     memory?.summary,
+    memory?.ruleText,
     memory?.hypothesisText,
     memory?.keywords?.join(" "),
     JSON.stringify(metadata ?? {}),
@@ -173,7 +179,7 @@ function safetyBlockReason(input: {
   if (metadata.hardSafetyOverride === true || metadata.allowFinalSubmit === true || FINAL_SUBMIT_OVERRIDE_PATTERNS.some((pattern) => pattern.test(text))) {
     return "unsafe_final_submit_override";
   }
-  if (metadata.allowSecurityBypass === true || SECURITY_BYPASS_PATTERNS.some((pattern) => pattern.test(text))) {
+  if (metadata.allowSecurityBypass === true || (SECURITY_BYPASS_PATTERNS.some((pattern) => pattern.test(text)) && !isSafeCopywritingSecurityMention(text))) {
     return "unsafe_security_bypass";
   }
 
@@ -182,6 +188,11 @@ function safetyBlockReason(input: {
     return "unverified_proof_claim";
   }
   return null;
+}
+
+function isSafeCopywritingSecurityMention(text: string): boolean {
+  return /\b(?:avoid|skip|remove|omit)\b.{0,40}\b(?:mentioning|saying|referencing|talking about)\b.{0,80}\b(?:captcha|cloudflare|security|2fa|two[-\s]*factor|passkey|login)\b.{0,80}\b(?:proposal|draft|copy|cover letter)\b/i.test(text)
+    || /\b(?:proposal|draft|copy|cover letter)\b.{0,80}\b(?:avoid|skip|remove|omit)\b.{0,40}\b(?:mentioning|saying|referencing|talking about)\b.{0,80}\b(?:captcha|cloudflare|security|2fa|two[-\s]*factor|passkey|login)\b/i.test(text);
 }
 
 function hasVerifiedProofAttribution(proofVerification: MemoriProofVerification | undefined): boolean {
@@ -234,10 +245,10 @@ export function buildMemoriShadowPayload(input: MemoriShadowWriteInput): { ok: t
         keywords: normalizeKeywords(memory),
       },
       attribution: {
+        ...(input.attribution ?? {}),
         adapter: "memori_shadow",
         kind: input.kind ?? "agent_memory",
         localSourceOfTruth: true,
-        ...(input.attribution ?? {}),
       },
       metadata: {
         ...metadata,
