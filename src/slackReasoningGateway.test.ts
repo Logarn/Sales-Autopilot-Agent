@@ -81,6 +81,13 @@ async function runTests(): Promise<void> {
     handleSlackReasoningGateway: (input: Record<string, unknown>) => Promise<void>;
     handleSlackSocketTextEvent: (event: Record<string, unknown>, client: any) => Promise<void>;
   };
+  const {
+    listBrowserActions,
+    upsertSlackThreadState,
+  } = require("./db") as {
+    listBrowserActions: (status?: string | null, limit?: number) => Array<{ actionType: string; jobId: string; status: string }>;
+    upsertSlackThreadState: (input: Record<string, unknown>) => unknown;
+  };
 
   const healthReplies: string[] = [];
   const healthPlanner = new FakeConversationProvider([{
@@ -236,6 +243,71 @@ async function runTests(): Promise<void> {
     user: "U_ALLOWED",
   }, fakeClient(ignoredReplies));
   assert.equal(ignoredReplies.length, 0, "Irrelevant channel noise should not force a deterministic fallback reply.");
+
+  upsertSlackThreadState({
+    channelId: "C_GATE",
+    messageTs: "files.001",
+    threadTs: "files.001",
+    upworkUrl: "https://www.upwork.com/jobs/~055053866890130225260",
+    jobId: "gateway-file-job",
+    status: "packet_sent",
+  });
+  const fileReplies: string[] = [];
+  await handleSlackReasoningGateway({
+    channelId: "C_GATE",
+    threadTs: "files.001",
+    messageTs: "files.002",
+    text: "here",
+    botMentioned: false,
+    client: fakeClient(fileReplies),
+    files: [{ id: "F_GATEWAY_1", name: "case-study.pdf", size: 128, mimetype: "application/pdf" }],
+    conversationProvider: new FakeConversationProvider([{
+      intent: "ignore",
+      confidence: "high",
+      actions: ["none"],
+    }]),
+    copyProvider: new FakeCopyProvider(),
+  });
+  assert.equal(fileReplies.length, 1, "File payload should run intake even when LLM says ignore.");
+  assert.match(fileReplies[0], /could not ingest|downloadable private URL|file/i, "File intake reply should prove the attachment was not dropped.");
+
+  const actionsBeforeUrlIgnore = listBrowserActions(null, 1000).length;
+  const urlReplies: string[] = [];
+  await handleSlackReasoningGateway({
+    channelId: "C_GATE",
+    threadTs: "url-ignore.001",
+    messageTs: "url-ignore.001",
+    text: "https://www.upwork.com/jobs/Klaviyo-Email-Marketing_~066053866890130225260",
+    botMentioned: false,
+    client: fakeClient(urlReplies),
+    conversationProvider: new FakeConversationProvider([{
+      intent: "ignore",
+      confidence: "high",
+      actions: ["none"],
+    }]),
+    copyProvider: new FakeCopyProvider(),
+  });
+  const actionsAfterUrlIgnore = listBrowserActions(null, 1000);
+  assert(actionsAfterUrlIgnore.length > actionsBeforeUrlIgnore, "Upwork URL should queue capture even when LLM says ignore.");
+  assert(actionsAfterUrlIgnore.some((action) => action.actionType === "capture_job_from_url" && action.jobId.includes("066053866890130225260")), "Ignored Upwork URL should still queue capture.");
+  assert.equal(urlReplies.length, 1, "Ignored Upwork URL should get a capture acknowledgement.");
+
+  const quietIgnoreReplies: string[] = [];
+  await handleSlackReasoningGateway({
+    channelId: "C_GATE",
+    threadTs: "quiet-ignore.001",
+    messageTs: "quiet-ignore.001",
+    text: "random no-payload chatter",
+    botMentioned: false,
+    client: fakeClient(quietIgnoreReplies),
+    conversationProvider: new FakeConversationProvider([{
+      intent: "ignore",
+      confidence: "high",
+      actions: ["none"],
+    }]),
+    copyProvider: new FakeCopyProvider(),
+  });
+  assert.equal(quietIgnoreReplies.length, 0, "No-payload LLM ignore should remain quiet.");
 
   console.log("slack reasoning gateway tests passed");
 }
