@@ -1,7 +1,7 @@
 import {
   getAgentMemory,
   getMemoryEmbedding,
-  listAgentMemories,
+  listAllVisibleAgentMemories,
   listMemoryEmbeddingsByOwner,
   listMemoryLinksForMemory,
   recordMemoryEmbedding,
@@ -454,8 +454,6 @@ function segmentScore(memory: AgentMemory, input: AgenticMemoryRetrievalInput): 
   return segments.filter((segment) => haystack.includes(segment)).length / segments.length;
 }
 
-const AGENTIC_RETRIEVAL_CANDIDATE_LIMIT = 10_000;
-
 function normalizedScope(value: string | null | undefined): string {
   return clean(value).toLowerCase();
 }
@@ -502,7 +500,7 @@ export async function retrieveAgenticMemories(input: AgenticMemoryRetrievalInput
   ].filter(Boolean).join(" "));
   const queryEmbedding = (await embedText(query, input.embeddingProvider)).vector;
   const allowedTypes = new Set(input.memoryTypes ?? []);
-  const memories = listAgentMemories(AGENTIC_RETRIEVAL_CANDIDATE_LIMIT)
+  const memories = listAllVisibleAgentMemories()
     .filter((memory) => !allowedTypes.size || allowedTypes.has(memory.memoryType))
     .filter((memory) => scopesCompatible(memory.scope, input.scope));
 

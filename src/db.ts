@@ -1944,6 +1944,14 @@ const listAgentMemoriesStmt = db.prepare<[number], AgentMemoryRow>(
    ORDER BY importance DESC, evidence_count DESC, updated_at DESC, id DESC
    LIMIT ?`
 );
+const listAllVisibleAgentMemoriesStmt = db.prepare<[], AgentMemoryRow>(
+  `SELECT id, memory_type, scope, title, summary, rule_text, hypothesis_text, confidence, importance, evidence_count,
+          created_at, updated_at, last_used_at, decay_score, status, version, supersedes_memory_id,
+          contradicted_by_memory_id, source_event_ids, keywords, embedding_id
+   FROM agent_memories
+   WHERE status IN ('tentative', 'active')
+   ORDER BY updated_at DESC, id DESC`
+);
 const listAgentMemoriesByTypeStmt = db.prepare<[string, number], AgentMemoryRow>(
   `SELECT id, memory_type, scope, title, summary, rule_text, hypothesis_text, confidence, importance, evidence_count,
           created_at, updated_at, last_used_at, decay_score, status, version, supersedes_memory_id,
@@ -4048,6 +4056,10 @@ export function upsertAgentMemory(input: UpsertAgentMemoryInput): AgentMemory {
 
 export function listAgentMemories(limit = 50): AgentMemory[] {
   return listAgentMemoriesStmt.all(Math.max(1, limit)).map(rowToAgentMemory);
+}
+
+export function listAllVisibleAgentMemories(): AgentMemory[] {
+  return listAllVisibleAgentMemoriesStmt.all().map(rowToAgentMemory);
 }
 
 export function listAgentMemoriesByType(memoryType: string, limit = 50): AgentMemory[] {
