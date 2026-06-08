@@ -177,8 +177,9 @@ const STOP_WORDS = new Set([
 
 const SAFETY_BANNED_PATTERNS = [
   /\b(final\s*submit|submit\s+proposal|send\s+proposal|send\s+for\s+\d+\s+connects)\b/i,
-  /\b(click|press|tap)\b.{0,40}\bsubmit\b/i,
+  /\b(click|press|tap)\b.{0,40}\b(submit|send)\b/i,
   /\bsubmit\b.{0,40}\bautomatically\b/i,
+  /\bsend\b.{0,40}\b(automatically|after\b.{0,20}\bfields?|button)\b/i,
   /\b(bypass|solve|clear)\s+(captcha|security|login|2fa|passkey|cloudflare)\b/i,
   /\bclaim\s+.*\b(verified|attached|selected|filled)\b.*\bwithout\b/i,
   /\b(arbitrary|run)\s+shell\b/i,
@@ -478,7 +479,7 @@ function scopesMutationCompatible(memoryScopeValue: string, candidateScopeValue:
   const candidateScope = normalizedScope(candidateScopeValue);
   if (!candidateScope || candidateScope === "global") return memoryScope === "global";
   if (memoryScope === candidateScope || memoryScope === "global") return true;
-  return hasParentChildScope(memoryScope, candidateScope);
+  return candidateScope.startsWith(`${memoryScope}:`);
 }
 
 function scopeRelevance(memoryScopeValue: string, queryScopeValue: string | null | undefined): number {

@@ -4249,7 +4249,7 @@ export function upsertMemoryRelation(input: UpsertMemoryRelationInput): MemoryRe
     : sourceMemoryIds;
   const newSourceMemoryIds = sourceMemoryIds.filter((id) => !existingSourceMemoryIds.includes(id));
   const evidenceCount = existing && sourceMemoryIds.length
-    ? newSourceMemoryIds.length
+    ? newSourceMemoryIds.length ? normalizeEvidenceCount(input.evidenceCount) : 0
     : normalizeEvidenceCount(input.evidenceCount);
   upsertMemoryRelationStmt.run(
     sourceEntity,
