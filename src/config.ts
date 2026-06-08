@@ -132,9 +132,13 @@ export const MOONSHOT_BASE_URL = process.env.MOONSHOT_BASE_URL ?? process.env.KI
 export const MOONSHOT_MODEL = process.env.MOONSHOT_MODEL ?? process.env.KIMI_MODEL ?? "kimi-k2.5";
 export const LLM_NORMALIZATION_ENABLED = parseBoolean(process.env.LLM_NORMALIZATION_ENABLED, false);
 export const LLM_REQUEST_TIMEOUT_MS = Math.max(1000, parseInteger(process.env.LLM_REQUEST_TIMEOUT_MS, 30_000));
-export const MEMORI_ENABLED = parseBoolean(process.env.MEMORI_ENABLED ?? process.env.MEMORI_SHADOW_ENABLED, false);
+const MEMORI_LEGACY_ACTIVE_RECALL_ENABLED = parseBoolean(process.env.MEMORI_ACTIVE_RECALL_ENABLED, false);
+export const MEMORI_ENABLED = parseBoolean(
+  process.env.MEMORI_ENABLED ?? process.env.MEMORI_SHADOW_ENABLED ?? process.env.MEMORI_ACTIVE_RECALL_ENABLED,
+  false
+);
 export const MEMORI_SHADOW_MODE = parseBoolean(process.env.MEMORI_SHADOW_MODE ?? process.env.MEMORI_SHADOW_ENABLED, true);
-export const MEMORI_ACTIVE_RECALL = parseBoolean(process.env.MEMORI_ACTIVE_RECALL ?? process.env.MEMORI_ACTIVE_RECALL_ENABLED, false);
+export const MEMORI_ACTIVE_RECALL = parseBoolean(process.env.MEMORI_ACTIVE_RECALL, MEMORI_LEGACY_ACTIVE_RECALL_ENABLED);
 export const MEMORI_SHADOW_ENABLED = MEMORI_ENABLED && MEMORI_SHADOW_MODE;
 export const MEMORI_ACTIVE_RECALL_ENABLED = MEMORI_ENABLED && MEMORI_ACTIVE_RECALL;
 export const MEMORI_API_KEY = process.env.MEMORI_API_KEY ?? "";

@@ -153,6 +153,77 @@ function defaultConfig(): MemoriAdapterConfig {
   };
 }
 
+function memoriEndpoint(config: MemoriAdapterConfig, path: string): string {
+  const base = config.apiUrl.replace(/\/+$/, "");
+  return /\/(?:memories|memory|shadow|recall)(?:\/|$)/i.test(new URL(base).pathname)
+    ? base
+    : `${base}${path}`;
+}
+
+async function postMemoriJson<T>(input: {
+  endpoint: string;
+  body: unknown;
+  config: MemoriAdapterConfig;
+}): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), input.config.requestTimeoutMs);
+  try {
+    const response = await fetch(input.endpoint, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${input.config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input.body),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Memori request failed with status ${response.status}`);
+    }
+    return await response.json() as T;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+const defaultMemoriClient: MemoriClient = {
+  async shadowWrite(payload, config) {
+    await postMemoriJson({
+      endpoint: memoriEndpoint(config, "/v1/memories/shadow"),
+      body: payload,
+      config,
+    });
+  },
+  async recall(input, config) {
+    const response = await postMemoriJson<{ memories?: Array<{
+      localMemoryId?: number;
+      local_memory_id?: number;
+      score?: number;
+      reason?: string;
+      text?: string;
+      metadata?: Record<string, unknown>;
+    }>; results?: Array<{
+      localMemoryId?: number;
+      local_memory_id?: number;
+      score?: number;
+      reason?: string;
+      text?: string;
+      metadata?: Record<string, unknown>;
+    }> }>({
+      endpoint: memoriEndpoint(config, "/v1/memories/recall"),
+      body: input,
+      config,
+    });
+    return (response.memories ?? response.results ?? []).map((memory) => ({
+      localMemoryId: memory.localMemoryId ?? memory.local_memory_id,
+      score: memory.score,
+      reason: memory.reason,
+      text: memory.text,
+      metadata: memory.metadata,
+    }));
+  },
+};
+
 function clean(value: string | null | undefined, max = 1000): string {
   const cleaned = (value ?? "").replace(/\s+/g, " ").trim();
   return cleaned.length > max ? `${cleaned.slice(0, max - 3)}...` : cleaned;
@@ -269,15 +340,13 @@ export async function shadowWriteMemoriMemory(input: MemoriShadowWriteInput & {
   if (!config.apiKey) {
     return { ok: true, shadowed: false, sourceOfTruth: "local", skippedReason: "missing_api_key" };
   }
-  if (!input.client) {
-    return { ok: true, shadowed: false, sourceOfTruth: "local", skippedReason: "client_unavailable" };
-  }
+  const client = input.client ?? defaultMemoriClient;
   const built = buildMemoriShadowPayload(input);
   if (!built.ok) {
     return { ok: true, shadowed: false, sourceOfTruth: "local", skippedReason: built.reason };
   }
   try {
-    await input.client.shadowWrite(redactMemoriPayload(built.payload, [config.apiKey]) as MemoriShadowPayload, config);
+    await client.shadowWrite(redactMemoriPayload(built.payload, [config.apiKey]) as MemoriShadowPayload, config);
     return { ok: true, shadowed: true, sourceOfTruth: "local", payload: built.payload };
   } catch {
     return { ok: true, shadowed: false, sourceOfTruth: "local", skippedReason: "client_failed" };
@@ -307,19 +376,11 @@ export async function recallMemoriAttributions(input: MemoriRecallInput & {
       fallbackReason: "missing_api_key",
     };
   }
-  if (!input.client) {
-    return {
-      sourceOfTruth: "local",
-      activeRecallUsed: false,
-      semanticScoresByMemoryId: {},
-      attributions: [],
-      fallbackReason: "client_unavailable",
-    };
-  }
+  const client = input.client ?? defaultMemoriClient;
 
   const localIds = new Set(input.localMemories.map((memory) => memory.id));
   try {
-    const remote = await input.client.recall({
+    const remote = await client.recall({
       query: clean(input.query, 500),
       localMemoryIds: Array.from(localIds),
       limit: Math.max(1, input.limit ?? 10),

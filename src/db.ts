@@ -3,6 +3,7 @@ import * as path from "node:path";
 import Database from "better-sqlite3";
 import { DB_PATH, TIMEZONE } from "./config";
 import { areNearDuplicateJobs, buildJobFingerprint } from "./dedupe";
+import { shadowWriteMemoriMemory } from "./memoriAdapter";
 import {
   ApplicationDraft,
   ApplicationStatus,
@@ -3655,7 +3656,15 @@ export function upsertAgentMemory(input: UpsertAgentMemoryInput): AgentMemory {
   );
   const row = getAgentMemoryByKeyStmt.get(input.memoryType, scope, title, summary);
   if (!row) throw new Error(`Failed to persist agent memory: ${input.memoryType}/${scope}/${title}`);
-  return rowToAgentMemory(row);
+  const memory = rowToAgentMemory(row);
+  void shadowWriteMemoriMemory({
+    memory,
+    kind: "agent_memory_upsert",
+    attribution: {
+      source: "local_agent_memory_persistence",
+    },
+  });
+  return memory;
 }
 
 export function listAgentMemories(limit = 50): AgentMemory[] {
