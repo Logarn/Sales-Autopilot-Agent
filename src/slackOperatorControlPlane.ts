@@ -8,7 +8,7 @@ import {
   BROWSER_USER_DATA_DIR,
   SLACK_SOCKET_MODE_ENABLED,
 } from "./config";
-import { getBrowserSessionStatus } from "./browserSession";
+import { getBrowserSessionStatus, listUnresolvedBrowserChallengeQuarantines } from "./browserSession";
 import {
   acquireBrowserSession,
   checkCdpEndpoint,
@@ -130,6 +130,7 @@ function leadEngineLine(state: LeadEngineCycleSummary | null): string {
 async function buildOperatorStatusReply(deps: SlackOperatorControlDeps = {}): Promise<string> {
   const health = (deps.buildHealthReport ?? buildHealthReport)();
   const browserSession = (deps.getBrowserSessionStatus ?? getBrowserSessionStatus)();
+  const quarantined = listUnresolvedBrowserChallengeQuarantines();
   const cdp = await (deps.checkCdpEndpoint ?? checkCdpEndpoint)(BROWSER_CDP_URL);
   const heartbeats = (deps.readHeartbeats ?? readHeartbeats)();
   const leadState = (deps.readLeadEngineState ?? readLatestState)();
@@ -141,6 +142,9 @@ async function buildOperatorStatusReply(deps: SlackOperatorControlDeps = {}): Pr
     `I’m running, and Slack is listening${SLACK_SOCKET_MODE_ENABLED ? "." : " in this socket handler."}`,
     `Overall health: ${friendlyHealthLabel(health.status)}${health.findings.length ? ` (${health.findings.length} thing${health.findings.length === 1 ? "" : "s"} need attention)` : "."}`,
     `Chrome: ${cdp.reachable && !browserSession.blocked ? "connected and ready" : "needs attention"}${browserSession.reason ? ` because ${humanizeReason(browserSession.reason)}` : ""}.`,
+    quarantined.length > 0
+      ? `Blocked application: one page is paused safely. Clear the remote Chrome check, then say retry or skip this one.`
+      : `Blocked application: none waiting on retry or skip.`,
     leadEngineLine(leadState),
     `QA queue: ${protectedCount} protected application tab${protectedCount === 1 ? "" : "s"} waiting.`,
     `Workers: ${runningWorkers} active heartbeat${runningWorkers === 1 ? "" : "s"}${staleCount ? `, ${staleCount} stale` : ""}.`,

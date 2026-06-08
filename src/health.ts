@@ -4,7 +4,7 @@ import { HeartbeatRecord, readHeartbeats, readStaleHeartbeats, writeHeartbeat } 
 import { getLlmProviderConfig } from "./llm/provider";
 import { logger } from "./logger";
 import { sendHealthAlert } from "./slack";
-import { formatBrowserSessionStatus, getBrowserSessionStatus } from "./browserSession";
+import { formatBrowserSessionStatus, getBrowserSessionStatus, listUnresolvedBrowserChallengeQuarantines } from "./browserSession";
 import { isRecoveredBacklogDrain, readLatestState, type LeadEngineCycleSummary } from "./leadEngine";
 
 type HealthSeverity = "ok" | "warning" | "critical";
@@ -25,18 +25,26 @@ export interface HealthReport {
 
 function browserStateFindings(): HealthFinding[] {
   const session = getBrowserSessionStatus();
+  const quarantined = listUnresolvedBrowserChallengeQuarantines();
   const sessionFindings: HealthFinding[] = session.blocked
     ? [
         {
-          key: "browser-session-state",
+          key: "browser-currently-blocked",
           severity: session.state === "browser_session_unhealthy" ? "critical" : "warning",
-          message: `Browser session requires attention: ${formatBrowserSessionStatus(session)}`,
+          message: `Remote Chrome is currently blocked and needs a human check: ${formatBrowserSessionStatus(session)}`,
         },
       ]
     : [];
   const paused = listBrowserActions("paused", 50);
   return [
     ...sessionFindings,
+    ...(!session.blocked && quarantined.length > 0
+      ? [{
+        key: "browser-action-quarantined",
+        severity: "warning" as const,
+        message: `Remote Chrome is clean, but ${quarantined.length} paused application page${quarantined.length === 1 ? "" : "s"} still needs retry or skip.`,
+      }]
+      : []),
     ...paused
     .filter((action) => {
       const error = (action.lastError ?? "").toLowerCase();

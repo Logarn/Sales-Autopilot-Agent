@@ -77,6 +77,15 @@ function humanStatus(item: ProtectedQaQueueItem): string {
   return "ready";
 }
 
+function humanBlockedReason(value: string): string {
+  if (/\b(captcha_or_security_challenge|captcha|cloudflare|just a moment|security check)\b/i.test(value)) {
+    return "Upwork asked for a browser check";
+  }
+  if (/\b(login_required|log in|sign in)\b/i.test(value)) return "Upwork needs the remote Chrome session signed in";
+  if (/\b(two_factor_required|2fa|two-factor|passkey)\b/i.test(value)) return "Upwork needs a human security check";
+  return "remote Chrome needs review";
+}
+
 export function getProtectedQaQueueItems(limit = BROWSER_QA_MAX_PROTECTED_TABS): ProtectedQaQueueItem[] {
   return listBrowserActions(null, 1000)
     .filter((action) => isProtectedQaApplyAction(action, getApplicationStatus))
@@ -92,7 +101,7 @@ export function getProtectedQaQueueItems(limit = BROWSER_QA_MAX_PROTECTED_TABS):
       const required = plan?.connects.required ?? null;
       const boost = plan?.connects.boost ?? null;
       const state = queueStateForAction(action, applicationStatus);
-      const reason = action.lastError || hold?.reason || hold?.state || "remote Chrome needs review";
+      const reason = humanBlockedReason(action.lastError || hold?.reason || hold?.state || "remote Chrome needs review");
       return {
         index: index + 1,
         action,
@@ -105,7 +114,7 @@ export function getProtectedQaQueueItems(limit = BROWSER_QA_MAX_PROTECTED_TABS):
         files: basenameList(files, 2),
         connects: required === null ? "unknown" : `${required}`,
         boost: boost && boost > 0 ? `${boost}` : "none",
-        nextAction: state === "blocked" ? `clear Chrome, then reply "retry" (${reason})` : "review in remote Chrome, ask for changes, or manually submit",
+        nextAction: state === "blocked" ? `${reason}. Clear it, then reply "retry" or "skip this one".` : "review in remote Chrome, ask for changes, or manually submit",
       };
     });
 }

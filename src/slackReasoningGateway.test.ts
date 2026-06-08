@@ -84,21 +84,53 @@ async function runTests(): Promise<void> {
   const { SLACK_CONVERSATION_ALLOWED_ACTIONS } = require("./slackConversationBrain") as {
     SLACK_CONVERSATION_ALLOWED_ACTIONS: string[];
   };
-  const {
-    listActiveSlackBehaviorMemories,
-    listBrowserActions,
-    listRecentSlackFailureReflections,
-    markJobSeen,
-    saveApplicationDraft,
-    upsertSlackThreadState,
-  } = require("./db") as {
-    listActiveSlackBehaviorMemories: (limit?: number) => Array<{ type: string; rule: string }>;
-    listBrowserActions: (status?: string | null, limit?: number) => Array<{ actionType: string; jobId: string; status: string }>;
-    listRecentSlackFailureReflections: (limit?: number) => Array<{ userMessage: string; whatHappened: string }>;
-    markJobSeen: (job: any, notified: boolean) => void;
-    saveApplicationDraft: (draft: any) => void;
-    upsertSlackThreadState: (input: Record<string, unknown>) => unknown;
-  };
+	  const {
+	    enqueueBrowserAction,
+	    getBrowserActionById,
+	    listActiveSlackBehaviorMemories,
+	    listBrowserActions,
+	    listRecentSlackFailureReflections,
+	    markJobSeen,
+	    saveApplicationDraft,
+	    updateBrowserActionStatus,
+	    upsertSlackThreadState,
+	  } = require("./db") as {
+	    enqueueBrowserAction: (input: { jobId: string; actionType: string; payload: Record<string, unknown> }) => number;
+	    getBrowserActionById: (id: number) => { status: string; payload: Record<string, unknown> } | null;
+	    listActiveSlackBehaviorMemories: (limit?: number) => Array<{ type: string; rule: string }>;
+	    listBrowserActions: (status?: string | null, limit?: number) => Array<{ actionType: string; jobId: string; status: string }>;
+	    listRecentSlackFailureReflections: (limit?: number) => Array<{ userMessage: string; whatHappened: string }>;
+	    markJobSeen: (job: any, notified: boolean) => void;
+	    saveApplicationDraft: (draft: any) => void;
+	    updateBrowserActionStatus: (id: number, status: string, lastError?: string | null) => void;
+	    upsertSlackThreadState: (input: Record<string, unknown>) => unknown;
+	  };
+	  const {
+	    buildManualAttentionSlackText,
+	    listUnresolvedBrowserChallengeQuarantines,
+	    recordBrowserManualAttention,
+	  } = require("./browserSession") as {
+	    buildManualAttentionSlackText: (event: {
+	      at: string;
+	      actionId?: number;
+	      jobId?: string;
+	      title?: string | null;
+	      url?: string | null;
+	      reason: string;
+	    }) => string;
+	    listUnresolvedBrowserChallengeQuarantines: () => Array<{ actionId?: number; status: string }>;
+	    recordBrowserManualAttention: (input: {
+	      actionId: number;
+	      jobId: string;
+	      threadChannelId?: string | null;
+	      threadTs?: string | null;
+	      actionType?: string | null;
+	      source?: string | null;
+	      reason: string;
+	      url?: string | null;
+	      title?: string | null;
+	    }) => Promise<unknown>;
+	  };
   for (const unsupportedAction of ["remember", "forget", "explain_learning", "create_mayor_task"]) {
     assert(!SLACK_CONVERSATION_ALLOWED_ACTIONS.includes(unsupportedAction), `${unsupportedAction} should not be advertised until the gateway executor implements it.`);
   }
@@ -685,12 +717,114 @@ async function runTests(): Promise<void> {
     }]),
     copyProvider: destructiveCopyProvider,
   });
-  assert.equal(previewReplies.length, 1);
-  assert(previewReplies[0].includes(exactDraft), "Draft preview must preserve the exact proposal body.");
-  assert.match(previewReplies[0], /Final submit remains manual/i, "Draft preview should keep manual-submit safety.");
+	  assert.equal(previewReplies.length, 1);
+	  assert(previewReplies[0].includes(exactDraft), "Draft preview must preserve the exact proposal body.");
+	  assert.match(previewReplies[0], /Final submit remains manual/i, "Draft preview should keep manual-submit safety.");
 
-  console.log("slack reasoning gateway tests passed");
-}
+	  const blockedCopy = buildManualAttentionSlackText({
+	    at: new Date(0).toISOString(),
+	    actionId: 210,
+	    jobId: "blocked-gateway-job",
+	    title: "Just a moment...",
+	    url: "https://www.upwork.com/?__cf_chl_tk=test",
+	    reason: "captcha_or_security_challenge",
+	  });
+	  assert.match(blockedCopy, /Upwork checked one application page\. I paused that one safely/i, "Normal blocker copy should use natural recovery language.");
+	  assert.match(blockedCopy, /Clear the remote Chrome check, then reply .retry./i, "Normal blocker copy should give Steve the retry path.");
+	  assert.doesNotMatch(blockedCopy, /manual_attention_required|browserSessionState|raw action id/i, "Normal blocker copy should hide raw internals.");
+
+	  upsertSlackThreadState({
+	    channelId: "C_GATE",
+	    messageTs: "blocked.001",
+	    threadTs: "blocked.001",
+	    upworkUrl: "https://www.upwork.com/jobs/~055053866890130225263",
+	    jobId: "blocked-gateway-job",
+	    status: "manual_attention_required",
+	  });
+	  const blockedActionId = enqueueBrowserAction({
+	    jobId: "blocked-gateway-job",
+	    actionType: "capture_job_from_url",
+	    payload: {
+	      url: "https://www.upwork.com/jobs/~055053866890130225263",
+	      channelId: "C_GATE",
+	      threadTs: "blocked.001",
+	    },
+	  });
+	  updateBrowserActionStatus(blockedActionId, "paused", "Detected state: captcha_or_security_challenge.");
+	  await recordBrowserManualAttention({
+	    actionId: blockedActionId,
+	    jobId: "blocked-gateway-job",
+	    threadChannelId: "C_GATE",
+	    threadTs: "blocked.001",
+	    actionType: "capture_job_from_url",
+	    source: "slack_url",
+	    reason: "captcha_or_security_challenge",
+	    url: "https://www.upwork.com/?__cf_chl_tk=test",
+	    title: "Just a moment...",
+	  });
+
+	  const debugReplies: string[] = [];
+	  await handleSlackReasoningGateway({
+	    channelId: "C_GATE",
+	    threadTs: "blocked.001",
+	    messageTs: "blocked.002",
+	    text: "debug blocker",
+	    botMentioned: false,
+	    client: fakeClient(debugReplies),
+	  });
+	  assert(debugReplies.some((reply) => reply.includes(String(blockedActionId)) && /captcha_or_security_challenge/i.test(reply)), "Debug blocker copy should expose raw action details.");
+
+	  const retryReplies: string[] = [];
+	  await handleSlackReasoningGateway({
+	    channelId: "C_GATE",
+	    threadTs: "blocked.001",
+	    messageTs: "blocked.003",
+	    text: "retry",
+	    botMentioned: false,
+	    client: fakeClient(retryReplies),
+	    copyProvider: new FakeCopyProvider(),
+	  });
+	  assert.equal(getBrowserActionById(blockedActionId)?.status, "pending", "Retry should requeue the quarantined action.");
+	  assert.equal(listUnresolvedBrowserChallengeQuarantines().some((item) => item.actionId === blockedActionId), false, "Retry should clear unresolved quarantine blocker.");
+	  assert(retryReplies.some((reply) => /Retry queued/i.test(reply) && /stop before submit/i.test(reply)), "Retry reply should be natural and preserve final-submit safety.");
+	  assert(!retryReplies.join("\n").includes(String(blockedActionId)), "Normal retry copy should hide raw action id.");
+
+	  const skippedActionId = enqueueBrowserAction({
+	    jobId: "blocked-gateway-job",
+	    actionType: "capture_job_from_url",
+	    payload: {
+	      url: "https://www.upwork.com/jobs/~055053866890130225263",
+	      channelId: "C_GATE",
+	      threadTs: "blocked.001",
+	    },
+	  });
+	  updateBrowserActionStatus(skippedActionId, "paused", "Detected state: captcha_or_security_challenge.");
+	  await recordBrowserManualAttention({
+	    actionId: skippedActionId,
+	    jobId: "blocked-gateway-job",
+	    threadChannelId: "C_GATE",
+	    threadTs: "blocked.001",
+	    actionType: "capture_job_from_url",
+	    source: "slack_url",
+	    reason: "captcha_or_security_challenge",
+	    url: "https://www.upwork.com/?__cf_chl_tk=test",
+	    title: "Just a moment...",
+	  });
+	  const skipReplies: string[] = [];
+	  await handleSlackReasoningGateway({
+	    channelId: "C_GATE",
+	    threadTs: "blocked.001",
+	    messageTs: "blocked.004",
+	    text: "skip this one",
+	    botMentioned: false,
+	    client: fakeClient(skipReplies),
+	    copyProvider: new FakeCopyProvider(),
+	  });
+	  assert.equal(getBrowserActionById(skippedActionId)?.status, "cancelled", "Skip should cancel the paused quarantined action.");
+	  assert.equal(listUnresolvedBrowserChallengeQuarantines().some((item) => item.actionId === skippedActionId), false, "Skip should clear unresolved quarantine blocker.");
+
+	  console.log("slack reasoning gateway tests passed");
+	}
 
 runTests().catch((error) => {
   console.error(`slack reasoning gateway tests failed: ${error instanceof Error ? error.message : String(error)}`);

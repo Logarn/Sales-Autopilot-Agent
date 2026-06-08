@@ -1,5 +1,11 @@
 import { App } from "@slack/bolt";
-import { clearBrowserManualAttention, getBrowserSessionStatus } from "./browserSession";
+import {
+  clearBrowserManualAttention,
+  getBrowserSessionStatus,
+  listUnresolvedBrowserChallengeQuarantines,
+  markBrowserChallengeRetried,
+  markBrowserChallengeSkipped,
+} from "./browserSession";
 import { buildBrowserApplyPlan } from "./browserApply";
 import {
   applyApplicationRevision,
@@ -20,6 +26,7 @@ import {
   upsertSlackThreadState,
   upsertSlackBehaviorMemory,
   recordApplicationRevisionRequest,
+  mergeBrowserActionPayload,
   updateBrowserActionStatus,
   updateApplicationProofPlanOverrides,
 } from "./db";
@@ -347,6 +354,12 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
       instruction: commandText,
       source: "fallback",
     };
+  }
+  if (/^(?:debug blocker|debug blocked|blocker debug|blocked debug|debug browser blocker)$/i.test(commandText)) {
+    return { type: "status", rawText: normalized, source: "fallback" };
+  }
+  if (/^(?:what(?:'|’)?s blocked|what is blocked|what needs unblocking|blocked\??)$/i.test(commandText)) {
+    return { type: "qa_queue", rawText: normalized, qaQuery: "blocked", source: "fallback" };
   }
   const qaQueueMatch = /\b(?:what[’']?s ready|what is ready|what needs me|what needs my review|what needs review|show qa queue|qa queue|what is blocked|what[’']?s blocked|what needs unblocking)\b/i.test(commandText);
   if (qaQueueMatch) {
@@ -1581,6 +1594,26 @@ export async function handleSlackSocketTextEvent(rawEvent: SlackSocketTextEvent,
 type SlackThreadStateForRetry = NonNullable<ReturnType<typeof getSlackThreadStateByThreadTs>>;
 type BrowserActionRecord = NonNullable<ReturnType<typeof getBrowserActionById>>;
 
+function actionHasPausedChallengeQuarantine(action: BrowserActionRecord): boolean {
+  const quarantine = action.payload.challengeQuarantine as { status?: unknown; challengeType?: unknown } | undefined;
+  if (quarantine?.status === "paused") return true;
+  const value = `${action.lastError ?? ""} ${String(quarantine?.challengeType ?? "")}`.toLowerCase();
+  return /\b(captcha_or_security_challenge|login_required|two_factor_required|passkey|security check|just a moment|cloudflare|captcha)\b/.test(value);
+}
+
+function updateActionQuarantineStatus(action: BrowserActionRecord, status: "retried" | "skipped" | "resolved"): void {
+  const current = action.payload.challengeQuarantine && typeof action.payload.challengeQuarantine === "object"
+    ? action.payload.challengeQuarantine as Record<string, unknown>
+    : {};
+  mergeBrowserActionPayload(action.id, {
+    challengeQuarantine: {
+      ...current,
+      status,
+      lastSeenAt: new Date().toISOString(),
+    },
+  });
+}
+
 function actionMatchesSlackThread(action: BrowserActionRecord, state: SlackThreadStateForRetry): boolean {
   const payload = action.payload as { channelId?: string; threadTs?: string; applicationId?: string };
   const matchesThread = payload.channelId === state.channelId && payload.threadTs === state.threadTs;
@@ -1595,6 +1628,10 @@ function threadBrowserActions(state: SlackThreadStateForRetry) {
       if (!["capture_job_from_url", "prepare_application_review"].includes(candidate.actionType)) return false;
       return actionMatchesSlackThread(candidate, state);
     });
+}
+
+function resolvePausedChallengeActionForThread(state: SlackThreadStateForRetry): BrowserActionRecord | null {
+  return threadBrowserActions(state).filter(actionHasPausedChallengeQuarantine).slice(-1)[0] ?? null;
 }
 
 function resolveRetryAction(input: {
@@ -1905,10 +1942,13 @@ async function executeConversationBrainDecision(params: {
       return true;
     }
     updateBrowserActionStatus(action.id, "pending", "Slack conversation brain retry request.");
+    updateActionQuarantineStatus(action, "retried");
+    markBrowserChallengeRetried(action.id);
     const session = getBrowserSessionStatus();
     if (session.blocked) {
       const clearResult = await clearBrowserManualAttention(action.id);
       logger.info(`Cleared browser manual attention for action #${action.id}; state=${clearResult.state}.`);
+      markBrowserChallengeRetried(action.id);
     }
     updateSlackThreadStateStatus(params.state.channelId, params.state.threadTs, "retry_requested");
     const text = await userFacingSlackCopy({
@@ -2478,6 +2518,17 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, 
   }
 
   if (command.type === "reject") {
+    const blockedAction = resolvePausedChallengeActionForThread(state);
+    if (blockedAction) {
+      updateBrowserActionStatus(blockedAction.id, "cancelled", "Skipped from Slack after browser challenge quarantine.");
+      updateActionQuarantineStatus(blockedAction, "skipped");
+      markBrowserChallengeSkipped(blockedAction.id);
+      const session = getBrowserSessionStatus();
+      if (session.blocked) {
+        clearBrowserManualAttention(blockedAction.id);
+        markBrowserChallengeSkipped(blockedAction.id);
+      }
+    }
     if (state.jobId && maybeJobStatus) {
       updateApplicationStatus(state.jobId, "rejected", "Rejected from Slack socket thread command.");
     }
@@ -2668,10 +2719,13 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, 
       return;
     }
     updateBrowserActionStatus(action.id, "pending", "Slack socket retry request.");
+    updateActionQuarantineStatus(action, "retried");
+    markBrowserChallengeRetried(action.id);
     const session = getBrowserSessionStatus();
     if (session.blocked) {
       const clearResult = await clearBrowserManualAttention(action.id);
       logger.info(`Cleared browser manual attention for action #${action.id}; state=${clearResult.state}.`);
+      markBrowserChallengeRetried(action.id);
     }
     updateSlackThreadStateStatus(state.channelId, state.threadTs, "retry_requested");
     const text = await userFacingSlackCopy({
