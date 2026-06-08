@@ -69,6 +69,7 @@ import {
   BrowserSessionStatus,
   formatBrowserSessionStatus,
   getBrowserSessionStatus,
+  markBrowserChallengeResolved,
   recordBrowserManualAttention,
 } from "./browserSession";
 import { hasAllowedCaptureSourceMetadata } from "./browserDiscoveryTool";
@@ -2506,6 +2507,59 @@ function stateStatusMessage(state: DetectedBrowserState): string {
   return `Detected state: ${state}; stop-before-submit enforced.`;
 }
 
+function quarantineBackoffUntil(repeatCount: number, now = new Date()): string | null {
+  if (repeatCount <= 1) return null;
+  const pauseMs = Math.min(60 * 60 * 1000, 5 * 60 * 1000 * 2 ** Math.min(5, repeatCount - 2));
+  return new Date(now.getTime() + pauseMs).toISOString();
+}
+
+async function quarantineBrowserChallenge(input: {
+  action: BrowserAction;
+  thread: SlackThreadContext | null;
+  state: DetectedBrowserState | string;
+  url: string | null;
+  title: string | null;
+}): Promise<void> {
+  const action = input.action;
+  const source = typeof action.payload.source === "string"
+    ? action.payload.source
+    : typeof (action.payload.discovery as { sourceLabel?: unknown } | undefined)?.sourceLabel === "string"
+      ? String((action.payload.discovery as { sourceLabel?: unknown }).sourceLabel)
+      : null;
+  const record = await recordBrowserManualAttention({
+    actionId: action.id,
+    jobId: action.jobId,
+    applicationId: typeof action.payload.applicationId === "string" ? action.payload.applicationId : null,
+    threadChannelId: input.thread?.channelId ?? (typeof action.payload.channelId === "string" ? action.payload.channelId : null),
+    threadTs: input.thread?.threadTs ?? (typeof action.payload.threadTs === "string" ? action.payload.threadTs : null),
+    actionType: action.actionType,
+    source,
+    url: input.url,
+    title: input.title,
+    reason: String(input.state),
+  });
+  const quarantine = (record.quarantinedActions ?? []).find((item) => item.actionId === action.id);
+  mergeBrowserActionPayload(action.id, {
+    challengeQuarantine: {
+      actionId: action.id,
+      jobId: action.jobId,
+      applicationId: typeof action.payload.applicationId === "string" ? action.payload.applicationId : null,
+      threadChannelId: input.thread?.channelId ?? null,
+      threadTs: input.thread?.threadTs ?? null,
+      challengeType: String(input.state),
+      firstSeenAt: quarantine?.firstSeenAt ?? record.lastManualAttentionAt ?? new Date().toISOString(),
+      lastSeenAt: quarantine?.lastSeenAt ?? record.lastManualAttentionAt ?? new Date().toISOString(),
+      retryCommand: quarantine?.retryCommand ?? `retry ${action.id}`,
+      status: "paused",
+      source,
+      pageUrl: input.url,
+      pageTitle: input.title,
+      repeatCount: quarantine?.repeatCount ?? 1,
+      backoffUntil: quarantineBackoffUntil(quarantine?.repeatCount ?? 1),
+    },
+  });
+}
+
 export type DiscoverySlackNotificationStatus = "not_discovery" | "missing_channel" | "post_failed" | "posted";
 type DiscoveryLeadPostOutcome = "not_needed" | "posted" | "failed";
 interface DiscoveryLeadPostResult {
@@ -2902,13 +2956,15 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       }
       updateBrowserActionStatus(action.id, terminalStatusForState(state), stateStatusMessage(state));
       if (["login_required", "two_factor_required", "captcha_or_security_challenge"].includes(state)) {
-        await recordBrowserManualAttention({
-          actionId: action.id,
-          jobId: action.jobId,
+        await quarantineBrowserChallenge({
+          action,
+          thread,
+          state,
           url: snapshot?.url ?? url,
           title: snapshot?.title ?? null,
-          reason: state,
         });
+      } else if (state === "apply_page_loaded") {
+        markBrowserChallengeResolved(action.id);
       }
       if (state === "apply_page_loaded" || state === "connects_not_verified" || state === "field_preparation_incomplete") {
         const qaStatus = state === "apply_page_loaded" ? "prepared_for_qa" : "needs_review";
@@ -3043,12 +3099,12 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
             });
           }
           if (["login_required", "two_factor_required", "captcha_or_security_challenge"].includes(threadStatus)) {
-            await recordBrowserManualAttention({
-              actionId: action.id,
-              jobId: action.jobId,
+            await quarantineBrowserChallenge({
+              action,
+              thread,
+              state: threadStatus,
               url: snapshot?.url ?? url,
               title: snapshot?.title ?? null,
-              reason: threadStatus,
             });
           }
         }

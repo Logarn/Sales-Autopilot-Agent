@@ -347,13 +347,62 @@ async function run(): Promise<void> {
   assert.equal(staleButLiveUsable.sessionBlocked, false);
   assert.equal(staleButLiveUsable.discoveryRan, true);
   assert.equal(staleDiscoveryCalls, 1);
-  assert.equal(staleWorkerCalls, 1);
-  assert.equal(clearCalls, 1, "real run should clear stale stored manual-attention state after a usable live feed");
-  assert.deepEqual(
-    staleWorkerAllowedActionTypes,
-    ["capture_job_from_url", "prepare_application_review"],
-    "lead engine worker gate should process capture and prepare actions",
-  );
+	  assert.equal(staleWorkerCalls, 1);
+	  assert.equal(clearCalls, 1, "real run should clear stale stored manual-attention state after a usable live feed");
+	  assert.deepEqual(
+	    staleWorkerAllowedActionTypes,
+	    ["capture_job_from_url", "prepare_application_review"],
+	    "lead engine worker gate should process capture and prepare actions",
+	  );
+
+	  let pausedChallengeDiscoveryCalls = 0;
+	  let pausedChallengeWorkerCalls = 0;
+	  const cleanBrowserPausedAction = await runLeadEngineCycle(
+	    { mode: "run_once", dryRun: false },
+	    {
+	      getSessionStatus: () => sessionStatus(),
+	      inspectLiveSession: async () => usableFeedInspection(),
+	      listUnresolvedQuarantines: () => [{
+	        actionId: 210,
+	        jobId: "ae:test:challenge",
+	        challengeType: "captcha_or_security_challenge",
+	        firstSeenAt: new Date(0).toISOString(),
+	        lastSeenAt: new Date(0).toISOString(),
+	        retryCommand: "retry 210",
+	        status: "paused",
+	        repeatCount: 1,
+	      }],
+	      listActions: (status?: string | null) => status === "paused"
+	        ? [{
+	          id: 210,
+	          jobId: "ae:test:challenge",
+	          actionType: "capture_job_from_url",
+	          status: "paused",
+	          payload: {},
+	          attempts: 1,
+	          lastError: "Detected state: captcha_or_security_challenge.",
+	          createdAt: new Date(0).toISOString(),
+	          updatedAt: new Date(0).toISOString(),
+	        } as never]
+	        : [],
+	      runDiscovery: async () => {
+	        pausedChallengeDiscoveryCalls += 1;
+	        return discoveryOk();
+	      },
+	      runWorker: async () => {
+	        pausedChallengeWorkerCalls += 1;
+	        return workerEmpty();
+	      },
+	      writeState: () => undefined,
+	      random: () => 0,
+	    },
+	  );
+	  assert.equal(cleanBrowserPausedAction.status, "paused", "clean browser with unresolved quarantined action should still block start gate");
+	  assert.equal(cleanBrowserPausedAction.stoppedReason, "browser_challenge_action_paused");
+	  assert.equal(cleanBrowserPausedAction.sessionBlocked, false, "paused action is distinct from browser currently blocked");
+	  assert.equal(cleanBrowserPausedAction.unresolvedChallengeActions, 1);
+	  assert.equal(pausedChallengeDiscoveryCalls, 0);
+	  assert.equal(pausedChallengeWorkerCalls, 0);
 
   let challengeDiscoveryCalls = 0;
   let challengeWorkerCalls = 0;

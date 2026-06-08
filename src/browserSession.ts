@@ -16,10 +16,35 @@ export interface BrowserManualAttentionEvent {
   at: string;
   actionId?: number;
   jobId?: string;
+  applicationId?: string | null;
+  threadChannelId?: string | null;
+  threadTs?: string | null;
+  actionType?: string | null;
+  source?: string | null;
   jobTitle?: string | null;
   url?: string | null;
   title?: string | null;
   reason: string;
+}
+
+export type BrowserChallengeQuarantineStatus = "paused" | "retried" | "resolved" | "skipped";
+
+export interface BrowserChallengeQuarantineRecord {
+  actionId?: number;
+  jobId?: string;
+  applicationId?: string | null;
+  threadChannelId?: string | null;
+  threadTs?: string | null;
+  actionType?: string | null;
+  source?: string | null;
+  pageUrl?: string | null;
+  pageTitle?: string | null;
+  challengeType: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  retryCommand?: string;
+  status: BrowserChallengeQuarantineStatus;
+  repeatCount: number;
 }
 
 export interface BrowserSessionRecord {
@@ -30,6 +55,7 @@ export interface BrowserSessionRecord {
   lastAlertSentAt?: string;
   lastAlertKey?: string;
   challengeEvents: BrowserManualAttentionEvent[];
+  quarantinedActions?: BrowserChallengeQuarantineRecord[];
 }
 
 export interface BrowserSessionStatus extends BrowserSessionRecord {
@@ -43,6 +69,7 @@ const DEFAULT_SESSION: BrowserSessionRecord = {
   state: "healthy",
   updatedAt: new Date(0).toISOString(),
   challengeEvents: [],
+  quarantinedActions: [],
 };
 
 function sessionPath(): string {
@@ -62,6 +89,7 @@ function readRawSession(): BrowserSessionRecord {
       ...DEFAULT_SESSION,
       ...parsed,
       challengeEvents: Array.isArray(parsed.challengeEvents) ? parsed.challengeEvents : [],
+      quarantinedActions: Array.isArray(parsed.quarantinedActions) ? parsed.quarantinedActions : [],
     };
   } catch {
     return { ...DEFAULT_SESSION, updatedAt: nowIso() };
@@ -72,6 +100,84 @@ function writeSession(record: BrowserSessionRecord): void {
   const filePath = sessionPath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, `${JSON.stringify(record, null, 2)}\n`);
+}
+
+function quarantineKey(input: { actionId?: number; jobId?: string; applicationId?: string | null; source?: string | null }): string {
+  if (input.actionId) return `action:${input.actionId}`;
+  if (input.applicationId) return `application:${input.applicationId}`;
+  if (input.jobId) return `job:${input.jobId}`;
+  if (input.source) return `source:${input.source}`;
+  return "browser-session";
+}
+
+function upsertQuarantine(
+  quarantines: BrowserChallengeQuarantineRecord[],
+  event: BrowserManualAttentionEvent,
+): BrowserChallengeQuarantineRecord[] {
+  const key = quarantineKey(event);
+  const existing = quarantines.find((record) => quarantineKey(record) === key);
+  const retryCommand = event.actionId ? `retry ${event.actionId}` : "retry";
+  const next: BrowserChallengeQuarantineRecord = {
+    actionId: event.actionId,
+    jobId: event.jobId,
+    applicationId: event.applicationId ?? null,
+    threadChannelId: event.threadChannelId ?? null,
+    threadTs: event.threadTs ?? null,
+    actionType: event.actionType ?? null,
+    source: event.source ?? null,
+    pageUrl: event.url ?? null,
+    pageTitle: event.title ?? null,
+    challengeType: event.reason,
+    firstSeenAt: existing?.firstSeenAt ?? event.at,
+    lastSeenAt: event.at,
+    retryCommand,
+    status: "paused",
+    repeatCount: (existing?.repeatCount ?? 0) + 1,
+  };
+  return [...quarantines.filter((record) => quarantineKey(record) !== key), next];
+}
+
+function updateQuarantineStatus(
+  status: BrowserChallengeQuarantineStatus,
+  actionId?: number,
+  now = new Date(),
+): BrowserSessionRecord {
+  const record = readRawSession();
+  const quarantinedActions = record.quarantinedActions ?? [];
+  const last = actionId
+    ? quarantinedActions.find((item) => item.actionId === actionId)
+    : quarantinedActions.slice().reverse().find((item) => item.status === "paused");
+  if (!last) return record;
+  const updated: BrowserSessionRecord = {
+    ...record,
+    updatedAt: nowIso(now),
+    quarantinedActions: quarantinedActions.map((item) =>
+      item === last ? { ...item, status, lastSeenAt: nowIso(now) } : item
+    ),
+  };
+  writeSession(updated);
+  return updated;
+}
+
+export function listBrowserChallengeQuarantines(status?: BrowserChallengeQuarantineStatus): BrowserChallengeQuarantineRecord[] {
+  const records = readRawSession().quarantinedActions ?? [];
+  return status ? records.filter((record) => record.status === status) : records;
+}
+
+export function listUnresolvedBrowserChallengeQuarantines(): BrowserChallengeQuarantineRecord[] {
+  return listBrowserChallengeQuarantines("paused");
+}
+
+export function markBrowserChallengeRetried(actionId?: number): BrowserSessionRecord {
+  return updateQuarantineStatus("retried", actionId);
+}
+
+export function markBrowserChallengeResolved(actionId?: number): BrowserSessionRecord {
+  return updateQuarantineStatus("resolved", actionId);
+}
+
+export function markBrowserChallengeSkipped(actionId?: number): BrowserSessionRecord {
+  return updateQuarantineStatus("skipped", actionId);
 }
 
 export function getBrowserSessionStatus(now = new Date()): BrowserSessionStatus {
@@ -99,6 +205,11 @@ export function clearBrowserManualAttention(actionId?: number): BrowserSessionRe
     ...record,
     state: "healthy",
     updatedAt: nowIso(),
+    quarantinedActions: (record.quarantinedActions ?? []).map((item) =>
+      (!actionId || item.actionId === actionId) && item.status === "paused"
+        ? { ...item, status: "resolved", lastSeenAt: nowIso() }
+        : item
+    ),
   };
   writeSession(updated);
   return updated;
@@ -121,12 +232,12 @@ function humanBrowserAttentionReason(reason: string): string {
 export function buildManualAttentionSlackText(event: BrowserManualAttentionEvent): string {
   const jobLine = event.jobTitle ? `\nJob: ${event.jobTitle}` : "";
   const pageLine = event.title ? `\nPage: ${event.title}` : "";
-  return [
-    "⚠️ *Upwork needs a browser check.*",
-    `${humanBrowserAttentionReason(event.reason)} I paused safely and did not submit anything.${jobLine}${pageLine}`,
-    "Clear it in remote Chrome, then reply “retry” in the relevant Slack thread and I’ll pick this back up.",
-    "Ask for debug details only if you need the raw action state.",
-  ].join("\n");
+	  return [
+	    "Upwork checked one application page. I paused that one safely.",
+	    `${humanBrowserAttentionReason(event.reason)} I did not submit anything.${jobLine}${pageLine}`,
+	    "Clear the remote Chrome check, then reply “retry” in the relevant Slack thread and I’ll pick this back up.",
+	    "Ask for debug details only if you need the raw action state.",
+	  ].join("\n");
 }
 
 function recentChallengeEvents(events: BrowserManualAttentionEvent[], now: Date): BrowserManualAttentionEvent[] {
@@ -170,6 +281,11 @@ async function maybeSendManualAttentionAlert(record: BrowserSessionRecord, event
 export async function recordBrowserManualAttention(input: {
   actionId?: number;
   jobId?: string;
+  applicationId?: string | null;
+  threadChannelId?: string | null;
+  threadTs?: string | null;
+  actionType?: string | null;
+  source?: string | null;
   url?: string | null;
   title?: string | null;
   reason: string;
@@ -181,6 +297,11 @@ export async function recordBrowserManualAttention(input: {
     at: nowIso(now),
     actionId: input.actionId,
     jobId: input.jobId,
+    applicationId: input.applicationId ?? null,
+    threadChannelId: input.threadChannelId ?? null,
+    threadTs: input.threadTs ?? null,
+    actionType: input.actionType ?? null,
+    source: input.source ?? null,
     jobTitle: link?.title ?? null,
     url: input.url,
     title: input.title,
@@ -197,6 +318,7 @@ export async function recordBrowserManualAttention(input: {
     lastManualAttentionAt: event.at,
     lastManualAttention: event,
     challengeEvents: events,
+    quarantinedActions: upsertQuarantine(existing.quarantinedActions ?? [], event),
   };
   updated = await maybeSendManualAttentionAlert(updated, event, now);
   writeSession(updated);

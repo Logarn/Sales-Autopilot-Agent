@@ -11,7 +11,7 @@ import {
 import { closeDb, listBrowserActions } from "./db";
 import { runDiscoveryOnceFromCdp } from "./discoveryScheduler";
 import { runControlledWorkerLoop } from "./browserWorker";
-import { BrowserSessionStatus, clearBrowserManualAttention, getBrowserSessionStatus, recordBrowserManualAttention } from "./browserSession";
+import { BrowserSessionStatus, clearBrowserManualAttention, getBrowserSessionStatus, listUnresolvedBrowserChallengeQuarantines, recordBrowserManualAttention } from "./browserSession";
 import { inspectLiveBrowserSessionFromCdp } from "./browserLiveSession";
 import { BrowserSessionInspection } from "./browserSessionInspector";
 import { writeHeartbeat } from "./heartbeat";
@@ -46,6 +46,7 @@ export interface LeadEngineCycleSummary {
   actionsPaused: number;
   actionsSkipped: number;
   slackPostFailures: number;
+  unresolvedChallengeActions: number;
   nextSleepMs: number;
 }
 
@@ -59,6 +60,7 @@ interface LeadEngineDeps {
   runDiscovery?: typeof runDiscoveryOnceFromCdp;
   runWorker?: typeof runControlledWorkerLoop;
   recordManualAttention?: typeof recordBrowserManualAttention;
+  listUnresolvedQuarantines?: typeof listUnresolvedBrowserChallengeQuarantines;
   random?: () => number;
   writeState?: (summary: LeadEngineCycleSummary) => void;
 }
@@ -186,6 +188,7 @@ function makeSummary(input: { mode: "run_once" | "continuous"; dryRun: boolean }
     actionsPaused: 0,
     actionsSkipped: 0,
     slackPostFailures: 0,
+    unresolvedChallengeActions: 0,
     nextSleepMs: 0,
     ...overrides,
   };
@@ -211,6 +214,11 @@ function recoverDrainedBacklog(summary: LeadEngineCycleSummary): void {
   summary.queueBackpressure = false;
 }
 
+function isPausedChallengeAction(action: { lastError?: string | null }): boolean {
+  const value = String(action.lastError ?? "").toLowerCase();
+  return /\b(captcha_or_security_challenge|login_required|two_factor_required|passkey|security check|just a moment|cloudflare|captcha)\b/.test(value);
+}
+
 export async function runLeadEngineCycle(
   input: { mode: "run_once" | "continuous"; dryRun: boolean },
   deps: LeadEngineDeps = {},
@@ -233,6 +241,7 @@ export async function runLeadEngineCycle(
     writeHeartbeat({ worker: "lead-engine", status: "running", metadata: { mode: input.mode, dryRun: input.dryRun } });
     const getSessionStatus = deps.getSessionStatus ?? getBrowserSessionStatus;
     const listActions = deps.listActions ?? listBrowserActions;
+    const listUnresolvedQuarantines = deps.listUnresolvedQuarantines ?? listUnresolvedBrowserChallengeQuarantines;
     const runDiscovery = deps.runDiscovery ?? runDiscoveryOnceFromCdp;
     const runWorker = deps.runWorker ?? runControlledWorkerLoop;
     const controlState = readHuntingControlState();
@@ -254,11 +263,15 @@ export async function runLeadEngineCycle(
     const storedSession = getSessionStatus();
     const session = await resolveLeadEngineBrowserSession(input, storedSession, deps);
     const pendingBefore = listActions("pending", 1000).length;
+    const unresolvedQuarantines = listUnresolvedQuarantines();
+    const pausedChallengeActions = listActions("paused", 1000).filter(isPausedChallengeAction);
     const summary: LeadEngineCycleSummary = makeSummary(input, {
       browserSessionState: session.state,
       sessionBlocked: session.blocked,
       queuePendingBefore: pendingBefore,
       queuePendingAfter: pendingBefore,
+      actionsPaused: pausedChallengeActions.length,
+      unresolvedChallengeActions: Math.max(unresolvedQuarantines.length, pausedChallengeActions.length),
     });
 
     if (session.blocked) {
@@ -271,6 +284,25 @@ export async function runLeadEngineCycle(
         status: "error",
         error: summary.stoppedReason,
         metadata: { status: summary.status, browserSessionState: summary.browserSessionState },
+      });
+      return summary;
+    }
+
+    if (summary.unresolvedChallengeActions > 0) {
+      summary.status = "paused";
+      summary.stoppedReason = "browser_challenge_action_paused";
+      summary.nextSleepMs = computeJitteredDelay(AGENT_ENGINE_INTERVAL_MS, AGENT_ENGINE_JITTER_PCT, random);
+      writeState(summary);
+      writeHeartbeat({
+        worker: "lead-engine",
+        status: "error",
+        error: summary.stoppedReason,
+        metadata: {
+          status: summary.status,
+          browserSessionState: summary.browserSessionState,
+          sessionBlocked: summary.sessionBlocked,
+          unresolvedChallengeActions: summary.unresolvedChallengeActions,
+        },
       });
       return summary;
     }
