@@ -31,10 +31,6 @@ export type SlackConversationBrainIntent =
   | "start_hunting"
   | "check_browser"
   | "check_services"
-  | "remember"
-  | "forget"
-  | "explain_learning"
-  | "create_mayor_task"
   | "debug_details"
   | "reject"
   | "mark_submitted"
@@ -59,10 +55,6 @@ export type SlackConversationBrainAction =
   | "start_hunting"
   | "check_browser"
   | "check_services"
-  | "remember"
-  | "forget"
-  | "explain_learning"
-  | "create_mayor_task"
   | "show_debug_details"
   | "mark_skip"
   | "record_outcome"
@@ -256,10 +248,6 @@ const INTENTS = new Set<SlackConversationBrainIntent>([
   "start_hunting",
   "check_browser",
   "check_services",
-  "remember",
-  "forget",
-  "explain_learning",
-  "create_mayor_task",
   "debug_details",
   "reject",
   "mark_submitted",
@@ -285,10 +273,6 @@ const ACTIONS = new Set<SlackConversationBrainAction>([
   "start_hunting",
   "check_browser",
   "check_services",
-  "remember",
-  "forget",
-  "explain_learning",
-  "create_mayor_task",
   "show_debug_details",
   "mark_skip",
   "record_outcome",
@@ -324,10 +308,6 @@ export const SLACK_CONVERSATION_ALLOWED_ACTIONS: SlackConversationBrainAction[] 
   "start_hunting",
   "check_browser",
   "check_services",
-  "remember",
-  "forget",
-  "explain_learning",
-  "create_mayor_task",
   "show_debug_details",
   "mark_skip",
   "record_outcome",
@@ -529,7 +509,7 @@ export async function planSlackConversationWithLlm(
           "You are the Upwork agent's Slack conversation brain.",
           "Reason about Steve's latest message using the structured thread state before responding.",
           "Return JSON only with: intent, confidence, reply, actions, progressReplyNeeded, progressReply, memoryUpdate, needsHumanClarification, codeImprovementNeeded, failureReflection, safety, instruction, qaIndex, qaQuery, actionId, outcomeStatus.",
-          "Allowed intents: answer_file_capability_question, answer_health, explain_health_findings, show_cover_letter, full_safe_prep, draft_preview_first, retry_action, focus_qa_tab, open_application_page, qa_queue, capture_upwork_url, ingest_file, revise_proof_plan, revise_draft, status_summary, explain_risk, explain_proof, explain_boost, pause_hunting, start_hunting, check_browser, check_services, remember, forget, explain_learning, create_mayor_task, debug_details, reject, mark_submitted, record_outcome, clarify, ignore.",
+          "Allowed intents: answer_file_capability_question, answer_health, explain_health_findings, show_cover_letter, full_safe_prep, draft_preview_first, retry_action, focus_qa_tab, open_application_page, qa_queue, capture_upwork_url, ingest_file, revise_proof_plan, revise_draft, status_summary, explain_risk, explain_proof, explain_boost, pause_hunting, start_hunting, check_browser, check_services, debug_details, reject, mark_submitted, record_outcome, clarify, ignore.",
           "Allowed actions are provided in the user payload. Propose only those action names.",
           "Every normal inbound Slack message is coming through this gateway. Reason first from context, then select one or more allowed actions.",
           "For service/browser questions, use answer_health/check_services/check_browser and explain in human language.",

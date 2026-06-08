@@ -81,6 +81,9 @@ async function runTests(): Promise<void> {
     handleSlackReasoningGateway: (input: Record<string, unknown>) => Promise<void>;
     handleSlackSocketTextEvent: (event: Record<string, unknown>, client: any) => Promise<void>;
   };
+  const { SLACK_CONVERSATION_ALLOWED_ACTIONS } = require("./slackConversationBrain") as {
+    SLACK_CONVERSATION_ALLOWED_ACTIONS: string[];
+  };
   const {
     listActiveSlackBehaviorMemories,
     listBrowserActions,
@@ -96,6 +99,9 @@ async function runTests(): Promise<void> {
     saveApplicationDraft: (draft: any) => void;
     upsertSlackThreadState: (input: Record<string, unknown>) => unknown;
   };
+  for (const unsupportedAction of ["remember", "forget", "explain_learning", "create_mayor_task"]) {
+    assert(!SLACK_CONVERSATION_ALLOWED_ACTIONS.includes(unsupportedAction), `${unsupportedAction} should not be advertised until the gateway executor implements it.`);
+  }
 
   const healthReplies: string[] = [];
   const healthPlanner = new FakeConversationProvider([{
@@ -490,6 +496,27 @@ async function runTests(): Promise<void> {
   assert(actionsAfterUrlIgnore.some((action) => action.actionType === "capture_job_from_url" && action.jobId.includes("066053866890130225260")), "Ignored Upwork URL should still queue capture.");
   assert.equal(urlReplies.length, 1, "Ignored Upwork URL should get a capture acknowledgement.");
 
+  const actionsBeforeCaptureReply = listBrowserActions(null, 1000).length;
+  const captureReplyReplies: string[] = [];
+  await handleSlackReasoningGateway({
+    channelId: "C_GATE",
+    threadTs: "url-capture-reply.001",
+    messageTs: "url-capture-reply.001",
+    text: "<@UAGENT> https://www.upwork.com/jobs/Klaviyo-Flow-Setup_~066053866890130225261",
+    botMentioned: true,
+    client: fakeClient(captureReplyReplies),
+    conversationProvider: new FakeConversationProvider([{
+      intent: "capture_upwork_url",
+      confidence: "high",
+      actions: ["none"],
+      reply: "I’ll capture that listing.",
+    }]),
+    copyProvider: new FakeCopyProvider(),
+  });
+  const actionsAfterCaptureReply = listBrowserActions(null, 1000);
+  assert(actionsAfterCaptureReply.length > actionsBeforeCaptureReply, "Capture intent with actions none must still queue the URL.");
+  assert(actionsAfterCaptureReply.some((action) => action.actionType === "capture_job_from_url" && action.jobId.includes("066053866890130225261")), "Capture intent must not be swallowed as a plain reply.");
+
   const quietIgnoreReplies: string[] = [];
   await handleSlackReasoningGateway({
     channelId: "C_GATE",
@@ -506,6 +533,27 @@ async function runTests(): Promise<void> {
     copyProvider: new FakeCopyProvider(),
   });
   assert.equal(quietIgnoreReplies.length, 0, "No-payload LLM ignore should remain quiet.");
+
+  const fallbackReflectionBefore = listRecentSlackFailureReflections(100).length;
+  await handleSlackReasoningGateway({
+    channelId: "C_GATE",
+    threadTs: "tracked.001",
+    messageTs: "tracked.004",
+    text: "Wtf? I just need the CV you used.",
+    botMentioned: false,
+    client: fakeClient([]),
+    conversationProvider: new FakeConversationProvider([{
+      intent: "show_cover_letter",
+      confidence: "low",
+      actions: ["none"],
+    }]),
+    copyProvider: new FakeCopyProvider(),
+  });
+  assert.equal(
+    listRecentSlackFailureReflections(100).length - fallbackReflectionBefore,
+    1,
+    "Fallback after the gateway LLM pass should not learn the same frustrated correction twice."
+  );
 
   const exactDraft = [
     "Exact long draft body starts here.",

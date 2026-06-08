@@ -1710,9 +1710,20 @@ async function executeConversationBrainDecision(params: {
       decision.intent === "explain_health_findings" ||
       decision.intent === "clarify" ||
       decision.needsHumanClarification ||
-      (!params.state && decision.actions.includes("none")) ||
+      (!params.state && decision.actions.includes("none") && ![
+        "answer_health",
+        "check_browser",
+        "check_services",
+        "pause_hunting",
+        "start_hunting",
+        "capture_upwork_url",
+        "ingest_file",
+      ].includes(decision.intent)) ||
       (decision.actions.includes("none") && ![
         "answer_file_capability_question",
+        "answer_health",
+        "check_browser",
+        "check_services",
         "show_cover_letter",
         "full_safe_prep",
         "draft_preview_first",
@@ -1720,6 +1731,8 @@ async function executeConversationBrainDecision(params: {
         "focus_qa_tab",
         "open_application_page",
         "qa_queue",
+        "capture_upwork_url",
+        "ingest_file",
         "revise_proof_plan",
         "revise_draft",
         "status_summary",
@@ -2012,6 +2025,7 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
   const relevant = shouldFallbackWithoutLlm({ ...params, upworkUrl }, state);
   const allowLearningAndActions = shouldAllowSlackLearningAndActions({ ...params, upworkUrl }, state);
   const canExecuteConversationBrainAction = relevant && allowLearningAndActions;
+  let learnedFromGateway = false;
 
   if (allowLearningAndActions && params.text.trim()) {
     learnFromSlackMessage({
@@ -2020,6 +2034,7 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
       text: params.text,
       state,
     });
+    learnedFromGateway = true;
   }
 
   const conversationBrain = await planSlackConversationWithLlm(
@@ -2094,14 +2109,14 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
     return;
   }
 
-  await handleThreadCommandFallback(params);
+  await handleThreadCommandFallback(params, { skipLearning: learnedFromGateway });
 }
 
 export async function handleThreadCommand(params: SlackReasoningGatewayParams): Promise<void> {
   await handleSlackReasoningGateway(params);
 }
 
-async function handleThreadCommandFallback(params: SlackReasoningGatewayParams): Promise<void> {
+async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, options: { skipLearning?: boolean } = {}): Promise<void> {
   const state = getSlackThreadStateByThreadTs(params.channelId, params.threadTs);
   const operatorIntent = parseSlackOperatorIntent(params.text);
   if (operatorIntent) {
@@ -2130,12 +2145,14 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams):
     return;
   }
 
-  learnFromSlackMessage({
-    channelId: params.channelId,
-    threadTs: params.threadTs,
-    text: params.text,
-    state,
-  });
+  if (!options.skipLearning) {
+    learnFromSlackMessage({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      text: params.text,
+      state,
+    });
+  }
 
   const conversationBrain = await planSlackConversationWithLlm(
     buildSlackConversationBrainInput({
