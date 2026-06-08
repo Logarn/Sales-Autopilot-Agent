@@ -339,6 +339,11 @@ async function runTests(): Promise<void> {
 
   const restartReplies: string[] = [];
   let restarted = false;
+  const restartBrain = new FakeConversationProvider([{
+    intent: "check_browser",
+    confidence: "high",
+    actions: ["check_browser"],
+  }]);
   await handleSlackReasoningGateway({
     channelId: "C_GATE",
     threadTs: "restart.001",
@@ -346,11 +351,7 @@ async function runTests(): Promise<void> {
     text: "restart Chrome",
     botMentioned: false,
     client: fakeClient(restartReplies),
-    conversationProvider: new FakeConversationProvider([{
-      intent: "check_browser",
-      confidence: "high",
-      actions: ["check_browser"],
-    }]),
+    conversationProvider: restartBrain,
     copyProvider: new FakeCopyProvider(),
     operatorDeps: {
       startBrowserSession: async () => {
@@ -360,10 +361,16 @@ async function runTests(): Promise<void> {
     },
   });
   assert.equal(restarted, true, "Restart Chrome should preserve restart_browser_session operator action.");
+  assert.equal(restartBrain.requests.length, 0, "Explicit operator actions should not wait on the LLM planner before execution.");
   assert.match(restartReplies.join("\n"), /visible Chrome session/i);
 
   const restartIgnoredReplies: string[] = [];
   let restartedAfterIgnore = false;
+  const restartIgnoreBrain = new FakeConversationProvider([{
+    intent: "ignore",
+    confidence: "high",
+    actions: ["none"],
+  }]);
   await handleSlackReasoningGateway({
     channelId: "C_GATE",
     threadTs: "restart-ignore.001",
@@ -371,11 +378,7 @@ async function runTests(): Promise<void> {
     text: "restart Chrome",
     botMentioned: false,
     client: fakeClient(restartIgnoredReplies),
-    conversationProvider: new FakeConversationProvider([{
-      intent: "ignore",
-      confidence: "high",
-      actions: ["none"],
-    }]),
+    conversationProvider: restartIgnoreBrain,
     copyProvider: new FakeCopyProvider(),
     operatorDeps: {
       startBrowserSession: async () => {
@@ -385,10 +388,16 @@ async function runTests(): Promise<void> {
     },
   });
   assert.equal(restartedAfterIgnore, true, "LLM ignore must not swallow deterministic restart Chrome commands.");
+  assert.equal(restartIgnoreBrain.requests.length, 0, "Restart Chrome should be preserved before any LLM ignore/no-reply decision.");
   assert.match(restartIgnoredReplies.join("\n"), /visible Chrome session/i);
 
   const openChromeReplies: string[] = [];
   let openedUrl: string | null = null;
+  const openUrlBrain = new FakeConversationProvider([{
+    intent: "check_browser",
+    confidence: "high",
+    actions: ["check_browser"],
+  }]);
   await handleSlackReasoningGateway({
     channelId: "C_GATE",
     threadTs: "open-url.001",
@@ -396,11 +405,7 @@ async function runTests(): Promise<void> {
     text: "open https://example.com/test in Chrome",
     botMentioned: false,
     client: fakeClient(openChromeReplies),
-    conversationProvider: new FakeConversationProvider([{
-      intent: "check_browser",
-      confidence: "high",
-      actions: ["check_browser"],
-    }]),
+    conversationProvider: openUrlBrain,
     copyProvider: new FakeCopyProvider(),
     operatorDeps: {
       openRemoteChromeUrl: async (url: string) => {
@@ -410,6 +415,7 @@ async function runTests(): Promise<void> {
     },
   });
   assert.equal(openedUrl, "https://example.com/test", "Open URL in Chrome should preserve open_remote_chrome operator action.");
+  assert.equal(openUrlBrain.requests.length, 0, "Open URL in Chrome should not wait on generic browser/status LLM classification.");
   assert.match(openChromeReplies.join("\n"), /remote Chrome/i);
 
   const progressReplies: string[] = [];
@@ -457,6 +463,11 @@ async function runTests(): Promise<void> {
     status: "packet_sent",
   });
   const fileReplies: string[] = [];
+  const fileIgnoreBrain = new FakeConversationProvider([{
+    intent: "ignore",
+    confidence: "high",
+    actions: ["none"],
+  }]);
   await handleSlackReasoningGateway({
     channelId: "C_GATE",
     threadTs: "files.001",
@@ -465,18 +476,20 @@ async function runTests(): Promise<void> {
     botMentioned: false,
     client: fakeClient(fileReplies),
     files: [{ id: "F_GATEWAY_1", name: "case-study.pdf", size: 128, mimetype: "application/pdf" }],
-    conversationProvider: new FakeConversationProvider([{
-      intent: "ignore",
-      confidence: "high",
-      actions: ["none"],
-    }]),
+    conversationProvider: fileIgnoreBrain,
     copyProvider: new FakeCopyProvider(),
   });
   assert.equal(fileReplies.length, 1, "File payload should run intake even when LLM says ignore.");
+  assert.equal(fileIgnoreBrain.requests.length, 0, "Slack file intake should be preserved before the LLM planner can ignore it.");
   assert.match(fileReplies[0], /could not ingest|downloadable private URL|file/i, "File intake reply should prove the attachment was not dropped.");
 
   const actionsBeforeUrlIgnore = listBrowserActions(null, 1000).length;
   const urlReplies: string[] = [];
+  const urlIgnoreBrain = new FakeConversationProvider([{
+    intent: "ignore",
+    confidence: "high",
+    actions: ["none"],
+  }]);
   await handleSlackReasoningGateway({
     channelId: "C_GATE",
     threadTs: "url-ignore.001",
@@ -484,20 +497,23 @@ async function runTests(): Promise<void> {
     text: "<@UAGENT> capture https://www.upwork.com/jobs/Klaviyo-Email-Marketing_~066053866890130225260",
     botMentioned: true,
     client: fakeClient(urlReplies),
-    conversationProvider: new FakeConversationProvider([{
-      intent: "ignore",
-      confidence: "high",
-      actions: ["none"],
-    }]),
+    conversationProvider: urlIgnoreBrain,
     copyProvider: new FakeCopyProvider(),
   });
   const actionsAfterUrlIgnore = listBrowserActions(null, 1000);
   assert(actionsAfterUrlIgnore.length > actionsBeforeUrlIgnore, "Upwork URL should queue capture even when LLM says ignore.");
   assert(actionsAfterUrlIgnore.some((action) => action.actionType === "capture_job_from_url" && action.jobId.includes("066053866890130225260")), "Ignored Upwork URL should still queue capture.");
+  assert.equal(urlIgnoreBrain.requests.length, 0, "Upwork URL capture should be preserved before the LLM planner can ignore it.");
   assert.equal(urlReplies.length, 1, "Ignored Upwork URL should get a capture acknowledgement.");
 
   const actionsBeforeCaptureReply = listBrowserActions(null, 1000).length;
   const captureReplyReplies: string[] = [];
+  const captureReplyBrain = new FakeConversationProvider([{
+    intent: "capture_upwork_url",
+    confidence: "high",
+    actions: ["none"],
+    reply: "I’ll capture that listing.",
+  }]);
   await handleSlackReasoningGateway({
     channelId: "C_GATE",
     threadTs: "url-capture-reply.001",
@@ -505,17 +521,13 @@ async function runTests(): Promise<void> {
     text: "<@UAGENT> https://www.upwork.com/jobs/Klaviyo-Flow-Setup_~066053866890130225261",
     botMentioned: true,
     client: fakeClient(captureReplyReplies),
-    conversationProvider: new FakeConversationProvider([{
-      intent: "capture_upwork_url",
-      confidence: "high",
-      actions: ["none"],
-      reply: "I’ll capture that listing.",
-    }]),
+    conversationProvider: captureReplyBrain,
     copyProvider: new FakeCopyProvider(),
   });
   const actionsAfterCaptureReply = listBrowserActions(null, 1000);
   assert(actionsAfterCaptureReply.length > actionsBeforeCaptureReply, "Capture intent with actions none must still queue the URL.");
   assert(actionsAfterCaptureReply.some((action) => action.actionType === "capture_job_from_url" && action.jobId.includes("066053866890130225261")), "Capture intent must not be swallowed as a plain reply.");
+  assert.equal(captureReplyBrain.requests.length, 0, "Deterministic URL capture should run before any LLM reply can preempt it.");
 
   const quietIgnoreReplies: string[] = [];
   await handleSlackReasoningGateway({

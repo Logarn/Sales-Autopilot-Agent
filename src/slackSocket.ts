@@ -2037,6 +2037,64 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
     learnedFromGateway = true;
   }
 
+  const deterministicFirstOperatorIntent = parseSlackOperatorIntent(params.text);
+  if (
+    canExecuteConversationBrainAction &&
+    deterministicFirstOperatorIntent &&
+    (
+      deterministicFirstOperatorIntent.type === "restart_browser_session" ||
+      deterministicFirstOperatorIntent.type === "open_remote_chrome"
+    )
+  ) {
+    const deterministicText = await buildSlackOperatorReply(deterministicFirstOperatorIntent, params.operatorDeps);
+    const preservePhrases = [
+      deterministicText.includes("Final submit remains manual") ? "Final submit remains manual" : null,
+      deterministicText.includes("did not click through login, CAPTCHA, security checks, or submit anything")
+        ? "did not click through login, CAPTCHA, security checks, or submit anything"
+        : null,
+      deterministicText.includes("did not paste through VNC or click submit")
+        ? "did not paste through VNC or click submit"
+        : null,
+    ].filter((phrase): phrase is string => Boolean(phrase));
+    const text = await userFacingSlackCopy({
+      deterministicText,
+      userMessage: params.text,
+      intent: `operator_${deterministicFirstOperatorIntent.type}`,
+      context: {
+        operatorIntent: deterministicFirstOperatorIntent.type,
+        hasTrackedThread: Boolean(state),
+      },
+      preservePhrases,
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return;
+  }
+
+  if (canExecuteConversationBrainAction && hasFiles && state) {
+    await handleSlackFilesMessage({
+      state,
+      files: params.files ?? [],
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      client: params.client,
+      copyProvider: params.copyProvider,
+    });
+    return;
+  }
+
+  if (canExecuteConversationBrainAction && upworkUrl && (params.botMentioned || state) && params.messageTs) {
+    await handleUrlMessage({
+      channelId: params.channelId,
+      messageTs: params.messageTs,
+      threadTs: params.threadTs,
+      text: params.text,
+      client: params.client,
+      copyProvider: params.copyProvider,
+    });
+    return;
+  }
+
   const conversationBrain = await planSlackConversationWithLlm(
     buildSlackConversationBrainInput({
       state,
@@ -2075,30 +2133,6 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
       });
       if (handled) return;
     }
-  }
-
-  if (hasFiles && state) {
-    await handleSlackFilesMessage({
-      state,
-      files: params.files ?? [],
-      channelId: params.channelId,
-      threadTs: params.threadTs,
-      client: params.client,
-      copyProvider: params.copyProvider,
-    });
-    return;
-  }
-
-  if (upworkUrl && (params.botMentioned || state) && params.messageTs) {
-    await handleUrlMessage({
-      channelId: params.channelId,
-      messageTs: params.messageTs,
-      threadTs: params.threadTs,
-      text: params.text,
-      client: params.client,
-      copyProvider: params.copyProvider,
-    });
-    return;
   }
 
   if (!relevant && conversationBrain.ok) {
