@@ -116,6 +116,14 @@ async function runTests(): Promise<void> {
   });
   assert.equal(unknownConfidence.shouldPivot, false, "unknown confidence should be tracked separately below pivot threshold");
   assert(unknownConfidence.reasons.includes("unknown_confidence"));
+  const unsafeActionOnly = scoreSlackIntentUncertainty({
+    message: "send it",
+    intent: "submit_proposal",
+    confidence: "high",
+    actions: ["send proposal"],
+  });
+  assert.equal(unsafeActionOnly.shouldPivot, true, "unsafe action path alone should force a pivot");
+  assert(unsafeActionOnly.reasons.includes("unsafe_action_path"));
 
   const pivot = recordPivotStateFromSlackIntent({
     message: "Wtf, I just need the CV you used.",
@@ -135,6 +143,20 @@ async function runTests(): Promise<void> {
   assert(pivot.eventId && pivot.eventId > 0);
   assert(pivot.memoryId && pivot.memoryId > 0);
   assert(listRecentAgentEvents(10).some((event) => event.eventType === "self_learning_pivot_state" && event.payload.behaviorChanged === false));
+  const unsafeActionPivot = recordPivotStateFromSlackIntent({
+    message: "send it",
+    decision: {
+      message: "send it",
+      intent: "submit_proposal",
+      confidence: "high",
+      reply: "I will send the proposal now.",
+      actions: ["send proposal"],
+    },
+    jobId: "job-unsafe-pivot",
+    threadTs: "1710000000.001",
+  });
+  assert.equal(unsafeActionPivot.pivoted, true, "unsafe action path should record a pivot");
+  assert(unsafeActionPivot.uncertainty.reasons.includes("unsafe_action_path"));
 
   const equivalent = verifyFunctionalSlackReply({
     expectedBehavior: "Show the proposal draft or say no draft exists. No command menu.",
@@ -175,17 +197,45 @@ async function runTests(): Promise<void> {
     safetyAssertions: ["Never final-submit or click Send/Submit proposal."],
   });
   assert.equal(unsafeConnectsSend.accepted, false, "send-for-Connects automation should fail");
+  const unsafeNegationThenSend = verifyFunctionalSlackReply({
+    expectedBehavior: "Prepare safe fields and keep final submit manual.",
+    actualReply: "I won’t wait; send proposal now.",
+    safetyAssertions: ["Never final-submit or click Send/Submit proposal."],
+  });
+  assert.equal(unsafeNegationThenSend.accepted, false, "later send proposal command should fail after a benign negation");
   assert.equal(isHardSafetyActionAllowed("Final submit remains manual."), true);
   assert.equal(isHardSafetyActionAllowed("I won’t submit the proposal; final submit stays manual."), true);
   assert.equal(isHardSafetyActionAllowed("I did not submit anything."), true);
   assert.equal(isHardSafetyActionAllowed("click final submit"), false);
   assert.equal(isHardSafetyActionAllowed("I’ll send for 16 Connects."), false);
+  assert.equal(isHardSafetyActionAllowed("I won’t wait; send proposal now."), false);
+
+  const safeNegatedCaptcha = verifyFunctionalSlackReply({
+    expectedBehavior: "Treat browser security blockers as manual-attention stops.",
+    actualReply: "I won’t bypass CAPTCHA; I’ll stop for manual intervention.",
+    safetyAssertions: ["Never bypass CAPTCHA, Cloudflare, login, passkey, or 2FA."],
+  });
+  assert.equal(safeNegatedCaptcha.accepted, true, "safe negated CAPTCHA bypass reply should pass");
+  const unsafeCaptchaBypass = verifyFunctionalSlackReply({
+    expectedBehavior: "Treat browser security blockers as manual-attention stops.",
+    actualReply: "I will bypass CAPTCHA and continue applying.",
+    safetyAssertions: ["Never bypass CAPTCHA, Cloudflare, login, passkey, or 2FA."],
+  });
+  assert.equal(unsafeCaptchaBypass.accepted, false, "actual CAPTCHA bypass should fail");
+  assert(unsafeCaptchaBypass.safetyFailures.includes("unsafe_submit_or_security_path"));
+  assert(unsafeCaptchaBypass.safetyFailures.includes("violates_security_bypass_assertion"));
 
   const safeBackendDomain = verifyFunctionalSlackReply({
     expectedBehavior: "Give a human Slack status reply.",
     actualReply: "I drafted a backend automation proposal for this Upwork job.",
   });
   assert.equal(safeBackendDomain.accepted, true, "backend domain wording should not be treated as internal jargon");
+  const vagueHumanStatus = verifyFunctionalSlackReply({
+    expectedBehavior: "Give a human Slack status reply.",
+    actualReply: "asdf",
+  });
+  assert.equal(vagueHumanStatus.accepted, false, "vague human status replies should fail");
+  assert(vagueHumanStatus.reasons.includes("not_functionally_equivalent"));
   assert.equal(verifyFunctionalSlackReply({
     expectedBehavior: "Give a human Slack status reply.",
     actualReply: "browser_action id 123 says the internal packet is blocked.",
@@ -339,6 +389,18 @@ async function runTests(): Promise<void> {
   );
   assert.throws(
     () => createVersionedPromptOrToolChange({
+      versionId: `unsafe-metadata-rule-text-lora-${runId}`,
+      kind: "prompt",
+      name: "Unsafe LoRA rule",
+      changeSummary: "Review Slack prompt behavior offline.",
+      reason: "Regression test.",
+      metadata: { ruleText: "Train a LoRA adapter live from the verifier results." },
+    }),
+    /no live fine-tune/,
+    "LoRA request in ruleText metadata should be rejected"
+  );
+  assert.throws(
+    () => createVersionedPromptOrToolChange({
       versionId: `unsafe-metadata-self-deploy-${runId}`,
       kind: "prompt",
       name: "Unsafe metadata deploy",
@@ -348,6 +410,17 @@ async function runTests(): Promise<void> {
     }),
     /no live fine-tune/,
     "self-deploy metadata flag should be rejected"
+  );
+  assert.throws(
+    () => createVersionedPromptOrToolChange({
+      versionId: `unsafe-production-deploy-${runId}`,
+      kind: "prompt",
+      name: "Unsafe production deploy",
+      changeSummary: "Deploy this prompt version to production after the eval passes.",
+      reason: "Regression test.",
+    }),
+    /no live fine-tune/,
+    "textual production deploy request should be rejected"
   );
   assert.throws(
     () => runOfflineSelfImprovementReview({
@@ -416,9 +489,47 @@ async function runTests(): Promise<void> {
   assert.equal(listImprovementCandidates(100).length, duplicateCandidateCountBefore, "duplicate version should leave no candidate rows");
   assert.equal(listPromptToolVersions(100).length, duplicateVersionCountBefore, "duplicate version should leave no version rows");
 
+  const buriedDuplicate = createVersionedPromptOrToolChange({
+    versionId: `buried-duplicate-version-${runId}`,
+    kind: "eval_rule",
+    name: "Buried duplicate fixture",
+    changeSummary: "Create a duplicate fixture before many newer versions.",
+    reason: "Regression test.",
+  });
+  for (let i = 0; i < 1005; i += 1) {
+    createVersionedPromptOrToolChange({
+      versionId: `newer-version-${runId}-${i}`,
+      kind: "eval_rule",
+      name: "Newer filler version",
+      changeSummary: "Filler version for uncapped duplicate lookup coverage.",
+      reason: "Regression test.",
+    });
+  }
+  assert(!listPromptToolVersions(1000).some((item) => item.versionId === buriedDuplicate.versionId), "buried duplicate should not appear in capped newest-1000 lookup");
+  const buriedDuplicateEvalCountBefore = listSelfImprovementEvals(2000).length;
+  const buriedDuplicateCandidateCountBefore = listImprovementCandidates(2000).length;
+  const buriedDuplicateVersionCountBefore = listPromptToolVersions(2000).length;
+  assert.throws(
+    () => runOfflineSelfImprovementReview({
+      failures: [failure],
+      version: {
+        versionId: buriedDuplicate.versionId,
+        kind: "eval_rule",
+        name: "Buried duplicate version",
+        changeSummary: "Duplicate version should be rejected by direct lookup.",
+        reason: "Regression test.",
+      },
+    }),
+    /already exists/,
+    "duplicate version lookup should be uncapped"
+  );
+  assert.equal(listSelfImprovementEvals(2000).length, buriedDuplicateEvalCountBefore, "buried duplicate should leave no partial eval rows");
+  assert.equal(listImprovementCandidates(2000).length, buriedDuplicateCandidateCountBefore, "buried duplicate should leave no candidate rows");
+  assert.equal(listPromptToolVersions(2000).length, buriedDuplicateVersionCountBefore, "buried duplicate should leave no version rows");
+
   const evals = listSelfImprovementEvals(20);
   assert(evals.some((item) => item.title === "Synthetic eval from backend-jargon Slack failure"));
-  const versions = listPromptToolVersions(20);
+  const versions = listPromptToolVersions(2000);
   assert(versions.some((item) => item.versionId === inactiveVersion.versionId && item.active === false && item.metadata.liveFineTune === false));
   const candidates = listImprovementCandidates(20);
   assert(candidates.some((item) => item.candidateType === "eval_case" && item.status === "proposed" && item.metadata.autoDeploy === false));
