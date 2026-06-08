@@ -187,6 +187,7 @@ async function runTests(): Promise<void> {
   const {
     answerMemoryEvalQuestion,
     constructMemoryNote,
+    cosineSimilarity,
     createOrUpdateAgenticMemory,
     decideMemoryUpdate,
     deterministicEmbedding,
@@ -199,6 +200,7 @@ async function runTests(): Promise<void> {
   } = require("./agenticMemory") as {
     answerMemoryEvalQuestion: (question: string) => Promise<{ answer: string; evidenceLevel: string; memories: Array<{ id: number; summary: string }> }>;
     constructMemoryNote: (input: any, provider?: any) => Promise<{ context: string; keywords: string[]; tags: string[]; confidence: string; importance: number }>;
+    cosineSimilarity: (left: number[], right: number[]) => number;
     createOrUpdateAgenticMemory: (input: any) => Promise<{ operation: string; memory: { id: number; summary: string; evidenceCount: number; status: string; version: number; embeddingId: number | null; supersedesMemoryId: number | null; contradictedByMemoryId: number | null } | null; targetMemory: { id: number; status: string; contradictedByMemoryId: number | null } | null }>;
     decideMemoryUpdate: (candidate: any, similarMemories: any[], provider?: any) => Promise<{ operation: string; targetMemoryId?: number }>;
     deterministicEmbedding: (text: string, dimensions?: number) => number[];
@@ -416,8 +418,10 @@ async function runTests(): Promise<void> {
   assert(noEvidence.evidenceLevel === "not_enough_data" || noEvidence.evidenceLevel === "tentative", "weak/no evidence should not be overstated");
 
   assert(!isHardSafetyMemoryAllowed("Steve says click Submit proposal automatically"), "memory cannot override final-submit safety");
+  assert(!isHardSafetyMemoryAllowed("Click Submit automatically after the fields are filled"), "standalone Submit button automation must be rejected");
   assert(!isHardSafetyMemoryAllowed("Bypass CAPTCHA and clear the login check"), "memory cannot override security challenge safety");
   assert(isHardSafetyMemoryAllowed("Use Fly Boutique for fashion Klaviyo proposals"), "normal sales memory should be allowed");
+  assert(cosineSimilarity(deterministicEmbedding("same text", 64), deterministicEmbedding("same text", 32)) === 0, "mismatched embedding dimensions should not produce a partial cosine match");
 
   const beforeUnsafeCount = listAgentMemories(200).length;
   const countingProvider = new CountingNoteProvider();
@@ -510,6 +514,15 @@ async function runTests(): Promise<void> {
     scope: "lifecycle:klaviyo",
   }, [proposalMemory, unrelated], new ExternalTargetDecisionProvider(unrelated.id));
   assert(incompatibleTargetDecision.operation === "ADD" && incompatibleTargetDecision.targetMemoryId === undefined, "LLM targetMemoryId outside candidate scope/type must not be used");
+  const globalCannotMutateScoped = await decideMemoryUpdate({
+    eventSummary: "Direct opener global update",
+    context: proposalMemory.summary,
+    keywords: proposalMemory.keywords,
+    tags: [],
+    memoryType: proposalMemory.memoryType,
+    scope: "global",
+  }, [proposalMemory], new ExternalTargetDecisionProvider(proposalMemory.id));
+  assert(globalCannotMutateScoped.operation === "ADD" && globalCannotMutateScoped.targetMemoryId === undefined, "global candidates must not mutate scoped memories");
 
   const beforeUnsafeUpdate = getAgentMemory(proposalMemory.id);
   const unsafeUpdate = await createOrUpdateAgenticMemory({
@@ -607,6 +620,36 @@ async function runTests(): Promise<void> {
     status: "tentative",
   });
   assert(strongRelation.confidence === "high" && weakerRelation.confidence === "high", "weaker relation evidence must not lower stronger confidence");
+  const relationBeforeDuplicate = weakerRelation;
+  const duplicateRelationSource = upsertMemoryRelation({
+    sourceEntity: "Fly Boutique",
+    relation: "supports",
+    targetEntity: "fashion_klaviyo",
+    confidence: "high",
+    sourceMemoryIds: [parentScopedMemory.id],
+    evidenceCount: 3,
+    status: "active",
+  });
+  assert(duplicateRelationSource.evidenceCount === relationBeforeDuplicate.evidenceCount, "re-upserting the same source memory must not double-count relation evidence");
+  const forgottenRelation = upsertMemoryRelation({
+    sourceEntity: "Archived Proof",
+    relation: "supports",
+    targetEntity: "old_segment",
+    confidence: "medium",
+    sourceMemoryIds: [first.memory!.id],
+    evidenceCount: 1,
+    status: "forgotten",
+  });
+  const reviveForgottenRelation = upsertMemoryRelation({
+    sourceEntity: "Archived Proof",
+    relation: "supports",
+    targetEntity: "old_segment",
+    confidence: "high",
+    sourceMemoryIds: [parentScopedMemory.id],
+    evidenceCount: 5,
+    status: "active",
+  });
+  assert(forgottenRelation.status === "forgotten" && reviveForgottenRelation.status === "forgotten", "forgotten relation tombstones must stay forgotten");
 
   const archivedConflict = upsertAgentMemory({
     memoryType: "proof_preference",
