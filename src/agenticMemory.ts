@@ -177,6 +177,8 @@ const STOP_WORDS = new Set([
 
 const SAFETY_BANNED_PATTERNS = [
   /\b(final\s*submit|submit\s+proposal|send\s+proposal|send\s+for\s+\d+\s+connects)\b/i,
+  /\b(click|press|tap)\b.{0,40}\bsubmit\b/i,
+  /\bsubmit\b.{0,40}\bautomatically\b/i,
   /\b(bypass|solve|clear)\s+(captcha|security|login|2fa|passkey|cloudflare)\b/i,
   /\bclaim\s+.*\b(verified|attached|selected|filled)\b.*\bwithout\b/i,
   /\b(arbitrary|run)\s+shell\b/i,
@@ -370,8 +372,8 @@ export function deterministicEmbedding(text: string, dimensions = 64): number[] 
 }
 
 export function cosineSimilarity(left: number[], right: number[]): number {
-  const length = Math.min(left.length, right.length);
-  if (!length) return 0;
+  if (!left.length || !right.length || left.length !== right.length) return 0;
+  const length = left.length;
   let dot = 0;
   let leftMag = 0;
   let rightMag = 0;
@@ -469,6 +471,14 @@ function scopesCompatible(memoryScopeValue: string, queryScopeValue: string | nu
   if (!queryScope) return true;
   if (memoryScope === queryScope || memoryScope === "global" || queryScope === "global") return true;
   return hasParentChildScope(memoryScope, queryScope);
+}
+
+function scopesMutationCompatible(memoryScopeValue: string, candidateScopeValue: string | null | undefined): boolean {
+  const memoryScope = normalizedScope(memoryScopeValue);
+  const candidateScope = normalizedScope(candidateScopeValue);
+  if (!candidateScope || candidateScope === "global") return memoryScope === "global";
+  if (memoryScope === candidateScope || memoryScope === "global") return true;
+  return hasParentChildScope(memoryScope, candidateScope);
 }
 
 function scopeRelevance(memoryScopeValue: string, queryScopeValue: string | null | undefined): number {
@@ -572,7 +582,7 @@ export async function decideMemoryUpdate(
 ): Promise<AgenticMemoryUpdateDecision> {
   const compatibleMemories = similarMemories.filter((memory) => (
     memory.memoryType === candidate.memoryType &&
-    scopesCompatible(memory.scope, candidate.scope) &&
+    scopesMutationCompatible(memory.scope, candidate.scope) &&
     hasMutableMemoryStatus(memory)
   ));
   const candidateMemoryIds = new Set(compatibleMemories.map((memory) => memory.id));

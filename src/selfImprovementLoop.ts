@@ -241,11 +241,37 @@ function assertCandidateIsNotShipped(input: CreateImprovementCandidateInput): vo
 }
 
 function safetyTextFromMetadata(metadata: Record<string, unknown> | undefined): string {
+  const parts: string[] = [];
+  const visit = (value: unknown, key?: string): void => {
+    if (value === null || value === undefined || value === false) return;
+    if (typeof value === "string") {
+      parts.push(key ? `${key} ${value}` : value);
+      return;
+    }
+    if (typeof value === "number") {
+      parts.push(key ? `${key} ${value}` : String(value));
+      return;
+    }
+    if (value === true) {
+      if (key) parts.push(key);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, key);
+      return;
+    }
+    if (typeof value === "object") {
+      for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
+        visit(childValue, childKey);
+      }
+    }
+  };
   try {
-    return JSON.stringify(metadata ?? {});
+    visit(metadata ?? {});
   } catch {
     return "";
   }
+  return parts.join(" ");
 }
 
 function hasHardSafetyOverrideIntent(text: string | null | undefined): boolean {
@@ -292,16 +318,16 @@ function forcedProposalMetadata(metadata: Record<string, unknown> | undefined): 
 
 function assertOfflineOnlyMetadata(metadata: Record<string, unknown> | undefined, textFields: string[] = []): void {
   const values = metadata ?? {};
+  const trueFlag = (...keys: string[]): boolean => keys.some((key) => values[key] === true);
   if (
-    values.liveFineTune === true ||
-    values.fineTune === true ||
-    values.modelWeightsChanged === true ||
-    values.modelWeightUpdate === true ||
-    values.selfDeploy === true ||
-    values.autoDeploy === true ||
-    values.autoActivate === true ||
-    values.deploy === true ||
-    values.deployed === true
+    trueFlag("liveFineTune", "live_fine_tune") ||
+    trueFlag("fineTune", "fine_tune") ||
+    trueFlag("modelWeightsChanged", "model_weights_changed") ||
+    trueFlag("modelWeightUpdate", "model_weight_update") ||
+    trueFlag("selfDeploy", "self_deploy") ||
+    trueFlag("autoDeploy", "auto_deploy") ||
+    trueFlag("autoActivate", "auto_activate") ||
+    trueFlag("deploy", "deployed")
   ) {
     throw new Error("Self-learning proposals must stay offline: no live fine-tune, model-weight update, deploy, or auto-activation.");
   }
@@ -334,9 +360,9 @@ function hasUsefulHumanStatusContent(actualReply: string): boolean {
 function stripAllowedHardSafetyPhrases(action: string): string {
   let remaining = clean(action);
   const allowedPhrases = [
-    /\b(?:i\s+)?(?:won['’]?t|will\s+not|do\s+not|don['’]?t|did\s+not|never)\b[^.;:!?]{0,60}\b(?:click|press|tap)?\s*(?:final\s+submit|submit\s+proposal|send\s+proposal|submit|send\s+for\s+\d+\s+connects|send)\b[^.;:!?]*/gi,
-    /\b(?:i\s+)?(?:won['’]?t|will\s+not|do\s+not|don['’]?t|did\s+not|never)\b[^.;:!?]{0,60}\bbypass\b[^.;:!?]{0,40}\b(?:captcha|cloudflare|security|2fa|passkey|login)\b[^.;:!?]*/gi,
-    /\b(?:i\s+)?(?:won['’]?t|will\s+not|do\s+not|don['’]?t|did\s+not|never)\b[^.;:!?]{0,60}\b(?:captcha|cloudflare|security|2fa|passkey|login)\b[^.;:!?]{0,40}\bbypass\b[^.;:!?]*/gi,
+    /\b(?:i\s+)?(?:won['’]?t|will\s+not|do\s+not|don['’]?t|did\s+not|never)\b[^,.;:!?]{0,60}\b(?:click|press|tap)?\s*(?:final\s+submit|submit\s+proposal|send\s+proposal|submit|send\s+for\s+\d+\s+connects|send)\b[^,.;:!?]*/gi,
+    /\b(?:i\s+)?(?:won['’]?t|will\s+not|do\s+not|don['’]?t|did\s+not|never)\b[^,.;:!?]{0,60}\bbypass\b[^,.;:!?]{0,40}\b(?:captcha|cloudflare|security|2fa|passkey|login)\b[^,.;:!?]*/gi,
+    /\b(?:i\s+)?(?:won['’]?t|will\s+not|do\s+not|don['’]?t|did\s+not|never)\b[^,.;:!?]{0,60}\b(?:captcha|cloudflare|security|2fa|passkey|login)\b[^,.;:!?]{0,40}\bbypass\b[^,.;:!?]*/gi,
     /\b(?:final\s+submit|submit)\b.{0,40}\b(?:stays|remains|is)\s+(?:manual|untouched)\b/gi,
     /\bstop\s+before\s+submit\b/gi,
     /\b(final\s+)?submit\s+(is\s+|remains\s+)?(manual|untouched)\b/gi,

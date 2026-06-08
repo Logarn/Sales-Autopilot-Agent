@@ -2108,8 +2108,9 @@ const upsertMemoryRelationStmt = db.prepare(
     source_memory_ids = excluded.source_memory_ids,
     evidence_count = memory_relations.evidence_count + excluded.evidence_count,
     status = CASE
+      WHEN memory_relations.status IN ('forgotten', 'archived') THEN memory_relations.status
       WHEN excluded.status = 'forgotten' THEN 'forgotten'
-      WHEN memory_relations.status = 'forgotten' THEN excluded.status
+      WHEN excluded.status = 'archived' THEN 'archived'
       WHEN memory_relations.evidence_count + excluded.evidence_count >= 2 AND excluded.status = 'tentative' THEN 'active'
       ELSE excluded.status
     END,
@@ -4242,16 +4243,21 @@ export function upsertMemoryRelation(input: UpsertMemoryRelationInput): MemoryRe
   const targetEntity = cleanRelationText(input.targetEntity, "unknown_target").toLowerCase();
   const sourceMemoryIds = Array.from(new Set((input.sourceMemoryIds ?? []).filter((id) => Number.isFinite(id)))).slice(0, 50);
   const existing = getMemoryRelationStmt.get(sourceEntity, relation, targetEntity);
+  const existingSourceMemoryIds = existing ? parseJsonNumberArray(existing.source_memory_ids) : [];
   const mergedSourceMemoryIds = existing
-    ? Array.from(new Set([...parseJsonNumberArray(existing.source_memory_ids), ...sourceMemoryIds])).slice(0, 50)
+    ? Array.from(new Set([...existingSourceMemoryIds, ...sourceMemoryIds])).slice(0, 50)
     : sourceMemoryIds;
+  const newSourceMemoryIds = sourceMemoryIds.filter((id) => !existingSourceMemoryIds.includes(id));
+  const evidenceCount = existing && sourceMemoryIds.length
+    ? newSourceMemoryIds.length
+    : normalizeEvidenceCount(input.evidenceCount);
   upsertMemoryRelationStmt.run(
     sourceEntity,
     relation,
     targetEntity,
     input.confidence ?? "low",
     JSON.stringify(mergedSourceMemoryIds),
-    normalizeEvidenceCount(input.evidenceCount),
+    evidenceCount,
     input.status ?? "tentative"
   );
   const row = getMemoryRelationStmt.get(sourceEntity, relation, targetEntity);
