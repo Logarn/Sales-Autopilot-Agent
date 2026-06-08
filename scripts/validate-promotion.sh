@@ -26,6 +26,7 @@ run npx tsx src/salesLearningSignals.test.ts
 run npx tsx src/salesLearningInsights.test.ts
 run npx tsx src/selfImprovementLoop.test.ts
 run npx tsx src/selfImprovementEvalVersioning.test.ts
+run npx tsx src/selfLearningVerifierEvalHarness.test.ts
 run npx tsx src/slackConversationPlanner.test.ts
 run npx tsx src/leadDecision.test.ts
 run npx tsx src/platformEligibility.test.ts

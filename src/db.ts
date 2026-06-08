@@ -4398,8 +4398,18 @@ export function createPromptToolVersion(input: CreatePromptToolVersionInput): Pr
   return rowToPromptToolVersion(row);
 }
 
+export function getPromptToolVersionByVersionId(versionId: string): PromptToolVersion | null {
+  const cleanedVersionId = cleanAgentMemoryText(versionId, "prompt/tool version id");
+  const row = getPromptToolVersionByVersionIdStmt.get(cleanedVersionId);
+  return row ? rowToPromptToolVersion(row) : null;
+}
+
 export function listPromptToolVersions(limit = 50): PromptToolVersion[] {
   return listPromptToolVersionsStmt.all(Math.max(1, limit)).map(rowToPromptToolVersion);
+}
+
+export function runDbTransaction<T>(fn: () => T): T {
+  return db.transaction(fn)();
 }
 
 export function deactivatePromptToolVersion(versionId: string): boolean {

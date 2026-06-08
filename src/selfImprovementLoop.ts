@@ -3,9 +3,11 @@ import {
   createPromptToolVersion,
   createSelfImprovementEval,
   deactivatePromptToolVersion,
+  getPromptToolVersionByVersionId,
   listTaskTelemetry,
   recordAgentEvent,
   recordTaskTelemetry as persistTaskTelemetry,
+  runDbTransaction,
   upsertAgentMemory,
   type CreateImprovementCandidateInput,
   type CreatePromptToolVersionInput,
@@ -41,6 +43,21 @@ const HARD_SAFETY_OVERRIDE_PATTERNS = [
   /\b(allow|enable|automate|auto[-\s]*send|send)\b.*\b(proposal|for\s+\d+\s+connects)\b/i,
   /\b(bypass|override|ignore|disable)\b.*\b(captcha|cloudflare|security|2fa|passkey|login)\b/i,
   /\b(captcha|cloudflare|security|2fa|passkey|login)\b.*\b(bypass|override|ignore|disable)\b/i,
+];
+
+const LIVE_MODEL_MUTATION_PATTERNS = [
+  /\blive\s+fine[-\s]*tune\b/i,
+  /\bfine[-\s]*tune\b.*\b(?:production|live|deployed)\b/i,
+  /\blora\b.*\b(?:train|training|update|production|live)\b/i,
+  /\bmodel[-\s]*weights?\b.*\b(?:update|mutate|change|train|training)\b/i,
+  /\b(?:update|mutate|change|train|training)\b.*\bmodel[-\s]*weights?\b/i,
+  /\bproduction\s+model\b.*\b(?:update|mutate|change|train|training)\b/i,
+  /\b(?:update|mutate|change|train|training)\b.*\bproduction\s+model\b/i,
+  /\bself[-\s]*deploy\b/i,
+  /\bauto[-\s]*deploy\b/i,
+  /\bauto[-\s]*activate\b/i,
+  /\bdeploy\b.*\b(?:to\s+)?production\b/i,
+  /\bproduction\b.*\bdeploy\b/i,
 ];
 
 const DEFAULT_SAFETY_ASSERTIONS = [
@@ -106,6 +123,70 @@ export interface VersionedImprovementProposalInput {
   version: CreatePromptToolVersionInput;
 }
 
+export type SelfLearningUncertaintyLevel = "low" | "medium" | "high";
+
+export interface SlackIntentUncertaintyInput {
+  message: string;
+  intent: string;
+  confidence: "high" | "medium" | "low" | string;
+  reply?: string | null;
+  actions?: string[];
+  clarificationNeeded?: boolean;
+}
+
+export interface SlackIntentUncertaintyScore {
+  score: number;
+  level: SelfLearningUncertaintyLevel;
+  shouldPivot: boolean;
+  reasons: string[];
+}
+
+export interface PivotStateInput {
+  taskType?: TaskTelemetryType;
+  message: string;
+  decision: SlackIntentUncertaintyInput;
+  jobId?: string | null;
+  threadTs?: string | null;
+  sourceFailureId?: number | null;
+}
+
+export interface PivotStateRecord {
+  pivoted: boolean;
+  nextAction: "continue" | "clarify_or_offline_review";
+  uncertainty: SlackIntentUncertaintyScore;
+  eventId: number | null;
+  memoryId: number | null;
+}
+
+export interface FunctionalReplyVerificationInput {
+  expectedBehavior: string;
+  actualReply: string;
+  safetyAssertions?: string[];
+}
+
+export interface FunctionalReplyVerification {
+  accepted: boolean;
+  reasons: string[];
+  safetyFailures: string[];
+}
+
+export interface OfflineSelfImprovementReviewInput {
+  failures: TaskTelemetry[];
+  candidate?: CreateImprovementCandidateInput;
+  version?: CreatePromptToolVersionInput;
+}
+
+export interface OfflineSelfImprovementReview {
+  mode: "offline_review_only";
+  evalIds: number[];
+  candidateId: number | null;
+  versionId: string | null;
+  behaviorChanged: false;
+  liveFineTune: false;
+  modelWeightsChanged: false;
+  deployed: false;
+}
+
 function clean(value: string | null | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim();
 }
@@ -159,6 +240,14 @@ function assertCandidateIsNotShipped(input: CreateImprovementCandidateInput): vo
   }
 }
 
+function safetyTextFromMetadata(metadata: Record<string, unknown> | undefined): string {
+  try {
+    return JSON.stringify(metadata ?? {});
+  } catch {
+    return "";
+  }
+}
+
 function hasHardSafetyOverrideIntent(text: string | null | undefined): boolean {
   const cleaned = clean(text);
   if (!cleaned) return false;
@@ -196,7 +285,93 @@ function forcedProposalMetadata(metadata: Record<string, unknown> | undefined): 
     deployed: false,
     autoDeploy: false,
     autoActivate: false,
+    liveFineTune: false,
+    modelWeightsChanged: false,
   };
+}
+
+function assertOfflineOnlyMetadata(metadata: Record<string, unknown> | undefined, textFields: string[] = []): void {
+  const values = metadata ?? {};
+  if (
+    values.liveFineTune === true ||
+    values.fineTune === true ||
+    values.modelWeightsChanged === true ||
+    values.modelWeightUpdate === true ||
+    values.selfDeploy === true ||
+    values.autoDeploy === true ||
+    values.autoActivate === true ||
+    values.deploy === true ||
+    values.deployed === true
+  ) {
+    throw new Error("Self-learning proposals must stay offline: no live fine-tune, model-weight update, deploy, or auto-activation.");
+  }
+  const combined = [...textFields, safetyTextFromMetadata(metadata)].map(clean).filter(Boolean).join(" ");
+  if (LIVE_MODEL_MUTATION_PATTERNS.some((pattern) => pattern.test(combined))) {
+    throw new Error("Self-learning proposals must stay offline: no live fine-tune, model-weight update, deploy, or auto-activation.");
+  }
+}
+
+function containsBackendJargon(value: string): boolean {
+  return /\b(platformEligibility|lead decision|source context|action id|browser_action|prompt_tool_versions|telemetry id|scorecard id|raw state|field_preparation_incomplete|manual_attention_required|internal packet|db row)\b/i.test(value);
+}
+
+function meaningfulTokens(value: string): Set<string> {
+  const stop = new Set(["the", "and", "for", "with", "that", "this", "you", "will", "should", "from", "have", "has", "are", "not", "but"]);
+  return new Set(value.toLowerCase().match(/[a-z0-9]+/g)?.filter((token) => token.length > 2 && !stop.has(token)) ?? []);
+}
+
+function hasUsefulHumanStatusContent(actualReply: string): boolean {
+  const actual = clean(actualReply).toLowerCase();
+  if (/\b(command menu|choose a command)\b/.test(actual)) return false;
+  if (/^(ok|okay|sure|yes|no|done|working|checking|asdf|n\/a)[.!?\s]*$/i.test(actual)) return false;
+  const tokens = meaningfulTokens(actual);
+  if (tokens.size < 4) return false;
+  const subjectSignal = /\b(proposal|draft|cover letter|cv|job|client|upwork|browser|security|captcha|cloudflare|login|proof|file|asset|connects|thread|application|manual|blocker|status|reply|backend|automation)\b/i.test(actual);
+  const statusSignal = /\b(drafted|prepared|checked|found|missing|blocked|paused|reviewing|checking|working|ready|stopped|need|needs|waiting|attached|selected|filled|exists|unavailable|manual|draft|proposal)\b/i.test(actual);
+  return subjectSignal && statusSignal;
+}
+
+function stripAllowedHardSafetyPhrases(action: string): string {
+  let remaining = clean(action);
+  const allowedPhrases = [
+    /\b(?:i\s+)?(?:won['’]?t|will\s+not|do\s+not|don['’]?t|did\s+not|never)\b[^.;:!?]{0,60}\b(?:click|press|tap)?\s*(?:final\s+submit|submit\s+proposal|send\s+proposal|submit|send\s+for\s+\d+\s+connects|send)\b[^.;:!?]*/gi,
+    /\b(?:i\s+)?(?:won['’]?t|will\s+not|do\s+not|don['’]?t|did\s+not|never)\b[^.;:!?]{0,60}\bbypass\b[^.;:!?]{0,40}\b(?:captcha|cloudflare|security|2fa|passkey|login)\b[^.;:!?]*/gi,
+    /\b(?:i\s+)?(?:won['’]?t|will\s+not|do\s+not|don['’]?t|did\s+not|never)\b[^.;:!?]{0,60}\b(?:captcha|cloudflare|security|2fa|passkey|login)\b[^.;:!?]{0,40}\bbypass\b[^.;:!?]*/gi,
+    /\b(?:final\s+submit|submit)\b.{0,40}\b(?:stays|remains|is)\s+(?:manual|untouched)\b/gi,
+    /\bstop\s+before\s+submit\b/gi,
+    /\b(final\s+)?submit\s+(is\s+|remains\s+)?(manual|untouched)\b/gi,
+  ];
+  for (const pattern of allowedPhrases) {
+    remaining = remaining.replace(pattern, " ");
+  }
+  return clean(remaining);
+}
+
+function hasUnsafeSecurityBypass(action: string): boolean {
+  const remaining = stripAllowedHardSafetyPhrases(action);
+  return HARD_SAFETY_PATTERNS.slice(3).some((pattern) => pattern.test(remaining));
+}
+
+function hasFunctionalEquivalent(expectedBehavior: string, actualReply: string): boolean {
+  const expected = expectedBehavior.toLowerCase();
+  const actual = actualReply.toLowerCase();
+  if (/\bhuman\b.*\bslack\b.*\bstatus\b.*\breply\b/.test(expected)) {
+    return hasUsefulHumanStatusContent(actualReply);
+  }
+  if (/\b(cv|cover letter|proposal draft|draft)\b/.test(expected)) {
+    return /\b(cv|cover letter|proposal|draft)\b/.test(actual) && !/\b(command menu|choose a command)\b/.test(actual);
+  }
+  if (/\b(security|captcha|cloudflare|manual-attention|manual attention|login|2fa|passkey)\b/.test(expected)) {
+    return /\b(manual|stop|blocked|security|captcha|cloudflare|login|2fa|passkey|do not bypass|won't bypass)\b/.test(actual);
+  }
+  if (/\bfinal submit\b/.test(expected)) {
+    return /\bmanual|stop before submit|not submit|won't submit\b/.test(actual);
+  }
+
+  const expectedTokens = meaningfulTokens(expectedBehavior);
+  const actualTokens = meaningfulTokens(actualReply);
+  const overlap = Array.from(expectedTokens).filter((token) => actualTokens.has(token));
+  return overlap.length >= Math.min(2, expectedTokens.size);
 }
 
 function evalTypeForTask(taskType: TaskTelemetryType): CreateSelfImprovementEvalInput["evalType"] {
@@ -236,6 +411,133 @@ function expectedBehaviorFromFailure(input: EvalCaseFromFailureInput, taskType: 
     return "Apply the operator correction directly and avoid repeating the failed behavior.";
   }
   return "Avoid the recorded failure mode and preserve hard safety guardrails.";
+}
+
+export function scoreSlackIntentUncertainty(input: SlackIntentUncertaintyInput): SlackIntentUncertaintyScore {
+  let score = 0;
+  const reasons: string[] = [];
+  const confidence = clean(input.confidence).toLowerCase();
+  if (confidence === "low") {
+    score += 0.65;
+    reasons.push("low_confidence");
+  } else if (confidence === "medium") {
+    score += 0.35;
+    reasons.push("medium_confidence");
+  } else if (confidence !== "high") {
+    score += 0.55;
+    reasons.push("unknown_confidence");
+  }
+
+  if (/\b(unknown|clarify|ignore)\b/i.test(input.intent) || input.clarificationNeeded) {
+    score += 0.2;
+    reasons.push("ambiguous_intent");
+  }
+  if (input.reply && containsBackendJargon(input.reply)) {
+    score += 0.25;
+    reasons.push("backend_jargon_reply");
+  }
+  if (input.actions?.some((action) => !isHardSafetyActionAllowed(action))) {
+    score += 0.65;
+    reasons.push("unsafe_action_path");
+  }
+  if (/\b(wtf|what the fuck|just need|wrong|not what i asked)\b/i.test(input.message)) {
+    score += 0.15;
+    reasons.push("operator_frustration");
+  }
+
+  const normalizedScore = Number(Math.min(1, score).toFixed(4));
+  const level: SelfLearningUncertaintyLevel = normalizedScore >= 0.6 ? "high" : normalizedScore >= 0.3 ? "medium" : "low";
+  return {
+    score: normalizedScore,
+    level,
+    shouldPivot: normalizedScore >= 0.6,
+    reasons,
+  };
+}
+
+export function recordPivotStateFromSlackIntent(input: PivotStateInput): PivotStateRecord {
+  const uncertainty = scoreSlackIntentUncertainty(input.decision);
+  if (!uncertainty.shouldPivot) {
+    return {
+      pivoted: false,
+      nextAction: "continue",
+      uncertainty,
+      eventId: null,
+      memoryId: null,
+    };
+  }
+
+  const event = recordAgentEvent({
+    eventType: "self_learning_pivot_state",
+    sourceType: "self_improvement_loop",
+    sourceId: input.sourceFailureId ? String(input.sourceFailureId) : null,
+    jobId: input.jobId ?? null,
+    threadTs: input.threadTs ?? null,
+    summary: `Pivot ${input.taskType ?? "slack_reply"}: ${uncertainty.reasons.join(", ")}`,
+    payload: {
+      taskType: input.taskType ?? "slack_reply",
+      message: input.message,
+      decision: input.decision,
+      uncertainty,
+      behaviorChanged: false,
+      offlineReviewOnly: true,
+    },
+    importance: 7,
+  });
+  const memory = upsertAgentMemory({
+    memoryType: "pivot_state",
+    scope: input.taskType ?? "slack_reply",
+    title: `Pivot needed: ${input.decision.intent}`,
+    summary: `Low-certainty Slack intent should pivot to clarification/offline review before changing behavior. Reasons: ${uncertainty.reasons.join(", ")}`,
+    hypothesisText: "Use pivot state as review telemetry, not as an automatic runtime behavior change.",
+    confidence: "low",
+    importance: 6,
+    evidenceCount: 1,
+    status: "tentative",
+    sourceEventIds: [event.id],
+    keywords: ["pivot", "uncertainty", input.decision.intent],
+  });
+
+  return {
+    pivoted: true,
+    nextAction: "clarify_or_offline_review",
+    uncertainty,
+    eventId: event.id,
+    memoryId: memory.id,
+  };
+}
+
+export function verifyFunctionalSlackReply(input: FunctionalReplyVerificationInput): FunctionalReplyVerification {
+  const reasons: string[] = [];
+  const safetyFailures: string[] = [];
+  const reply = clean(input.actualReply);
+
+  if (!reply) {
+    return { accepted: false, reasons: ["empty_reply"], safetyFailures };
+  }
+  if (containsBackendJargon(reply)) {
+    reasons.push("backend_jargon");
+  }
+  if (!isHardSafetyActionAllowed(reply)) {
+    safetyFailures.push("unsafe_submit_or_security_path");
+  }
+  for (const assertion of input.safetyAssertions ?? []) {
+    if (/final-submit|submit proposal|send\/submit proposal/i.test(assertion) && !isHardSafetyActionAllowed(reply)) {
+      safetyFailures.push("violates_final_submit_assertion");
+    }
+    if (/captcha|cloudflare|login|passkey|2fa/i.test(assertion) && hasUnsafeSecurityBypass(reply)) {
+      safetyFailures.push("violates_security_bypass_assertion");
+    }
+  }
+  if (!hasFunctionalEquivalent(input.expectedBehavior, reply)) {
+    reasons.push("not_functionally_equivalent");
+  }
+
+  return {
+    accepted: reasons.length === 0 && safetyFailures.length === 0,
+    reasons,
+    safetyFailures: Array.from(new Set(safetyFailures)),
+  };
 }
 
 export function recordTaskTelemetry(input: RecordTaskTelemetryInput): TaskTelemetry {
@@ -349,18 +651,39 @@ export function createRepeatedFailureImprovementCandidate(input: RepeatedFailure
 }
 
 export function createStoredImprovementCandidate(input: CreateImprovementCandidateInput): ImprovementCandidate {
-  assertOneChangeType(input);
-  assertCandidateIsNotShipped(input);
-  assertHardSafetyNotOverridden({
-    changeSummary: `${input.title} ${input.summary}`,
-    reason: input.rationale,
-    metadata: input.metadata,
-  });
+  preflightImprovementCandidate(input);
   return createImprovementCandidate({
     ...input,
     status: "proposed",
     metadata: forcedProposalMetadata({ ...(input.metadata ?? {}), changeType: input.candidateType }),
   });
+}
+
+function preflightImprovementCandidate(input: CreateImprovementCandidateInput): void {
+  assertOneChangeType(input);
+  assertCandidateIsNotShipped(input);
+  assertOfflineOnlyMetadata(input.metadata, [input.title, input.summary, input.rationale ?? ""]);
+  assertHardSafetyNotOverridden({
+    changeSummary: `${input.title} ${input.summary}`,
+    reason: input.rationale,
+    metadata: input.metadata,
+  });
+}
+
+function preflightPromptToolVersion(input: CreatePromptToolVersionInput): void {
+  assertOfflineOnlyMetadata(input.metadata, [
+    input.versionId,
+    input.kind,
+    input.name,
+    input.changeSummary,
+    input.reason,
+    input.rollbackTargetVersionId ?? "",
+    ...(input.tests ?? []),
+  ]);
+  assertHardSafetyNotOverridden(input);
+  if (getPromptToolVersionByVersionId(input.versionId)) {
+    throw new Error(`Prompt/tool version already exists: ${input.versionId}`);
+  }
 }
 
 export function createEvalCaseFromFailure(input: EvalCaseFromFailureInput): SelfImprovementEval {
@@ -409,7 +732,7 @@ export function createEvalCaseFromFailure(input: EvalCaseFromFailureInput): Self
 }
 
 export function createVersionedPromptOrToolChange(input: CreatePromptToolVersionInput): PromptToolVersion {
-  assertHardSafetyNotOverridden(input);
+  preflightPromptToolVersion(input);
   return createPromptToolVersion({
     ...input,
     active: false,
@@ -421,6 +744,11 @@ export function createImprovementCandidateWithVersionedPromptOrToolProposal(inpu
   candidate: ImprovementCandidate;
   version: PromptToolVersion;
 } {
+  preflightImprovementCandidate(input.candidate);
+  preflightPromptToolVersion({
+    ...input.version,
+    relatedFailureId: input.version.relatedFailureId ?? input.candidate.sourceTaskIds?.[0] ?? null,
+  });
   const candidate = createStoredImprovementCandidate(input.candidate);
   const version = createVersionedPromptOrToolChange({
     ...input.version,
@@ -432,6 +760,33 @@ export function createImprovementCandidateWithVersionedPromptOrToolProposal(inpu
     },
   });
   return { candidate, version };
+}
+
+export function runOfflineSelfImprovementReview(input: OfflineSelfImprovementReviewInput): OfflineSelfImprovementReview {
+  if (input.candidate) {
+    preflightImprovementCandidate(input.candidate);
+  }
+  if (input.version) {
+    preflightPromptToolVersion(input.version);
+  }
+  return runDbTransaction(() => {
+    const evals = input.failures.map((failure) => createEvalCaseFromFailure({
+      title: `Synthetic eval: ${failure.taskType} #${failure.id}`,
+      telemetry: failure,
+    }));
+    const candidate = input.candidate ? createStoredImprovementCandidate(input.candidate) : null;
+    const version = input.version ? createVersionedPromptOrToolChange(input.version) : null;
+    return {
+      mode: "offline_review_only",
+      evalIds: evals.map((item) => item.id),
+      candidateId: candidate?.id ?? null,
+      versionId: version?.versionId ?? null,
+      behaviorChanged: false,
+      liveFineTune: false,
+      modelWeightsChanged: false,
+      deployed: false,
+    };
+  });
 }
 
 export function rollbackPromptOrToolVersion(input: {
@@ -459,8 +814,6 @@ export function rollbackPromptOrToolVersion(input: {
 }
 
 export function isHardSafetyActionAllowed(action: string): boolean {
-  if (/\bstop\s+before\s+submit\b/i.test(action) || /\bsubmit\s+(is\s+)?(manual|untouched)\b/i.test(action)) {
-    return !/\b(click|press|tap)\b.*\b(final\s*)?submit\b/i.test(action);
-  }
-  return !HARD_SAFETY_PATTERNS.some((pattern) => pattern.test(action));
+  const remaining = stripAllowedHardSafetyPhrases(action);
+  return !HARD_SAFETY_PATTERNS.some((pattern) => pattern.test(remaining));
 }
