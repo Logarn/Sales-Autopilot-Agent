@@ -132,6 +132,11 @@ export const MOONSHOT_BASE_URL = process.env.MOONSHOT_BASE_URL ?? process.env.KI
 export const MOONSHOT_MODEL = process.env.MOONSHOT_MODEL ?? process.env.KIMI_MODEL ?? "kimi-k2.5";
 export const LLM_NORMALIZATION_ENABLED = parseBoolean(process.env.LLM_NORMALIZATION_ENABLED, false);
 export const LLM_REQUEST_TIMEOUT_MS = Math.max(1000, parseInteger(process.env.LLM_REQUEST_TIMEOUT_MS, 30_000));
+export const MEMORI_SHADOW_ENABLED = parseBoolean(process.env.MEMORI_SHADOW_ENABLED, false);
+export const MEMORI_ACTIVE_RECALL_ENABLED = parseBoolean(process.env.MEMORI_ACTIVE_RECALL_ENABLED, false);
+export const MEMORI_API_KEY = process.env.MEMORI_API_KEY ?? "";
+export const MEMORI_API_URL = process.env.MEMORI_API_URL ?? "https://api.memori.ai";
+export const MEMORI_REQUEST_TIMEOUT_MS = Math.max(1000, parseInteger(process.env.MEMORI_REQUEST_TIMEOUT_MS, 10_000));
 export const JOB_INTELLIGENCE_ENABLED = parseBoolean(process.env.JOB_INTELLIGENCE_ENABLED, false);
 export const JOB_INTELLIGENCE_PROVIDER = process.env.JOB_INTELLIGENCE_PROVIDER ?? (XAI_API_KEY ? "xai" : LLM_PROVIDER);
 export const JOB_INTELLIGENCE_MODEL = process.env.JOB_INTELLIGENCE_MODEL ?? (JOB_INTELLIGENCE_PROVIDER.toLowerCase() === "xai" || JOB_INTELLIGENCE_PROVIDER.toLowerCase() === "grok" ? XAI_MODEL : LLM_MODEL);
