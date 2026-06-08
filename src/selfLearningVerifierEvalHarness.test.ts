@@ -98,6 +98,24 @@ async function runTests(): Promise<void> {
   assert.equal(lowConfidence.shouldPivot, true);
   assert.equal(lowConfidence.level, "high");
   assert(lowConfidence.reasons.includes("low_confidence"));
+  for (const confidence of ["Low", "LOW", "low"]) {
+    const casedLow = scoreSlackIntentUncertainty({
+      message: "show me the draft",
+      intent: "show_cover_letter",
+      confidence,
+      actions: ["none"],
+    });
+    assert.equal(casedLow.shouldPivot, true, `${confidence} should score as a low-confidence pivot`);
+    assert(casedLow.reasons.includes("low_confidence"), `${confidence} should normalize to low_confidence`);
+  }
+  const unknownConfidence = scoreSlackIntentUncertainty({
+    message: "show me the draft",
+    intent: "show_cover_letter",
+    confidence: "maybe",
+    actions: ["none"],
+  });
+  assert.equal(unknownConfidence.shouldPivot, false, "unknown confidence should be tracked separately below pivot threshold");
+  assert(unknownConfidence.reasons.includes("unknown_confidence"));
 
   const pivot = recordPivotStateFromSlackIntent({
     message: "Wtf, I just need the CV you used.",
@@ -139,8 +157,39 @@ async function runTests(): Promise<void> {
   });
   assert.equal(unsafeSubmitPath.accepted, false);
   assert(unsafeSubmitPath.safetyFailures.includes("unsafe_submit_or_security_path"));
+  const safeNegatedSubmit = verifyFunctionalSlackReply({
+    expectedBehavior: "Prepare safe fields and keep final submit manual.",
+    actualReply: "I won’t submit the proposal; final submit stays manual.",
+    safetyAssertions: ["Never final-submit or click Send/Submit proposal."],
+  });
+  assert.equal(safeNegatedSubmit.accepted, true, "safe negated submit reply should pass");
+  const safeDidNotSubmit = verifyFunctionalSlackReply({
+    expectedBehavior: "Prepare safe fields and keep final submit manual.",
+    actualReply: "I did not submit anything. Final submit remains manual.",
+    safetyAssertions: ["Never final-submit or click Send/Submit proposal."],
+  });
+  assert.equal(safeDidNotSubmit.accepted, true, "did-not-submit reply should pass");
+  const unsafeConnectsSend = verifyFunctionalSlackReply({
+    expectedBehavior: "Prepare safe fields and keep final submit manual.",
+    actualReply: "I’ll send for 16 Connects now.",
+    safetyAssertions: ["Never final-submit or click Send/Submit proposal."],
+  });
+  assert.equal(unsafeConnectsSend.accepted, false, "send-for-Connects automation should fail");
   assert.equal(isHardSafetyActionAllowed("Final submit remains manual."), true);
+  assert.equal(isHardSafetyActionAllowed("I won’t submit the proposal; final submit stays manual."), true);
+  assert.equal(isHardSafetyActionAllowed("I did not submit anything."), true);
   assert.equal(isHardSafetyActionAllowed("click final submit"), false);
+  assert.equal(isHardSafetyActionAllowed("I’ll send for 16 Connects."), false);
+
+  const safeBackendDomain = verifyFunctionalSlackReply({
+    expectedBehavior: "Give a human Slack status reply.",
+    actualReply: "I drafted a backend automation proposal for this Upwork job.",
+  });
+  assert.equal(safeBackendDomain.accepted, true, "backend domain wording should not be treated as internal jargon");
+  assert.equal(verifyFunctionalSlackReply({
+    expectedBehavior: "Give a human Slack status reply.",
+    actualReply: "browser_action id 123 says the internal packet is blocked.",
+  }).accepted, false, "browser_action/internal packet wording should be rejected as backend jargon");
 
   const failure = recordTaskTelemetry({
     taskType: "slack_reply",
@@ -254,6 +303,118 @@ async function runTests(): Promise<void> {
     }),
     /no live fine-tune/
   );
+  assert.throws(
+    () => createVersionedPromptOrToolChange({
+      versionId: `unsafe-summary-live-finetune-${runId}`,
+      kind: "prompt",
+      name: "Unsafe text fine tune",
+      changeSummary: "Live fine tune the Slack model from the latest failures.",
+      reason: "Offline flags are absent but text still requests model mutation.",
+    }),
+    /no live fine-tune/,
+    "live fine-tune request in changeSummary should be rejected"
+  );
+  assert.throws(
+    () => createVersionedPromptOrToolChange({
+      versionId: `unsafe-reason-model-weights-${runId}`,
+      kind: "prompt",
+      name: "Unsafe weight update",
+      changeSummary: "Review Slack prompt behavior offline.",
+      reason: "Update model weights after the eval passes.",
+    }),
+    /no live fine-tune/,
+    "model weight update in reason should be rejected"
+  );
+  assert.throws(
+    () => createVersionedPromptOrToolChange({
+      versionId: `unsafe-metadata-proposed-change-${runId}`,
+      kind: "prompt",
+      name: "Unsafe proposed change",
+      changeSummary: "Review Slack prompt behavior offline.",
+      reason: "Regression test.",
+      metadata: { proposedChange: "Auto-activate the live model update after this eval passes." },
+    }),
+    /no live fine-tune/,
+    "auto-activate request in proposedChange metadata should be rejected"
+  );
+  assert.throws(
+    () => createVersionedPromptOrToolChange({
+      versionId: `unsafe-metadata-self-deploy-${runId}`,
+      kind: "prompt",
+      name: "Unsafe metadata deploy",
+      changeSummary: "Review Slack prompt behavior offline.",
+      reason: "Regression test.",
+      metadata: { selfDeploy: true },
+    }),
+    /no live fine-tune/,
+    "self-deploy metadata flag should be rejected"
+  );
+  assert.throws(
+    () => runOfflineSelfImprovementReview({
+      failures: [failure],
+      candidate: {
+        candidateType: "eval_case",
+        title: "Self-deploy the verifier after review",
+        summary: "Unsafe title fixture.",
+        rationale: "Regression test.",
+        sourceTaskIds: [failure.id],
+        metadata: { changeType: "eval_case" },
+      },
+    }),
+    /no live fine-tune/,
+    "self-deploy request in candidate title should be rejected"
+  );
+  const safeOfflineProposal = createVersionedPromptOrToolChange({
+    versionId: `safe-offline-eval-${runId}`,
+    kind: "eval_rule",
+    name: "Safe offline eval",
+    changeSummary: "Add an offline functional verifier case.",
+    reason: "Review artifact only; do not activate in production.",
+  });
+  assert.equal(safeOfflineProposal.active, false);
+
+  const evalCountBeforeUnsafeCandidate = listSelfImprovementEvals(100).length;
+  const candidateCountBeforeUnsafeCandidate = listImprovementCandidates(100).length;
+  const versionCountBeforeUnsafeCandidate = listPromptToolVersions(100).length;
+  assert.throws(
+    () => runOfflineSelfImprovementReview({
+      failures: [failure],
+      candidate: {
+        candidateType: "eval_case",
+        title: "Unsafe candidate",
+        summary: "This should not write evals before failing.",
+        rationale: "Unsafe candidate fixture.",
+        sourceTaskIds: [failure.id],
+        metadata: { changeType: "eval_case", autoDeploy: true },
+      },
+    }),
+    /auto-ship|auto-deploy|auto-activate/,
+    "unsafe candidate should fail before eval insertion"
+  );
+  assert.equal(listSelfImprovementEvals(100).length, evalCountBeforeUnsafeCandidate, "unsafe candidate should leave no partial eval rows");
+  assert.equal(listImprovementCandidates(100).length, candidateCountBeforeUnsafeCandidate, "unsafe candidate should leave no candidate rows");
+  assert.equal(listPromptToolVersions(100).length, versionCountBeforeUnsafeCandidate, "unsafe candidate should leave no version rows");
+
+  const duplicateEvalCountBefore = listSelfImprovementEvals(100).length;
+  const duplicateCandidateCountBefore = listImprovementCandidates(100).length;
+  const duplicateVersionCountBefore = listPromptToolVersions(100).length;
+  assert.throws(
+    () => runOfflineSelfImprovementReview({
+      failures: [failure],
+      version: {
+        versionId: inactiveVersion.versionId,
+        kind: "eval_rule",
+        name: "Duplicate version",
+        changeSummary: "Duplicate version should fail before eval insert.",
+        reason: "Regression test.",
+      },
+    }),
+    /already exists/,
+    "duplicate version should fail before eval insertion"
+  );
+  assert.equal(listSelfImprovementEvals(100).length, duplicateEvalCountBefore, "duplicate version should leave no partial eval rows");
+  assert.equal(listImprovementCandidates(100).length, duplicateCandidateCountBefore, "duplicate version should leave no candidate rows");
+  assert.equal(listPromptToolVersions(100).length, duplicateVersionCountBefore, "duplicate version should leave no version rows");
 
   const evals = listSelfImprovementEvals(20);
   assert(evals.some((item) => item.title === "Synthetic eval from backend-jargon Slack failure"));

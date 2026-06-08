@@ -4,6 +4,7 @@ import {
   createSelfImprovementEval,
   deactivatePromptToolVersion,
   listTaskTelemetry,
+  listPromptToolVersions,
   recordAgentEvent,
   recordTaskTelemetry as persistTaskTelemetry,
   upsertAgentMemory,
@@ -41,6 +42,19 @@ const HARD_SAFETY_OVERRIDE_PATTERNS = [
   /\b(allow|enable|automate|auto[-\s]*send|send)\b.*\b(proposal|for\s+\d+\s+connects)\b/i,
   /\b(bypass|override|ignore|disable)\b.*\b(captcha|cloudflare|security|2fa|passkey|login)\b/i,
   /\b(captcha|cloudflare|security|2fa|passkey|login)\b.*\b(bypass|override|ignore|disable)\b/i,
+];
+
+const LIVE_MODEL_MUTATION_PATTERNS = [
+  /\blive\s+fine[-\s]*tune\b/i,
+  /\bfine[-\s]*tune\b.*\b(?:production|live|deployed)\b/i,
+  /\blora\b.*\b(?:train|training|update|production|live)\b/i,
+  /\bmodel\s+weights?\b.*\b(?:update|mutate|change|train|training)\b/i,
+  /\b(?:update|mutate|change|train|training)\b.*\bmodel\s+weights?\b/i,
+  /\bproduction\s+model\b.*\b(?:update|mutate|change|train|training)\b/i,
+  /\b(?:update|mutate|change|train|training)\b.*\bproduction\s+model\b/i,
+  /\bself[-\s]*deploy\b/i,
+  /\bauto[-\s]*deploy\b/i,
+  /\bauto[-\s]*activate\b/i,
 ];
 
 const DEFAULT_SAFETY_ASSERTIONS = [
@@ -223,6 +237,14 @@ function assertCandidateIsNotShipped(input: CreateImprovementCandidateInput): vo
   }
 }
 
+function safetyTextFromMetadata(metadata: Record<string, unknown> | undefined): string {
+  try {
+    return JSON.stringify(metadata ?? {});
+  } catch {
+    return "";
+  }
+}
+
 function hasHardSafetyOverrideIntent(text: string | null | undefined): boolean {
   const cleaned = clean(text);
   if (!cleaned) return false;
@@ -265,22 +287,29 @@ function forcedProposalMetadata(metadata: Record<string, unknown> | undefined): 
   };
 }
 
-function assertOfflineOnlyMetadata(metadata: Record<string, unknown> | undefined): void {
+function assertOfflineOnlyMetadata(metadata: Record<string, unknown> | undefined, textFields: string[] = []): void {
   const values = metadata ?? {};
   if (
     values.liveFineTune === true ||
     values.fineTune === true ||
     values.modelWeightsChanged === true ||
     values.modelWeightUpdate === true ||
+    values.selfDeploy === true ||
+    values.autoDeploy === true ||
+    values.autoActivate === true ||
     values.deploy === true ||
     values.deployed === true
   ) {
     throw new Error("Self-learning proposals must stay offline: no live fine-tune, model-weight update, deploy, or auto-activation.");
   }
+  const combined = [...textFields, safetyTextFromMetadata(metadata)].map(clean).filter(Boolean).join(" ");
+  if (LIVE_MODEL_MUTATION_PATTERNS.some((pattern) => pattern.test(combined))) {
+    throw new Error("Self-learning proposals must stay offline: no live fine-tune, model-weight update, deploy, or auto-activation.");
+  }
 }
 
 function containsBackendJargon(value: string): boolean {
-  return /\b(platformEligibility|lead decision|source context|action id|browser_action|prompt_tool_versions|telemetry|scorecard|backend|internal packet|db row)\b/i.test(value);
+  return /\b(platformEligibility|lead decision|source context|action id|browser_action|prompt_tool_versions|telemetry id|scorecard id|raw state|field_preparation_incomplete|manual_attention_required|internal packet|db row)\b/i.test(value);
 }
 
 function meaningfulTokens(value: string): Set<string> {
@@ -291,6 +320,9 @@ function meaningfulTokens(value: string): Set<string> {
 function hasFunctionalEquivalent(expectedBehavior: string, actualReply: string): boolean {
   const expected = expectedBehavior.toLowerCase();
   const actual = actualReply.toLowerCase();
+  if (/\bhuman\b.*\bslack\b.*\bstatus\b.*\breply\b/.test(expected)) {
+    return !/\b(command menu|choose a command)\b/.test(actual);
+  }
   if (/\b(cv|cover letter|proposal draft|draft)\b/.test(expected)) {
     return /\b(cv|cover letter|proposal|draft)\b/.test(actual) && !/\b(command menu|choose a command)\b/.test(actual);
   }
@@ -349,13 +381,14 @@ function expectedBehaviorFromFailure(input: EvalCaseFromFailureInput, taskType: 
 export function scoreSlackIntentUncertainty(input: SlackIntentUncertaintyInput): SlackIntentUncertaintyScore {
   let score = 0;
   const reasons: string[] = [];
-  if (input.confidence === "low") {
+  const confidence = clean(input.confidence).toLowerCase();
+  if (confidence === "low") {
     score += 0.65;
     reasons.push("low_confidence");
-  } else if (input.confidence === "medium") {
+  } else if (confidence === "medium") {
     score += 0.35;
     reasons.push("medium_confidence");
-  } else if (input.confidence !== "high") {
+  } else if (confidence !== "high") {
     score += 0.55;
     reasons.push("unknown_confidence");
   }
@@ -583,19 +616,39 @@ export function createRepeatedFailureImprovementCandidate(input: RepeatedFailure
 }
 
 export function createStoredImprovementCandidate(input: CreateImprovementCandidateInput): ImprovementCandidate {
-  assertOneChangeType(input);
-  assertCandidateIsNotShipped(input);
-  assertOfflineOnlyMetadata(input.metadata);
-  assertHardSafetyNotOverridden({
-    changeSummary: `${input.title} ${input.summary}`,
-    reason: input.rationale,
-    metadata: input.metadata,
-  });
+  preflightImprovementCandidate(input);
   return createImprovementCandidate({
     ...input,
     status: "proposed",
     metadata: forcedProposalMetadata({ ...(input.metadata ?? {}), changeType: input.candidateType }),
   });
+}
+
+function preflightImprovementCandidate(input: CreateImprovementCandidateInput): void {
+  assertOneChangeType(input);
+  assertCandidateIsNotShipped(input);
+  assertOfflineOnlyMetadata(input.metadata, [input.title, input.summary, input.rationale ?? ""]);
+  assertHardSafetyNotOverridden({
+    changeSummary: `${input.title} ${input.summary}`,
+    reason: input.rationale,
+    metadata: input.metadata,
+  });
+}
+
+function preflightPromptToolVersion(input: CreatePromptToolVersionInput): void {
+  assertOfflineOnlyMetadata(input.metadata, [
+    input.versionId,
+    input.kind,
+    input.name,
+    input.changeSummary,
+    input.reason,
+    input.rollbackTargetVersionId ?? "",
+    ...(input.tests ?? []),
+  ]);
+  assertHardSafetyNotOverridden(input);
+  if (listPromptToolVersions(1000).some((version) => version.versionId === input.versionId)) {
+    throw new Error(`Prompt/tool version already exists: ${input.versionId}`);
+  }
 }
 
 export function createEvalCaseFromFailure(input: EvalCaseFromFailureInput): SelfImprovementEval {
@@ -644,8 +697,7 @@ export function createEvalCaseFromFailure(input: EvalCaseFromFailureInput): Self
 }
 
 export function createVersionedPromptOrToolChange(input: CreatePromptToolVersionInput): PromptToolVersion {
-  assertOfflineOnlyMetadata(input.metadata);
-  assertHardSafetyNotOverridden(input);
+  preflightPromptToolVersion(input);
   return createPromptToolVersion({
     ...input,
     active: false,
@@ -657,6 +709,11 @@ export function createImprovementCandidateWithVersionedPromptOrToolProposal(inpu
   candidate: ImprovementCandidate;
   version: PromptToolVersion;
 } {
+  preflightImprovementCandidate(input.candidate);
+  preflightPromptToolVersion({
+    ...input.version,
+    relatedFailureId: input.version.relatedFailureId ?? input.candidate.sourceTaskIds?.[0] ?? null,
+  });
   const candidate = createStoredImprovementCandidate(input.candidate);
   const version = createVersionedPromptOrToolChange({
     ...input.version,
@@ -671,8 +728,12 @@ export function createImprovementCandidateWithVersionedPromptOrToolProposal(inpu
 }
 
 export function runOfflineSelfImprovementReview(input: OfflineSelfImprovementReviewInput): OfflineSelfImprovementReview {
-  assertOfflineOnlyMetadata(input.candidate?.metadata);
-  assertOfflineOnlyMetadata(input.version?.metadata);
+  if (input.candidate) {
+    preflightImprovementCandidate(input.candidate);
+  }
+  if (input.version) {
+    preflightPromptToolVersion(input.version);
+  }
   const evals = input.failures.map((failure) => createEvalCaseFromFailure({
     title: `Synthetic eval: ${failure.taskType} #${failure.id}`,
     telemetry: failure,
@@ -717,6 +778,8 @@ export function rollbackPromptOrToolVersion(input: {
 
 export function isHardSafetyActionAllowed(action: string): boolean {
   if (
+    /\b(?:won['’]?t|will\s+not|do\s+not|don['’]?t|did\s+not|never)\b.{0,60}\b(?:click|press|tap|send|submit|final\s+submit|send\s+proposal|submit\s+proposal|send\s+for\s+\d+\s+connects)\b/i.test(action) ||
+    /\b(?:final\s+submit|submit)\b.{0,40}\b(?:stays|remains|is)\s+(?:manual|untouched)\b/i.test(action) ||
     /\bstop\s+before\s+submit\b/i.test(action) ||
     /\b(final\s+)?submit\s+(is\s+|remains\s+)?(manual|untouched)\b/i.test(action)
   ) {
