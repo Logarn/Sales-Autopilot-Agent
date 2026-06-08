@@ -1681,6 +1681,29 @@ async function executeConversationBrainDecision(params: {
     return false;
   }
 
+  const parsedOperatorIntent = parseSlackOperatorIntent(params.text);
+  if (parsedOperatorIntent) {
+    const deterministicText = await buildSlackOperatorReply(parsedOperatorIntent, params.operatorDeps);
+    const text = await userFacingSlackCopy({
+      deterministicText,
+      userMessage: params.text,
+      intent: `operator_${parsedOperatorIntent.type}`,
+      context: { operatorIntent: parsedOperatorIntent.type, plannedActions: decision.actions },
+      preservePhrases: [
+        deterministicText.includes("Final submit remains manual") ? "Final submit remains manual" : null,
+        deterministicText.includes("did not click through login, CAPTCHA, security checks, or submit anything")
+          ? "did not click through login, CAPTCHA, security checks, or submit anything"
+          : null,
+        deterministicText.includes("did not paste through VNC or click submit")
+          ? "did not paste through VNC or click submit"
+          : null,
+      ].filter((phrase): phrase is string => Boolean(phrase)),
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return true;
+  }
+
   if (
     decision.reply &&
     (
@@ -1734,15 +1757,7 @@ async function executeConversationBrainDecision(params: {
     decision.actions.includes("pause_hunting") ||
     decision.actions.includes("start_hunting")
   ) {
-    const parsedOperatorIntent = parseSlackOperatorIntent(params.text);
-    const intent = parsedOperatorIntent && (
-      parsedOperatorIntent.type === "restart_browser_session" ||
-      parsedOperatorIntent.type === "open_remote_chrome" ||
-      parsedOperatorIntent.type === "pause_hunting" ||
-      parsedOperatorIntent.type === "start_hunting"
-    )
-      ? parsedOperatorIntent
-      : decision.intent === "pause_hunting" || decision.actions.includes("pause_hunting")
+    const intent = decision.intent === "pause_hunting" || decision.actions.includes("pause_hunting")
       ? { type: "pause_hunting" as const }
       : decision.intent === "start_hunting" || decision.actions.includes("start_hunting")
         ? { type: "start_hunting" as const }
@@ -1996,6 +2011,7 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
   const hasFiles = Boolean(params.files?.length);
   const relevant = shouldFallbackWithoutLlm({ ...params, upworkUrl }, state);
   const allowLearningAndActions = shouldAllowSlackLearningAndActions({ ...params, upworkUrl }, state);
+  const canExecuteConversationBrainAction = relevant && allowLearningAndActions;
 
   if (allowLearningAndActions && params.text.trim()) {
     learnFromSlackMessage({
@@ -2019,7 +2035,7 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
     params.conversationProvider,
   );
   if (conversationBrain.ok) {
-    if (allowLearningAndActions) {
+    if (canExecuteConversationBrainAction) {
       persistConversationBrainLearning({
         channelId: params.channelId,
         threadTs: params.threadTs,
