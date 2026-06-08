@@ -624,6 +624,47 @@ interface MemoryConsolidationRow {
   status: AgentMemoryStatus;
 }
 
+interface MemoryLinkRow {
+  id: number;
+  source_memory_id: number;
+  target_memory_id: number;
+  relationship_type: string;
+  strength: number;
+  reason: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface MemoryRelationRow {
+  id: number;
+  source_entity: string;
+  relation: string;
+  target_entity: string;
+  confidence: AgentMemoryConfidence;
+  source_memory_ids: string;
+  evidence_count: number;
+  status: AgentMemoryStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+interface MemoryThreadSummaryRow {
+  id: number;
+  owner_type: string;
+  owner_id: string;
+  channel_id: string | null;
+  thread_ts: string | null;
+  job_id: string | null;
+  summary: string;
+  recent_messages_json: string;
+  source_event_ids: string;
+  source_memory_ids: string;
+  version: number;
+  status: AgentMemoryStatus;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AgentEvent {
   id: number;
   createdAt: string;
@@ -688,6 +729,47 @@ export interface MemoryConsolidation {
   status: AgentMemoryStatus;
 }
 
+export interface MemoryLink {
+  id: number;
+  sourceMemoryId: number;
+  targetMemoryId: number;
+  relationshipType: string;
+  strength: number;
+  reason: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemoryRelation {
+  id: number;
+  sourceEntity: string;
+  relation: string;
+  targetEntity: string;
+  confidence: AgentMemoryConfidence;
+  sourceMemoryIds: number[];
+  evidenceCount: number;
+  status: AgentMemoryStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemoryThreadSummary {
+  id: number;
+  ownerType: string;
+  ownerId: string;
+  channelId: string | null;
+  threadTs: string | null;
+  jobId: string | null;
+  summary: string;
+  recentMessages: string[];
+  sourceEventIds: number[];
+  sourceMemoryIds: number[];
+  version: number;
+  status: AgentMemoryStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface RecordAgentEventInput {
   eventType: string;
   sourceType?: string;
@@ -720,6 +802,37 @@ export interface UpsertAgentMemoryInput {
   sourceEventIds?: number[];
   keywords?: string[];
   embeddingId?: number | null;
+}
+
+export interface UpsertMemoryLinkInput {
+  sourceMemoryId: number;
+  targetMemoryId: number;
+  relationshipType: string;
+  strength?: number;
+  reason?: string;
+}
+
+export interface UpsertMemoryRelationInput {
+  sourceEntity: string;
+  relation: string;
+  targetEntity: string;
+  confidence?: AgentMemoryConfidence;
+  sourceMemoryIds?: number[];
+  evidenceCount?: number;
+  status?: AgentMemoryStatus;
+}
+
+export interface UpsertMemoryThreadSummaryInput {
+  ownerType: string;
+  ownerId: string;
+  channelId?: string | null;
+  threadTs?: string | null;
+  jobId?: string | null;
+  summary: string;
+  recentMessages?: string[];
+  sourceEventIds?: number[];
+  sourceMemoryIds?: number[];
+  status?: AgentMemoryStatus;
 }
 
 export type TaskTelemetryType =
@@ -1198,6 +1311,59 @@ CREATE TABLE IF NOT EXISTS memory_consolidations (
 
 CREATE INDEX IF NOT EXISTS idx_memory_consolidations_period ON memory_consolidations(period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_memory_consolidations_type ON memory_consolidations(summary_type, status);
+
+CREATE TABLE IF NOT EXISTS memory_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_memory_id INTEGER NOT NULL,
+  target_memory_id INTEGER NOT NULL,
+  relationship_type TEXT NOT NULL,
+  strength REAL NOT NULL DEFAULT 0.5,
+  reason TEXT NOT NULL DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(source_memory_id, target_memory_id, relationship_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_links_source ON memory_links(source_memory_id, strength);
+CREATE INDEX IF NOT EXISTS idx_memory_links_target ON memory_links(target_memory_id, strength);
+
+CREATE TABLE IF NOT EXISTS memory_relations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_entity TEXT NOT NULL,
+  relation TEXT NOT NULL,
+  target_entity TEXT NOT NULL,
+  confidence TEXT NOT NULL DEFAULT 'low',
+  source_memory_ids TEXT NOT NULL DEFAULT '[]',
+  evidence_count INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'tentative',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(source_entity, relation, target_entity)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_relations_subject ON memory_relations(source_entity, relation, status);
+CREATE INDEX IF NOT EXISTS idx_memory_relations_target ON memory_relations(target_entity, status);
+
+CREATE TABLE IF NOT EXISTS memory_thread_summaries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_type TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  channel_id TEXT,
+  thread_ts TEXT,
+  job_id TEXT,
+  summary TEXT NOT NULL,
+  recent_messages_json TEXT NOT NULL DEFAULT '[]',
+  source_event_ids TEXT NOT NULL DEFAULT '[]',
+  source_memory_ids TEXT NOT NULL DEFAULT '[]',
+  version INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(owner_type, owner_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_thread_summaries_thread ON memory_thread_summaries(channel_id, thread_ts);
+CREATE INDEX IF NOT EXISTS idx_memory_thread_summaries_job ON memory_thread_summaries(job_id);
 
 CREATE TABLE IF NOT EXISTS task_telemetry (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1797,6 +1963,35 @@ const updateAgentMemoryStateStmt = db.prepare<[AgentMemoryStatus | null, number 
        updated_at = datetime('now')
    WHERE id = ?`
 );
+const updateAgentMemoryContentStmt = db.prepare<[
+  string | null,
+  string | null,
+  string | null,
+  string | null,
+  AgentMemoryConfidence | null,
+  number | null,
+  number | null,
+  AgentMemoryStatus | null,
+  number | null,
+  string | null,
+  string | null,
+  number,
+]>(
+  `UPDATE agent_memories
+   SET title = COALESCE(?, title),
+       summary = COALESCE(?, summary),
+       rule_text = COALESCE(?, rule_text),
+       hypothesis_text = COALESCE(?, hypothesis_text),
+       confidence = COALESCE(?, confidence),
+       importance = COALESCE(?, importance),
+       evidence_count = evidence_count + COALESCE(?, 0),
+       status = COALESCE(?, status),
+       version = version + COALESCE(?, 1),
+       source_event_ids = COALESCE(?, source_event_ids),
+       keywords = COALESCE(?, keywords),
+       updated_at = datetime('now')
+   WHERE id = ?`
+);
 const forgetAgentMemoriesMatchingStmt = db.prepare<[string, string, string, string, string]>(
   `UPDATE agent_memories
    SET status = 'forgotten', updated_at = datetime('now')
@@ -1807,6 +2002,23 @@ const forgetAgentMemoriesMatchingStmt = db.prepare<[string, string, string, stri
 const insertMemoryEmbeddingStmt = db.prepare(
   `INSERT INTO memory_embeddings (owner_type, owner_id, provider, model, vector_json_or_blob)
    VALUES (?, ?, ?, ?, ?)`
+);
+const getMemoryEmbeddingByIdStmt = db.prepare<[number], MemoryEmbeddingRow>(
+  `SELECT id, owner_type, owner_id, provider, model, vector_json_or_blob, created_at
+   FROM memory_embeddings
+   WHERE id = ?
+   LIMIT 1`
+);
+const listMemoryEmbeddingsByOwnerStmt = db.prepare<[string, number], MemoryEmbeddingRow>(
+  `SELECT id, owner_type, owner_id, provider, model, vector_json_or_blob, created_at
+   FROM memory_embeddings
+   WHERE owner_type = ? AND owner_id = ?
+   ORDER BY created_at DESC, id DESC`
+);
+const updateAgentMemoryEmbeddingIdStmt = db.prepare<[number, number]>(
+  `UPDATE agent_memories
+   SET embedding_id = ?, updated_at = datetime('now')
+   WHERE id = ?`
 );
 const insertMemoryConsolidationStmt = db.prepare(
   `INSERT INTO memory_consolidations (
@@ -1819,6 +2031,110 @@ const insertMemoryConsolidationStmt = db.prepare(
     confidence,
     status
   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+);
+const upsertMemoryLinkStmt = db.prepare(
+  `INSERT INTO memory_links (
+    source_memory_id,
+    target_memory_id,
+    relationship_type,
+    strength,
+    reason,
+    updated_at
+  ) VALUES (?, ?, ?, ?, ?, datetime('now'))
+  ON CONFLICT(source_memory_id, target_memory_id, relationship_type) DO UPDATE SET
+    strength = MAX(memory_links.strength, excluded.strength),
+    reason = CASE WHEN excluded.reason != '' THEN excluded.reason ELSE memory_links.reason END,
+    updated_at = datetime('now')`
+);
+const getMemoryLinkStmt = db.prepare<[number, number, string], MemoryLinkRow>(
+  `SELECT id, source_memory_id, target_memory_id, relationship_type, strength, reason, created_at, updated_at
+   FROM memory_links
+   WHERE source_memory_id = ? AND target_memory_id = ? AND relationship_type = ?
+   LIMIT 1`
+);
+const listMemoryLinksForMemoryStmt = db.prepare<[number, number, number], MemoryLinkRow>(
+  `SELECT id, source_memory_id, target_memory_id, relationship_type, strength, reason, created_at, updated_at
+   FROM memory_links
+   WHERE source_memory_id = ? OR target_memory_id = ?
+   ORDER BY strength DESC, updated_at DESC, id DESC
+   LIMIT ?`
+);
+const upsertMemoryRelationStmt = db.prepare(
+  `INSERT INTO memory_relations (
+    source_entity,
+    relation,
+    target_entity,
+    confidence,
+    source_memory_ids,
+    evidence_count,
+    status,
+    updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  ON CONFLICT(source_entity, relation, target_entity) DO UPDATE SET
+    confidence = excluded.confidence,
+    source_memory_ids = excluded.source_memory_ids,
+    evidence_count = memory_relations.evidence_count + excluded.evidence_count,
+    status = CASE
+      WHEN excluded.status = 'forgotten' THEN 'forgotten'
+      WHEN memory_relations.status = 'forgotten' THEN excluded.status
+      WHEN memory_relations.evidence_count + excluded.evidence_count >= 2 AND excluded.status = 'tentative' THEN 'active'
+      ELSE excluded.status
+    END,
+    updated_at = datetime('now')`
+);
+const getMemoryRelationStmt = db.prepare<[string, string, string], MemoryRelationRow>(
+  `SELECT id, source_entity, relation, target_entity, confidence, source_memory_ids, evidence_count, status, created_at, updated_at
+   FROM memory_relations
+   WHERE source_entity = ? AND relation = ? AND target_entity = ?
+   LIMIT 1`
+);
+const listMemoryRelationsStmt = db.prepare<[number], MemoryRelationRow>(
+  `SELECT id, source_entity, relation, target_entity, confidence, source_memory_ids, evidence_count, status, created_at, updated_at
+   FROM memory_relations
+   WHERE status IN ('tentative', 'active')
+   ORDER BY evidence_count DESC, updated_at DESC, id DESC
+   LIMIT ?`
+);
+const upsertMemoryThreadSummaryStmt = db.prepare(
+  `INSERT INTO memory_thread_summaries (
+    owner_type,
+    owner_id,
+    channel_id,
+    thread_ts,
+    job_id,
+    summary,
+    recent_messages_json,
+    source_event_ids,
+    source_memory_ids,
+    status,
+    updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  ON CONFLICT(owner_type, owner_id) DO UPDATE SET
+    channel_id = COALESCE(excluded.channel_id, memory_thread_summaries.channel_id),
+    thread_ts = COALESCE(excluded.thread_ts, memory_thread_summaries.thread_ts),
+    job_id = COALESCE(excluded.job_id, memory_thread_summaries.job_id),
+    summary = excluded.summary,
+    recent_messages_json = excluded.recent_messages_json,
+    source_event_ids = excluded.source_event_ids,
+    source_memory_ids = excluded.source_memory_ids,
+    status = excluded.status,
+    version = memory_thread_summaries.version + 1,
+    updated_at = datetime('now')`
+);
+const getMemoryThreadSummaryStmt = db.prepare<[string, string], MemoryThreadSummaryRow>(
+  `SELECT id, owner_type, owner_id, channel_id, thread_ts, job_id, summary, recent_messages_json,
+          source_event_ids, source_memory_ids, version, status, created_at, updated_at
+   FROM memory_thread_summaries
+   WHERE owner_type = ? AND owner_id = ?
+   LIMIT 1`
+);
+const listMemoryThreadSummariesStmt = db.prepare<[number], MemoryThreadSummaryRow>(
+  `SELECT id, owner_type, owner_id, channel_id, thread_ts, job_id, summary, recent_messages_json,
+          source_event_ids, source_memory_ids, version, status, created_at, updated_at
+   FROM memory_thread_summaries
+   WHERE status IN ('tentative', 'active')
+   ORDER BY updated_at DESC, id DESC
+   LIMIT ?`
 );
 const insertTaskTelemetryStmt = db.prepare(
   `INSERT INTO task_telemetry (
@@ -2326,6 +2642,53 @@ function rowToMemoryConsolidation(row: MemoryConsolidationRow): MemoryConsolidat
     sourceEventIds: parseJsonNumberArray(row.source_event_ids),
     confidence: row.confidence,
     status: row.status,
+  };
+}
+
+function rowToMemoryLink(row: MemoryLinkRow): MemoryLink {
+  return {
+    id: row.id,
+    sourceMemoryId: row.source_memory_id,
+    targetMemoryId: row.target_memory_id,
+    relationshipType: row.relationship_type,
+    strength: row.strength,
+    reason: row.reason,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToMemoryRelation(row: MemoryRelationRow): MemoryRelation {
+  return {
+    id: row.id,
+    sourceEntity: row.source_entity,
+    relation: row.relation,
+    targetEntity: row.target_entity,
+    confidence: row.confidence,
+    sourceMemoryIds: parseJsonNumberArray(row.source_memory_ids),
+    evidenceCount: row.evidence_count,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToMemoryThreadSummary(row: MemoryThreadSummaryRow): MemoryThreadSummary {
+  return {
+    id: row.id,
+    ownerType: row.owner_type,
+    ownerId: row.owner_id,
+    channelId: row.channel_id,
+    threadTs: row.thread_ts,
+    jobId: row.job_id,
+    summary: row.summary,
+    recentMessages: parseJsonStringArray(row.recent_messages_json),
+    sourceEventIds: parseJsonNumberArray(row.source_event_ids),
+    sourceMemoryIds: parseJsonNumberArray(row.source_memory_ids),
+    version: row.version,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -3694,6 +4057,37 @@ export function updateAgentMemoryState(input: {
   return getAgentMemory(input.id);
 }
 
+export function updateAgentMemoryContent(input: {
+  id: number;
+  title?: string;
+  summary?: string;
+  ruleText?: string | null;
+  hypothesisText?: string | null;
+  confidence?: AgentMemoryConfidence;
+  importance?: number;
+  evidenceCountIncrement?: number;
+  status?: AgentMemoryStatus;
+  versionIncrement?: number;
+  sourceEventIds?: number[];
+  keywords?: string[];
+}): AgentMemory | null {
+  updateAgentMemoryContentStmt.run(
+    input.title === undefined ? null : cleanAgentMemoryText(input.title, "title"),
+    input.summary === undefined ? null : cleanAgentMemoryText(input.summary, "summary"),
+    input.ruleText === undefined ? null : input.ruleText?.trim() || null,
+    input.hypothesisText === undefined ? null : input.hypothesisText?.trim() || null,
+    input.confidence ?? null,
+    input.importance === undefined ? null : clampMemoryImportance(input.importance),
+    input.evidenceCountIncrement === undefined ? null : normalizeEvidenceCount(input.evidenceCountIncrement),
+    input.status ?? null,
+    input.versionIncrement === undefined ? null : Math.max(1, Math.floor(input.versionIncrement)),
+    input.sourceEventIds === undefined ? null : JSON.stringify(Array.from(new Set(input.sourceEventIds.filter((id) => Number.isFinite(id)))).slice(0, 50)),
+    input.keywords === undefined ? null : JSON.stringify(normalizeAgentKeywords(input.keywords)),
+    input.id
+  );
+  return getAgentMemory(input.id);
+}
+
 export function forgetAgentMemory(input: { id?: number; query?: string; memoryType?: string }): number {
   if (typeof input.id === "number") {
     return forgetAgentMemoryByIdStmt.run(input.id).changes;
@@ -3721,6 +4115,20 @@ export function recordMemoryEmbedding(input: {
     vector_json_or_blob: input.vectorJsonOrBlob,
     created_at: new Date().toISOString(),
   });
+}
+
+export function getMemoryEmbedding(id: number): MemoryEmbedding | null {
+  const row = getMemoryEmbeddingByIdStmt.get(id);
+  return row ? rowToMemoryEmbedding(row) : null;
+}
+
+export function listMemoryEmbeddingsByOwner(ownerType: string, ownerId: number): MemoryEmbedding[] {
+  return listMemoryEmbeddingsByOwnerStmt.all(ownerType, ownerId).map(rowToMemoryEmbedding);
+}
+
+export function setAgentMemoryEmbedding(input: { memoryId: number; embeddingId: number }): AgentMemory | null {
+  updateAgentMemoryEmbeddingIdStmt.run(input.embeddingId, input.memoryId);
+  return getAgentMemory(input.memoryId);
 }
 
 export function recordMemoryConsolidation(input: {
@@ -3755,6 +4163,99 @@ export function recordMemoryConsolidation(input: {
     confidence: input.confidence ?? "low",
     status: input.status ?? "tentative",
   });
+}
+
+function clampLinkStrength(value: number | undefined): number {
+  if (!Number.isFinite(value)) return 0.5;
+  return Math.max(0, Math.min(1, value ?? 0.5));
+}
+
+function cleanRelationText(value: string, fallback: string): string {
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  if (!cleaned) return fallback;
+  return cleaned.slice(0, 160);
+}
+
+export function upsertMemoryLink(input: UpsertMemoryLinkInput): MemoryLink {
+  const relationshipType = cleanRelationText(input.relationshipType, "related_to").replace(/\s+/g, "_").toLowerCase();
+  const reason = cleanAgentMemoryText(input.reason ?? "Related memory evidence.", "reason");
+  upsertMemoryLinkStmt.run(
+    input.sourceMemoryId,
+    input.targetMemoryId,
+    relationshipType,
+    clampLinkStrength(input.strength),
+    reason
+  );
+  const row = getMemoryLinkStmt.get(input.sourceMemoryId, input.targetMemoryId, relationshipType);
+  if (!row) throw new Error(`Failed to persist memory link: ${input.sourceMemoryId}/${input.targetMemoryId}`);
+  return rowToMemoryLink(row);
+}
+
+export function listMemoryLinksForMemory(memoryId: number, limit = 25): MemoryLink[] {
+  return listMemoryLinksForMemoryStmt.all(memoryId, memoryId, Math.max(1, limit)).map(rowToMemoryLink);
+}
+
+export function upsertMemoryRelation(input: UpsertMemoryRelationInput): MemoryRelation {
+  const sourceEntity = cleanRelationText(input.sourceEntity, "unknown_source").toLowerCase();
+  const relation = cleanRelationText(input.relation, "related_to").replace(/\s+/g, "_").toLowerCase();
+  const targetEntity = cleanRelationText(input.targetEntity, "unknown_target").toLowerCase();
+  const sourceMemoryIds = Array.from(new Set((input.sourceMemoryIds ?? []).filter((id) => Number.isFinite(id)))).slice(0, 50);
+  const existing = getMemoryRelationStmt.get(sourceEntity, relation, targetEntity);
+  const mergedSourceMemoryIds = existing
+    ? Array.from(new Set([...parseJsonNumberArray(existing.source_memory_ids), ...sourceMemoryIds])).slice(0, 50)
+    : sourceMemoryIds;
+  upsertMemoryRelationStmt.run(
+    sourceEntity,
+    relation,
+    targetEntity,
+    input.confidence ?? "low",
+    JSON.stringify(mergedSourceMemoryIds),
+    normalizeEvidenceCount(input.evidenceCount),
+    input.status ?? "tentative"
+  );
+  const row = getMemoryRelationStmt.get(sourceEntity, relation, targetEntity);
+  if (!row) throw new Error(`Failed to persist memory relation: ${sourceEntity}/${relation}/${targetEntity}`);
+  return rowToMemoryRelation(row);
+}
+
+export function listMemoryRelations(limit = 50): MemoryRelation[] {
+  return listMemoryRelationsStmt.all(Math.max(1, limit)).map(rowToMemoryRelation);
+}
+
+export function upsertMemoryThreadSummary(input: UpsertMemoryThreadSummaryInput): MemoryThreadSummary {
+  const ownerType = cleanRelationText(input.ownerType, "thread").replace(/\s+/g, "_").toLowerCase();
+  const ownerId = cleanRelationText(input.ownerId, "unknown");
+  const summary = cleanAgentMemoryText(input.summary, "summary");
+  const recentMessages = (input.recentMessages ?? []).map((message) => cleanAgentMemoryText(message, "message")).filter(Boolean).slice(-30);
+  const sourceEventIds = Array.from(new Set((input.sourceEventIds ?? []).filter((id) => Number.isFinite(id)))).slice(0, 50);
+  const sourceMemoryIds = Array.from(new Set((input.sourceMemoryIds ?? []).filter((id) => Number.isFinite(id)))).slice(0, 50);
+  upsertMemoryThreadSummaryStmt.run(
+    ownerType,
+    ownerId,
+    input.channelId ?? null,
+    input.threadTs ?? null,
+    input.jobId ?? null,
+    summary,
+    JSON.stringify(recentMessages),
+    JSON.stringify(sourceEventIds),
+    JSON.stringify(sourceMemoryIds),
+    input.status ?? "active"
+  );
+  const row = getMemoryThreadSummaryStmt.get(ownerType, ownerId);
+  if (!row) throw new Error(`Failed to persist memory thread summary: ${ownerType}/${ownerId}`);
+  return rowToMemoryThreadSummary(row);
+}
+
+export function getMemoryThreadSummary(ownerType: string, ownerId: string): MemoryThreadSummary | null {
+  const row = getMemoryThreadSummaryStmt.get(
+    cleanRelationText(ownerType, "thread").replace(/\s+/g, "_").toLowerCase(),
+    cleanRelationText(ownerId, "unknown")
+  );
+  return row ? rowToMemoryThreadSummary(row) : null;
+}
+
+export function listMemoryThreadSummaries(limit = 25): MemoryThreadSummary[] {
+  return listMemoryThreadSummariesStmt.all(Math.max(1, limit)).map(rowToMemoryThreadSummary);
 }
 
 function boolToInt(value: boolean | undefined): number {
