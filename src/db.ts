@@ -2092,7 +2092,11 @@ const upsertMemoryRelationStmt = db.prepare(
     updated_at
   ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
   ON CONFLICT(source_entity, relation, target_entity) DO UPDATE SET
-    confidence = excluded.confidence,
+    confidence = CASE
+      WHEN memory_relations.confidence = 'high' OR excluded.confidence = 'high' THEN 'high'
+      WHEN memory_relations.confidence = 'medium' OR excluded.confidence = 'medium' THEN 'medium'
+      ELSE 'low'
+    END,
     source_memory_ids = excluded.source_memory_ids,
     evidence_count = memory_relations.evidence_count + excluded.evidence_count,
     status = CASE
