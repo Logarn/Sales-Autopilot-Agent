@@ -1896,12 +1896,18 @@ const upsertAgentMemoryStmt = db.prepare(
   ON CONFLICT(memory_type, scope, title, summary) DO UPDATE SET
     rule_text = COALESCE(excluded.rule_text, agent_memories.rule_text),
     hypothesis_text = COALESCE(excluded.hypothesis_text, agent_memories.hypothesis_text),
-    confidence = excluded.confidence,
+    confidence = CASE
+      WHEN agent_memories.confidence = 'high' OR excluded.confidence = 'high' THEN 'high'
+      WHEN agent_memories.confidence = 'medium' OR excluded.confidence = 'medium' THEN 'medium'
+      ELSE 'low'
+    END,
     importance = MAX(agent_memories.importance, excluded.importance),
     evidence_count = agent_memories.evidence_count + excluded.evidence_count,
     status = CASE
       WHEN excluded.status = 'forgotten' THEN 'forgotten'
-      WHEN agent_memories.status = 'forgotten' THEN excluded.status
+      WHEN agent_memories.status = 'forgotten' THEN 'forgotten'
+      WHEN agent_memories.status = 'archived' THEN 'archived'
+      WHEN agent_memories.status = 'active' AND excluded.status = 'tentative' THEN 'active'
       WHEN agent_memories.evidence_count + excluded.evidence_count >= 2 AND excluded.status = 'tentative' THEN 'active'
       ELSE excluded.status
     END,
@@ -1969,8 +1975,12 @@ const updateAgentMemoryContentStmt = db.prepare<[
   string | null,
   string | null,
   AgentMemoryConfidence | null,
+  AgentMemoryConfidence | null,
+  AgentMemoryConfidence | null,
   number | null,
   number | null,
+  AgentMemoryStatus | null,
+  AgentMemoryStatus | null,
   AgentMemoryStatus | null,
   number | null,
   string | null,
@@ -1982,10 +1992,21 @@ const updateAgentMemoryContentStmt = db.prepare<[
        summary = COALESCE(?, summary),
        rule_text = COALESCE(?, rule_text),
        hypothesis_text = COALESCE(?, hypothesis_text),
-       confidence = COALESCE(?, confidence),
+       confidence = CASE
+         WHEN ? IS NULL THEN confidence
+         WHEN confidence = 'high' OR ? = 'high' THEN 'high'
+         WHEN confidence = 'medium' OR ? = 'medium' THEN 'medium'
+         ELSE 'low'
+       END,
        importance = COALESCE(?, importance),
        evidence_count = evidence_count + COALESCE(?, 0),
-       status = COALESCE(?, status),
+       status = CASE
+         WHEN status = 'forgotten' THEN 'forgotten'
+         WHEN status = 'archived' THEN 'archived'
+         WHEN ? IS NULL THEN status
+         WHEN status = 'active' AND ? = 'tentative' THEN 'active'
+         ELSE ?
+       END,
        version = version + COALESCE(?, 1),
        source_event_ids = COALESCE(?, source_event_ids),
        keywords = COALESCE(?, keywords),
@@ -4077,8 +4098,12 @@ export function updateAgentMemoryContent(input: {
     input.ruleText === undefined ? null : input.ruleText?.trim() || null,
     input.hypothesisText === undefined ? null : input.hypothesisText?.trim() || null,
     input.confidence ?? null,
+    input.confidence ?? null,
+    input.confidence ?? null,
     input.importance === undefined ? null : clampMemoryImportance(input.importance),
     input.evidenceCountIncrement === undefined ? null : normalizeEvidenceCount(input.evidenceCountIncrement),
+    input.status ?? null,
+    input.status ?? null,
     input.status ?? null,
     input.versionIncrement === undefined ? null : Math.max(1, Math.floor(input.versionIncrement)),
     input.sourceEventIds === undefined ? null : JSON.stringify(Array.from(new Set(input.sourceEventIds.filter((id) => Number.isFinite(id)))).slice(0, 50)),

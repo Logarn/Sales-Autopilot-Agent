@@ -206,6 +206,16 @@ function confidenceScore(value: AgentMemoryConfidence): number {
   return 0.33;
 }
 
+function confidenceRank(value: AgentMemoryConfidence): number {
+  if (value === "high") return 3;
+  if (value === "medium") return 2;
+  return 1;
+}
+
+function strongerConfidence(left: AgentMemoryConfidence, right: AgentMemoryConfidence): AgentMemoryConfidence {
+  return confidenceRank(left) >= confidenceRank(right) ? left : right;
+}
+
 function tokenize(value: string): string[] {
   return clean(value)
     .toLowerCase()
@@ -504,6 +514,10 @@ function hasContradictionLanguage(value: string): boolean {
   return /\b(no longer|not true|wrong|contradicts|avoid|replace|instead|stop using|do not use|don't use)\b/i.test(value);
 }
 
+function hasArchiveReplacementLanguage(value: string): boolean {
+  return /\b(no longer|not true|wrong|contradicts|replace|stop using|do not use|don't use)\b/i.test(value);
+}
+
 function keywordOverlap(left: string[], right: string[]): number {
   const rightSet = new Set(right);
   if (!left.length || !rightSet.size) return 0;
@@ -524,6 +538,19 @@ export async function decideMemoryUpdate(
   similarMemories: AgentMemory[],
   provider?: AgenticMemoryLlmProvider
 ): Promise<AgenticMemoryUpdateDecision> {
+  const compatibleMemories = similarMemories.filter((memory) => (
+    memory.memoryType === candidate.memoryType &&
+    (
+      memory.scope === candidate.scope ||
+      memory.scope === "global" ||
+      candidate.scope === "global" ||
+      memory.scope.includes(candidate.scope) ||
+      candidate.scope.includes(memory.scope)
+    ) &&
+    memory.status !== "archived" &&
+    memory.status !== "forgotten"
+  ));
+  const candidateMemoryIds = new Set(compatibleMemories.map((memory) => memory.id));
   if (provider?.isAvailable()) {
     const result = await provider.completeJson<RawUpdateDecision>({
       temperature: 0.1,
@@ -538,7 +565,7 @@ export async function decideMemoryUpdate(
           role: "user",
           content: JSON.stringify({
             candidate,
-            similarMemories: similarMemories.map((memory) => ({
+            similarMemories: compatibleMemories.map((memory) => ({
               id: memory.id,
               type: memory.memoryType,
               scope: memory.scope,
@@ -554,7 +581,20 @@ export async function decideMemoryUpdate(
     if (result.ok && result.data) {
       const rawOperation = typeof result.data.operation === "string" ? result.data.operation.toUpperCase() : "";
       const operation: AgenticMemoryUpdateOperation = rawOperation === "UPDATE" || rawOperation === "DELETE" || rawOperation === "NOOP" ? rawOperation : "ADD";
-      const targetMemoryId = typeof result.data.targetMemoryId === "number" ? result.data.targetMemoryId : undefined;
+      const rawTargetMemoryId = typeof result.data.targetMemoryId === "number" ? result.data.targetMemoryId : undefined;
+      const targetMemoryId = rawTargetMemoryId !== undefined && candidateMemoryIds.has(rawTargetMemoryId) ? rawTargetMemoryId : undefined;
+      if ((operation === "UPDATE" || operation === "DELETE" || operation === "NOOP") && rawTargetMemoryId !== undefined && targetMemoryId === undefined) {
+        return {
+          operation: "ADD",
+          reason: "LLM targetMemoryId was outside retrieved candidates; preserving isolation by adding a new memory.",
+        };
+      }
+      if ((operation === "UPDATE" || operation === "DELETE") && targetMemoryId === undefined) {
+        return {
+          operation: "ADD",
+          reason: "LLM selected a target-dependent operation without a retrieved target; adding a new memory instead.",
+        };
+      }
       return {
         operation,
         reason: typeof result.data.reason === "string" ? result.data.reason : "LLM selected memory update operation.",
@@ -575,13 +615,14 @@ export async function decideMemoryUpdate(
   }
 
   const best = similarMemories
+    .filter((memory) => candidateMemoryIds.has(memory.id))
     .map((memory) => ({
       memory,
       overlap: keywordOverlap(candidate.keywords, memory.keywords),
     }))
     .sort((left, right) => right.overlap - left.overlap)[0];
 
-  if (best && best.overlap >= 0.45 && hasContradictionLanguage(candidateText)) {
+  if (best && best.overlap >= 0.45 && hasArchiveReplacementLanguage(candidateText)) {
     return {
       operation: "DELETE",
       targetMemoryId: best.memory.id,
@@ -635,12 +676,18 @@ export async function applyMemoryUpdateDecision(
     return { operation: "DELETE", memory: embedded.memory, targetMemory: updatedTarget, reason: decision.reason, embeddingId: embedded.embeddingId };
   }
 
+  if (decision.operation === "UPDATE" && targetMemory && (targetMemory.status === "archived" || targetMemory.status === "forgotten")) {
+    const memory = upsertAgentMemory(memoryNoteToUpsertInput(candidate));
+    const embedded = await persistMemoryEmbedding(memory, embeddingProvider);
+    return { operation: "ADD", memory: embedded.memory, targetMemory, reason: "Target memory is inactive; added a new memory instead of reviving it.", embeddingId: embedded.embeddingId };
+  }
+
   if (decision.operation === "UPDATE" && targetMemory) {
     const updated = updateAgentMemoryContent({
       id: targetMemory.id,
       summary: decision.updatedSummary ?? compact(`${targetMemory.summary} ${candidate.context}`, 900),
       hypothesisText: decision.updatedSummary ?? compact(`${targetMemory.hypothesisText ?? targetMemory.summary} ${candidate.context}`, 900),
-      confidence: candidate.confidence === "high" || targetMemory.confidence === "high" ? "high" : candidate.confidence,
+      confidence: strongerConfidence(targetMemory.confidence, candidate.confidence),
       importance: Math.max(targetMemory.importance, candidate.importance),
       evidenceCountIncrement: candidate.evidenceCount,
       status: targetMemory.status === "active" || candidate.evidenceCount > 1 ? "active" : "tentative",
@@ -666,7 +713,39 @@ export async function createOrUpdateAgenticMemory(input: {
   embeddingProvider?: AgenticMemoryEmbeddingProvider;
   similarLimit?: number;
 }): Promise<PersistedAgenticMemoryResult> {
+  const rawSafetyText = [
+    input.note.rawContent,
+    input.note.eventSummary,
+    input.note.context,
+    ...(input.note.keywords ?? []),
+    ...(input.note.tags ?? []),
+  ].map(clean).filter(Boolean).join(" ");
+  if (!isHardSafetyMemoryAllowed(rawSafetyText)) {
+    return {
+      operation: "NOOP",
+      memory: null,
+      targetMemory: null,
+      reason: "Rejected unsafe memory before persistence.",
+      embeddingId: null,
+    };
+  }
   const note = await constructMemoryNote(input.note, input.llmProvider);
+  const constructedSafetyText = [
+    note.rawContent,
+    note.eventSummary,
+    note.context,
+    ...note.keywords,
+    ...note.tags,
+  ].map(clean).filter(Boolean).join(" ");
+  if (!isHardSafetyMemoryAllowed(constructedSafetyText)) {
+    return {
+      operation: "NOOP",
+      memory: null,
+      targetMemory: null,
+      reason: "Rejected unsafe memory before persistence.",
+      embeddingId: null,
+    };
+  }
   const similar = (await retrieveAgenticMemories({
     query: `${note.eventSummary} ${note.context} ${note.keywords.join(" ")}`,
     memoryTypes: [note.memoryType],
@@ -724,8 +803,10 @@ export async function generateMemoryLinks(
       ],
     });
     if (result.ok && Array.isArray(result.data?.links)) {
+      const allowedTargets = new Set(relatedMemories.map((item) => item.id));
       for (const link of result.data.links) {
         if (typeof link.targetMemoryId !== "number") continue;
+        if (!allowedTargets.has(link.targetMemoryId)) continue;
         suggestions.push({
           targetMemoryId: link.targetMemoryId,
           relationshipType: normalizeRelationshipType(link.relationshipType),
@@ -761,15 +842,17 @@ export async function generateMemoryLinks(
 export function evolveLinkedMemories(newMemory: AgentMemory, relatedMemories: AgentMemory[]): AgentMemory[] {
   const evolved: AgentMemory[] = [];
   for (const related of relatedMemories.slice(0, 5)) {
+    const current = getAgentMemory(related.id);
+    if (!current || current.status === "archived" || current.status === "forgotten") continue;
     const overlap = keywordOverlap(newMemory.keywords, related.keywords);
     if (overlap < 0.35) continue;
     const updated = updateAgentMemoryContent({
-      id: related.id,
-      confidence: related.confidence === "high" || newMemory.confidence === "high" ? "high" : related.confidence === "medium" ? "medium" : newMemory.confidence,
-      importance: Math.max(related.importance, newMemory.importance),
+      id: current.id,
+      confidence: strongerConfidence(current.confidence, newMemory.confidence),
+      importance: Math.max(current.importance, newMemory.importance),
       evidenceCountIncrement: 1,
-      status: related.status === "active" || related.evidenceCount >= 1 ? "active" : "tentative",
-      keywords: unique([...related.keywords, ...newMemory.keywords]),
+      status: current.status === "active" || current.evidenceCount >= 1 ? "active" : "tentative",
+      keywords: unique([...current.keywords, ...newMemory.keywords]),
     });
     if (updated) evolved.push(updated);
   }
