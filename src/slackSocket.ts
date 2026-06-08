@@ -1457,14 +1457,16 @@ async function executeConversationPlan(params: {
   if (params.plan.actions.includes("send_draft_preview")) {
     const result = buildDraftPreviewFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs });
     if (!result.ok) updateSlackThreadStateStatus(params.state.channelId, params.state.threadTs, "error");
-    const text = await userFacingSlackCopy({
-      deterministicText: result.text,
-      userMessage: params.userMessage,
-      intent: "draft_preview",
-      context: { jobId: params.state.jobId, ok: result.ok },
-      preservePhrases: result.text.includes("Final submit remains manual") ? ["Final submit remains manual"] : [],
-      copyProvider: params.copyProvider,
-    });
+    const text = result.ok
+      ? result.text
+      : await userFacingSlackCopy({
+        deterministicText: result.text,
+        userMessage: params.userMessage,
+        intent: "draft_preview",
+        context: { jobId: params.state.jobId, ok: result.ok },
+        preservePhrases: result.text.includes("Final submit remains manual") ? ["Final submit remains manual"] : [],
+        copyProvider: params.copyProvider,
+      });
     await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
@@ -1514,14 +1516,7 @@ async function executeConversationPlan(params: {
     return;
   }
   if (params.plan.intent === "show_cover_letter") {
-    const text = await userFacingSlackCopy({
-      deterministicText: params.plan.reply,
-      userMessage: params.userMessage,
-      intent: params.plan.intent,
-      context: { jobId: params.state.jobId, threadStatus: params.state.status },
-      copyProvider: params.copyProvider,
-    });
-    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    await postThreadReply(params.client, params.channelId, params.threadTs, params.plan.reply);
     return;
   }
   const text = await userFacingSlackCopy({
@@ -1655,6 +1650,9 @@ async function executeConversationBrainDecision(params: {
 }): Promise<boolean> {
   const { decision } = params;
   if (decision.intent === "ignore") {
+    if (parseSlackOperatorIntent(params.text)) {
+      return false;
+    }
     if (params.files?.length && params.state) {
       await handleSlackFilesMessage({
         state: params.state,
@@ -1736,7 +1734,15 @@ async function executeConversationBrainDecision(params: {
     decision.actions.includes("pause_hunting") ||
     decision.actions.includes("start_hunting")
   ) {
-    const intent = decision.intent === "pause_hunting" || decision.actions.includes("pause_hunting")
+    const parsedOperatorIntent = parseSlackOperatorIntent(params.text);
+    const intent = parsedOperatorIntent && (
+      parsedOperatorIntent.type === "restart_browser_session" ||
+      parsedOperatorIntent.type === "open_remote_chrome" ||
+      parsedOperatorIntent.type === "pause_hunting" ||
+      parsedOperatorIntent.type === "start_hunting"
+    )
+      ? parsedOperatorIntent
+      : decision.intent === "pause_hunting" || decision.actions.includes("pause_hunting")
       ? { type: "pause_hunting" as const }
       : decision.intent === "start_hunting" || decision.actions.includes("start_hunting")
         ? { type: "start_hunting" as const }
@@ -1959,7 +1965,16 @@ export interface SlackReasoningGatewayParams {
 
 function shouldFallbackWithoutLlm(params: SlackReasoningGatewayParams, state: ReturnType<typeof getSlackThreadStateByThreadTs>): boolean {
   if (state || params.botMentioned || params.files?.length || params.upworkUrl || parseSlackOperatorIntent(params.text)) return true;
-  return /\b(?:upwork|application|proposal|drafts?|prep|listing|cv|cover letter|qa|queue|chrome|browser|blocked|blocker|proof|connects|boost|hunting|running|health|retry|submitted|interview|hired|lost)\b/i.test(params.text);
+  return hasExplicitAgentSlackContext(params.text);
+}
+
+function hasExplicitAgentSlackContext(text: string): boolean {
+  const withoutUrls = text.replace(/https?:\/\/\S+/gi, " ");
+  return /\b(?:application|proposal|drafts?|prep|listing|cover letter|qa|queue|chrome|browser|blocked|blocker|proof|portfolio|connects|boost|hunting|running|health|retry|submitted|interview|hired|lost|upwork\s+(?:agent|bot|application|listing|proposal)|upload\s+files?|attach\s+files?)\b/i.test(withoutUrls);
+}
+
+function shouldAllowSlackLearningAndActions(params: SlackReasoningGatewayParams, state: ReturnType<typeof getSlackThreadStateByThreadTs>): boolean {
+  return Boolean(state || params.botMentioned || parseSlackOperatorIntent(params.text) || hasExplicitAgentSlackContext(params.text));
 }
 
 async function postGatewayProgressReply(params: SlackReasoningGatewayParams, decision: SlackConversationBrainDecision): Promise<void> {
@@ -1980,8 +1995,9 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
   const upworkUrl = params.upworkUrl ?? parseUpworkJobUrlFromText(params.text);
   const hasFiles = Boolean(params.files?.length);
   const relevant = shouldFallbackWithoutLlm({ ...params, upworkUrl }, state);
+  const allowLearningAndActions = shouldAllowSlackLearningAndActions({ ...params, upworkUrl }, state);
 
-  if (params.text.trim()) {
+  if (allowLearningAndActions && params.text.trim()) {
     learnFromSlackMessage({
       channelId: params.channelId,
       threadTs: params.threadTs,
@@ -2003,29 +2019,31 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
     params.conversationProvider,
   );
   if (conversationBrain.ok) {
-    persistConversationBrainLearning({
-      channelId: params.channelId,
-      threadTs: params.threadTs,
-      text: params.text,
-      state,
-      decision: conversationBrain.decision,
-    });
-    await postGatewayProgressReply(params, conversationBrain.decision);
-    const handled = await executeConversationBrainDecision({
-      decision: conversationBrain.decision,
-      state,
-      channelId: params.channelId,
-      threadTs: params.threadTs,
-      text: params.text,
-      client: params.client,
-      copyProvider: params.copyProvider,
-      focusQaTab: params.focusQaTab,
-      operatorDeps: params.operatorDeps,
-      files: params.files,
-      upworkUrl,
-      messageTs: params.messageTs,
-    });
-    if (handled) return;
+    if (allowLearningAndActions) {
+      persistConversationBrainLearning({
+        channelId: params.channelId,
+        threadTs: params.threadTs,
+        text: params.text,
+        state,
+        decision: conversationBrain.decision,
+      });
+      await postGatewayProgressReply(params, conversationBrain.decision);
+      const handled = await executeConversationBrainDecision({
+        decision: conversationBrain.decision,
+        state,
+        channelId: params.channelId,
+        threadTs: params.threadTs,
+        text: params.text,
+        client: params.client,
+        copyProvider: params.copyProvider,
+        focusQaTab: params.focusQaTab,
+        operatorDeps: params.operatorDeps,
+        files: params.files,
+        upworkUrl,
+        messageTs: params.messageTs,
+      });
+      if (handled) return;
+    }
   }
 
   if (hasFiles && state) {
@@ -2475,14 +2493,16 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams):
     if (!result.ok) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
     }
-    const text = await userFacingSlackCopy({
-      deterministicText: result.text,
-      userMessage: params.text,
-      intent: "draft_preview",
-      context: { jobId: state.jobId, ok: result.ok },
-      preservePhrases: result.text.includes("Final submit remains manual") ? ["Final submit remains manual"] : [],
-      copyProvider: params.copyProvider,
-    });
+    const text = result.ok
+      ? result.text
+      : await userFacingSlackCopy({
+        deterministicText: result.text,
+        userMessage: params.text,
+        intent: "draft_preview",
+        context: { jobId: state.jobId, ok: result.ok },
+        preservePhrases: result.text.includes("Final submit remains manual") ? ["Final submit remains manual"] : [],
+        copyProvider: params.copyProvider,
+      });
     await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
