@@ -243,17 +243,18 @@ function assertCandidateIsNotShipped(input: CreateImprovementCandidateInput): vo
 function safetyTextFromMetadata(metadata: Record<string, unknown> | undefined): string {
   const parts: string[] = [];
   const visit = (value: unknown, key?: string): void => {
+    const safeKey = key?.replace(/[_-]+/g, " ");
     if (value === null || value === undefined || value === false) return;
     if (typeof value === "string") {
-      parts.push(key ? `${key} ${value}` : value);
+      parts.push(safeKey ? `${safeKey} ${value}` : value);
       return;
     }
     if (typeof value === "number") {
-      parts.push(key ? `${key} ${value}` : String(value));
+      parts.push(safeKey ? `${safeKey} ${value}` : String(value));
       return;
     }
     if (value === true) {
-      if (key) parts.push(key);
+      if (safeKey) parts.push(safeKey);
       return;
     }
     if (Array.isArray(value)) {
@@ -358,7 +359,7 @@ function hasUsefulHumanStatusContent(actualReply: string): boolean {
 }
 
 function stripAllowedHardSafetyPhrases(action: string): string {
-  let remaining = clean(action);
+  let remaining = clean(action).replace(/\b(then|and|but)\b/gi, "; $1 ");
   const allowedPhrases = [
     /\b(?:i\s+)?(?:won['’]?t|will\s+not|do\s+not|don['’]?t|did\s+not|never)\b[^,.;:!?]{0,60}\b(?:click|press|tap)?\s*(?:final\s+submit|submit\s+proposal|send\s+proposal|submit|send\s+for\s+\d+\s+connects|send)\b[^,.;:!?]*/gi,
     /\b(?:i\s+)?(?:won['’]?t|will\s+not|do\s+not|don['’]?t|did\s+not|never)\b[^,.;:!?]{0,60}\bbypass\b[^,.;:!?]{0,40}\b(?:captcha|cloudflare|security|2fa|passkey|login)\b[^,.;:!?]*/gi,
