@@ -56,7 +56,7 @@ import {
   ScoredJob,
 } from "./types";
 import { extractConnectsFromVisibleText } from "./connectsExtraction";
-import { chooseVisibleBoost, extractVisibleBoostBids } from "./connectsStrategy";
+import { chooseVisibleBoost, extractVisibleBoostBids, type VisibleBoostBid } from "./connectsStrategy";
 import { guardedClick } from "./browserSafetyGuard";
 import { getSlackLeadPostingDecision, SlackPacketV3Context, writeV3CapturePacketWithLlm } from "./slackPacketV3";
 import { evaluatePlatformEligibility } from "./platformEligibility";
@@ -85,7 +85,13 @@ import { isUpworkFindWorkFeedUrl, isUpworkWorkTabUrl } from "./browserSessionIns
 import { listProtectedQaApplyUrls } from "./browserQaHold";
 import { canQueueNewQaPreparation } from "./browserQaWorkspace";
 import { proofAssetExists, resolveProofAssetPath } from "./proofAssets";
-import { recordProposalStyleSignal } from "./salesLearningMemory";
+import {
+  recordApplicationOutcomeLearning,
+  recordApplyPreparationFailureLearning,
+  recordBrowserApplyPlanLearning,
+  recordProposalStyleSignal,
+  recordProposalVersionDiffLearning,
+} from "./salesLearningMemory";
 
 type DetectedBrowserState =
   | "dry_run"
@@ -338,7 +344,7 @@ function humanSlackPrepDetail(value: string): string {
   return value
     .replace(/\bmanual review\b/gi, "a quick look")
     .replace(/\bmanual field(s)?\b/gi, "couldn’t safely fill")
-    .replace(/\bfield_preparation_incomplete\b/gi, "something on the apply page needs a human")
+    .replace(/\bfield_preparation_incomplete\b/gi, "an apply-page field still needs verification")
     .replace(/\brequired_attachment_missing_locally\b/gi, "a selected file is missing locally")
     .replace(/\bconnects_apply_page_manual_review_required\b/gi, "Connects need a quick look")
     .replace(/\brequired_connects_unverified_on_apply_page\b/gi, "I couldn’t verify the Connects on the apply page")
@@ -1687,12 +1693,13 @@ function verifyApplyPageConnects(plan: BrowserApplyFillPlan, bodyText: string): 
 
   removeConnectsVerificationIssues(issues);
   const requestedBoost = plan.connects.boost ?? 0;
+  const visibleBoostBids = extractVisibleBoostBids(bodyText);
   const visibleBoostDecision = chooseVisibleBoost({
     requiredConnects: extracted.requiredConnects,
     expectedValueScore: plan.connectsStrategy.expectedValueScore,
     clientQualityScore: plan.connectsStrategy.decision === "safe_apply" ? 60 : 0,
     opportunityScore: plan.connectsStrategy.decision === "safe_apply" ? 60 : 0,
-    currentBids: extractVisibleBoostBids(bodyText),
+    currentBids: visibleBoostBids,
   });
   const plannedBoost = Math.min(Math.max(0, visibleBoostDecision.boostConnects), 50);
   if (requestedBoost > 50) {
@@ -1718,6 +1725,8 @@ function verifyApplyPageConnects(plan: BrowserApplyFillPlan, bodyText: string): 
   plan.connectsStrategy.requiredConnects = required;
   plan.connectsStrategy.suggestedBoostConnects = plannedBoost;
   plan.connectsStrategy.totalConnects = total;
+  (plan.connectsStrategy as typeof plan.connectsStrategy & { visibleBoostBids?: VisibleBoostBid[]; chosenBoostRank?: number | null }).visibleBoostBids = visibleBoostBids;
+  (plan.connectsStrategy as typeof plan.connectsStrategy & { visibleBoostBids?: VisibleBoostBid[]; chosenBoostRank?: number | null }).chosenBoostRank = visibleBoostDecision.targetRank;
   plan.connectsStrategy.sourceBackedConnects = {
     ...extracted,
     boostConnects: extracted.boostConnects,
@@ -1924,8 +1933,21 @@ export function persistApplicationSnapshot(input: {
       source: "remote_chrome_human_edit",
     });
   }
+  if (["human_edit_reread", "remote_chrome_qa", "final_submitted"].includes(input.source)) {
+    recordProposalVersionDiffLearning({
+      jobId: input.jobId,
+      source: `remote_chrome_${input.source}`,
+      editor: input.source === "final_submitted" ? "Steve" : "operator",
+    });
+  }
   if (input.markSubmittedAfterCapture) {
     updateApplicationStatus(input.jobId, "submitted", "Steve said submitted; captured current remote Chrome text as final submitted version when possible.");
+    recordApplicationOutcomeLearning({
+      jobId: input.jobId,
+      outcome: "submitted",
+      note: "Steve said submitted; captured current remote Chrome text as final submitted version when possible.",
+      source: "remote_chrome_final_submitted_capture",
+    });
   }
   return { ok: true, label: version.label };
 }
@@ -2814,6 +2836,9 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
     if (action.actionType === "prepare_application_review") {
       const diagnostics = buildApplyDiagnostics(action, plan, applyPlanResult?.issues ?? [], state, fields);
       saveApplyDiagnostics(options, action, diagnostics);
+      if (plan) {
+        recordBrowserApplyPlanLearning(plan, state === "apply_page_loaded" ? "browser_apply_prepared" : "browser_apply_attempt");
+      }
       const coverLetterVerification = getVerification(fields.fieldVerification ?? [], "coverLetter");
       if (plan && applicationSnapshot && (state === "apply_page_loaded" || state === "connects_not_verified" || state === "field_preparation_incomplete") && coverLetterVerification?.status === "verified") {
         const persisted = persistApplicationSnapshot({
@@ -2829,8 +2854,28 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       }
       if (state === "field_preparation_incomplete") {
         logger.warn(`Required fields not filled confidently for browser action #${action.id}: ${getRequiredSkippedFields(fields).join(", ")}`);
+        recordApplyPreparationFailureLearning({
+          jobId: action.jobId,
+          state,
+          reason: diagnostics.warnings.join("; ") || "Apply preparation paused because one or more fields could not be verified.",
+          requiredConnects: diagnostics.requiredConnects,
+          unverifiedFields: diagnostics.unverifiedFields,
+          channelId: thread?.channelId ?? null,
+          threadTs: thread?.threadTs ?? null,
+          source: "browser_apply_prep",
+        });
       } else if (state === "connects_not_verified") {
         logger.warn(`Connects not verified for browser action #${action.id}; boost skipped and final submit remains manual.`);
+        recordApplyPreparationFailureLearning({
+          jobId: action.jobId,
+          state,
+          reason: "Required Connects were not visible on the apply page. This should be described as Connects not verified, not as a generic browser issue.",
+          requiredConnects: diagnostics.requiredConnects,
+          unverifiedFields: diagnostics.unverifiedFields,
+          channelId: thread?.channelId ?? null,
+          threadTs: thread?.threadTs ?? null,
+          source: "browser_apply_prep",
+        });
       }
       updateBrowserActionStatus(action.id, terminalStatusForState(state), stateStatusMessage(state));
       if (["login_required", "two_factor_required", "captcha_or_security_challenge"].includes(state)) {

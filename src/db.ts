@@ -1755,6 +1755,14 @@ const getAgentMemoryByKeyStmt = db.prepare<[string, string, string, string], Age
    WHERE memory_type = ? AND scope = ? AND title = ? AND summary = ?
    LIMIT 1`
 );
+const getAgentMemoryByIdStmt = db.prepare<[number], AgentMemoryRow>(
+  `SELECT id, memory_type, scope, title, summary, rule_text, hypothesis_text, confidence, importance, evidence_count,
+          created_at, updated_at, last_used_at, decay_score, status, version, supersedes_memory_id,
+          contradicted_by_memory_id, source_event_ids, keywords, embedding_id
+   FROM agent_memories
+   WHERE id = ?
+   LIMIT 1`
+);
 const listAgentMemoriesStmt = db.prepare<[number], AgentMemoryRow>(
   `SELECT id, memory_type, scope, title, summary, rule_text, hypothesis_text, confidence, importance, evidence_count,
           created_at, updated_at, last_used_at, decay_score, status, version, supersedes_memory_id,
@@ -1778,6 +1786,16 @@ const touchAgentMemoryStmt = db.prepare<[number]>(
 );
 const forgetAgentMemoryByIdStmt = db.prepare<[number]>(
   `UPDATE agent_memories SET status = 'forgotten', updated_at = datetime('now') WHERE id = ?`
+);
+const updateAgentMemoryStateStmt = db.prepare<[AgentMemoryStatus | null, number | null, number | null, number | null, number | null, number]>(
+  `UPDATE agent_memories
+   SET status = COALESCE(?, status),
+       importance = COALESCE(?, importance),
+       decay_score = COALESCE(?, decay_score),
+       supersedes_memory_id = COALESCE(?, supersedes_memory_id),
+       contradicted_by_memory_id = COALESCE(?, contradicted_by_memory_id),
+       updated_at = datetime('now')
+   WHERE id = ?`
 );
 const forgetAgentMemoriesMatchingStmt = db.prepare<[string, string, string, string, string]>(
   `UPDATE agent_memories
@@ -3648,8 +3666,32 @@ export function listAgentMemoriesByType(memoryType: string, limit = 50): AgentMe
   return listAgentMemoriesByTypeStmt.all(memoryType, Math.max(1, limit)).map(rowToAgentMemory);
 }
 
+export function getAgentMemory(id: number): AgentMemory | null {
+  const row = getAgentMemoryByIdStmt.get(id);
+  return row ? rowToAgentMemory(row) : null;
+}
+
 export function touchAgentMemory(id: number): boolean {
   return touchAgentMemoryStmt.run(id).changes > 0;
+}
+
+export function updateAgentMemoryState(input: {
+  id: number;
+  status?: AgentMemoryStatus;
+  importance?: number;
+  decayScore?: number;
+  supersedesMemoryId?: number | null;
+  contradictedByMemoryId?: number | null;
+}): AgentMemory | null {
+  updateAgentMemoryStateStmt.run(
+    input.status ?? null,
+    input.importance === undefined ? null : clampMemoryImportance(input.importance),
+    input.decayScore === undefined ? null : Math.max(0, input.decayScore),
+    input.supersedesMemoryId ?? null,
+    input.contradictedByMemoryId ?? null,
+    input.id
+  );
+  return getAgentMemory(input.id);
 }
 
 export function forgetAgentMemory(input: { id?: number; query?: string; memoryType?: string }): number {

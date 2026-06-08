@@ -51,6 +51,7 @@ async function runTests(): Promise<void> {
   };
   const {
     buildSalesLearningPromptContext,
+    recordApplyPreparationFailureLearning,
     recordApplicationOutcomeLearning,
     recordBoostDecisionSignal,
     recordCodeImprovementTask,
@@ -61,6 +62,7 @@ async function runTests(): Promise<void> {
     retrieveRelevantSalesLearningMemories,
   } = require("./salesLearningMemory") as {
     buildSalesLearningPromptContext: (input: any) => { relevantMemories: any[]; guidance: string[] };
+    recordApplyPreparationFailureLearning: (input: any) => any[];
     recordApplicationOutcomeLearning: (input: any) => any[];
     recordBoostDecisionSignal: (input: any) => any;
     recordCodeImprovementTask: (input: any) => any;
@@ -256,6 +258,23 @@ async function runTests(): Promise<void> {
   assert(outcomeMemories.some((memory) => memory.type === "proposal_style"), "outcome should create proposal style memory");
   assert(outcomeMemories.some((memory) => memory.type === "boost_strategy"), "outcome should create boost strategy memory");
   assert(outcomeMemories.some((memory) => memory.type === "timing_hypothesis"), "outcome should create timing hypothesis");
+
+  const prepFailureMemories = recordApplyPreparationFailureLearning({
+    jobId: job.id,
+    state: "field_preparation_incomplete",
+    reason: "Required Connects could not be verified on the apply page.",
+    requiredConnects: null,
+    unverifiedFields: ["requiredConnects"],
+    source: "test",
+  });
+  assert(
+    prepFailureMemories.some((memory) => memory.type === "failure_pattern" && /Connects not verified, not as a Chrome\/browser issue/i.test(memory.hypothesis)),
+    "required-Connects prep failure should be stored as field-specific learning, not generic browser attention"
+  );
+  assert(
+    prepFailureMemories.some((memory) => memory.type === "code_improvement_task" && /field_preparation_incomplete\/requiredConnects-not-visible/i.test(memory.hypothesis)),
+    "required-Connects prep failure should create a visible code-improvement candidate memory"
+  );
 
   const futureJob = {
     ...job,
