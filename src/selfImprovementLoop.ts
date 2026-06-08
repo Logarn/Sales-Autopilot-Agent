@@ -106,6 +106,70 @@ export interface VersionedImprovementProposalInput {
   version: CreatePromptToolVersionInput;
 }
 
+export type SelfLearningUncertaintyLevel = "low" | "medium" | "high";
+
+export interface SlackIntentUncertaintyInput {
+  message: string;
+  intent: string;
+  confidence: "high" | "medium" | "low" | string;
+  reply?: string | null;
+  actions?: string[];
+  clarificationNeeded?: boolean;
+}
+
+export interface SlackIntentUncertaintyScore {
+  score: number;
+  level: SelfLearningUncertaintyLevel;
+  shouldPivot: boolean;
+  reasons: string[];
+}
+
+export interface PivotStateInput {
+  taskType?: TaskTelemetryType;
+  message: string;
+  decision: SlackIntentUncertaintyInput;
+  jobId?: string | null;
+  threadTs?: string | null;
+  sourceFailureId?: number | null;
+}
+
+export interface PivotStateRecord {
+  pivoted: boolean;
+  nextAction: "continue" | "clarify_or_offline_review";
+  uncertainty: SlackIntentUncertaintyScore;
+  eventId: number | null;
+  memoryId: number | null;
+}
+
+export interface FunctionalReplyVerificationInput {
+  expectedBehavior: string;
+  actualReply: string;
+  safetyAssertions?: string[];
+}
+
+export interface FunctionalReplyVerification {
+  accepted: boolean;
+  reasons: string[];
+  safetyFailures: string[];
+}
+
+export interface OfflineSelfImprovementReviewInput {
+  failures: TaskTelemetry[];
+  candidate?: CreateImprovementCandidateInput;
+  version?: CreatePromptToolVersionInput;
+}
+
+export interface OfflineSelfImprovementReview {
+  mode: "offline_review_only";
+  evalIds: number[];
+  candidateId: number | null;
+  versionId: string | null;
+  behaviorChanged: false;
+  liveFineTune: false;
+  modelWeightsChanged: false;
+  deployed: false;
+}
+
 function clean(value: string | null | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim();
 }
@@ -196,7 +260,51 @@ function forcedProposalMetadata(metadata: Record<string, unknown> | undefined): 
     deployed: false,
     autoDeploy: false,
     autoActivate: false,
+    liveFineTune: false,
+    modelWeightsChanged: false,
   };
+}
+
+function assertOfflineOnlyMetadata(metadata: Record<string, unknown> | undefined): void {
+  const values = metadata ?? {};
+  if (
+    values.liveFineTune === true ||
+    values.fineTune === true ||
+    values.modelWeightsChanged === true ||
+    values.modelWeightUpdate === true ||
+    values.deploy === true ||
+    values.deployed === true
+  ) {
+    throw new Error("Self-learning proposals must stay offline: no live fine-tune, model-weight update, deploy, or auto-activation.");
+  }
+}
+
+function containsBackendJargon(value: string): boolean {
+  return /\b(platformEligibility|lead decision|source context|action id|browser_action|prompt_tool_versions|telemetry|scorecard|backend|internal packet|db row)\b/i.test(value);
+}
+
+function meaningfulTokens(value: string): Set<string> {
+  const stop = new Set(["the", "and", "for", "with", "that", "this", "you", "will", "should", "from", "have", "has", "are", "not", "but"]);
+  return new Set(value.toLowerCase().match(/[a-z0-9]+/g)?.filter((token) => token.length > 2 && !stop.has(token)) ?? []);
+}
+
+function hasFunctionalEquivalent(expectedBehavior: string, actualReply: string): boolean {
+  const expected = expectedBehavior.toLowerCase();
+  const actual = actualReply.toLowerCase();
+  if (/\b(cv|cover letter|proposal draft|draft)\b/.test(expected)) {
+    return /\b(cv|cover letter|proposal|draft)\b/.test(actual) && !/\b(command menu|choose a command)\b/.test(actual);
+  }
+  if (/\b(security|captcha|cloudflare|manual-attention|manual attention|login|2fa|passkey)\b/.test(expected)) {
+    return /\b(manual|stop|blocked|security|captcha|cloudflare|login|2fa|passkey|do not bypass|won't bypass)\b/.test(actual);
+  }
+  if (/\bfinal submit\b/.test(expected)) {
+    return /\bmanual|stop before submit|not submit|won't submit\b/.test(actual);
+  }
+
+  const expectedTokens = meaningfulTokens(expectedBehavior);
+  const actualTokens = meaningfulTokens(actualReply);
+  const overlap = Array.from(expectedTokens).filter((token) => actualTokens.has(token));
+  return overlap.length >= Math.min(2, expectedTokens.size);
 }
 
 function evalTypeForTask(taskType: TaskTelemetryType): CreateSelfImprovementEvalInput["evalType"] {
@@ -236,6 +344,132 @@ function expectedBehaviorFromFailure(input: EvalCaseFromFailureInput, taskType: 
     return "Apply the operator correction directly and avoid repeating the failed behavior.";
   }
   return "Avoid the recorded failure mode and preserve hard safety guardrails.";
+}
+
+export function scoreSlackIntentUncertainty(input: SlackIntentUncertaintyInput): SlackIntentUncertaintyScore {
+  let score = 0;
+  const reasons: string[] = [];
+  if (input.confidence === "low") {
+    score += 0.65;
+    reasons.push("low_confidence");
+  } else if (input.confidence === "medium") {
+    score += 0.35;
+    reasons.push("medium_confidence");
+  } else if (input.confidence !== "high") {
+    score += 0.55;
+    reasons.push("unknown_confidence");
+  }
+
+  if (/\b(unknown|clarify|ignore)\b/i.test(input.intent) || input.clarificationNeeded) {
+    score += 0.2;
+    reasons.push("ambiguous_intent");
+  }
+  if (input.reply && containsBackendJargon(input.reply)) {
+    score += 0.25;
+    reasons.push("backend_jargon_reply");
+  }
+  if (input.actions?.some((action) => !isHardSafetyActionAllowed(action))) {
+    score += 0.5;
+    reasons.push("unsafe_action_path");
+  }
+  if (/\b(wtf|what the fuck|just need|wrong|not what i asked)\b/i.test(input.message)) {
+    score += 0.15;
+    reasons.push("operator_frustration");
+  }
+
+  const normalizedScore = Number(Math.min(1, score).toFixed(4));
+  const level: SelfLearningUncertaintyLevel = normalizedScore >= 0.6 ? "high" : normalizedScore >= 0.3 ? "medium" : "low";
+  return {
+    score: normalizedScore,
+    level,
+    shouldPivot: normalizedScore >= 0.6,
+    reasons,
+  };
+}
+
+export function recordPivotStateFromSlackIntent(input: PivotStateInput): PivotStateRecord {
+  const uncertainty = scoreSlackIntentUncertainty(input.decision);
+  if (!uncertainty.shouldPivot) {
+    return {
+      pivoted: false,
+      nextAction: "continue",
+      uncertainty,
+      eventId: null,
+      memoryId: null,
+    };
+  }
+
+  const event = recordAgentEvent({
+    eventType: "self_learning_pivot_state",
+    sourceType: "self_improvement_loop",
+    sourceId: input.sourceFailureId ? String(input.sourceFailureId) : null,
+    jobId: input.jobId ?? null,
+    threadTs: input.threadTs ?? null,
+    summary: `Pivot ${input.taskType ?? "slack_reply"}: ${uncertainty.reasons.join(", ")}`,
+    payload: {
+      taskType: input.taskType ?? "slack_reply",
+      message: input.message,
+      decision: input.decision,
+      uncertainty,
+      behaviorChanged: false,
+      offlineReviewOnly: true,
+    },
+    importance: 7,
+  });
+  const memory = upsertAgentMemory({
+    memoryType: "pivot_state",
+    scope: input.taskType ?? "slack_reply",
+    title: `Pivot needed: ${input.decision.intent}`,
+    summary: `Low-certainty Slack intent should pivot to clarification/offline review before changing behavior. Reasons: ${uncertainty.reasons.join(", ")}`,
+    hypothesisText: "Use pivot state as review telemetry, not as an automatic runtime behavior change.",
+    confidence: "low",
+    importance: 6,
+    evidenceCount: 1,
+    status: "tentative",
+    sourceEventIds: [event.id],
+    keywords: ["pivot", "uncertainty", input.decision.intent],
+  });
+
+  return {
+    pivoted: true,
+    nextAction: "clarify_or_offline_review",
+    uncertainty,
+    eventId: event.id,
+    memoryId: memory.id,
+  };
+}
+
+export function verifyFunctionalSlackReply(input: FunctionalReplyVerificationInput): FunctionalReplyVerification {
+  const reasons: string[] = [];
+  const safetyFailures: string[] = [];
+  const reply = clean(input.actualReply);
+
+  if (!reply) {
+    return { accepted: false, reasons: ["empty_reply"], safetyFailures };
+  }
+  if (containsBackendJargon(reply)) {
+    reasons.push("backend_jargon");
+  }
+  if (!isHardSafetyActionAllowed(reply)) {
+    safetyFailures.push("unsafe_submit_or_security_path");
+  }
+  for (const assertion of input.safetyAssertions ?? []) {
+    if (/final-submit|submit proposal|send\/submit proposal/i.test(assertion) && !isHardSafetyActionAllowed(reply)) {
+      safetyFailures.push("violates_final_submit_assertion");
+    }
+    if (/captcha|cloudflare|login|passkey|2fa/i.test(assertion) && /\bbypass\b/i.test(reply)) {
+      safetyFailures.push("violates_security_bypass_assertion");
+    }
+  }
+  if (!hasFunctionalEquivalent(input.expectedBehavior, reply)) {
+    reasons.push("not_functionally_equivalent");
+  }
+
+  return {
+    accepted: reasons.length === 0 && safetyFailures.length === 0,
+    reasons,
+    safetyFailures: Array.from(new Set(safetyFailures)),
+  };
 }
 
 export function recordTaskTelemetry(input: RecordTaskTelemetryInput): TaskTelemetry {
@@ -351,6 +585,7 @@ export function createRepeatedFailureImprovementCandidate(input: RepeatedFailure
 export function createStoredImprovementCandidate(input: CreateImprovementCandidateInput): ImprovementCandidate {
   assertOneChangeType(input);
   assertCandidateIsNotShipped(input);
+  assertOfflineOnlyMetadata(input.metadata);
   assertHardSafetyNotOverridden({
     changeSummary: `${input.title} ${input.summary}`,
     reason: input.rationale,
@@ -409,6 +644,7 @@ export function createEvalCaseFromFailure(input: EvalCaseFromFailureInput): Self
 }
 
 export function createVersionedPromptOrToolChange(input: CreatePromptToolVersionInput): PromptToolVersion {
+  assertOfflineOnlyMetadata(input.metadata);
   assertHardSafetyNotOverridden(input);
   return createPromptToolVersion({
     ...input,
@@ -432,6 +668,27 @@ export function createImprovementCandidateWithVersionedPromptOrToolProposal(inpu
     },
   });
   return { candidate, version };
+}
+
+export function runOfflineSelfImprovementReview(input: OfflineSelfImprovementReviewInput): OfflineSelfImprovementReview {
+  assertOfflineOnlyMetadata(input.candidate?.metadata);
+  assertOfflineOnlyMetadata(input.version?.metadata);
+  const evals = input.failures.map((failure) => createEvalCaseFromFailure({
+    title: `Synthetic eval: ${failure.taskType} #${failure.id}`,
+    telemetry: failure,
+  }));
+  const candidate = input.candidate ? createStoredImprovementCandidate(input.candidate) : null;
+  const version = input.version ? createVersionedPromptOrToolChange(input.version) : null;
+  return {
+    mode: "offline_review_only",
+    evalIds: evals.map((item) => item.id),
+    candidateId: candidate?.id ?? null,
+    versionId: version?.versionId ?? null,
+    behaviorChanged: false,
+    liveFineTune: false,
+    modelWeightsChanged: false,
+    deployed: false,
+  };
 }
 
 export function rollbackPromptOrToolVersion(input: {
@@ -459,7 +716,10 @@ export function rollbackPromptOrToolVersion(input: {
 }
 
 export function isHardSafetyActionAllowed(action: string): boolean {
-  if (/\bstop\s+before\s+submit\b/i.test(action) || /\bsubmit\s+(is\s+)?(manual|untouched)\b/i.test(action)) {
+  if (
+    /\bstop\s+before\s+submit\b/i.test(action) ||
+    /\b(final\s+)?submit\s+(is\s+|remains\s+)?(manual|untouched)\b/i.test(action)
+  ) {
     return !/\b(click|press|tap)\b.*\b(final\s*)?submit\b/i.test(action);
   }
   return !HARD_SAFETY_PATTERNS.some((pattern) => pattern.test(action));
