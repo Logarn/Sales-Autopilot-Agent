@@ -5,7 +5,7 @@ import { getLlmProviderConfig } from "./llm/provider";
 import { logger } from "./logger";
 import { sendHealthAlert } from "./slack";
 import { formatBrowserSessionStatus, getBrowserSessionStatus } from "./browserSession";
-import { readLatestState } from "./leadEngine";
+import { isRecoveredBacklogDrain, readLatestState, type LeadEngineCycleSummary } from "./leadEngine";
 
 type HealthSeverity = "ok" | "warning" | "critical";
 
@@ -84,9 +84,9 @@ function llmProviderFindings(): HealthFinding[] {
   }];
 }
 
-function leadEngineFindings(): HealthFinding[] {
-  const state = readLatestState();
+function leadEngineFindings(state: LeadEngineCycleSummary | null): HealthFinding[] {
   if (!state) return [];
+  if (isRecoveredBacklogDrain(state)) return [];
   const findings: HealthFinding[] = [];
   if (state.status === "paused" && state.stoppedReason !== "agent_engine_disabled") {
     findings.push({
@@ -99,7 +99,9 @@ function leadEngineFindings(): HealthFinding[] {
     findings.push({
       key: "lead-engine-degraded",
       severity: "warning",
-      message: `Lead engine is degraded: ${state.stoppedReason}${state.discoveryError ? ` (${state.discoveryError})` : ""}.`,
+      message: state.stoppedReason === "too_many_pending_capture_actions"
+        ? "Lead engine is waiting for the browser worker to finish clearing the capture backlog before adding more discovery work."
+        : `Lead engine is degraded: ${state.stoppedReason}${state.discoveryError ? ` (${state.discoveryError})` : ""}.`,
     });
   }
   if (state.queueBackpressure) {
@@ -112,9 +114,18 @@ function leadEngineFindings(): HealthFinding[] {
   return findings;
 }
 
+function formatHeartbeatError(heartbeat: HeartbeatRecord): string {
+  if (heartbeat.worker === "lead-engine" && heartbeat.lastError === "too_many_pending_capture_actions") {
+    return "capture backlog is still draining";
+  }
+  return heartbeat.lastError ?? "unknown error";
+}
+
 export function buildHealthReport(now = new Date()): HealthReport {
   const heartbeats = readHeartbeats();
   const staleHeartbeats = readStaleHeartbeats(HEARTBEAT_STALE_AFTER_MS, now);
+  const leadState = readLatestState();
+  const suppressRecoveredLeadEngineError = leadState ? isRecoveredBacklogDrain(leadState) : false;
   const findings: HealthFinding[] = [
     ...staleHeartbeats.map((heartbeat) => ({
       key: `stale-${heartbeat.worker}`,
@@ -122,16 +133,16 @@ export function buildHealthReport(now = new Date()): HealthReport {
       message: `Worker ${heartbeat.worker} is stale. Last update: ${heartbeat.updatedAt}`,
     })),
     ...heartbeats
-      .filter((heartbeat) => heartbeat.status === "error")
+      .filter((heartbeat) => heartbeat.status === "error" && !(suppressRecoveredLeadEngineError && heartbeat.worker === "lead-engine"))
       .map((heartbeat) => ({
         key: `worker-error-${heartbeat.worker}`,
         severity: "critical" as const,
-        message: `Worker ${heartbeat.worker} last errored: ${heartbeat.lastError ?? "unknown error"}`,
+        message: `Worker ${heartbeat.worker} last errored: ${formatHeartbeatError(heartbeat)}`,
       })),
     ...browserStateFindings(),
     ...queueFindings(),
     ...llmProviderFindings(),
-    ...leadEngineFindings(),
+    ...leadEngineFindings(leadState),
   ];
 
   return {

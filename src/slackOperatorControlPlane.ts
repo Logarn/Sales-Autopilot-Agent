@@ -18,7 +18,7 @@ import {
 } from "./browserSessionControl";
 import { buildHealthReport } from "./health";
 import { readHeartbeats } from "./heartbeat";
-import { readLatestState, runLeadEngineCycle, type LeadEngineCycleSummary } from "./leadEngine";
+import { isRecoveredBacklogDrain, readLatestState, runLeadEngineCycle, type LeadEngineCycleSummary } from "./leadEngine";
 import { readHuntingControlState, setHuntingPaused } from "./operatorControlState";
 import { getProtectedQaQueueItems } from "./browserQaWorkspace";
 
@@ -115,6 +115,9 @@ function leadEngineLine(state: LeadEngineCycleSummary | null): string {
     return `Lead engine: paused because you asked me to pause hunting.`;
   }
   if (!state) return "Lead engine: I do not have a recent run recorded yet.";
+  if (isRecoveredBacklogDrain(state)) {
+    return "Lead engine: I cleared an old capture backlog; browser is clean now.";
+  }
   if (state.status === "ok") {
     return `Lead engine: running normally. I found ${state.jobsFound} lead${state.jobsFound === 1 ? "" : "s"} and queued ${state.jobsQueued}.`;
   }
