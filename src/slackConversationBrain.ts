@@ -10,18 +10,27 @@ import { buildSoulPromptContext, buildSoulPromptSection } from "./soul";
 
 export type SlackConversationBrainIntent =
   | "answer_file_capability_question"
+  | "answer_health"
+  | "explain_health_findings"
   | "show_cover_letter"
   | "full_safe_prep"
   | "draft_preview_first"
   | "retry_action"
   | "focus_qa_tab"
+  | "open_application_page"
   | "qa_queue"
+  | "capture_upwork_url"
+  | "ingest_file"
   | "revise_proof_plan"
   | "revise_draft"
   | "status_summary"
   | "explain_risk"
   | "explain_proof"
   | "explain_boost"
+  | "pause_hunting"
+  | "start_hunting"
+  | "check_browser"
+  | "check_services"
   | "debug_details"
   | "reject"
   | "mark_submitted"
@@ -30,13 +39,22 @@ export type SlackConversationBrainIntent =
   | "ignore";
 
 export type SlackConversationBrainAction =
+  | "answer_health"
+  | "explain_health_findings"
   | "queue_prepare_application"
   | "send_draft_preview"
   | "retry_browser_action"
   | "focus_qa_tab"
+  | "open_application_page"
   | "show_qa_queue"
+  | "capture_upwork_url"
+  | "ingest_file"
   | "queue_proof_recheck"
   | "revise_draft"
+  | "pause_hunting"
+  | "start_hunting"
+  | "check_browser"
+  | "check_services"
   | "show_debug_details"
   | "mark_skip"
   | "record_outcome"
@@ -75,6 +93,8 @@ export interface SlackConversationBrainDecision {
   needsHumanClarification: boolean;
   codeImprovementNeeded: boolean;
   failureReflection: SlackConversationFailureReflection | null;
+  progressReplyNeeded: boolean;
+  progressReply: string | null;
   safety: {
     finalSubmit: "manual_only";
     rawIdsAllowed: boolean;
@@ -134,6 +154,24 @@ export interface SlackConversationBrainInput {
     retryable: boolean;
     lastError?: string | null;
   } | null;
+  browserSession?: {
+    state?: string | null;
+    blocked: boolean;
+    reason?: string | null;
+  } | null;
+  serviceState?: {
+    slackListening?: boolean | null;
+    leadEngine?: string | null;
+    huntingPaused?: boolean | null;
+    healthSummary?: string | null;
+  } | null;
+  inbound?: {
+    botMentioned: boolean;
+    hasSlackFiles: boolean;
+    upworkUrl?: string | null;
+    allowedUser: boolean;
+    allowedChannel: boolean;
+  } | null;
   qaQueue: Array<{
     index: number;
     title: string;
@@ -177,6 +215,8 @@ interface RawSlackConversationBrainDecision {
   needsHumanClarification?: unknown;
   codeImprovementNeeded?: unknown;
   failureReflection?: unknown;
+  progressReplyNeeded?: unknown;
+  progressReply?: unknown;
   safety?: unknown;
   instruction?: unknown;
   qaIndex?: unknown;
@@ -187,18 +227,27 @@ interface RawSlackConversationBrainDecision {
 
 const INTENTS = new Set<SlackConversationBrainIntent>([
   "answer_file_capability_question",
+  "answer_health",
+  "explain_health_findings",
   "show_cover_letter",
   "full_safe_prep",
   "draft_preview_first",
   "retry_action",
   "focus_qa_tab",
+  "open_application_page",
   "qa_queue",
+  "capture_upwork_url",
+  "ingest_file",
   "revise_proof_plan",
   "revise_draft",
   "status_summary",
   "explain_risk",
   "explain_proof",
   "explain_boost",
+  "pause_hunting",
+  "start_hunting",
+  "check_browser",
+  "check_services",
   "debug_details",
   "reject",
   "mark_submitted",
@@ -208,13 +257,22 @@ const INTENTS = new Set<SlackConversationBrainIntent>([
 ]);
 
 const ACTIONS = new Set<SlackConversationBrainAction>([
+  "answer_health",
+  "explain_health_findings",
   "queue_prepare_application",
   "send_draft_preview",
   "retry_browser_action",
   "focus_qa_tab",
+  "open_application_page",
   "show_qa_queue",
+  "capture_upwork_url",
+  "ingest_file",
   "queue_proof_recheck",
   "revise_draft",
+  "pause_hunting",
+  "start_hunting",
+  "check_browser",
+  "check_services",
   "show_debug_details",
   "mark_skip",
   "record_outcome",
@@ -234,13 +292,22 @@ const MEMORY_TYPES = new Set<SlackBehaviorMemoryType>([
 const FIX_TYPES = new Set<SlackConversationBrainFixType>(["memory", "prompt", "config", "code_pr"]);
 
 export const SLACK_CONVERSATION_ALLOWED_ACTIONS: SlackConversationBrainAction[] = [
+  "answer_health",
+  "explain_health_findings",
   "queue_prepare_application",
   "send_draft_preview",
   "retry_browser_action",
   "focus_qa_tab",
+  "open_application_page",
   "show_qa_queue",
+  "capture_upwork_url",
+  "ingest_file",
   "queue_proof_recheck",
   "revise_draft",
+  "pause_hunting",
+  "start_hunting",
+  "check_browser",
+  "check_services",
   "show_debug_details",
   "mark_skip",
   "record_outcome",
@@ -379,6 +446,8 @@ function normalizeDecision(raw: RawSlackConversationBrainDecision, input: SlackC
     needsHumanClarification: asBoolean(raw.needsHumanClarification),
     codeImprovementNeeded: asBoolean(raw.codeImprovementNeeded),
     failureReflection: normalizeFailureReflection(raw.failureReflection),
+    progressReplyNeeded: asBoolean(raw.progressReplyNeeded),
+    progressReply: cleanText(raw.progressReply, 400, { rawIdsAllowed }),
     safety: {
       finalSubmit: "manual_only",
       rawIdsAllowed,
@@ -410,6 +479,9 @@ function buildPromptInput(input: SlackConversationBrainInput): Record<string, un
     proof: input.proof,
     connects: input.connects,
     browserAction: input.browserAction,
+    browserSession: input.browserSession ?? null,
+    serviceState: input.serviceState ?? null,
+    inbound: input.inbound ?? null,
     qaQueue: input.qaQueue.slice(0, 5),
     behaviorMemories: input.behaviorMemories.slice(0, 25),
     salesLearning: input.salesLearning ?? { relevantMemories: [], guidance: [] },
@@ -436,14 +508,19 @@ export async function planSlackConversationWithLlm(
         content: [
           "You are the Upwork agent's Slack conversation brain.",
           "Reason about Steve's latest message using the structured thread state before responding.",
-          "Return JSON only with: intent, confidence, reply, actions, memoryUpdate, needsHumanClarification, codeImprovementNeeded, failureReflection, safety, instruction, qaIndex, qaQuery, actionId, outcomeStatus.",
-          "Allowed intents: answer_file_capability_question, show_cover_letter, full_safe_prep, draft_preview_first, retry_action, focus_qa_tab, qa_queue, revise_proof_plan, revise_draft, status_summary, explain_risk, explain_proof, explain_boost, debug_details, reject, mark_submitted, record_outcome, clarify, ignore.",
+          "Return JSON only with: intent, confidence, reply, actions, progressReplyNeeded, progressReply, memoryUpdate, needsHumanClarification, codeImprovementNeeded, failureReflection, safety, instruction, qaIndex, qaQuery, actionId, outcomeStatus.",
+          "Allowed intents: answer_file_capability_question, answer_health, explain_health_findings, show_cover_letter, full_safe_prep, draft_preview_first, retry_action, focus_qa_tab, open_application_page, qa_queue, capture_upwork_url, ingest_file, revise_proof_plan, revise_draft, status_summary, explain_risk, explain_proof, explain_boost, pause_hunting, start_hunting, check_browser, check_services, debug_details, reject, mark_submitted, record_outcome, clarify, ignore.",
           "Allowed actions are provided in the user payload. Propose only those action names.",
+          "Every normal inbound Slack message is coming through this gateway. Reason first from context, then select one or more allowed actions.",
+          "For service/browser questions, use answer_health/check_services/check_browser and explain in human language.",
+          "For Upwork links, use capture_upwork_url when the message is relevant to this agent.",
+          "For Slack file attachments in a tracked thread, use ingest_file.",
           "Use action queue_prepare_application for full safe prep. It means draft/files/proof/portfolio/Connects/boost only, then stop before submit.",
           "Use action send_draft_preview when Steve asks to see the draft here first. Do not fill Upwork for that request.",
           "Use action retry_browser_action for retry. If the thread has a retryable browser action, do not require an action id.",
           "Use action focus_qa_tab for open this, bring this up, show application page, or open draft in Chrome.",
           "Use action show_qa_queue for what's ready, QA queue, or blocked queue questions.",
+          "If the selected action may take more than a few seconds, set progressReplyNeeded true and provide a short human progressReply.",
           "Treat CV in an Upwork thread as the cover letter/proposal draft unless context proves otherwise.",
           "When Steve is frustrated, acknowledge the bad prior response briefly and answer directly.",
           "Do not show command menus. Only ask clarification when genuinely ambiguous.",

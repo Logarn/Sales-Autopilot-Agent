@@ -667,19 +667,30 @@ async function handleDiscoveryHuntingCommand(params: {
   channelId: string;
   threadTs: string;
   client: App["client"];
+  copyProvider?: SlackCopyProvider;
 }): Promise<void> {
   if (params.command.type === "discovery_block_status") {
-    await postThreadReply(params.client, params.channelId, params.threadTs, formatDiscoverySourceHealthForSlack({ debug: isDebugStatusRequest(params.text) }));
+    const deterministicText = formatDiscoverySourceHealthForSlack({ debug: isDebugStatusRequest(params.text) });
+    const text = isDebugStatusRequest(params.text)
+      ? deterministicText
+      : await userFacingSlackCopy({
+        deterministicText,
+        userMessage: params.text,
+        intent: "discovery_block_status",
+        copyProvider: params.copyProvider,
+      });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
   if (params.command.type === "discovery_keep_hunting") {
-    await postThreadReply(
-      params.client,
-      params.channelId,
-      params.threadTs,
-      "I’ll keep hunting from the safer feed. If Upwork checks one search page, I’m leaving that one alone for now."
-    );
+    const text = await userFacingSlackCopy({
+      deterministicText: "I’ll keep hunting from the safer feed. If Upwork checks one search page, I’m leaving that one alone for now.",
+      userMessage: params.text,
+      intent: "discovery_keep_hunting",
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
@@ -688,7 +699,13 @@ async function handleDiscoveryHuntingCommand(params: {
       exceptSourceTypes: ["best_matches"],
       reason: "operator_requested_best_matches_only",
     });
-    await postThreadReply(params.client, params.channelId, params.threadTs, "I’ll stick to Best Matches for now and leave the other searches alone.");
+    const text = await userFacingSlackCopy({
+      deterministicText: "I’ll stick to Best Matches for now and leave the other searches alone.",
+      userMessage: params.text,
+      intent: "discovery_best_matches_only",
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
@@ -698,17 +715,25 @@ async function handleDiscoveryHuntingCommand(params: {
     if (session.blocked) {
       clearBrowserManualAttention();
     }
-    await postThreadReply(
-      params.client,
-      params.channelId,
-      params.threadTs,
-      "Got it — I’ll try the blocked search again and keep hunting. Chrome itself is clear, and final submit remains manual."
-    );
+    const text = await userFacingSlackCopy({
+      deterministicText: "Got it — I’ll try the blocked search again and keep hunting. Chrome itself is clear, and final submit remains manual.",
+      userMessage: params.text,
+      intent: "discovery_clear_browser",
+      preservePhrases: ["final submit remains manual"],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
   clearPausedDiscoverySourceHealth();
-  await postThreadReply(params.client, params.channelId, params.threadTs, "I’ll try the searches again and keep hunting from Best Matches if one checks out.");
+  const text = await userFacingSlackCopy({
+    deterministicText: "I’ll try the searches again and keep hunting from Best Matches if one checks out.",
+    userMessage: params.text,
+    intent: "discovery_retry_sources",
+    copyProvider: params.copyProvider,
+  });
+  await postThreadReply(params.client, params.channelId, params.threadTs, text);
 }
 
 function buildShortStatusReply(state: NonNullable<ReturnType<typeof getSlackThreadStateByThreadTs>>): string {
@@ -779,6 +804,10 @@ function buildSlackConversationBrainInput(input: {
   state: ReturnType<typeof getSlackThreadStateByThreadTs>;
   text: string;
   hasSlackFiles?: boolean;
+  botMentioned?: boolean;
+  upworkUrl?: ParsedUpworkUrl | null;
+  allowedUser?: boolean;
+  allowedChannel?: boolean;
 }): SlackConversationBrainInput {
   const state = input.state;
   const job = state?.jobId ? getScoredJobForSlackPreview(state.jobId) : null;
@@ -854,6 +883,27 @@ function buildSlackConversationBrainInput(input: {
       retryable: latestAction.status === "paused" || latestAction.status === "failed",
       lastError: latestAction.lastError,
     } : null,
+    browserSession: (() => {
+      const session = getBrowserSessionStatus();
+      return {
+        state: session.state,
+        blocked: Boolean(session.blocked),
+        reason: session.reason,
+      };
+    })(),
+    serviceState: {
+      slackListening: true,
+      leadEngine: null,
+      huntingPaused: null,
+      healthSummary: null,
+    },
+    inbound: {
+      botMentioned: Boolean(input.botMentioned),
+      hasSlackFiles: Boolean(input.hasSlackFiles),
+      upworkUrl: input.upworkUrl?.canonicalJobUrl ?? null,
+      allowedUser: input.allowedUser ?? true,
+      allowedChannel: input.allowedChannel ?? true,
+    },
     qaQueue,
     behaviorMemories,
     salesLearning,
@@ -1334,6 +1384,7 @@ async function handleUrlMessage(params: {
   text: string;
   threadTs: string;
   client: App["client"];
+  copyProvider?: SlackCopyProvider;
 }): Promise<void> {
   const queued = queueCaptureFromSlackUrl(params);
   if (!queued) {
@@ -1350,7 +1401,18 @@ async function handleUrlMessage(params: {
     `Listing: ${upworkUrl.canonicalJobUrl}`,
   ].join("\n");
 
-  await postThreadReply(params.client, params.channelId, params.threadTs, details);
+  const text = await userFacingSlackCopy({
+    deterministicText: details,
+    userMessage: params.text,
+    intent: "capture_upwork_url",
+    context: {
+      upworkUrl: upworkUrl.canonicalJobUrl,
+      duplicate: action.duplicate,
+    },
+    preservePhrases: [upworkUrl.canonicalJobUrl],
+    copyProvider: params.copyProvider,
+  });
+  await postThreadReply(params.client, params.channelId, params.threadTs, text);
 }
 
 async function handleSlackFilesMessage(params: {
@@ -1359,6 +1421,7 @@ async function handleSlackFilesMessage(params: {
   channelId: string;
   threadTs: string;
   client: App["client"];
+  copyProvider?: SlackCopyProvider;
 }): Promise<void> {
   const result = await ingestSlackFilesForThread({
     state: params.state,
@@ -1368,7 +1431,18 @@ async function handleSlackFilesMessage(params: {
   if (params.state.jobId && result.accepted.length > 0) {
     updateSlackThreadStateStatus(params.state.channelId, params.state.threadTs, "files_ingested");
   }
-  await postThreadReply(params.client, params.channelId, params.threadTs, formatSlackFileIntakeReply(result));
+  const text = await userFacingSlackCopy({
+    deterministicText: formatSlackFileIntakeReply(result),
+    userMessage: "Slack file attachment",
+    intent: "ingest_file",
+    context: {
+      jobId: params.state.jobId,
+      acceptedCount: result.accepted.length,
+      rejectedCount: result.rejected.length,
+    },
+    copyProvider: params.copyProvider,
+  });
+  await postThreadReply(params.client, params.channelId, params.threadTs, text);
 }
 
 async function executeConversationPlan(params: {
@@ -1383,7 +1457,17 @@ async function executeConversationPlan(params: {
   if (params.plan.actions.includes("send_draft_preview")) {
     const result = buildDraftPreviewFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs });
     if (!result.ok) updateSlackThreadStateStatus(params.state.channelId, params.state.threadTs, "error");
-    await postThreadReply(params.client, params.channelId, params.threadTs, result.text);
+    const text = result.ok
+      ? result.text
+      : await userFacingSlackCopy({
+        deterministicText: result.text,
+        userMessage: params.userMessage,
+        intent: "draft_preview",
+        context: { jobId: params.state.jobId, ok: result.ok },
+        preservePhrases: result.text.includes("Final submit remains manual") ? ["Final submit remains manual"] : [],
+        copyProvider: params.copyProvider,
+      });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
   if (params.plan.actions.includes("queue_prepare_application") || params.plan.actions.includes("retry_prepare_after_files")) {
@@ -1481,48 +1565,17 @@ export async function handleSlackSocketTextEvent(rawEvent: SlackSocketTextEvent,
   const threadTs = rawEvent.thread_ts ?? rawEvent.ts;
   const mappedThread = getSlackThreadStateByThreadTs(channelId, threadTs);
   const botMentioned = hasSlackMention(text);
-
-  if (files.length > 0 && mappedThread) {
-    await handleSlackFilesMessage({
-      state: mappedThread,
-      files,
-      channelId,
-      threadTs,
-      client,
-    });
-    return;
-  }
-
-  if ((mappedThread || botMentioned) && parseSlackOperatorIntent(text)) {
-    await handleThreadCommand({
-      channelId,
-      threadTs,
-      text,
-      client,
-    });
-    return;
-  }
-
   const upworkUrl = parseUpworkJobUrlFromText(text);
-  if (upworkUrl && (botMentioned || mappedThread)) {
-    await handleUrlMessage({
-      channelId,
-      messageTs: rawEvent.ts,
-      threadTs,
-      text,
-      client,
-    });
-    return;
-  }
-
-  if (mappedThread || botMentioned) {
-    await handleThreadCommand({
-      channelId,
-      threadTs,
-      text,
-      client,
-    });
-  }
+  await handleSlackReasoningGateway({
+    channelId,
+    messageTs: rawEvent.ts,
+    threadTs,
+    text,
+    files,
+    botMentioned,
+    upworkUrl,
+    client,
+  });
 }
 
 type SlackThreadStateForRetry = NonNullable<ReturnType<typeof getSlackThreadStateByThreadTs>>;
@@ -1590,13 +1643,175 @@ async function executeConversationBrainDecision(params: {
   client: App["client"];
   copyProvider?: SlackCopyProvider;
   focusQaTab?: (input: { jobId?: string | null; index?: number; query?: string | null }) => Promise<ProtectedQaFocusResult>;
+  operatorDeps?: SlackOperatorControlDeps;
+  files?: SlackFileLike[];
+  upworkUrl?: ParsedUpworkUrl | null;
+  messageTs?: string;
 }): Promise<boolean> {
   const { decision } = params;
   if (decision.intent === "ignore") {
+    if (parseSlackOperatorIntent(params.text)) {
+      return false;
+    }
+    if (params.files?.length && params.state) {
+      await handleSlackFilesMessage({
+        state: params.state,
+        files: params.files,
+        channelId: params.channelId,
+        threadTs: params.threadTs,
+        client: params.client,
+        copyProvider: params.copyProvider,
+      });
+      return true;
+    }
+    if (params.upworkUrl && params.messageTs) {
+      await handleUrlMessage({
+        channelId: params.channelId,
+        messageTs: params.messageTs,
+        threadTs: params.threadTs,
+        text: params.text,
+        client: params.client,
+        copyProvider: params.copyProvider,
+      });
+      return true;
+    }
     return true;
   }
   if (decision.confidence === "low" && decision.intent !== "clarify") {
     return false;
+  }
+
+  const parsedOperatorIntent = parseSlackOperatorIntent(params.text);
+  if (parsedOperatorIntent) {
+    const deterministicText = await buildSlackOperatorReply(parsedOperatorIntent, params.operatorDeps);
+    const text = await userFacingSlackCopy({
+      deterministicText,
+      userMessage: params.text,
+      intent: `operator_${parsedOperatorIntent.type}`,
+      context: { operatorIntent: parsedOperatorIntent.type, plannedActions: decision.actions },
+      preservePhrases: [
+        deterministicText.includes("Final submit remains manual") ? "Final submit remains manual" : null,
+        deterministicText.includes("did not click through login, CAPTCHA, security checks, or submit anything")
+          ? "did not click through login, CAPTCHA, security checks, or submit anything"
+          : null,
+        deterministicText.includes("did not paste through VNC or click submit")
+          ? "did not paste through VNC or click submit"
+          : null,
+      ].filter((phrase): phrase is string => Boolean(phrase)),
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return true;
+  }
+
+  if (
+    decision.reply &&
+    (
+      decision.intent === "explain_health_findings" ||
+      decision.intent === "clarify" ||
+      decision.needsHumanClarification ||
+      (!params.state && decision.actions.includes("none") && ![
+        "answer_health",
+        "check_browser",
+        "check_services",
+        "pause_hunting",
+        "start_hunting",
+        "capture_upwork_url",
+        "ingest_file",
+      ].includes(decision.intent)) ||
+      (decision.actions.includes("none") && ![
+        "answer_file_capability_question",
+        "answer_health",
+        "check_browser",
+        "check_services",
+        "show_cover_letter",
+        "full_safe_prep",
+        "draft_preview_first",
+        "retry_action",
+        "focus_qa_tab",
+        "open_application_page",
+        "qa_queue",
+        "capture_upwork_url",
+        "ingest_file",
+        "revise_proof_plan",
+        "revise_draft",
+        "status_summary",
+        "explain_risk",
+        "explain_proof",
+        "explain_boost",
+        "reject",
+        "mark_submitted",
+        "record_outcome",
+      ].includes(decision.intent))
+    )
+  ) {
+    const text = await userFacingSlackCopy({
+      deterministicText: decision.reply,
+      userMessage: params.text,
+      intent: decision.intent,
+      context: { jobId: params.state?.jobId ?? null, threadStatus: params.state?.status ?? null },
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return true;
+  }
+
+  if (
+    decision.intent === "answer_health" ||
+    decision.intent === "explain_health_findings" ||
+    decision.intent === "check_browser" ||
+    decision.intent === "check_services" ||
+    decision.intent === "pause_hunting" ||
+    decision.intent === "start_hunting" ||
+    decision.actions.includes("answer_health") ||
+    decision.actions.includes("explain_health_findings") ||
+    decision.actions.includes("check_browser") ||
+    decision.actions.includes("check_services") ||
+    decision.actions.includes("pause_hunting") ||
+    decision.actions.includes("start_hunting")
+  ) {
+    const intent = decision.intent === "pause_hunting" || decision.actions.includes("pause_hunting")
+      ? { type: "pause_hunting" as const }
+      : decision.intent === "start_hunting" || decision.actions.includes("start_hunting")
+        ? { type: "start_hunting" as const }
+        : { type: "service_status" as const };
+    const deterministicText = await buildSlackOperatorReply(intent, params.operatorDeps);
+    const text = await userFacingSlackCopy({
+      deterministicText,
+      userMessage: params.text,
+      intent: decision.intent,
+      context: { operatorIntent: intent.type, plannedActions: decision.actions },
+      preservePhrases: [
+        deterministicText.includes("Final submit remains manual") ? "Final submit remains manual" : null,
+      ].filter((phrase): phrase is string => Boolean(phrase)),
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return true;
+  }
+
+  if ((decision.intent === "capture_upwork_url" || decision.actions.includes("capture_upwork_url")) && params.upworkUrl && params.messageTs) {
+    await handleUrlMessage({
+      channelId: params.channelId,
+      messageTs: params.messageTs,
+      threadTs: params.threadTs,
+      text: params.text,
+      client: params.client,
+      copyProvider: params.copyProvider,
+    });
+    return true;
+  }
+
+  if ((decision.intent === "ingest_file" || decision.actions.includes("ingest_file")) && params.files?.length && params.state) {
+    await handleSlackFilesMessage({
+      state: params.state,
+      files: params.files,
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      client: params.client,
+      copyProvider: params.copyProvider,
+    });
+    return true;
   }
 
   if (decision.intent === "qa_queue" || decision.actions.includes("show_qa_queue")) {
@@ -1610,7 +1825,12 @@ async function executeConversationBrainDecision(params: {
     return true;
   }
 
-  if (decision.intent === "focus_qa_tab" || decision.actions.includes("focus_qa_tab")) {
+  if (
+    decision.intent === "focus_qa_tab" ||
+    decision.intent === "open_application_page" ||
+    decision.actions.includes("focus_qa_tab") ||
+    decision.actions.includes("open_application_page")
+  ) {
     const focus = await (params.focusQaTab ?? focusProtectedQaApplicationTab)({
       jobId: params.state?.jobId ?? null,
       index: decision.qaIndex ?? undefined,
@@ -1755,7 +1975,7 @@ async function executeConversationBrainDecision(params: {
   return false;
 }
 
-export async function handleThreadCommand(params: {
+export interface SlackReasoningGatewayParams {
   channelId: string;
   threadTs: string;
   text: string;
@@ -1765,7 +1985,172 @@ export async function handleThreadCommand(params: {
   copyProvider?: SlackCopyProvider;
   focusQaTab?: (input: { jobId?: string | null; index?: number; query?: string | null }) => Promise<ProtectedQaFocusResult>;
   operatorDeps?: SlackOperatorControlDeps;
-}): Promise<void> {
+  files?: SlackFileLike[];
+  messageTs?: string;
+  botMentioned?: boolean;
+  upworkUrl?: ParsedUpworkUrl | null;
+}
+
+function shouldFallbackWithoutLlm(params: SlackReasoningGatewayParams, state: ReturnType<typeof getSlackThreadStateByThreadTs>): boolean {
+  if (state || params.botMentioned || params.files?.length || params.upworkUrl || parseSlackOperatorIntent(params.text)) return true;
+  return hasExplicitAgentSlackContext(params.text);
+}
+
+function hasExplicitAgentSlackContext(text: string): boolean {
+  const withoutUrls = text.replace(/https?:\/\/\S+/gi, " ");
+  return /\b(?:application|proposal|drafts?|prep|listing|cover letter|qa|queue|chrome|browser|blocked|blocker|proof|portfolio|connects|boost|hunting|running|health|retry|submitted|interview|hired|lost|upwork\s+(?:agent|bot|application|listing|proposal)|upload\s+files?|attach\s+files?)\b/i.test(withoutUrls);
+}
+
+function shouldAllowSlackLearningAndActions(params: SlackReasoningGatewayParams, state: ReturnType<typeof getSlackThreadStateByThreadTs>): boolean {
+  return Boolean(state || params.botMentioned || parseSlackOperatorIntent(params.text) || hasExplicitAgentSlackContext(params.text));
+}
+
+async function postGatewayProgressReply(params: SlackReasoningGatewayParams, decision: SlackConversationBrainDecision): Promise<void> {
+  if (!decision.progressReplyNeeded) return;
+  const progress = decision.progressReply?.trim() || "I’m on it — checking the current context before I act.";
+  const text = await userFacingSlackCopy({
+    deterministicText: progress,
+    userMessage: params.text,
+    intent: `${decision.intent}:progress`,
+    context: { plannedActions: decision.actions },
+    copyProvider: params.copyProvider,
+  });
+  await postThreadReply(params.client, params.channelId, params.threadTs, text);
+}
+
+export async function handleSlackReasoningGateway(params: SlackReasoningGatewayParams): Promise<void> {
+  const state = getSlackThreadStateByThreadTs(params.channelId, params.threadTs);
+  const upworkUrl = params.upworkUrl ?? parseUpworkJobUrlFromText(params.text);
+  const hasFiles = Boolean(params.files?.length);
+  const relevant = shouldFallbackWithoutLlm({ ...params, upworkUrl }, state);
+  const allowLearningAndActions = shouldAllowSlackLearningAndActions({ ...params, upworkUrl }, state);
+  const canExecuteConversationBrainAction = relevant && allowLearningAndActions;
+  let learnedFromGateway = false;
+
+  if (allowLearningAndActions && params.text.trim()) {
+    learnFromSlackMessage({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      text: params.text,
+      state,
+    });
+    learnedFromGateway = true;
+  }
+
+  const deterministicFirstOperatorIntent = parseSlackOperatorIntent(params.text);
+  if (
+    canExecuteConversationBrainAction &&
+    deterministicFirstOperatorIntent &&
+    (
+      deterministicFirstOperatorIntent.type === "restart_browser_session" ||
+      deterministicFirstOperatorIntent.type === "open_remote_chrome"
+    )
+  ) {
+    const deterministicText = await buildSlackOperatorReply(deterministicFirstOperatorIntent, params.operatorDeps);
+    const preservePhrases = [
+      deterministicText.includes("Final submit remains manual") ? "Final submit remains manual" : null,
+      deterministicText.includes("did not click through login, CAPTCHA, security checks, or submit anything")
+        ? "did not click through login, CAPTCHA, security checks, or submit anything"
+        : null,
+      deterministicText.includes("did not paste through VNC or click submit")
+        ? "did not paste through VNC or click submit"
+        : null,
+    ].filter((phrase): phrase is string => Boolean(phrase));
+    const text = await userFacingSlackCopy({
+      deterministicText,
+      userMessage: params.text,
+      intent: `operator_${deterministicFirstOperatorIntent.type}`,
+      context: {
+        operatorIntent: deterministicFirstOperatorIntent.type,
+        hasTrackedThread: Boolean(state),
+      },
+      preservePhrases,
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return;
+  }
+
+  if (canExecuteConversationBrainAction && hasFiles && state) {
+    await handleSlackFilesMessage({
+      state,
+      files: params.files ?? [],
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      client: params.client,
+      copyProvider: params.copyProvider,
+    });
+    return;
+  }
+
+  if (canExecuteConversationBrainAction && upworkUrl && (params.botMentioned || state) && params.messageTs) {
+    await handleUrlMessage({
+      channelId: params.channelId,
+      messageTs: params.messageTs,
+      threadTs: params.threadTs,
+      text: params.text,
+      client: params.client,
+      copyProvider: params.copyProvider,
+    });
+    return;
+  }
+
+  const conversationBrain = await planSlackConversationWithLlm(
+    buildSlackConversationBrainInput({
+      state,
+      text: params.text,
+      hasSlackFiles: hasFiles,
+      botMentioned: params.botMentioned,
+      upworkUrl,
+      allowedUser: true,
+      allowedChannel: true,
+    }),
+    params.conversationProvider,
+  );
+  if (conversationBrain.ok) {
+    if (canExecuteConversationBrainAction) {
+      persistConversationBrainLearning({
+        channelId: params.channelId,
+        threadTs: params.threadTs,
+        text: params.text,
+        state,
+        decision: conversationBrain.decision,
+      });
+      await postGatewayProgressReply(params, conversationBrain.decision);
+      const handled = await executeConversationBrainDecision({
+        decision: conversationBrain.decision,
+        state,
+        channelId: params.channelId,
+        threadTs: params.threadTs,
+        text: params.text,
+        client: params.client,
+        copyProvider: params.copyProvider,
+        focusQaTab: params.focusQaTab,
+        operatorDeps: params.operatorDeps,
+        files: params.files,
+        upworkUrl,
+        messageTs: params.messageTs,
+      });
+      if (handled) return;
+    }
+  }
+
+  if (!relevant && conversationBrain.ok) {
+    return;
+  }
+
+  if (!relevant) {
+    return;
+  }
+
+  await handleThreadCommandFallback(params, { skipLearning: learnedFromGateway });
+}
+
+export async function handleThreadCommand(params: SlackReasoningGatewayParams): Promise<void> {
+  await handleSlackReasoningGateway(params);
+}
+
+async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, options: { skipLearning?: boolean } = {}): Promise<void> {
   const state = getSlackThreadStateByThreadTs(params.channelId, params.threadTs);
   const operatorIntent = parseSlackOperatorIntent(params.text);
   if (operatorIntent) {
@@ -1794,12 +2179,14 @@ export async function handleThreadCommand(params: {
     return;
   }
 
-  learnFromSlackMessage({
-    channelId: params.channelId,
-    threadTs: params.threadTs,
-    text: params.text,
-    state,
-  });
+  if (!options.skipLearning) {
+    learnFromSlackMessage({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      text: params.text,
+      state,
+    });
+  }
 
   const conversationBrain = await planSlackConversationWithLlm(
     buildSlackConversationBrainInput({
@@ -1844,7 +2231,13 @@ export async function handleThreadCommand(params: {
   }
 
   if (command.type === "qa_queue") {
-    await postThreadReply(params.client, params.channelId, params.threadTs, formatProtectedQaQueueReply());
+    const text = await userFacingSlackCopy({
+      deterministicText: formatProtectedQaQueueReply(),
+      userMessage: params.text,
+      intent: "qa_queue",
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
@@ -1876,6 +2269,7 @@ export async function handleThreadCommand(params: {
       channelId: params.channelId,
       threadTs: params.threadTs,
       client: params.client,
+      copyProvider: params.copyProvider,
     });
     return;
   }
@@ -1926,14 +2320,27 @@ export async function handleThreadCommand(params: {
       }),
       limit: 4,
     });
-    await postThreadReply(params.client, params.channelId, params.threadTs, reply.text);
+    const text = await userFacingSlackCopy({
+      deterministicText: reply.text,
+      userMessage: params.text,
+      intent: "memory_query",
+      context: { jobId: state?.jobId ?? null },
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
   if (command.type === "memory_remember") {
     const instruction = command.instruction?.trim();
     if (!instruction) {
-      await postThreadReply(params.client, params.channelId, params.threadTs, "Tell me exactly what to remember.");
+      const text = await userFacingSlackCopy({
+        deterministicText: "Tell me exactly what to remember.",
+        userMessage: params.text,
+        intent: "memory_remember",
+        copyProvider: params.copyProvider,
+      });
+      await postThreadReply(params.client, params.channelId, params.threadTs, text);
       return;
     }
     const memory = rememberSalesLearning({
@@ -1942,7 +2349,14 @@ export async function handleThreadCommand(params: {
       channelId: params.channelId,
       threadTs: params.threadTs,
     });
-    await postThreadReply(params.client, params.channelId, params.threadTs, `Got it — I’ll remember that as a ${memory.scope} sales rule.`);
+    const text = await userFacingSlackCopy({
+      deterministicText: `Got it — I’ll remember that as a ${memory.scope} sales rule.`,
+      userMessage: params.text,
+      intent: "memory_remember",
+      context: { scope: memory.scope },
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
@@ -1959,14 +2373,16 @@ export async function handleThreadCommand(params: {
       : relevant[0]
         ? forgetSalesLearning({ id: relevant[0].id })
         : 0;
-    await postThreadReply(
-      params.client,
-      params.channelId,
-      params.threadTs,
-      forgotten > 0
+    const text = await userFacingSlackCopy({
+      deterministicText: forgotten > 0
         ? "Done — I forgot that learning signal."
-        : "I could not find a matching sales-learning memory to forget. Name the proof, source, boost, or draft pattern and I’ll remove it."
-    );
+        : "I could not find a matching sales-learning memory to forget. Name the proof, source, boost, or draft pattern and I’ll remove it.",
+      userMessage: params.text,
+      intent: "memory_forget",
+      context: { forgotten },
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
@@ -1987,12 +2403,13 @@ export async function handleThreadCommand(params: {
   }
 
   if (!state) {
-    await postThreadReply(
-      params.client,
-      params.channelId,
-      params.threadTs,
-      "I heard you, but I can’t find the job tied to this thread. Send the Upwork listing link here and I’ll pick it up."
-    );
+    const text = await userFacingSlackCopy({
+      deterministicText: "I heard you, but I can’t find the job tied to this thread. Send the Upwork listing link here and I’ll pick it up.",
+      userMessage: params.text,
+      intent: "missing_thread_state",
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
@@ -2031,7 +2448,15 @@ export async function handleThreadCommand(params: {
     const response = `This thread tracks ${state.upworkUrl} but no job id was parsed. ${
       command.type === "approve_prepare" || command.type === "prepare_draft" || command.type === "draft_preview" ? "I can’t prep it until I have the job id. Send the Upwork listing link here and I’ll pick it up." : "Please share a supported Upwork job URL first."
     }`;
-    await postThreadReply(params.client, params.channelId, params.threadTs, response);
+    const text = await userFacingSlackCopy({
+      deterministicText: response,
+      userMessage: params.text,
+      intent: command.type,
+      context: { upworkUrl: state.upworkUrl },
+      preservePhrases: [state.upworkUrl],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
     return;
   }
@@ -2041,12 +2466,14 @@ export async function handleThreadCommand(params: {
       updateApplicationStatus(state.jobId, "approved", "Approved from Slack socket thread command.");
     }
     updateSlackThreadStateStatus(state.channelId, state.threadTs, "approve_requested");
-    await postThreadReply(
-      params.client,
-      params.channelId,
-      params.threadTs,
-      `I marked ${humanApplicationLabel(state.jobId)} approved.`
-    );
+    const text = await userFacingSlackCopy({
+      deterministicText: `I marked ${humanApplicationLabel(state.jobId)} approved.`,
+      userMessage: params.text,
+      intent: "approve",
+      context: { jobId: state.jobId },
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
@@ -2055,7 +2482,14 @@ export async function handleThreadCommand(params: {
       updateApplicationStatus(state.jobId, "rejected", "Rejected from Slack socket thread command.");
     }
     updateSlackThreadStateStatus(state.channelId, state.threadTs, "reject_requested");
-    await postThreadReply(params.client, params.channelId, params.threadTs, `I archived ${humanApplicationLabel(state.jobId)} from the active QA flow.`);
+    const text = await userFacingSlackCopy({
+      deterministicText: `I archived ${humanApplicationLabel(state.jobId)} from the active QA flow.`,
+      userMessage: params.text,
+      intent: "reject",
+      context: { jobId: state.jobId },
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
@@ -2068,7 +2502,15 @@ export async function handleThreadCommand(params: {
     if (!result.ok) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
     }
-    await postThreadReply(params.client, params.channelId, params.threadTs, result.text);
+    const text = await userFacingSlackCopy({
+      deterministicText: result.text,
+      userMessage: params.text,
+      intent: "revise",
+      context: { jobId: state.jobId, ok: result.ok },
+      preservePhrases: result.text.includes("Final submit remains manual") ? ["Final submit remains manual"] : [],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
@@ -2080,7 +2522,14 @@ export async function handleThreadCommand(params: {
     });
     if (!revision.ok) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
-      await postThreadReply(params.client, params.channelId, params.threadTs, revision.text);
+      const text = await userFacingSlackCopy({
+        deterministicText: revision.text,
+        userMessage: params.text,
+        intent: "proof_revision",
+        context: { jobId: state.jobId, ok: false },
+        copyProvider: params.copyProvider,
+      });
+      await postThreadReply(params.client, params.channelId, params.threadTs, text);
       return;
     }
     const result = queuePrepareDraftFromSlackThread({
@@ -2111,7 +2560,17 @@ export async function handleThreadCommand(params: {
     if (!result.ok) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
     }
-    await postThreadReply(params.client, params.channelId, params.threadTs, result.text);
+    const text = result.ok
+      ? result.text
+      : await userFacingSlackCopy({
+        deterministicText: result.text,
+        userMessage: params.text,
+        intent: "draft_preview",
+        context: { jobId: state.jobId, ok: result.ok },
+        preservePhrases: result.text.includes("Final submit remains manual") ? ["Final submit remains manual"] : [],
+        copyProvider: params.copyProvider,
+      });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
@@ -2239,29 +2698,51 @@ export async function handleThreadCommand(params: {
       updateApplicationStatus(state.jobId, "submitted", "Marked submitted from Slack after Steve submitted manually. Current remote Chrome text could not be queued; final version is last captured QA version if available.");
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "submitted_marked");
     }
-    await postThreadReply(
-      params.client,
-      params.channelId,
-      params.threadTs,
-      result.ok
+    const text = await userFacingSlackCopy({
+      deterministicText: result.ok
         ? result.text
-        : `I marked ${humanApplicationLabel(state.jobId)} as submitted in local state. I could not queue a final page capture, so the final version is the last captured QA version if available. Final submit remains manual.`
-    );
+        : `I marked ${humanApplicationLabel(state.jobId)} as submitted in local state. I could not queue a final page capture, so the final version is the last captured QA version if available. Final submit remains manual.`,
+      userMessage: params.text,
+      intent: "mark_submitted",
+      context: { jobId: state.jobId, queued: result.ok },
+      preservePhrases: ["Final submit remains manual"],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
   if (command.type === "record_outcome") {
     if (!command.outcomeStatus) {
-      await postThreadReply(params.client, params.channelId, params.threadTs, "I understand this is an outcome update, but I need one of: got reply, interview booked, hired, or lost.");
+      const text = await userFacingSlackCopy({
+        deterministicText: "I understand this is an outcome update, but I need one of: got reply, interview booked, hired, or lost.",
+        userMessage: params.text,
+        intent: "record_outcome",
+        copyProvider: params.copyProvider,
+      });
+      await postThreadReply(params.client, params.channelId, params.threadTs, text);
       return;
     }
     if (!state.jobId) {
-      await postThreadReply(params.client, params.channelId, params.threadTs, "I can’t record that outcome until this thread is tied to a job.");
+      const text = await userFacingSlackCopy({
+        deterministicText: "I can’t record that outcome until this thread is tied to a job.",
+        userMessage: params.text,
+        intent: "record_outcome",
+        copyProvider: params.copyProvider,
+      });
+      await postThreadReply(params.client, params.channelId, params.threadTs, text);
       return;
     }
     if (!maybeJobStatus) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
-      await postThreadReply(params.client, params.channelId, params.threadTs, "I found the thread, but there is no application record to update yet.");
+      const text = await userFacingSlackCopy({
+        deterministicText: "I found the thread, but there is no application record to update yet.",
+        userMessage: params.text,
+        intent: "record_outcome",
+        context: { jobId: state.jobId },
+        copyProvider: params.copyProvider,
+      });
+      await postThreadReply(params.client, params.channelId, params.threadTs, text);
       return;
     }
 
@@ -2272,7 +2753,14 @@ export async function handleThreadCommand(params: {
     );
     if (!updated) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
-      await postThreadReply(params.client, params.channelId, params.threadTs, "I couldn’t record that outcome for this application.");
+      const text = await userFacingSlackCopy({
+        deterministicText: "I couldn’t record that outcome for this application.",
+        userMessage: params.text,
+        intent: "record_outcome",
+        context: { jobId: state.jobId },
+        copyProvider: params.copyProvider,
+      });
+      await postThreadReply(params.client, params.channelId, params.threadTs, text);
       return;
     }
 
@@ -2292,12 +2780,14 @@ export async function handleThreadCommand(params: {
       logger.warn(`Sales learning reflection skipped: ${error instanceof Error ? error.message : String(error)}`);
     });
     const outcomeLabel = command.outcomeLabel ?? command.outcomeStatus;
-    await postThreadReply(
-      params.client,
-      params.channelId,
-      params.threadTs,
-      `Outcome recorded: ${humanApplicationLabel(state.jobId)} is now ${outcomeLabel}. I’ll use that signal in future fit/proof learning.`
-    );
+    const text = await userFacingSlackCopy({
+      deterministicText: `Outcome recorded: ${humanApplicationLabel(state.jobId)} is now ${outcomeLabel}. I’ll use that signal in future fit/proof learning.`,
+      userMessage: params.text,
+      intent: "record_outcome",
+      context: { jobId: state.jobId, outcome: outcomeLabel },
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 }

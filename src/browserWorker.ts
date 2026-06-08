@@ -1206,6 +1206,27 @@ function countPrepareDraftStatusPost(result: ProcessActionResult, postStatus: "p
   }
 }
 
+async function postSoulAwareBrowserThreadMessage(input: {
+  thread: SlackThreadContext;
+  deterministicText: string;
+  intent: string;
+  context?: Record<string, unknown>;
+  preservePhrases?: string[];
+}): Promise<boolean> {
+  const copy = await rewriteSlackCopyWithKimi({
+    path: "conversation_reply",
+    deterministicText: input.deterministicText,
+    intent: input.intent,
+    context: input.context,
+    preservePhrases: input.preservePhrases,
+  });
+  return postSlackThreadMessage({
+    channel: input.thread.channelId,
+    threadTs: input.thread.threadTs,
+    text: copy.text,
+  });
+}
+
 function hasHardRedFlags(job: ScoredJob): boolean {
   const redFlagTerms = ["scam", "commission only", "full-time", "full time", "on-site", "onsite", "w2", "verification", "blocked"];
   const signals = [
@@ -2719,15 +2740,17 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
     }, null, 2));
     if (thread) {
       updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "capture_failed", { jobId: action.jobId });
-      await postSlackThreadMessage({
-        channel: thread.channelId,
-        threadTs: thread.threadTs,
-        text: [
+      await postSoulAwareBrowserThreadMessage({
+        thread,
+        intent: "browser_capture_unknown_source",
+        context: { url },
+        deterministicText: [
           "⚠️ Browser capture skipped.",
           "I could not tie this job URL to an allowed discovery source or an explicit Slack URL intake, so I did not open it in Chrome.",
           `URL: ${url}`,
           `Retry command: mention me with the Upwork job URL in this thread or queue it from Best Matches/saved search discovery.`,
         ].join("\n"),
+        preservePhrases: [url],
       });
     }
     updateBrowserActionStatus(action.id, "failed", message);
@@ -2939,10 +2962,11 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         const message = "Application snapshot could not read remote Chrome fields before the browser session closed.";
         updateBrowserActionStatus(action.id, "failed", message);
         if (thread) {
-          await postSlackThreadMessage({
-            channel: thread.channelId,
-            threadTs: thread.threadTs,
-            text: `${message} Final version is the last captured QA/readback version if available.`,
+          await postSoulAwareBrowserThreadMessage({
+            thread,
+            intent: "application_snapshot_failed",
+            deterministicText: `${message} Final version is the last captured QA/readback version if available.`,
+            preservePhrases: ["Final version is the last captured QA/readback version if available."],
           });
         }
         return result;
@@ -2963,12 +2987,13 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           : persisted.fallbackReason ?? "Application text unavailable; used last captured QA version if available."
       );
       if (thread) {
-        await postSlackThreadMessage({
-          channel: thread.channelId,
-          threadTs: thread.threadTs,
-          text: persisted.ok
+        await postSoulAwareBrowserThreadMessage({
+          thread,
+          intent: "application_snapshot_saved",
+          deterministicText: persisted.ok
             ? `Saved current remote Chrome application text as ${persisted.label}. Final submit remains manual on my side.`
             : `${persisted.fallbackReason ?? "Remote Chrome text was unavailable."} I will not claim final submitted text beyond the last captured QA/readback version.`,
+          preservePhrases: persisted.ok ? ["Final submit remains manual"] : ["I will not claim final submitted text beyond the last captured QA/readback version."],
         });
       }
       return result;
@@ -2999,10 +3024,11 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         if (thread) {
           updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "manual_attention_required");
           if (!alreadyManual) {
-            await postSlackThreadMessage({
-              channel: thread.channelId,
-              threadTs: thread.threadTs,
-              text: [
+            await postSoulAwareBrowserThreadMessage({
+              thread,
+              intent: "browser_capture_blocked",
+              context: { browserState: threadStatus, pageTitle: snapshot?.title ?? null },
+              deterministicText: [
                 "⚠️ Browser capture is blocked.",
                 threadStatus === "browser_profile_in_use"
                   ? "Remote Chrome is already using the shared profile, so I paused this capture safely."
@@ -3013,6 +3039,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
                 "Next: clear the visible remote Chrome issue, then reply “retry” in this Slack thread.",
                 "Ask for debug details if you need the raw browser state.",
               ].filter((line): line is string => Boolean(line)).join("\n"),
+              preservePhrases: ["reply “retry”"],
             });
           }
           if (["login_required", "two_factor_required", "captcha_or_security_challenge"].includes(threadStatus)) {
@@ -3042,17 +3069,18 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "capture_failed", { jobId: action.jobId });
           const alreadyManual = getSlackThreadStateByThreadTs(thread.channelId, thread.threadTs)?.status === "manual_attention_required";
           if (!alreadyManual) {
-            await postSlackThreadMessage({
-              channel: thread.channelId,
-              threadTs: thread.threadTs,
-              text: [
+            await postSoulAwareBrowserThreadMessage({
+              thread,
+              intent: "browser_capture_low_confidence",
+              context: { currentUrl: snapshot?.url ?? url, currentTitle: snapshot?.title ?? null },
+              deterministicText: [
                 "⚠️ Browser capture failed for this job.",
                 "I could not read enough job content to score or draft safely. The browser session was not marked blocked.",
                 `Current URL: ${snapshot?.url ?? url}`,
                 `Current title: ${snapshot?.title ?? "n/a"}`,
-                `Extraction diagnostics: ${JSON.stringify(extractionDiagnostics)}`,
-                "Next: reply “retry” in this Slack thread after the page is readable.",
+                "Next: reply “retry” in this Slack thread after the page is readable. Ask for debug details if you need raw extraction diagnostics.",
               ].join("\n"),
+              preservePhrases: [snapshot?.url ?? url, "reply “retry”"],
             });
           }
         }
