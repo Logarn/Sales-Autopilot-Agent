@@ -382,7 +382,9 @@ async function runTests(): Promise<void> {
     );
     assert(manualReviewDiscovery.status === "posted", "Manual-review discovery lead should post via webhook fallback");
     assert(manualReviewDiscovery.outcome === "posted", "Manual-review discovery lead should report posted outcome");
-    assert(/^New lead:/i.test(webhookPostedText), "Review-needed lead should use compact safe fallback copy when no LLM provider is available");
+    assert(webhookPostedText.includes("*Hot take:*"), "Review-needed lead should keep SDR packet fallback copy when no LLM provider is available");
+    assert(webhookPostedText.includes("*Recommendation:* maybe"), "Review-needed lead should include a maybe recommendation");
+    assert(webhookPostedText.includes("*Connects/boost:*"), "Review-needed lead should include Connects/boost guidance");
     assert(webhookPostedText.includes(manualReviewJob.url), "Review-needed lead should include the Upwork link");
     assert(webhookPostedText.includes("stop before submit"), "Review-needed lead should preserve the final-submit boundary");
     assert(/Next:.*prep it/i.test(webhookPostedText), "Review-needed lead should ask for a clear next action");
@@ -491,7 +493,21 @@ async function runTests(): Promise<void> {
           isAvailable: () => true,
           completeJson: async (request: any) => {
             kimiLeadRequests.push(request);
-            return { ok: true, data: { text: `Kimi lead: This one is worth a real shot. Next: review it in VNC when ready; I’ll stop before submit.\n${kimiLeadJob.url}` } };
+            return {
+              ok: true,
+              data: {
+                text: [
+                  "*Hot take:* <@U0A2X5BCNKC> <@U0AHJFYV42K> Kimi-written lead says this one is worth a real shot.",
+                  "*Why it fits:* Klaviyo retention work for a beauty ecommerce brand.",
+                  "*Proof angle:* Lead with Truly Beauty case study.",
+                  "*Risks/watchouts:* Keep an eye on client quality.",
+                  "*Connects/boost:* 4 required; no boost suggested from visible data.",
+                  "*Recommendation:* prep",
+                  "*Next:* Review it in VNC when ready; I’ll stop before submit.",
+                  kimiLeadJob.url,
+                ].join("\n"),
+              },
+            };
           },
         },
         postChannelMessage: async (payload) => {
@@ -501,7 +517,8 @@ async function runTests(): Promise<void> {
       },
     );
     assert(kimiLeadDiscovery.status === "posted", "Lead packet should still post through the normal discovery Slack path.");
-    assert(kimiLeadText.startsWith("Kimi lead:"), "Lead packet should use Kimi copy when the provider is available and safe.");
+    assert(kimiLeadText.includes("Kimi-written lead"), "Lead packet should use Kimi copy when the provider is available and safe.");
+    assert(kimiLeadText.includes("*Recommendation:* prep"), "Kimi lead packet should preserve SDR recommendation formatting.");
     assert(kimiLeadRequests.some((request) => request.messages?.[1]?.content?.includes("\"path\":\"lead_packet\"")), "Lead packet copy request should use the lead_packet path.");
     assert(kimiLeadRequests.some((request) => JSON.stringify(request).includes("Operating constitution from soul.md")), "Lead packet copy request should include soul.md context.");
     assert(kimiLeadText.includes("stop before submit"), "Lead packet copy must preserve final-submit safety wording.");
