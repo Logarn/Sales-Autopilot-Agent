@@ -85,7 +85,7 @@ export function isSupportedUpworkJobUrl(value: string): boolean {
   }
   return Boolean(
     parsed.pathname.match(/^\/jobs\/(?:[^/?#]+_)?~[A-Za-z0-9_-]{8,}\/?$/i) ||
-    parsed.pathname.match(/^\/nx\/find-work\/best-matches\/details\/~[A-Za-z0-9_-]{8,}/i) ||
+    parsed.pathname.match(/^\/nx\/find-work\/best-matches\/details\/~[A-Za-z0-9_-]{8,}\/?$/i) ||
     parsed.pathname.match(/^\/(?:nx|ab)\/proposals\/job\/~[A-Za-z0-9_-]{8,}\/apply\/?$/i)
   );
 }

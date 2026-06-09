@@ -8,6 +8,7 @@ import {
   BROWSER_USER_DATA_DIR,
 } from "./config";
 import { getBrowserSessionStatus, listUnresolvedBrowserChallengeQuarantines } from "./browserSession";
+import { isSupportedUpworkJobUrl } from "./browserCapture";
 import {
   acquireBrowserSession,
   checkCdpEndpoint,
@@ -61,7 +62,7 @@ function stripTrailingPunctuation(value: string): string {
 function parseHttpUrl(text: string): string | null {
   const match = text.match(/https?:\/\/[^\s<>]+/i);
   if (!match) return null;
-  const raw = match[0].replace(/[),.;]+$/g, "");
+  const raw = match[0].split("|")[0].replace(/[),.;]+$/g, "");
   try {
     const parsed = new URL(raw);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
@@ -71,11 +72,19 @@ function parseHttpUrl(text: string): string | null {
   }
 }
 
+export function isAllowedRemoteChromeOperatorUrl(value: string): boolean {
+  return isSupportedUpworkJobUrl(value);
+}
+
 export function parseSlackOperatorIntent(text: string): SlackOperatorIntent | null {
   const normalized = normalizeOperatorText(text);
   const commandText = stripTrailingPunctuation(normalized).toLowerCase();
   const url = parseHttpUrl(normalized);
-  if (url && /\b(?:open|bring|show|focus)\b.*\b(?:chrome|browser|application|draft|page|this)\b/i.test(normalized)) {
+  if (
+    url &&
+    isAllowedRemoteChromeOperatorUrl(url) &&
+    /\b(?:open|bring|show|focus)\b.*\b(?:chrome|browser|application|draft|page|this)\b/i.test(normalized)
+  ) {
     return { type: "open_remote_chrome", url };
   }
   if (/^(?:are you running|are you healthy|is chrome okay|is chrome ok|is slack listening|is the lead engine running|lead engine running|check production health|production health|service status|control status|health check)$/i.test(commandText)) {
@@ -192,6 +201,12 @@ async function loadChromium(): Promise<PlaywrightChromiumLike> {
 }
 
 export async function openRemoteChromeUrl(url: string): Promise<RemoteChromeOpenResult> {
+  if (!isAllowedRemoteChromeOperatorUrl(url)) {
+    return {
+      ok: false,
+      text: "I can only open known Upwork job or apply pages in remote Chrome from Slack. I did not open that URL.",
+    };
+  }
   const chromium = await loadChromium();
   const handle = await acquireBrowserSession(chromium, {
     mode: "cdp",
@@ -233,6 +248,9 @@ export async function buildSlackOperatorReply(intent: SlackOperatorIntent, deps:
   }
   if (intent.type === "restart_browser_session") {
     return restartBrowserSession(deps);
+  }
+  if (!isAllowedRemoteChromeOperatorUrl(intent.url)) {
+    return "I can only open known Upwork job or apply pages in remote Chrome from Slack. I did not open that URL.";
   }
   const result = await (deps.openRemoteChromeUrl ?? openRemoteChromeUrl)(intent.url);
   return result.text;
