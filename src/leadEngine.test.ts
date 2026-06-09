@@ -1,9 +1,38 @@
 import assert from "node:assert/strict";
-import { enqueueBrowserAction, listBrowserActions, updateBrowserActionStatus } from "./db";
-import { readLatestState, RECOVERED_BACKLOG_STOP_REASON, runLeadEngineCycle } from "./leadEngine";
-import { BrowserSessionStatus } from "./browserSession";
-import { BrowserSessionInspection, classifyBrowserSessionSnapshot } from "./browserSessionInspector";
-import { readHeartbeat } from "./heartbeat";
+import { rmSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import type { BrowserSessionStatus } from "./browserSession";
+import type { BrowserSessionInspection } from "./browserSessionInspector";
+
+let enqueueBrowserAction: typeof import("./db").enqueueBrowserAction;
+let listBrowserActions: typeof import("./db").listBrowserActions;
+let updateBrowserActionStatus: typeof import("./db").updateBrowserActionStatus;
+let readLatestState: typeof import("./leadEngine").readLatestState;
+let RECOVERED_BACKLOG_STOP_REASON: typeof import("./leadEngine").RECOVERED_BACKLOG_STOP_REASON;
+let runLeadEngineCycle: typeof import("./leadEngine").runLeadEngineCycle;
+let classifyBrowserSessionSnapshot: typeof import("./browserSessionInspector").classifyBrowserSessionSnapshot;
+let readHeartbeat: typeof import("./heartbeat").readHeartbeat;
+
+async function loadTestModules(): Promise<void> {
+  const tempDb = resolve(process.cwd(), "data/.tmp-lead-engine/jobs.db");
+  rmSync(dirname(tempDb), { recursive: true, force: true });
+  process.env.DB_PATH = tempDb;
+  process.env.AGENT_ENGINE_STATE_PATH = "data/.tmp-lead-engine/agent-engine-state.json";
+
+  const db = await import("./db");
+  const leadEngine = await import("./leadEngine");
+  const inspector = await import("./browserSessionInspector");
+  const heartbeat = await import("./heartbeat");
+
+  enqueueBrowserAction = db.enqueueBrowserAction;
+  listBrowserActions = db.listBrowserActions;
+  updateBrowserActionStatus = db.updateBrowserActionStatus;
+  readLatestState = leadEngine.readLatestState;
+  RECOVERED_BACKLOG_STOP_REASON = leadEngine.RECOVERED_BACKLOG_STOP_REASON;
+  runLeadEngineCycle = leadEngine.runLeadEngineCycle;
+  classifyBrowserSessionSnapshot = inspector.classifyBrowserSessionSnapshot;
+  readHeartbeat = heartbeat.readHeartbeat;
+}
 
 function cleanup(): void {
   for (const a of listBrowserActions("pending", 1000)) updateBrowserActionStatus(a.id, "cancelled", "cleanup");
@@ -105,6 +134,7 @@ function challengeInspection(): BrowserSessionInspection {
 }
 
 async function run(): Promise<void> {
+  await loadTestModules();
   cleanup();
 
   const empty = await runLeadEngineCycle({ mode: "run_once", dryRun: true }, {
