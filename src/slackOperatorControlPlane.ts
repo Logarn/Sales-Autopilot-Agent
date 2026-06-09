@@ -62,7 +62,7 @@ function stripTrailingPunctuation(value: string): string {
 function parseHttpUrl(text: string): string | null {
   const match = text.match(/https?:\/\/[^\s<>]+/i);
   if (!match) return null;
-  const raw = match[0].replace(/[),.;]+$/g, "");
+  const raw = match[0].split("|")[0].replace(/[),.;]+$/g, "");
   try {
     const parsed = new URL(raw);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;

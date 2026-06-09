@@ -86,12 +86,16 @@ async function runTests(): Promise<void> {
     assert(openIntent?.type === "open_remote_chrome", "Open URL in Chrome should parse as remote Chrome control.");
     const applyOpenIntent = parseSlackOperatorIntent("open https://www.upwork.com/ab/proposals/job/~0123456789abcdef/apply/ in Chrome");
     assert(applyOpenIntent?.type === "open_remote_chrome", "Supported Upwork apply URL should parse as remote Chrome control.");
+    const slackLinkOpenIntent = parseSlackOperatorIntent("open <https://www.upwork.com/jobs/~0123456789abcdef|Job> in Chrome");
+    assert(slackLinkOpenIntent?.type === "open_remote_chrome" && slackLinkOpenIntent.url === "https://www.upwork.com/jobs/~0123456789abcdef", "Slack-labeled Upwork links should strip labels before allow-listing.");
     assert(isAllowedRemoteChromeOperatorUrl("https://www.upwork.com/jobs/~0123456789abcdef"), "Supported Upwork job URL should be allowed.");
     assert(isAllowedRemoteChromeOperatorUrl("https://www.upwork.com/nx/find-work/best-matches/details/~0123456789abcdef?pageTitle=Job%20Details"), "Supported Upwork job detail URL should be allowed.");
     assert(!isAllowedRemoteChromeOperatorUrl("https://example.com/jobs/~0123456789abcdef"), "Non-Upwork URL must not be allowed for remote Chrome control.");
     assert(!isAllowedRemoteChromeOperatorUrl("https://www.upwork.com/ab/account-security/login"), "Upwork login/security URL must not be opened from Slack.");
+    assert(!isAllowedRemoteChromeOperatorUrl("https://www.upwork.com/nx/find-work/best-matches/details/~0123456789abcdef/ab/account-security/login"), "Upwork detail URLs must not allow extra login/security path suffixes.");
     assert(parseSlackOperatorIntent("open https://example.com/jobs/~0123456789abcdef in Chrome") === null, "Arbitrary external URL must not become a Chrome-open intent.");
     assert(parseSlackOperatorIntent("open https://www.upwork.com/ab/account-security/login in Chrome") === null, "Upwork login/security URL must not become a Chrome-open intent.");
+    assert(parseSlackOperatorIntent("open https://www.upwork.com/nx/find-work/best-matches/details/~0123456789abcdef/ab/account-security/login in Chrome") === null, "Upwork login/security path suffixes must not become Chrome-open intents.");
 
     const statusReply = await buildSlackOperatorReply({ type: "service_status" }, {
       buildHealthReport: () => ({
