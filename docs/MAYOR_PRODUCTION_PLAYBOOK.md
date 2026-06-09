@@ -206,6 +206,7 @@ commit only after identifying the target SHA, then rerun the full gate sequence.
 | production smoke | ok | `env ENV_FILE=/opt/upwork-agent/app/.env npm run production:smoke` |
 | controlled dry run | ok | `env ENV_FILE=/opt/upwork-agent/app/.env npm run agent:run-once:dry` |
 | service start upwork-agent-lead-engine.service | ok | `systemctl start upwork-agent-lead-engine.service` |
+| service start upwork-agent-health.timer | ok | `systemctl start upwork-agent-health.timer` |
 
 Final submit remains manual. Secrets are not printed by this report.
 ```

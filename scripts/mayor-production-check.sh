@@ -296,6 +296,8 @@ if [[ "$START_LEAD_ENGINE" -eq 1 ]]; then
     exit 1
   fi
   service_step start upwork-agent-lead-engine.service
+  service_step start upwork-agent-health.timer
 else
   note_step "service start upwork-agent-lead-engine.service" "skipped" "run with --start-lead-engine after clean gates"
+  note_step "service start upwork-agent-health.timer" "skipped" "run with --start-lead-engine after clean gates"
 fi
