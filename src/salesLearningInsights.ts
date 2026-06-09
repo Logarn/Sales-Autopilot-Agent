@@ -53,6 +53,11 @@ function inferInsightTopic(question?: string | null): SalesLearningInsightTopic 
   return "general";
 }
 
+function asksForConnectsWaste(question?: string | null): boolean {
+  return /\b(?:wast|wasted|wasting|spend|spent|burn|burned|cost)\w*\b/i.test(clean(question))
+    && /\bconnects?\b/i.test(clean(question));
+}
+
 function confidenceScore(confidence: SalesLearningMemory["confidence"]): number {
   if (confidence === "high") return 30;
   if (confidence === "medium") return 18;
@@ -158,6 +163,61 @@ function formatInsightLine(insight: SalesLearningInsight, index: number): string
   return `${index + 1}. ${insight.summary} (${confidence}, ${evidence}, ${insight.scope})`;
 }
 
+function numberFromMetadata(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function outcomeFromMetadata(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : null;
+}
+
+function boostSpendSummary(memories: SalesLearningMemory[]): string | null {
+  const boostMemories = memories.filter((memory) => memory.type === "boost_strategy");
+  let negativeSignals = 0;
+  let positiveSignals = 0;
+  let unknownSignals = 0;
+  let negativeTotalConnects = 0;
+  let negativeBoostConnects = 0;
+  let positiveTotalConnects = 0;
+  let positiveBoostConnects = 0;
+
+  for (const memory of boostMemories) {
+    const outcome = outcomeFromMetadata(memory.metadata.outcome);
+    const totalConnects = numberFromMetadata(memory.metadata.totalConnects)
+      ?? numberFromMetadata(memory.metadata.requiredConnects);
+    const boostConnects = numberFromMetadata(memory.metadata.boostConnects)
+      ?? numberFromMetadata(memory.metadata.chosenBoostConnects);
+    if (totalConnects === null && boostConnects === null) continue;
+    const evidence = Math.max(1, memory.evidenceCount);
+    if (outcome === "replied" || outcome === "interview" || outcome === "hired" || outcome === "reply") {
+      positiveSignals += evidence;
+      positiveTotalConnects += (totalConnects ?? 0) * evidence;
+      positiveBoostConnects += (boostConnects ?? 0) * evidence;
+    } else if (outcome === "lost" || outcome === "rejected") {
+      negativeSignals += evidence;
+      negativeTotalConnects += (totalConnects ?? 0) * evidence;
+      negativeBoostConnects += (boostConnects ?? 0) * evidence;
+    } else {
+      unknownSignals += evidence;
+    }
+  }
+
+  if (!negativeSignals && !positiveSignals && !unknownSignals) return null;
+
+  const totalSignals = negativeSignals + positiveSignals + unknownSignals;
+  const evidence = totalSignals >= 6 ? "strong" : totalSignals >= 2 ? "tentative" : "not enough data";
+  const negativePart = negativeSignals
+    ? `${negativeTotalConnects} total Connects, including ${negativeBoostConnects} boost Connects, are tied to ${negativeSignals} known negative boost signal${negativeSignals === 1 ? "" : "s"}`
+    : "No known negative boost spend is recorded yet";
+  const positivePart = positiveSignals
+    ? `${positiveTotalConnects} total Connects, including ${positiveBoostConnects} boost Connects, are tied to ${positiveSignals} positive signal${positiveSignals === 1 ? "" : "s"}`
+    : "no positive boost spend is recorded yet";
+  const unknownPart = unknownSignals
+    ? ` ${unknownSignals} boost signal${unknownSignals === 1 ? "" : "s"} still lack outcome attribution.`
+    : "";
+  return `Connects waste read: Evidence level: ${evidence}. ${negativePart}. For comparison, ${positivePart}.${unknownPart} Treat negative spend as waste candidates, not proof that every Connect was wasted.`;
+}
+
 export function buildSalesLearningInsightReply(input?: {
   question?: string | null;
   memories?: SalesLearningMemory[];
@@ -174,9 +234,12 @@ export function buildSalesLearningInsightReply(input?: {
   if (!insights.length) {
     return { topic, text: emptyReply(topic), insights };
   }
+  const spendSummary = topic === "boost" && asksForConnectsWaste(input?.question)
+    ? boostSpendSummary(memories)
+    : null;
   return {
     topic,
     insights,
-    text: `${topicLead(topic)}\nEvidence level: ${evidenceLevel(insights)}\n\n${insights.map(formatInsightLine).join("\n")}`,
+    text: `${topicLead(topic)}\nEvidence level: ${evidenceLevel(insights)}${spendSummary ? `\n${spendSummary}` : ""}\n\n${insights.map(formatInsightLine).join("\n")}`,
   };
 }

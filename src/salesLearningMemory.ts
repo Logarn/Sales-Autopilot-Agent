@@ -29,6 +29,11 @@ import type { ApplicationStatus, BrowserApplyFillPlan, ConnectsStrategySnapshot,
 const POSITIVE_OUTCOMES = new Set<ApplicationStatus>(["replied", "interview", "hired"]);
 const NEGATIVE_OUTCOMES = new Set<ApplicationStatus>(["lost", "rejected"]);
 
+type OutcomeConnectsStrategy = ConnectsStrategySnapshot & {
+  visibleBoostBids?: BoostBid[];
+  chosenBoostRank?: number | null;
+};
+
 export interface SalesLearningContextInput {
   jobId?: string | null;
   job?: ScoredJob | null;
@@ -538,12 +543,15 @@ export function recordApplicationOutcomeLearning(input: {
   const negative = negativeOutcome(input.outcome);
   const versionUsed = latestProposalVersionForLearning(input.jobId);
   const proofLabels = selectedProofLabels(input.jobId);
-  const sourceBackedConnects = draft?.connectsStrategy?.sourceBackedConnects;
+  const connectsStrategy = draft?.connectsStrategy as OutcomeConnectsStrategy | undefined;
+  const sourceBackedConnects = connectsStrategy?.sourceBackedConnects;
   const requiredConnects = sourceBackedConnects?.requiredConnects ?? draft?.connectsStrategy?.requiredConnects ?? draft?.suggestedConnects ?? null;
   const boostConnects = draft?.connectsStrategy?.suggestedBoostConnects ?? draft?.suggestedBoostConnects ?? null;
   const totalConnects = draft?.connectsStrategy?.totalConnects ?? (
     typeof requiredConnects === "number" && typeof boostConnects === "number" ? requiredConnects + boostConnects : null
   );
+  const boostRank = connectsStrategy?.chosenBoostRank ?? null;
+  const visibleBoostBids = connectsStrategy?.visibleBoostBids ?? [];
   const outcomeAt = new Date().toISOString();
   const memories: SalesLearningMemory[] = [];
 
@@ -570,7 +578,9 @@ export function recordApplicationOutcomeLearning(input: {
       requiredConnects,
       boostConnects,
       totalConnects,
-      boostRank: typeof draft?.connectsStrategy?.sourceBackedConnects?.boostConnects === "number" ? null : null,
+      boostRank,
+      visibleBoostBids,
+      connectsDecision: connectsStrategy?.decision ?? null,
       selectedPortfolioItems: draft?.selectedPortfolioItems.map((item) => item.name) ?? [],
       proofFilesAttached: listApplicationAssets(input.jobId).map((asset) => asset.originalName),
       opener: firstSentence(versionUsed?.proposalText ?? draft?.proposalText ?? ""),
@@ -616,7 +626,18 @@ export function recordApplicationOutcomeLearning(input: {
     }));
   }
 
-  if ((positive || negative) && draft?.connectsStrategy) {
+  if ((positive || negative) && connectsStrategy) {
+    memories.push(upsertStructuredSalesLearningSignals([buildBoostExpectedValueSignal({
+      scope: segments.scope,
+      requiredConnects,
+      chosenBoostConnects: boostConnects,
+      boostTable: visibleBoostBids,
+      chosenRank: boostRank,
+      outcome: input.outcome,
+      source: input.source ?? "application_outcome",
+      leadScore: job?.score ?? null,
+      matchLevel: job?.matchLevel ?? null,
+    })], { jobId: input.jobId })[0]);
     memories.push(upsertSalesLearningMemory({
       type: "boost_strategy",
       scope: segments.scope,
@@ -630,8 +651,8 @@ export function recordApplicationOutcomeLearning(input: {
       status: "tentative",
       source: input.source ?? "application_outcome",
       jobId: input.jobId,
-      examples: draft.connectsStrategy.reasons.slice(0, 4),
-      metadata: { outcome: input.outcome, vertical: segments.vertical, platform: segments.platform, requiredConnects, boostConnects, totalConnects },
+      examples: connectsStrategy.reasons.slice(0, 4),
+      metadata: { outcome: input.outcome, vertical: segments.vertical, platform: segments.platform, requiredConnects, boostConnects, totalConnects, boostRank, visibleBoostBids, connectsDecision: connectsStrategy.decision },
     }));
   }
 

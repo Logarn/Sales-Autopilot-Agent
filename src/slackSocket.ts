@@ -297,7 +297,7 @@ function parseOutcomeCommand(commandText: string, rawText: string): ParsedSlackS
     {
       status: "lost",
       label: "ignored/no reply",
-      pattern: /^(?:ignored|no\s+reply|no\s+response|ghosted|mark\s+(?:as\s+)?ignored)$/i,
+      pattern: /^(?:ignored|no\s+reply|no\s+response|ghosted|client\s+ghosted|bad\s+lead|mark\s+(?:as\s+)?ignored)$/i,
     },
   ];
   const match = outcomePatterns.find((candidate) => candidate.pattern.test(commandText));
@@ -347,7 +347,7 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
       source: "fallback",
     };
   }
-  if (/\b(?:what did you learn|what have you learned|what patterns are working|what proof is working|what boost strategy is working|why did you choose that|what would you do differently next time|what should mayor fix|what should codex fix|what improvement ideas do you have|what failed recently|what has failed recently)\b/i.test(commandText)) {
+  if (/\b(?:what did you learn|what have you learned|what patterns are working|what proof is working|what boost strategy is working|how many connects are we wasting|connects waste|wasting connects|why did you choose that|what would you do differently next time|what should mayor fix|what should codex fix|what improvement ideas do you have|what failed recently|what has failed recently)\b/i.test(commandText)) {
     return {
       type: "memory_query",
       rawText: normalized,

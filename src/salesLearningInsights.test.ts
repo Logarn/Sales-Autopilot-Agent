@@ -56,6 +56,18 @@ const memories: SalesLearningMemory[] = [
     confidence: "medium",
     evidenceCount: 4,
     status: "active",
+    metadata: { outcome: "replied", requiredConnects: 12, boostConnects: 28, totalConnects: 40 },
+  }),
+  memory({
+    id: 6,
+    type: "boost_strategy",
+    scope: "klaviyo:low_fit",
+    subject: "low-fit boost waste",
+    hypothesis: "Low-fit jobs with paid boosts should be treated as waste candidates until they show reply evidence.",
+    confidence: "low",
+    evidenceCount: 2,
+    status: "tentative",
+    metadata: { outcome: "lost", requiredConnects: 12, boostConnects: 22, totalConnects: 34 },
   }),
   memory({
     id: 4,
@@ -95,8 +107,13 @@ assert(boost.topic === "boost", "Boost question should choose boost topic.");
 assert(boost.text.includes("top-3 visibility"), "Boost answer should include boost strategy memory.");
 assert(!boost.text.includes("Fly Boutique"), "Boost answer should not include proof memories.");
 
+const waste = buildSalesLearningInsightReply({ memories, question: "how many Connects are we wasting?", limit: 3 });
+assert(waste.topic === "boost", "Connects waste question should choose boost topic.");
+assert(waste.text.includes("68 total Connects"), "Connects waste answer should total known negative Connects with evidence count.");
+assert(waste.text.includes("44 boost Connects"), "Connects waste answer should total known negative boost Connects with evidence count.");
+assert(waste.text.includes("waste candidates"), "Connects waste answer should avoid fake certainty.");
+
 const empty = buildSalesLearningInsightReply({ memories: [], question: "what source is working?" });
 assert(empty.text.includes("not have enough"), "Empty memory state should answer plainly without dumping internals.");
 
 console.log("sales learning insights tests passed");
-
