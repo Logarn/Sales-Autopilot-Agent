@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import Database from "better-sqlite3";
 import {
   answerMonthlyOperatorQuestion,
   buildFridayOperatorHandoff,
@@ -110,5 +114,76 @@ const emptyReport = buildFridayOperatorHandoff(emptySnapshot);
 assert(emptyReport.includes("Leads found: 0"), "Missing lead data should be shown as 0");
 assert(emptyReport.includes("Unavailable: no source-backed leads"), "Missing source data should be labeled unavailable");
 assert(emptyReport.includes("Unavailable: no submitted proof"), "Missing proof data should be labeled unavailable");
+
+{
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "operator-reports-"));
+  process.env.DB_PATH = path.join(tempDir, "jobs.db");
+  const { closeDb, getOperatorReportDbSnapshot } = require("./db") as typeof import("./db");
+  const fixtureDb = new Database(process.env.DB_PATH);
+
+  try {
+    fixtureDb.exec(`
+      INSERT INTO seen_jobs (id, title, url, match_level, source_query, seen_at)
+      VALUES
+        ('job-1', 'Lifecycle retention audit', 'https://www.upwork.com/jobs/~job1', 'high', 'Best Matches', '2026-06-10T10:00:00.000Z'),
+        ('job-2', 'Email QA role', 'https://www.upwork.com/jobs/~job2', 'medium', 'Best Matches', '2026-06-11T10:00:00.000Z'),
+        ('job-3', 'Low-fit admin role', 'https://www.upwork.com/jobs/~job3', 'low', 'Other Search', '2026-06-11T11:00:00.000Z');
+
+      INSERT INTO applications (
+        job_id,
+        status,
+        fit_score,
+        fit_reasons,
+        red_flags,
+        selected_portfolio_items,
+        proposal_text,
+        generated_at,
+        actual_total_connects,
+        attachments_used,
+        profile_highlights_used,
+        submitted_at,
+        updated_at
+      )
+      VALUES
+        ('job-1', 'replied', 91, '[]', '[]', '[]', 'proposal', '2026-06-10T12:00:00.000Z', 12, '["Fly Boutique retention proof"]', '["Lifecycle highlight"]', '2026-06-10T13:00:00.000Z', '2026-06-11T09:00:00.000Z'),
+        ('job-2', 'approved', 88, '[]', '[]', '[]', 'proposal', '2026-06-11T12:00:00.000Z', NULL, '[]', '[]', NULL, '2026-06-11T15:00:00.000Z');
+
+      INSERT INTO application_events (job_id, event_type, from_status, to_status, note, created_at)
+      VALUES ('job-1', 'status_change', 'submitted', 'replied', 'client replied', '2026-06-11T14:00:00.000Z');
+
+      INSERT INTO application_assets (job_id, source, source_file_id, original_name, proof_type, attach_policy, created_at)
+      VALUES ('job-1', 'slack_file', 'F123', 'Fly Boutique retention proof', 'case_study', 'attach', '2026-06-10T12:30:00.000Z');
+
+      INSERT INTO browser_actions (job_id, action_type, status, updated_at)
+      VALUES ('job-3', 'prepare_application_review', 'paused', '2026-06-11T16:00:00.000Z');
+
+      INSERT INTO sales_learning_memories (type, subject, hypothesis, confidence, evidence_count, status, updated_at)
+      VALUES ('proof_preference', 'Fly Boutique', 'Use Fly Boutique proof for retention-heavy Klaviyo work.', 'high', 4, 'active', '2026-06-11T17:00:00.000Z');
+    `);
+
+    const dbSnapshot = getOperatorReportDbSnapshot({
+      label: "Week ending 2026-06-12",
+      start: new Date("2026-06-09T00:00:00.000Z"),
+      end: new Date("2026-06-13T00:00:00.000Z"),
+      now: new Date("2026-06-12T09:00:00.000Z"),
+    });
+
+    assert.equal(dbSnapshot.leadsFound.value, 3, "DB snapshot should count seen jobs in period");
+    assert.equal(dbSnapshot.qualifiedLeads.value, 2, "DB snapshot should count high/medium leads");
+    assert.equal(dbSnapshot.applicationsPrepared.value, 2, "DB snapshot should count generated applications");
+    assert.equal(dbSnapshot.applicationsSubmitted.value, 1, "DB snapshot should count submitted applications only from submitted_at");
+    assert.equal(dbSnapshot.replies.value, 1, "DB snapshot should count reply events");
+    assert.equal(dbSnapshot.connectsUsed.value, 12, "DB snapshot should sum submitted application connects");
+    assert.equal(dbSnapshot.bestSource?.label, "Best Matches", "DB snapshot should rank source evidence");
+    assert.equal(dbSnapshot.bestProof?.label, "Fly Boutique retention proof", "DB snapshot should rank proof evidence");
+    assert.equal(dbSnapshot.blockedItems[0]?.label, "Low-fit admin role", "DB snapshot should surface paused browser work");
+    assert.equal(dbSnapshot.lessons[0]?.label, "proof_preference: Fly Boutique", "DB snapshot should surface DB-backed lessons");
+    assert.equal(dbSnapshot.steveActionItems[0]?.label, "Email QA role", "DB snapshot should surface Steve-needed review actions");
+  } finally {
+    fixtureDb.close();
+    closeDb();
+    fs.rmSync(tempDir, { force: true, recursive: true });
+  }
+}
 
 console.log("operator reports tests passed");
