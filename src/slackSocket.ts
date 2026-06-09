@@ -9,15 +9,20 @@ import {
 import { buildBrowserApplyPlan } from "./browserApply";
 import {
   applyApplicationRevision,
+  createBatchApplyWorkspace,
   enqueueBrowserActionDeduped,
+  getActiveBatchApplyWorkspace,
   getApplicationDraft,
   getApplicationProofPlanOverrides,
   getApplicationStatus,
   getBrowserActionById,
   getScoredJobForSlackPreview,
   getSlackConversationOwnership,
+  getSlackThreadStateByJobId,
   getSlackThreadStateByThreadTs,
   listActiveSlackBehaviorMemories,
+  listBatchApplyCandidateThreads,
+  listBatchApplyWorkspaceItems,
   listBrowserActions,
   listRecentSlackFailureReflections,
   getLatestProposalVersion,
@@ -25,7 +30,9 @@ import {
   recordProposalVersion,
   recordSlackFailureReflection,
   updateApplicationStatus,
+  updateBatchApplyWorkspaceItemStatus,
   updateSlackThreadStateStatus,
+  upsertBatchApplyWorkspaceItem,
   upsertSlackThreadState,
   upsertSlackBehaviorMemory,
   upsertSlackConversationOwnership,
@@ -48,6 +55,7 @@ import {
   pauseDiscoverySources,
 } from "./browserDiscoverySourceHealth";
 import {
+  BROWSER_QA_MAX_PROTECTED_TABS,
   SLACK_APP_TOKEN,
   SLACK_BOT_TOKEN,
   SLACK_SOCKET_MODE_ENABLED,
@@ -87,8 +95,10 @@ import { looksLikeProofPlanRevision, parseProofPlanOverrides, reviseProofPlanOve
 import {
   canQueueNewQaPreparation,
   focusProtectedQaApplicationTab,
-  formatProtectedQaQueueReply,
+  formatBatchApplyWorkspaceReply,
+  getBatchApplyWorkspaceView,
   getProtectedQaQueueItems,
+  type BatchApplyWorkspaceItemView,
   type ProtectedQaFocusResult,
 } from "./browserQaWorkspace";
 import { rewriteSlackCopyWithKimi, type SlackCopyProvider, type SlackCopyResult } from "./slackCopywriter";
@@ -172,8 +182,10 @@ export type SlackSocketParsedCommandType =
   | "approve_prepare"
   | "prepare_draft"
   | "draft_preview"
+  | "batch_prep"
   | "qa_queue"
   | "focus_qa_tab"
+  | "skip_batch_item"
   | "prep_issue_report"
   | "retry_action"
   | "discovery_keep_hunting"
@@ -183,6 +195,7 @@ export type SlackSocketParsedCommandType =
   | "discovery_clear_browser"
   | "reread_application"
   | "mark_submitted"
+  | "mark_batch_submitted"
   | "record_outcome"
   | "memory_query"
   | "memory_remember"
@@ -198,6 +211,7 @@ export interface ParsedSlackSocketCommand {
   actionId?: number;
   qaIndex?: number;
   qaQuery?: string;
+  batchTargetCount?: number;
   proposalVersionSource?: ProposalVersionSource;
   markSubmittedAfterCapture?: boolean;
   confidence?: "high" | "medium" | "low";
@@ -397,6 +411,23 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
   if (/^(?:debug blocker|debug blocked|blocker debug|blocked debug|debug browser blocker)$/i.test(commandText)) {
     return { type: "status", rawText: normalized, source: "fallback" };
   }
+  const batchPrepMatch = commandText.match(/^(?:prep|prepare)\s+(?:the\s+)?(?:next\s+|strong(?:est)?\s+)?(\d{1,2})(?:\s+(?:applications?|apps?|drafts?|leads?|jobs?))?$/i);
+  if (batchPrepMatch) {
+    return {
+      type: "batch_prep",
+      rawText: normalized,
+      batchTargetCount: Number.parseInt(batchPrepMatch[1] ?? "10", 10),
+      source: "fallback",
+    };
+  }
+  if (/^(?:prep|prepare)\s+(?:the\s+)?(?:strong|strongest|best|next)\s+(?:ones|applications?|apps?|drafts?|leads?|jobs?)$/i.test(commandText)) {
+    return {
+      type: "batch_prep",
+      rawText: normalized,
+      batchTargetCount: BROWSER_QA_MAX_PROTECTED_TABS,
+      source: "fallback",
+    };
+  }
   if (/^(?:what(?:'|’)?s blocked|what is blocked|what needs unblocking|blocked\??)$/i.test(commandText)) {
     return { type: "qa_queue", rawText: normalized, qaQuery: "blocked", source: "fallback" };
   }
@@ -419,8 +450,37 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
   if (/\b(?:i cleared chrome|chrome is clear|cleared chrome|remote browser is clear|browser is clear|done clearing chrome)\b/i.test(commandText)) {
     return { type: "discovery_clear_browser", rawText: normalized, source: "fallback" };
   }
-  const focusIndexMatch = commandText.match(/^(?:open|bring up|show|focus|retry)\s+(?:the\s+)?(?:number\s+)?(?:(first|second|third|fourth|fifth)|#?(\d+))(?:\s+(?:one|application|draft|in chrome))?$/i);
-  const ordinalIndex: Record<string, number> = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5 };
+  const focusApplicationIndexMatch = commandText.match(/^(?:open|bring up|show|focus)\s+(?:the\s+)?(?:application|app|draft)\s+(?:number\s+)?(?:(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)|#?(\d+))(?:\s+in\s+chrome)?$/i);
+  const ordinalIndex: Record<string, number> = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10 };
+  if (focusApplicationIndexMatch) {
+    return {
+      type: "focus_qa_tab",
+      rawText: normalized,
+      qaIndex: focusApplicationIndexMatch[1] ? ordinalIndex[focusApplicationIndexMatch[1].toLowerCase()] : Number.parseInt(focusApplicationIndexMatch[2] ?? "", 10),
+      source: "fallback",
+    };
+  }
+  const skipBatchIndexMatch = commandText.match(/^(?:skip|archive|drop)\s+(?:the\s+)?(?:application|app|draft|number)?\s*#?(\d+)$/i);
+  if (skipBatchIndexMatch) {
+    return {
+      type: "skip_batch_item",
+      rawText: normalized,
+      qaIndex: Number.parseInt(skipBatchIndexMatch[1] ?? "", 10),
+      source: "fallback",
+    };
+  }
+  const submittedBatchIndexMatch = commandText.match(/^(?:(?:mark\s+)?(?:application|app|draft)\s+#?(\d+)\s+(?:submitted|sent)|(?:submitted|sent)\s+(?:application|app|draft)\s+#?(\d+))$/i);
+  if (submittedBatchIndexMatch) {
+    return {
+      type: "mark_batch_submitted",
+      rawText: normalized,
+      qaIndex: Number.parseInt(submittedBatchIndexMatch[1] ?? submittedBatchIndexMatch[2] ?? "", 10),
+      proposalVersionSource: "final_submitted",
+      markSubmittedAfterCapture: true,
+      source: "fallback",
+    };
+  }
+  const focusIndexMatch = commandText.match(/^(?:open|bring up|show|focus|retry)\s+(?:the\s+)?(?:number\s+)?(?:(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)|#?(\d+))(?:\s+(?:one|application|draft|in chrome))?$/i);
   if (focusIndexMatch && !/^retry\b/i.test(commandText)) {
     return {
       type: "focus_qa_tab",
@@ -1537,6 +1597,296 @@ export function queueApplicationSnapshotFromSlackThread(input: {
   };
 }
 
+function clampBatchTarget(value: number | null | undefined): number {
+  const parsed = Number.isFinite(value ?? NaN) ? Math.floor(value ?? BROWSER_QA_MAX_PROTECTED_TABS) : BROWSER_QA_MAX_PROTECTED_TABS;
+  return Math.min(BROWSER_QA_MAX_PROTECTED_TABS, Math.max(1, parsed));
+}
+
+function screeningSummary(count: number): string {
+  return count > 0 ? `${count} answer${count === 1 ? "" : "s"}` : "none captured";
+}
+
+export function startBatchApplyWorkspaceFromSlack(input: {
+  channelId: string;
+  threadTs: string;
+  targetCount?: number;
+}): { ok: boolean; text: string; batchId?: number; queued: number; ready: number; blocked: number; skipped: number } {
+  const targetCount = clampBatchTarget(input.targetCount);
+  const batch = createBatchApplyWorkspace({
+    targetCount,
+    source: "slack_batch_command",
+    channelId: input.channelId,
+    threadTs: input.threadTs,
+  });
+  const existingProtected = new Map(getProtectedQaQueueItems(1000).map((item) => [item.jobId, item]));
+  const candidates = listBatchApplyCandidateThreads(Math.max(25, targetCount * 3));
+  let position = 0;
+  let queued = 0;
+  let ready = 0;
+  let blocked = 0;
+  let skipped = 0;
+  let stopReason: string | null = null;
+
+  for (const candidate of candidates) {
+    if (position >= targetCount) break;
+    if (getApplicationStatus(candidate.jobId) === "submitted") continue;
+    position += 1;
+    const existing = existingProtected.get(candidate.jobId);
+    if (existing) {
+      const status = existing.state === "blocked" ? "blocked" : "ready";
+      if (status === "blocked") blocked += 1;
+      else ready += 1;
+      upsertBatchApplyWorkspaceItem({
+        batchId: batch.id,
+        position,
+        jobId: candidate.jobId,
+        channelId: candidate.channelId,
+        threadTs: candidate.threadTs,
+        applyUrl: existing.applyUrl ?? candidate.upworkUrl,
+        tabReference: existing.tabReference ?? existing.applyUrl ?? candidate.upworkUrl,
+        proposalVersion: existing.proposalVersion ?? candidate.proposalVersion,
+        status,
+        title: candidate.title,
+        screeningSummary: existing.screening,
+        proofSummary: existing.proof,
+        portfolioSummary: existing.portfolio,
+        connectsSummary: existing.connects,
+        boostSummary: existing.boost,
+        lastVerifiedAt: existing.lastVerifiedAt,
+      });
+      continue;
+    }
+
+    const result = queuePrepareDraftFromSlackThread({
+      channelId: candidate.channelId,
+      threadTs: candidate.threadTs,
+      ackText: "Batch prep queued.",
+    });
+    if (!result.ok) {
+      position -= 1;
+      if (/applications waiting for QA|pause new prep/i.test(result.text)) {
+        stopReason = result.text;
+        break;
+      }
+      skipped += 1;
+      continue;
+    }
+    queued += 1;
+    upsertBatchApplyWorkspaceItem({
+      batchId: batch.id,
+      position,
+      jobId: candidate.jobId,
+      channelId: candidate.channelId,
+      threadTs: candidate.threadTs,
+      applyUrl: candidate.upworkUrl,
+      tabReference: candidate.upworkUrl,
+      proposalVersion: candidate.proposalVersion,
+      status: "queued",
+      title: candidate.title,
+      screeningSummary: screeningSummary(candidate.screeningAnswers.length),
+      proofSummary: candidate.proofSummary,
+      portfolioSummary: candidate.portfolioSummary,
+      connectsSummary: candidate.connectsSummary,
+      boostSummary: candidate.boostSummary,
+      lastVerifiedAt: null,
+    });
+  }
+
+  const tracked = listBatchApplyWorkspaceItems(batch.id).length;
+  if (tracked === 0) {
+    return {
+      ok: false,
+      batchId: batch.id,
+      queued,
+      ready,
+      blocked,
+      skipped,
+      text: "I do not have draft-ready Slack leads to batch prep yet. No browser tabs were opened and final submit remains manual.",
+    };
+  }
+  return {
+    ok: true,
+    batchId: batch.id,
+    queued,
+    ready,
+    blocked,
+    skipped,
+    text: [
+      `Batch workspace started for ${tracked}/${targetCount} application${targetCount === 1 ? "" : "s"}.`,
+      `${queued} queued for safe browser prep; ${ready} already ready for QA; ${blocked} blocked.`,
+      stopReason ? `Stopped early: ${stopReason}` : null,
+      "I will fill only safe fields, preserve protected tabs, and stop before submit. Final submit remains manual.",
+    ].filter((line): line is string => Boolean(line)).join("\n"),
+  };
+}
+
+function findBatchWorkspaceItem(index: number | undefined): BatchApplyWorkspaceItemView | null {
+  if (!index || index < 1) return null;
+  return getBatchApplyWorkspaceView().items.find((item) => item.index === index) ?? null;
+}
+
+function skipBatchApplyWorkspaceItem(index: number | undefined): { ok: boolean; text: string } {
+  const item = findBatchWorkspaceItem(index);
+  if (!item) {
+    return { ok: false, text: "I could not find that application in the batch workspace. Ask what’s ready to refresh the current batch state." };
+  }
+  const batch = getActiveBatchApplyWorkspace();
+  if (item.action && item.action.status !== "completed") {
+    updateBrowserActionStatus(item.action.id, "cancelled", "Skipped from Batch Apply Workspace.");
+  }
+  if (getApplicationStatus(item.jobId)) {
+    updateApplicationStatus(item.jobId, "rejected", "Skipped from Batch Apply Workspace.");
+  }
+  if (batch) {
+    updateBatchApplyWorkspaceItemStatus({
+      batchId: batch.id,
+      jobId: item.jobId,
+      status: "skipped",
+      lastVerifiedAt: new Date().toISOString(),
+    });
+  }
+  return {
+    ok: true,
+    text: `Skipped application ${item.index} from the batch workspace. I did not submit anything.`,
+  };
+}
+
+function markBatchApplyWorkspaceItemSubmitted(index: number | undefined): { ok: boolean; text: string } {
+  const item = findBatchWorkspaceItem(index);
+  if (!item) {
+    return { ok: false, text: "I could not find that application in the batch workspace. Ask what’s ready to refresh the current batch state." };
+  }
+  const batch = getActiveBatchApplyWorkspace();
+  const state = item.channelId && item.threadTs
+    ? getSlackThreadStateByThreadTs(item.channelId, item.threadTs)
+    : getSlackThreadStateByJobId(item.jobId);
+  const capture = state
+    ? queueApplicationSnapshotFromSlackThread({
+      channelId: state.channelId,
+      threadTs: state.threadTs,
+      source: "final_submitted",
+      markSubmittedAfterCapture: true,
+      note: "Human marked this batch application submitted manually; capture current remote Chrome text first when possible.",
+    })
+    : null;
+  if (!capture?.ok && getApplicationStatus(item.jobId)) {
+    updateApplicationStatus(item.jobId, "submitted", "Marked submitted from Batch Apply Workspace after human submitted manually.");
+  }
+  if (batch) {
+    updateBatchApplyWorkspaceItemStatus({
+      batchId: batch.id,
+      jobId: item.jobId,
+      status: "submitted",
+      lastVerifiedAt: new Date().toISOString(),
+    });
+  }
+  return {
+    ok: true,
+    text: capture?.ok
+      ? `Application ${item.index} is marked submitted after the human sent it manually. I queued a read-only final version capture. Final submit remains manual on my side.`
+      : `Application ${item.index} is marked submitted after the human sent it manually. I could not queue a page capture, so the final version is the latest captured QA version if available. Final submit remains manual.`,
+  };
+}
+
+function isBatchWorkspaceCommand(command: ParsedSlackSocketCommand): boolean {
+  return ["batch_prep", "qa_queue", "focus_qa_tab", "skip_batch_item", "mark_batch_submitted"].includes(command.type);
+}
+
+async function handleBatchWorkspaceCommand(params: {
+  command: ParsedSlackSocketCommand;
+  state: ReturnType<typeof getSlackThreadStateByThreadTs>;
+  channelId: string;
+  threadTs: string;
+  text: string;
+  client: App["client"];
+  copyProvider?: SlackCopyProvider;
+  focusQaTab?: (input: { jobId?: string | null; index?: number; query?: string | null }) => Promise<ProtectedQaFocusResult>;
+}): Promise<boolean> {
+  const { command } = params;
+  if (command.type === "batch_prep") {
+    const result = startBatchApplyWorkspaceFromSlack({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      targetCount: command.batchTargetCount,
+    });
+    const text = await userFacingSlackCopy({
+      deterministicText: result.text,
+      userMessage: params.text,
+      intent: "batch_prep",
+      context: {
+        batchId: result.batchId,
+        queued: result.queued,
+        ready: result.ready,
+        blocked: result.blocked,
+        finalSubmitManual: true,
+      },
+      preservePhrases: result.text.includes("Final submit remains manual") ? ["Final submit remains manual"] : [],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return true;
+  }
+
+  if (command.type === "qa_queue") {
+    const text = await userFacingSlackCopy({
+      deterministicText: formatBatchApplyWorkspaceReply(),
+      userMessage: params.text,
+      intent: "batch_workspace_status",
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return true;
+  }
+
+  if (command.type === "focus_qa_tab") {
+    const focus = await (params.focusQaTab ?? focusProtectedQaApplicationTab)({
+      jobId: command.qaIndex ? null : params.state?.jobId ?? null,
+      index: command.qaIndex,
+      query: command.qaQuery,
+    });
+    const text = await userFacingSlackCopy({
+      deterministicText: focus.text,
+      userMessage: params.text,
+      intent: "focus_qa_tab",
+      context: { jobId: params.state?.jobId ?? null, ok: focus.ok },
+      preservePhrases: focus.text.includes("Final submit is still untouched") ? ["Final submit is still untouched."] : [],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    if (focus.ok && params.state) {
+      updateSlackThreadStateStatus(params.state.channelId, params.state.threadTs, "status_checked");
+    }
+    return true;
+  }
+
+  if (command.type === "skip_batch_item") {
+    const result = skipBatchApplyWorkspaceItem(command.qaIndex);
+    const text = await userFacingSlackCopy({
+      deterministicText: result.text,
+      userMessage: params.text,
+      intent: "skip_batch_item",
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return true;
+  }
+
+  if (command.type === "mark_batch_submitted") {
+    const result = markBatchApplyWorkspaceItemSubmitted(command.qaIndex);
+    const text = await userFacingSlackCopy({
+      deterministicText: result.text,
+      userMessage: params.text,
+      intent: "mark_batch_submitted",
+      preservePhrases: result.text.includes("Final submit remains manual") ? ["Final submit remains manual"] : [],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return true;
+  }
+
+  return false;
+}
+
 export function buildDraftPreviewFromSlackThread(input: {
   channelId: string;
   threadTs: string;
@@ -2596,7 +2946,7 @@ async function executeConversationBrainDecision(params: {
 
   if (decision.intent === "qa_queue" || decision.actions.includes("show_qa_queue")) {
     const text = await userFacingSlackCopy({
-      deterministicText: formatProtectedQaQueueReply(),
+      deterministicText: formatBatchApplyWorkspaceReply(),
       userMessage: params.text,
       intent: "qa_queue",
       copyProvider: params.copyProvider,
@@ -2612,7 +2962,7 @@ async function executeConversationBrainDecision(params: {
     decision.actions.includes("open_application_page")
   ) {
     const focus = await (params.focusQaTab ?? focusProtectedQaApplicationTab)({
-      jobId: params.state?.jobId ?? null,
+      jobId: decision.qaIndex ? null : params.state?.jobId ?? null,
       index: decision.qaIndex ?? undefined,
       query: decision.qaQuery ?? null,
     });
@@ -3023,6 +3373,21 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
     return;
   }
 
+  const deterministicBatchCommand = parseSlackThreadCommand(params.text);
+  if (canExecuteConversationBrainAction && isBatchWorkspaceCommand(deterministicBatchCommand)) {
+    const handled = await handleBatchWorkspaceCommand({
+      command: deterministicBatchCommand,
+      state,
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      text: params.text,
+      client: params.client,
+      copyProvider: params.copyProvider,
+      focusQaTab: params.focusQaTab,
+    });
+    if (handled) return;
+  }
+
   const conversationBrain = await planSlackConversationWithLlm(
     buildSlackConversationBrainInput({
       state,
@@ -3170,35 +3535,17 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, 
     return;
   }
 
-  if (command.type === "qa_queue") {
-    const text = await userFacingSlackCopy({
-      deterministicText: formatProtectedQaQueueReply(),
-      userMessage: params.text,
-      intent: "qa_queue",
+  if (isBatchWorkspaceCommand(command)) {
+    await handleBatchWorkspaceCommand({
+      command,
+      state,
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      text: params.text,
+      client: params.client,
       copyProvider: params.copyProvider,
+      focusQaTab: params.focusQaTab,
     });
-    await postThreadReply(params.client, params.channelId, params.threadTs, text);
-    return;
-  }
-
-  if (command.type === "focus_qa_tab") {
-    const focus = await (params.focusQaTab ?? focusProtectedQaApplicationTab)({
-      jobId: state?.jobId ?? null,
-      index: command.qaIndex,
-      query: command.qaQuery,
-    });
-    const text = await userFacingSlackCopy({
-      deterministicText: focus.text,
-      userMessage: params.text,
-      intent: "focus_qa_tab",
-      context: { jobId: state?.jobId ?? null, ok: focus.ok },
-      preservePhrases: focus.text.includes("Final submit is still untouched") ? ["Final submit is still untouched."] : [],
-      copyProvider: params.copyProvider,
-    });
-    await postThreadReply(params.client, params.channelId, params.threadTs, text);
-    if (focus.ok && state) {
-      updateSlackThreadStateStatus(state.channelId, state.threadTs, "status_checked");
-    }
     return;
   }
 

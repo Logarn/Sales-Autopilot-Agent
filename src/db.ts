@@ -261,6 +261,150 @@ export interface RecordProposalVersionInput {
   versionNumber?: number;
 }
 
+export type BatchApplyWorkspaceStatus = "active" | "completed" | "cancelled";
+
+export type BatchApplyWorkspaceItemStatus =
+  | "queued"
+  | "preparing"
+  | "ready"
+  | "blocked"
+  | "stale"
+  | "tab_missing"
+  | "skipped"
+  | "submitted";
+
+export interface BatchApplyWorkspace {
+  id: number;
+  targetCount: number;
+  status: BatchApplyWorkspaceStatus;
+  source: string;
+  channelId: string | null;
+  threadTs: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface BatchApplyWorkspaceRow {
+  id: number;
+  target_count: number;
+  status: BatchApplyWorkspaceStatus;
+  source: string;
+  channel_id: string | null;
+  thread_ts: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BatchApplyWorkspaceItem {
+  id: number;
+  batchId: number;
+  position: number;
+  jobId: string;
+  channelId: string | null;
+  threadTs: string | null;
+  applyUrl: string | null;
+  tabReference: string | null;
+  proposalVersion: number | null;
+  status: BatchApplyWorkspaceItemStatus;
+  title: string | null;
+  screeningSummary: string | null;
+  proofSummary: string | null;
+  portfolioSummary: string | null;
+  connectsSummary: string | null;
+  boostSummary: string | null;
+  lastVerifiedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface BatchApplyWorkspaceItemRow {
+  id: number;
+  batch_id: number;
+  position: number;
+  job_id: string;
+  channel_id: string | null;
+  thread_ts: string | null;
+  apply_url: string | null;
+  tab_reference: string | null;
+  proposal_version: number | null;
+  status: BatchApplyWorkspaceItemStatus;
+  title: string | null;
+  screening_summary: string | null;
+  proof_summary: string | null;
+  portfolio_summary: string | null;
+  connects_summary: string | null;
+  boost_summary: string | null;
+  last_verified_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateBatchApplyWorkspaceInput {
+  targetCount: number;
+  source: string;
+  channelId?: string | null;
+  threadTs?: string | null;
+}
+
+export interface UpsertBatchApplyWorkspaceItemInput {
+  batchId: number;
+  position: number;
+  jobId: string;
+  channelId?: string | null;
+  threadTs?: string | null;
+  applyUrl?: string | null;
+  tabReference?: string | null;
+  proposalVersion?: number | null;
+  status: BatchApplyWorkspaceItemStatus;
+  title?: string | null;
+  screeningSummary?: string | null;
+  proofSummary?: string | null;
+  portfolioSummary?: string | null;
+  connectsSummary?: string | null;
+  boostSummary?: string | null;
+  lastVerifiedAt?: string | null;
+}
+
+export interface BatchApplyCandidateThread {
+  channelId: string;
+  messageTs: string;
+  threadTs: string;
+  upworkUrl: string;
+  jobId: string;
+  threadStatus: string;
+  applicationStatus: ApplicationStatus;
+  fitScore: number;
+  proposalVersion: number;
+  title: string;
+  sourceUrl: string;
+  screeningAnswers: string[];
+  proofSummary: string | null;
+  portfolioSummary: string | null;
+  connectsSummary: string | null;
+  boostSummary: string | null;
+  updatedAt: string;
+}
+
+interface BatchApplyCandidateThreadRow {
+  channel_id: string;
+  message_ts: string;
+  thread_ts: string;
+  upwork_url: string;
+  job_id: string;
+  thread_status: string;
+  application_status: ApplicationStatus;
+  fit_score: number | null;
+  proposal_version: number | null;
+  title: string | null;
+  source_url: string | null;
+  structured_proposal: string | null;
+  selected_portfolio_items: string | null;
+  suggested_connects: number | null;
+  suggested_boost_connects: number | null;
+  connects_strategy: string | null;
+  updated_at: string;
+}
+
 export type HeartbeatStatus = "starting" | "running" | "success" | "error" | "stale";
 
 export interface HeartbeatRecord {
@@ -1695,6 +1839,47 @@ CREATE INDEX IF NOT EXISTS idx_browser_actions_status ON browser_actions(status)
 CREATE INDEX IF NOT EXISTS idx_browser_actions_job_id ON browser_actions(job_id);
 CREATE INDEX IF NOT EXISTS idx_browser_actions_created_at ON browser_actions(created_at);
 
+CREATE TABLE IF NOT EXISTS batch_apply_workspaces (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  target_count INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  source TEXT NOT NULL DEFAULT 'slack_batch_command',
+  channel_id TEXT,
+  thread_ts TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_batch_apply_workspaces_status ON batch_apply_workspaces(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS batch_apply_workspace_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch_id INTEGER NOT NULL,
+  position INTEGER NOT NULL,
+  job_id TEXT NOT NULL,
+  channel_id TEXT,
+  thread_ts TEXT,
+  apply_url TEXT,
+  tab_reference TEXT,
+  proposal_version INTEGER,
+  status TEXT NOT NULL DEFAULT 'queued',
+  title TEXT,
+  screening_summary TEXT,
+  proof_summary TEXT,
+  portfolio_summary TEXT,
+  connects_summary TEXT,
+  boost_summary TEXT,
+  last_verified_at TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(batch_id, job_id),
+  UNIQUE(batch_id, position),
+  FOREIGN KEY(batch_id) REFERENCES batch_apply_workspaces(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_batch_apply_workspace_items_batch ON batch_apply_workspace_items(batch_id, position);
+CREATE INDEX IF NOT EXISTS idx_batch_apply_workspace_items_job ON batch_apply_workspace_items(job_id);
+
 CREATE TABLE IF NOT EXISTS worker_heartbeats (
   worker TEXT PRIMARY KEY,
   status TEXT NOT NULL,
@@ -1894,6 +2079,33 @@ const listSlackThreadStatesStmt = db.prepare<[string, number], SlackThreadStateR
    FROM slack_thread_state
    WHERE channel_id = ?
    ORDER BY updated_at DESC
+   LIMIT ?`
+);
+const listBatchApplyCandidateThreadsStmt = db.prepare<[number], BatchApplyCandidateThreadRow>(
+  `SELECT st.channel_id,
+          st.message_ts,
+          st.thread_ts,
+          st.upwork_url,
+          st.job_id,
+          st.status as thread_status,
+          a.status as application_status,
+          a.fit_score,
+          a.proposal_version,
+          COALESCE(s.title, st.job_id) as title,
+          COALESCE(s.url, st.upwork_url) as source_url,
+          a.structured_proposal,
+          a.selected_portfolio_items,
+          a.suggested_connects,
+          a.suggested_boost_connects,
+          a.connects_strategy,
+          a.updated_at
+   FROM slack_thread_state st
+   JOIN applications a ON a.job_id = st.job_id
+   LEFT JOIN seen_jobs s ON s.id = st.job_id
+   WHERE st.job_id IS NOT NULL
+     AND TRIM(COALESCE(a.proposal_text, '')) <> ''
+     AND a.status NOT IN ('rejected', 'applied', 'submitted', 'replied', 'interview', 'hired', 'lost')
+   ORDER BY a.fit_score DESC, a.updated_at DESC, st.updated_at DESC
    LIMIT ?`
 );
 const upsertSlackConversationOwnershipStmt = db.prepare(
@@ -2578,6 +2790,86 @@ const incrementBrowserActionAttemptStmt = db.prepare(
   `UPDATE browser_actions
    SET attempts = attempts + 1, last_error = ?, updated_at = datetime('now')
    WHERE id = ?`
+);
+const insertBatchApplyWorkspaceStmt = db.prepare(
+  `INSERT INTO batch_apply_workspaces (target_count, status, source, channel_id, thread_ts, updated_at)
+   VALUES (?, 'active', ?, ?, ?, datetime('now'))`
+);
+const getBatchApplyWorkspaceByIdStmt = db.prepare<[number], BatchApplyWorkspaceRow>(
+  `SELECT id, target_count, status, source, channel_id, thread_ts, created_at, updated_at
+   FROM batch_apply_workspaces
+   WHERE id = ?
+   LIMIT 1`
+);
+const getActiveBatchApplyWorkspaceStmt = db.prepare<[], BatchApplyWorkspaceRow>(
+  `SELECT id, target_count, status, source, channel_id, thread_ts, created_at, updated_at
+   FROM batch_apply_workspaces
+   WHERE status = 'active'
+   ORDER BY updated_at DESC, id DESC
+   LIMIT 1`
+);
+const updateBatchApplyWorkspaceStatusStmt = db.prepare(
+  `UPDATE batch_apply_workspaces
+   SET status = ?, updated_at = datetime('now')
+   WHERE id = ?`
+);
+const upsertBatchApplyWorkspaceItemStmt = db.prepare(
+  `INSERT INTO batch_apply_workspace_items (
+    batch_id,
+    position,
+    job_id,
+    channel_id,
+    thread_ts,
+    apply_url,
+    tab_reference,
+    proposal_version,
+    status,
+    title,
+    screening_summary,
+    proof_summary,
+    portfolio_summary,
+    connects_summary,
+    boost_summary,
+    last_verified_at,
+    updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  ON CONFLICT(batch_id, job_id) DO UPDATE SET
+    position = excluded.position,
+    channel_id = COALESCE(excluded.channel_id, batch_apply_workspace_items.channel_id),
+    thread_ts = COALESCE(excluded.thread_ts, batch_apply_workspace_items.thread_ts),
+    apply_url = COALESCE(excluded.apply_url, batch_apply_workspace_items.apply_url),
+    tab_reference = COALESCE(excluded.tab_reference, batch_apply_workspace_items.tab_reference),
+    proposal_version = COALESCE(excluded.proposal_version, batch_apply_workspace_items.proposal_version),
+    status = excluded.status,
+    title = COALESCE(excluded.title, batch_apply_workspace_items.title),
+    screening_summary = COALESCE(excluded.screening_summary, batch_apply_workspace_items.screening_summary),
+    proof_summary = COALESCE(excluded.proof_summary, batch_apply_workspace_items.proof_summary),
+    portfolio_summary = COALESCE(excluded.portfolio_summary, batch_apply_workspace_items.portfolio_summary),
+    connects_summary = COALESCE(excluded.connects_summary, batch_apply_workspace_items.connects_summary),
+    boost_summary = COALESCE(excluded.boost_summary, batch_apply_workspace_items.boost_summary),
+    last_verified_at = COALESCE(excluded.last_verified_at, batch_apply_workspace_items.last_verified_at),
+    updated_at = datetime('now')`
+);
+const listBatchApplyWorkspaceItemsStmt = db.prepare<[number], BatchApplyWorkspaceItemRow>(
+  `SELECT id, batch_id, position, job_id, channel_id, thread_ts, apply_url, tab_reference,
+          proposal_version, status, title, screening_summary, proof_summary, portfolio_summary,
+          connects_summary, boost_summary, last_verified_at, created_at, updated_at
+   FROM batch_apply_workspace_items
+   WHERE batch_id = ?
+   ORDER BY position ASC, id ASC`
+);
+const getBatchApplyWorkspaceItemByPositionStmt = db.prepare<[number, number], BatchApplyWorkspaceItemRow>(
+  `SELECT id, batch_id, position, job_id, channel_id, thread_ts, apply_url, tab_reference,
+          proposal_version, status, title, screening_summary, proof_summary, portfolio_summary,
+          connects_summary, boost_summary, last_verified_at, created_at, updated_at
+   FROM batch_apply_workspace_items
+   WHERE batch_id = ? AND position = ?
+   LIMIT 1`
+);
+const updateBatchApplyWorkspaceItemStatusStmt = db.prepare(
+  `UPDATE batch_apply_workspace_items
+   SET status = ?, last_verified_at = COALESCE(?, last_verified_at), updated_at = datetime('now')
+   WHERE batch_id = ? AND job_id = ?`
 );
 const upsertHeartbeatStmt = db.prepare(
   `INSERT INTO worker_heartbeats (
@@ -4094,6 +4386,79 @@ function rowToBrowserAction(row: BrowserActionRow): BrowserAction {
   };
 }
 
+function rowToBatchApplyWorkspace(row: BatchApplyWorkspaceRow): BatchApplyWorkspace {
+  return {
+    id: row.id,
+    targetCount: row.target_count,
+    status: row.status,
+    source: row.source,
+    channelId: row.channel_id,
+    threadTs: row.thread_ts,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToBatchApplyWorkspaceItem(row: BatchApplyWorkspaceItemRow): BatchApplyWorkspaceItem {
+  return {
+    id: row.id,
+    batchId: row.batch_id,
+    position: row.position,
+    jobId: row.job_id,
+    channelId: row.channel_id,
+    threadTs: row.thread_ts,
+    applyUrl: row.apply_url,
+    tabReference: row.tab_reference,
+    proposalVersion: row.proposal_version,
+    status: row.status,
+    title: row.title,
+    screeningSummary: row.screening_summary,
+    proofSummary: row.proof_summary,
+    portfolioSummary: row.portfolio_summary,
+    connectsSummary: row.connects_summary,
+    boostSummary: row.boost_summary,
+    lastVerifiedAt: row.last_verified_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function summarizeNames(values: string[], empty: string | null = null): string | null {
+  const unique = Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+  if (unique.length === 0) return empty;
+  const shown = unique.slice(0, 2);
+  return unique.length > shown.length ? `${shown.join(", ")} + ${unique.length - shown.length} more` : shown.join(", ");
+}
+
+function rowToBatchApplyCandidateThread(row: BatchApplyCandidateThreadRow): BatchApplyCandidateThread {
+  const structured = parseJsonObject<StructuredProposalDraft>(row.structured_proposal);
+  const screeningAnswers = structured?.clientRequestAnswers ?? [];
+  const portfolioItems = parseJsonArray<PortfolioItem>(row.selected_portfolio_items)
+    .map((item) => item.name || item.id)
+    .filter(Boolean);
+  const required = row.suggested_connects ?? null;
+  const boost = row.suggested_boost_connects ?? null;
+  return {
+    channelId: row.channel_id,
+    messageTs: row.message_ts,
+    threadTs: row.thread_ts,
+    upworkUrl: row.upwork_url,
+    jobId: row.job_id,
+    threadStatus: row.thread_status,
+    applicationStatus: row.application_status,
+    fitScore: row.fit_score ?? 0,
+    proposalVersion: row.proposal_version ?? 1,
+    title: row.title ?? row.job_id,
+    sourceUrl: row.source_url ?? row.upwork_url,
+    screeningAnswers,
+    proofSummary: summarizeNames(portfolioItems),
+    portfolioSummary: summarizeNames(portfolioItems),
+    connectsSummary: required === null ? null : `${required} required`,
+    boostSummary: boost && boost > 0 ? `${boost} boost` : "no boost",
+    updatedAt: row.updated_at,
+  };
+}
+
 export function enqueueBrowserAction(input: BrowserActionInput): number {
   const result = insertBrowserActionStmt.run(
     input.jobId,
@@ -4138,6 +4503,93 @@ export function mergeBrowserActionPayload(id: number, patch: BrowserActionPayloa
 export function incrementBrowserActionAttempts(id: number, lastError?: string): boolean {
   const result = incrementBrowserActionAttemptStmt.run(lastError ?? null, id);
   return result.changes > 0;
+}
+
+export function createBatchApplyWorkspace(input: CreateBatchApplyWorkspaceInput): BatchApplyWorkspace {
+  const targetCount = Math.max(1, Math.floor(input.targetCount));
+  const result = insertBatchApplyWorkspaceStmt.run(
+    targetCount,
+    input.source,
+    input.channelId ?? null,
+    input.threadTs ?? null
+  );
+  const row = getBatchApplyWorkspaceByIdStmt.get(Number(result.lastInsertRowid));
+  if (!row) {
+    throw new Error("Failed to create batch apply workspace.");
+  }
+  return rowToBatchApplyWorkspace(row);
+}
+
+export function getActiveBatchApplyWorkspace(): BatchApplyWorkspace | null {
+  const row = getActiveBatchApplyWorkspaceStmt.get();
+  return row ? rowToBatchApplyWorkspace(row) : null;
+}
+
+export function updateBatchApplyWorkspaceStatus(id: number, status: BatchApplyWorkspaceStatus): boolean {
+  const result = updateBatchApplyWorkspaceStatusStmt.run(status, id);
+  return result.changes > 0;
+}
+
+export function upsertBatchApplyWorkspaceItem(input: UpsertBatchApplyWorkspaceItemInput): BatchApplyWorkspaceItem {
+  upsertBatchApplyWorkspaceItemStmt.run(
+    input.batchId,
+    input.position,
+    input.jobId,
+    input.channelId ?? null,
+    input.threadTs ?? null,
+    input.applyUrl ?? null,
+    input.tabReference ?? null,
+    input.proposalVersion ?? null,
+    input.status,
+    input.title ?? null,
+    input.screeningSummary ?? null,
+    input.proofSummary ?? null,
+    input.portfolioSummary ?? null,
+    input.connectsSummary ?? null,
+    input.boostSummary ?? null,
+    input.lastVerifiedAt ?? null
+  );
+  const row = getBatchApplyWorkspaceItemByPositionStmt.get(input.batchId, input.position);
+  if (!row) {
+    throw new Error(`Failed to upsert batch apply item for job_id=${input.jobId}`);
+  }
+  return rowToBatchApplyWorkspaceItem(row);
+}
+
+export function listBatchApplyWorkspaceItems(batchId: number): BatchApplyWorkspaceItem[] {
+  return listBatchApplyWorkspaceItemsStmt.all(batchId).map(rowToBatchApplyWorkspaceItem);
+}
+
+export function getBatchApplyWorkspaceItemByPosition(batchId: number, position: number): BatchApplyWorkspaceItem | null {
+  const row = getBatchApplyWorkspaceItemByPositionStmt.get(batchId, position);
+  return row ? rowToBatchApplyWorkspaceItem(row) : null;
+}
+
+export function updateBatchApplyWorkspaceItemStatus(input: {
+  batchId: number;
+  jobId: string;
+  status: BatchApplyWorkspaceItemStatus;
+  lastVerifiedAt?: string | null;
+}): boolean {
+  const result = updateBatchApplyWorkspaceItemStatusStmt.run(
+    input.status,
+    input.lastVerifiedAt ?? null,
+    input.batchId,
+    input.jobId
+  );
+  return result.changes > 0;
+}
+
+export function listBatchApplyCandidateThreads(limit = 25): BatchApplyCandidateThread[] {
+  const rows = listBatchApplyCandidateThreadsStmt.all(Math.max(1, limit));
+  const seenJobIds = new Set<string>();
+  const candidates: BatchApplyCandidateThread[] = [];
+  for (const row of rows) {
+    if (seenJobIds.has(row.job_id)) continue;
+    seenJobIds.add(row.job_id);
+    candidates.push(rowToBatchApplyCandidateThread(row));
+  }
+  return candidates;
 }
 
 export function upsertSlackThreadState(input: {
