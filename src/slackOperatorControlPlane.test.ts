@@ -102,9 +102,10 @@ async function runTests(): Promise<void> {
       readHeartbeats: () => [{ worker: "lead-engine", status: "running", updatedAt: new Date(0).toISOString() }],
       readLeadEngineState: () => leadEngineSummary(),
     });
-    assert(statusReply.includes("I’m running") && statusReply.includes("Slack is listening"), "Health command should return friendly service status.");
-    assert(statusReply.includes("Chrome: connected and ready"), "Health command should include friendly browser status.");
-    assert(!/systemd|journalctl|action #|job_id|raw/i.test(statusReply), "Normal health status should not include raw operational dumps.");
+    assert(statusReply.includes("Yeah") && statusReply.includes("Slack is live"), "Health command should return friendly teammate status.");
+    assert(statusReply.includes("Chrome is connected"), "Health command should include friendly browser status.");
+    assert(statusReply.includes("Final submit stays manual"), "Health command should preserve submit safety.");
+    assert(!/Overall health|Workers|Heartbeats|systemd|journalctl|action #|job_id|raw/i.test(statusReply), "Normal health status should not include dashboard or raw operational dumps.");
 
     const recoveredBacklogStatus = await buildSlackOperatorReply({ type: "service_status" }, {
       buildHealthReport: () => ({
@@ -197,7 +198,7 @@ async function runTests(): Promise<void> {
         readLeadEngineState: () => null,
       },
     });
-    assert(handled && posted.some((reply) => reply.includes("Chrome: connected and ready")), "Slack handler should post friendly Chrome health.");
+    assert(handled && posted.some((reply) => reply.includes("Chrome is connected")), "Slack handler should post friendly Chrome health.");
 
     setHuntingPaused(true, "Paused from Slack.");
     let discoveryCalled = false;

@@ -6,7 +6,6 @@ import {
   BROWSER_HEADLESS,
   BROWSER_START_URL,
   BROWSER_USER_DATA_DIR,
-  SLACK_SOCKET_MODE_ENABLED,
 } from "./config";
 import { getBrowserSessionStatus, listUnresolvedBrowserChallengeQuarantines } from "./browserSession";
 import {
@@ -94,12 +93,6 @@ export function parseSlackOperatorIntent(text: string): SlackOperatorIntent | nu
   return null;
 }
 
-function friendlyHealthLabel(status: string): string {
-  if (status === "ok" || status === "healthy" || status === "success") return "healthy";
-  if (status === "warning" || status === "paused" || status === "running") return "needs attention";
-  return "not healthy";
-}
-
 function humanizeReason(value: string | null | undefined): string {
   if (!value) return "needs attention";
   return value
@@ -132,22 +125,36 @@ async function buildOperatorStatusReply(deps: SlackOperatorControlDeps = {}): Pr
   const browserSession = (deps.getBrowserSessionStatus ?? getBrowserSessionStatus)();
   const quarantined = listUnresolvedBrowserChallengeQuarantines();
   const cdp = await (deps.checkCdpEndpoint ?? checkCdpEndpoint)(BROWSER_CDP_URL);
-  const heartbeats = (deps.readHeartbeats ?? readHeartbeats)();
   const leadState = (deps.readLeadEngineState ?? readLatestState)();
   const protectedCount = getProtectedQaQueueItems(1000).length;
-  const staleCount = health.staleHeartbeats.length;
-  const runningWorkers = heartbeats.filter((heartbeat) => heartbeat.status === "running").length;
+  const qaLine = protectedCount > 0
+    ? `${protectedCount} QA application${protectedCount === 1 ? " is" : "s are"} waiting.`
+    : "No QA applications are waiting.";
+
+  if (browserSession.blocked || !cdp.reachable) {
+    return [
+      "I’m up, but Chrome needs Steve before I can keep hunting.",
+      cdp.reachable ? "Slack is live. Chrome is connected, but Upwork is showing a browser/security check." : "Slack is live. Remote Chrome is not reachable cleanly right now.",
+      "Clear the visible remote Chrome check, then say “retry.” I won’t bypass it or submit anything.",
+    ].join("\n");
+  }
+
+  if (quarantined.length > 0) {
+    return [
+      "Yeah — I’m up. Slack is live and Chrome is connected.",
+      `I’m paused because ${quarantined.length} old apply item${quarantined.length === 1 ? " is" : "s are"} still sitting from the earlier Upwork check. Browser itself looks clean now.`,
+      `${qaLine} Best move: skip the stale blocked applications, then I’ll restart hunting if the next check is clean.`,
+    ].join("\n");
+  }
 
   return [
-    `I’m running, and Slack is listening${SLACK_SOCKET_MODE_ENABLED ? "." : " in this socket handler."}`,
-    `Overall health: ${friendlyHealthLabel(health.status)}${health.findings.length ? ` (${health.findings.length} thing${health.findings.length === 1 ? "" : "s"} need attention)` : "."}`,
-    `Chrome: ${cdp.reachable && !browserSession.blocked ? "connected and ready" : "needs attention"}${browserSession.reason ? ` because ${humanizeReason(browserSession.reason)}` : ""}.`,
-    quarantined.length > 0
-      ? `Blocked application: one page is paused safely. Clear the remote Chrome check, then say retry or skip this one.`
-      : `Blocked application: none waiting on retry or skip.`,
+    `Yeah — I’m running. Slack is live and Chrome is connected.`,
+    health.findings.length > 0
+      ? `A few things need attention, but there is no active Chrome block right now.`
+      : `Nothing is blocking me right now.`,
     leadEngineLine(leadState),
-    `QA queue: ${protectedCount} protected application tab${protectedCount === 1 ? "" : "s"} waiting.`,
-    `Workers: ${runningWorkers} active heartbeat${runningWorkers === 1 ? "" : "s"}${staleCount ? `, ${staleCount} stale` : ""}.`,
+    qaLine,
+    "Final submit stays manual.",
   ].join("\n");
 }
 

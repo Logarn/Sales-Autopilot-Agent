@@ -18,7 +18,7 @@ import { logger } from "./logger";
 import { formatConnectsStrategy } from "./connectsStrategy";
 import { DailySummary, ScoredJob } from "./types";
 import { sleep, timeAgo, truncateText, formatInTimezone } from "./utils";
-import { rewriteSlackCopyWithKimi, type SlackCopyProvider } from "./slackCopywriter";
+import { rewriteSlackCopyWithKimi, type SlackCopyPath, type SlackCopyProvider } from "./slackCopywriter";
 
 let webhook: IncomingWebhook | null = null;
 if (SLACK_CHANNEL_WEBHOOK_URL) {
@@ -73,6 +73,13 @@ const SLACK_MESSAGE_BLOCK_LIMIT = 50;
 const SLACK_SECTION_TEXT_LIMIT = 3000;
 const SLACK_FIELD_TEXT_LIMIT = 2000;
 const PROPOSAL_DRAFT_PREVIEW_LENGTH = 2200;
+
+type SoulAwareSlackPayload = IncomingWebhookSendArguments & {
+  copyIntent?: string;
+  copyPath?: SlackCopyPath;
+  preservePhrases?: string[];
+  soulComposed?: boolean;
+};
 
 function slackText(text: string, maxLength = SLACK_SECTION_TEXT_LIMIT): string {
   return truncateText(text, maxLength);
@@ -333,6 +340,100 @@ async function sendPayload(payload: IncomingWebhookSendArguments): Promise<void>
   await hook.send(payload);
 }
 
+function stripInternalSlackPayloadFields(payload: SoulAwareSlackPayload): IncomingWebhookSendArguments {
+  const {
+    copyIntent: _copyIntent,
+    copyPath: _copyPath,
+    preservePhrases: _preservePhrases,
+    soulComposed: _soulComposed,
+    ...sendable
+  } = payload;
+  return sendable;
+}
+
+function extractSlackBlockText(payload: IncomingWebhookSendArguments): string[] {
+  const blocks = Array.isArray(payload.blocks) ? payload.blocks : [];
+  const text: string[] = [];
+  for (const block of blocks) {
+    if (!block || typeof block !== "object") continue;
+    const maybeText = (block as { text?: { text?: unknown } }).text?.text;
+    if (typeof maybeText === "string" && maybeText.trim()) {
+      text.push(maybeText.trim());
+    }
+    const fields = (block as { fields?: Array<{ text?: unknown }> }).fields;
+    if (Array.isArray(fields)) {
+      for (const field of fields) {
+        if (typeof field.text === "string" && field.text.trim()) {
+          text.push(field.text.trim());
+        }
+      }
+    }
+  }
+  return text;
+}
+
+function firstSingleSectionTextBlockIndex(payload: IncomingWebhookSendArguments): number | null {
+  const blocks = Array.isArray(payload.blocks) ? payload.blocks : [];
+  if (blocks.length !== 1) return null;
+  const block = blocks[0] as { type?: unknown; text?: { type?: unknown; text?: unknown } } | undefined;
+  if (block?.type !== "section" || block.text?.type !== "mrkdwn" || typeof block.text.text !== "string") {
+    return null;
+  }
+  return 0;
+}
+
+function extractPreservePhrases(text: string, explicit: string[] = []): string[] {
+  const urls = text.match(/https?:\/\/[^\s<>)]+/gi) ?? [];
+  const safetyPhrases = [
+    "final submit remains manual",
+    "Final submit remains manual",
+    "stop before submit",
+    "Submit untouched",
+    "I did not submit",
+  ].filter((phrase) => text.includes(phrase));
+  return [...new Set([...explicit, ...urls, ...safetyPhrases].filter((phrase) => phrase.trim()))];
+}
+
+async function finalizeSoulSlackPayload(payload: SoulAwareSlackPayload): Promise<IncomingWebhookSendArguments> {
+  const sendable = stripInternalSlackPayloadFields(payload);
+  if (payload.soulComposed) {
+    return sendable;
+  }
+
+  const visibleText = [
+    typeof payload.text === "string" ? payload.text.trim() : "",
+    ...extractSlackBlockText(payload),
+  ].filter(Boolean).join("\n\n").trim();
+  if (!visibleText) {
+    return sendable;
+  }
+
+  const copy = await rewriteSlackCopyWithKimi({
+    path: payload.copyPath ?? "conversation_reply",
+    deterministicText: visibleText,
+    intent: payload.copyIntent ?? "slack_webhook_message",
+    preservePhrases: extractPreservePhrases(visibleText, payload.preservePhrases),
+  });
+  const finalized: IncomingWebhookSendArguments = {
+    ...sendable,
+    text: copy.text,
+  };
+  const index = firstSingleSectionTextBlockIndex(payload);
+  if (index !== null && Array.isArray(sendable.blocks)) {
+    finalized.blocks = sendable.blocks.map((block, blockIndex) => {
+      if (blockIndex !== index) return block;
+      return {
+        ...block,
+        text: {
+          ...(block as { text?: Record<string, unknown> }).text,
+          text: copy.text,
+        },
+      };
+    });
+  }
+  return finalized;
+}
+
 async function sendWithRetry(payload: IncomingWebhookSendArguments, attempts = 1): Promise<void> {
   try {
     await sendPayload(payload);
@@ -352,13 +453,14 @@ export async function sendSlackPreviewMessage(payload: IncomingWebhookSendArgume
   await sleep(SLACK_DELAY_MS);
 }
 
-export async function sendSlackMessage(payload: IncomingWebhookSendArguments): Promise<boolean> {
+export async function sendSlackMessage(payload: SoulAwareSlackPayload): Promise<boolean> {
   try {
-    await sendSlackPreviewMessage(payload);
+    const finalized = await finalizeSoulSlackPayload(payload);
+    await sendSlackPreviewMessage(finalized);
     return true;
   } catch (error) {
     logger.error(`Slack send failed, queueing payload: ${String(error)}`);
-    queueSlackMessage(JSON.stringify(payload));
+    queueSlackMessage(JSON.stringify(stripInternalSlackPayloadFields(payload)));
     return false;
   }
 }
@@ -373,7 +475,7 @@ export async function flushSlackQueue(): Promise<void> {
   for (const item of queue) {
     try {
       const parsed = JSON.parse(item.payload) as IncomingWebhookSendArguments;
-      await sendWithRetry(parsed);
+      await sendWithRetry(await finalizeSoulSlackPayload(parsed));
       markQueuedMessageSent(item.id);
       await sleep(SLACK_DELAY_MS);
     } catch (error) {
@@ -544,6 +646,7 @@ export async function sendDailySummary(summary: DailySummary, deps: { copyProvid
 
   await sendSlackMessage({
     text: copy.text,
+    soulComposed: true,
     blocks: [
       {
         type: "section",
@@ -577,15 +680,10 @@ export async function sendDailySummary(summary: DailySummary, deps: { copyProvid
 }
 
 export async function testSlackWebhook(): Promise<boolean> {
-  try {
-    await sendWithRetry({
-      text: `✅ ${APP_NAME} Slack webhook check passed`,
-    });
-    return true;
-  } catch (error) {
-    logger.error(`Slack health check failed: ${String(error)}`);
-    return false;
-  }
+  return sendSlackMessage({
+    text: `✅ ${APP_NAME} Slack webhook check passed`,
+    copyIntent: "slack_webhook_health_check",
+  });
 }
 
 if (require.main === module) {

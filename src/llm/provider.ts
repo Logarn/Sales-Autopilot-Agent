@@ -180,6 +180,19 @@ export function getSlackCopyProviderConfig(): LlmProviderConfig {
   });
 }
 
+export function getSlackCopyProviderFallbackConfigs(): LlmProviderConfig[] {
+  const primary = getSlackCopyProviderConfig();
+  const fallback = baseOpenAiCompatibleConfig({
+    enabled: primary.enabled,
+    provider: "xai",
+    model: process.env.SLACK_COPY_FALLBACK_MODEL || process.env.XAI_MODEL || process.env.GROK_MODEL || XAI_MODEL,
+  });
+  if (primary.provider === fallback.provider && primary.model === fallback.model && primary.baseUrl === fallback.baseUrl) {
+    return [primary];
+  }
+  return [primary, fallback];
+}
+
 function redactSecret(value: string): string {
   if (!value) return "";
   return value.length <= 8 ? "[redacted]" : `${value.slice(0, 3)}…${value.slice(-2)}[redacted]`;

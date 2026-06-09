@@ -2,6 +2,35 @@ import assert from "node:assert/strict";
 import { rewriteSlackCopyWithKimi, type SlackCopyProvider } from "./slackCopywriter";
 import type { LlmJsonRequest } from "./llm/provider";
 
+function withEnv<T>(values: Record<string, string | undefined>, fn: () => T | Promise<T>): T | Promise<T> {
+  const previous: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(values)) {
+    previous[key] = process.env[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  const restore = () => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  };
+  try {
+    const result = fn();
+    if (result && typeof (result as Promise<T>).then === "function") {
+      return (result as Promise<T>).finally(restore);
+    }
+    restore();
+    return result;
+  } catch (error) {
+    restore();
+    throw error;
+  }
+}
+
 function fakeProvider(text: string): { provider: SlackCopyProvider; requests: LlmJsonRequest[] } {
   const requests: LlmJsonRequest[] = [];
   return {
@@ -30,6 +59,7 @@ async function run(): Promise<void> {
   assert(kimi.requests[0]?.messages.some((message) => message.content.includes("Operating constitution from soul.md")), "Kimi copywriter prompt should include soul.md.");
   assert(kimi.requests[0]?.messages.some((message) => message.content.includes("Fucking Lead Closer")), "Kimi copywriter prompt should include the soul.md identity.");
   assert(kimi.requests[0]?.messages.some((message) => message.content.includes("Say \"I.\"")), "Kimi copywriter prompt should include first-person teammate guidance.");
+  assert(kimi.requests[0]?.messages.some((message) => message.content.includes("sharp senior SDR/operator teammate")), "Kimi copywriter prompt should force teammate-style Slack copy.");
 
   const leadPacket = fakeProvider("🚀 This one is worth a real shot. Review it in VNC when ready; I’ll stop before submit.\nhttps://www.upwork.com/jobs/~1234567890");
   const leadPacketCopy = await rewriteSlackCopyWithKimi({
@@ -87,6 +117,17 @@ async function run(): Promise<void> {
   assert.equal(rawInternalFallback.usedLlm, false);
   assert(!/manual:upwork|field_preparation_incomplete|manual_attention_required/i.test(rawInternalFallback.text), "Fallback should hide raw internal apply-prep states.");
 
+  const dashboardDump = fakeProvider("Overall health: not healthy\nWorkers: 0 active heartbeats, 1 stale\nbrowser_challenge_action_paused");
+  const dashboardFallback = await rewriteSlackCopyWithKimi({
+    path: "conversation_reply",
+    deterministicText: "Yeah — I’m up. Slack is live and Chrome is connected.\nI’m paused because 4 old apply items are still sitting from the earlier Upwork check. Browser itself looks clean now.\nBest move: skip the stale blocked applications, then I’ll restart hunting if the next check is clean.",
+    userMessage: "are you running?",
+    intent: "answer_health",
+  }, dashboardDump.provider);
+  assert.equal(dashboardFallback.usedLlm, false, "Dashboard-style Kimi output should be rejected for normal Slack copy.");
+  assert(!/Overall health|Workers|browser_challenge_action_paused/i.test(dashboardFallback.text), "Fallback should not expose dashboard/internal wording.");
+  assert(dashboardFallback.text.includes("Best move"), "Fallback should keep the practical teammate recommendation.");
+
   const connectsDrift = fakeProvider("Connects verified: 12 required. Boost: 18 selected. Submit untouched.");
   const connectsFallback = await rewriteSlackCopyWithKimi({
     path: "qa_handoff",
@@ -129,6 +170,48 @@ async function run(): Promise<void> {
   }, thirdPerson.provider);
   assert.equal(thirdPersonFallback.usedLlm, false);
   assert.equal(thirdPersonFallback.text.includes("The agent"), false);
+
+  const originalFetch = globalThis.fetch;
+  try {
+    await withEnv({
+      SLACK_COPY_LLM_ENABLED: "true",
+      SLACK_COPY_PROVIDER: "kimi",
+      SLACK_COPY_MODEL: "kimi-k2.6",
+      MOONSHOT_API_KEY: "moonshot-test-key",
+      MOONSHOT_BASE_URL: "https://api.moonshot.ai/v1",
+      XAI_API_KEY: "xai-test-key",
+      XAI_BASE_URL: "https://api.x.ai/v1",
+      XAI_MODEL: "grok-4.3",
+    }, async () => {
+      const calledUrls: string[] = [];
+      globalThis.fetch = async (input, init) => {
+        calledUrls.push(String(input));
+        const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string };
+        if (body.model === "kimi-k2.6") {
+          return new Response(JSON.stringify({
+            choices: [{ message: { content: JSON.stringify({ text: "Overall health: not healthy\nWorkers: 0 active heartbeats" }) } }],
+          }), { status: 200, headers: { "content-type": "application/json" } });
+        }
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify({ text: "Yeah — I’m up. Chrome is clean, but the old blocked apply items need cleanup first. Best move: skip the stale ones, then I’ll restart hunting." }) } }],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      };
+
+      const fallbackToGrok = await rewriteSlackCopyWithKimi({
+        path: "conversation_reply",
+        deterministicText: "Yeah — I’m up. Slack is live and Chrome is connected. Best move: skip stale blockers.",
+        userMessage: "are you running?",
+        intent: "answer_health",
+      });
+      assert.equal(fallbackToGrok.usedLlm, true);
+      assert.equal(fallbackToGrok.provider, "grok");
+      assert(!/Overall health|Workers/i.test(fallbackToGrok.text), "Kimi dashboard output should be rejected before Grok copy is used.");
+      assert.equal(calledUrls.some((url) => url.includes("moonshot")), true, "Slack copy should try Kimi first.");
+      assert.equal(calledUrls.some((url) => url.includes("api.x.ai")), true, "Slack copy should fall back to Grok.");
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 
   console.log("slack copywriter tests passed");
 }

@@ -1,7 +1,7 @@
 import { SLACK_COPY_TEMPERATURE } from "./config";
 import {
   OpenAiCompatibleProvider,
-  getSlackCopyProviderConfig,
+  getSlackCopyProviderFallbackConfigs,
   type LlmJsonRequest,
   type LlmJsonResult,
 } from "./llm/provider";
@@ -31,7 +31,7 @@ export interface SlackCopyRequest {
 export interface SlackCopyResult {
   text: string;
   usedLlm: boolean;
-  provider: "kimi" | "fallback";
+  provider: "kimi" | "grok" | "fallback";
   reason?: string;
 }
 
@@ -41,8 +41,20 @@ interface SlackCopyPayload {
 
 const recentOpeningsByPath = new Map<SlackCopyPath, string[]>();
 
-function defaultSlackCopyProvider(): SlackCopyProvider {
-  return new OpenAiCompatibleProvider(getSlackCopyProviderConfig());
+interface NamedSlackCopyProvider {
+  name: "kimi" | "grok";
+  provider: SlackCopyProvider;
+}
+
+function providerName(value: string): "kimi" | "grok" {
+  return value === "xai" || value === "grok" ? "grok" : "kimi";
+}
+
+function defaultSlackCopyProviders(): NamedSlackCopyProvider[] {
+  return getSlackCopyProviderFallbackConfigs().map((config) => ({
+    name: providerName(config.provider),
+    provider: new OpenAiCompatibleProvider(config),
+  }));
 }
 
 function containsOldMenu(text: string): boolean {
@@ -67,8 +79,24 @@ function containsRawInternalFields(text: string): boolean {
     /\bfield_preparation_incomplete\b/i,
     /\bmanual_attention_required\b/i,
     /\bbrowser_attention_required\b/i,
+    /\bbrowserSessionState\b/i,
+    /\bbrowser_challenge_action_paused\b/i,
+    /\bcaptcha_or_security_challenge\b/i,
+    /\btoo_many_pending_capture_actions\b/i,
     /\blead decision\b/i,
     /\bqueue internals\b/i,
+  ].some((pattern) => pattern.test(text));
+}
+
+function containsDashboardDump(text: string): boolean {
+  return [
+    /^Overall health:/im,
+    /^Workers:/im,
+    /^Heartbeats:/im,
+    /^Findings:/im,
+    /^QA queue$/im,
+    /\b0 active heartbeat/i,
+    /\bstale heartbeat/i,
   ].some((pattern) => pattern.test(text));
 }
 
@@ -161,6 +189,7 @@ function validateSlackCopy(text: string, request: SlackCopyRequest): string | nu
   if (containsOldMenu(trimmed)) return "old command menu";
   if (containsRawIds(trimmed)) return "raw ids in non-debug copy";
   if (containsRawInternalFields(trimmed)) return "raw internal fields in non-debug copy";
+  if (containsDashboardDump(trimmed)) return "dashboard dump in non-debug copy";
   if (/\bthe agent\b/i.test(trimmed)) return "third-person agent language";
   if (violatesSubmitBoundary(trimmed)) return "submit boundary violation";
   if (violatesProofWording(trimmed, request.deterministicText)) return "proof wording drift";
@@ -181,6 +210,15 @@ function compactSafeFallbackText(request: SlackCopyRequest, reason: string): str
   if (containsOldMenu(deterministic)) {
     return "I’m not sure what you want next. Send the specific change or next step and I’ll handle it without touching final submit.";
   }
+  if (/qa_queue|show_qa_queue/i.test(request.intent ?? "") && /\bQA queue\b/i.test(deterministic)) {
+    return deterministic;
+  }
+  if (containsRawIds(deterministic) || containsRawInternalFields(deterministic) || containsDashboardDump(deterministic)) {
+    if (/health|running|blocked|attention|status/i.test(request.intent ?? "")) {
+      return "I have the current state, but the clean copywriter path failed. Safe version: I’m paused until the open blocker is cleared or skipped. Final submit remains manual. Ask for debug if you want the raw details.";
+    }
+    return "I have the details, but the clean copywriter path failed. I’m keeping the safe state unchanged and hiding raw internals here. Ask for debug if you want the raw details.";
+  }
   if (request.path === "lead_packet") {
     const url = extractUpworkUrl(request);
     const title = typeof request.context?.title === "string" ? request.context.title : "New Upwork lead";
@@ -199,7 +237,7 @@ function compactSafeFallbackText(request: SlackCopyRequest, reason: string): str
 
 export async function rewriteSlackCopyWithKimi(
   request: SlackCopyRequest,
-  provider: SlackCopyProvider = defaultSlackCopyProvider(),
+  provider?: SlackCopyProvider,
 ): Promise<SlackCopyResult> {
   const fallback = (reason: string): SlackCopyResult => ({
     text: compactSafeFallbackText(request, reason),
@@ -208,60 +246,76 @@ export async function rewriteSlackCopyWithKimi(
     reason,
   });
 
-  if (!provider.isAvailable()) {
-    return fallback("Kimi/Moonshot Slack copy provider unavailable");
+  const providers: NamedSlackCopyProvider[] = provider
+    ? [{ name: "kimi", provider }]
+    : defaultSlackCopyProviders();
+  const failures: string[] = [];
+
+  for (const candidate of providers) {
+    if (!candidate.provider.isAvailable()) {
+      failures.push(`${candidate.name}: unavailable`);
+      continue;
+    }
+
+    const response = await candidate.provider.completeJson<SlackCopyPayload>({
+      temperature: SLACK_COPY_TEMPERATURE,
+      maxTokens: 1200,
+      messages: [
+        {
+          role: "system",
+          content: [
+            "You write Steve-facing Slack copy for an Upwork application agent.",
+            "Rewrite the deterministic response into natural, concise Slack copy. Keep the meaning and safety state.",
+            "Reason first from the current context, then write the message. Do not expose the reasoning.",
+            "You are a sharp senior SDR/operator teammate, not a dashboard, bot, CLI, or monitoring page.",
+            "Use first person. Be short, direct, context-aware, and useful. Prefer one clear recommendation.",
+            "Push toward resolution: say what is true, what matters, and what Steve should do next.",
+            "Never output dashboard headings like Overall health, Workers, Heartbeats, Findings, QA queue, or raw service state unless debug was explicitly requested.",
+            "For lead packets: be concise, human, commercially opinionated, and varied; include the Upwork link; include one clear next-step CTA; avoid raw packet fields.",
+            "For normal Slack replies: answer the actual question directly and conversationally. Do not route natural language into a command-menu fallback.",
+            "Use sales memories as hypotheses when provided. Current context and hard safety override learned preferences.",
+            "Avoid starting with any recent opening listed in recentOpenings.",
+            "Do not decide actions, change status, add facts, add raw ids, or expose internals.",
+            "Never show a command menu.",
+            "Never claim final submit happened or will happen. Final submit always remains manual.",
+            "Never bypass CAPTCHA, security, login, passkey, or 2FA checks.",
+            "Never claim files, proof, portfolio, browser fill, Connects, or boost were verified unless deterministic text/context says so.",
+            "Use Proof planned until verification is explicit. Use Proof verified only when the deterministic text already says Proof verified. Never say Proof I used.",
+            "If preservePhrases are provided, include each phrase exactly as written.",
+            "Return JSON only: {\"text\":\"...\"}.",
+            buildSoulPromptSection(`slack_copy:${request.path}`),
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            path: request.path,
+            intent: request.intent ?? null,
+            userMessage: request.userMessage ?? null,
+            deterministicText: request.deterministicText,
+            context: request.context ?? {},
+            preservePhrases: request.preservePhrases ?? [],
+            recentOpenings: recentOpeningsFor(request),
+            soul: buildSoulPromptContext(`slack_copy:${request.path}`),
+          }),
+        },
+      ],
+    });
+
+    const text = typeof response.data?.text === "string" ? response.data.text : "";
+    if (!response.ok || !text.trim()) {
+      failures.push(`${candidate.name}: ${response.error ?? response.skippedReason ?? "copy rewrite failed"}`);
+      continue;
+    }
+    const validationError = validateSlackCopy(text, request);
+    if (validationError) {
+      failures.push(`${candidate.name}: ${validationError}`);
+      continue;
+    }
+    const trimmed = text.trim();
+    rememberOpening(request.path, trimmed);
+    return { text: trimmed, usedLlm: true, provider: candidate.name };
   }
 
-  const response = await provider.completeJson<SlackCopyPayload>({
-    temperature: SLACK_COPY_TEMPERATURE,
-    maxTokens: 1200,
-    messages: [
-      {
-        role: "system",
-        content: [
-          "You write Steve-facing Slack copy for an Upwork application agent.",
-          "Rewrite the deterministic response into natural, concise Slack copy. Keep the meaning and safety state.",
-          "Reason first from the current context, then write the message. Do not expose the reasoning.",
-          "For lead packets: be concise, human, commercially opinionated, and varied; include the Upwork link; include one clear next-step CTA; avoid raw packet fields.",
-          "For normal Slack replies: answer the actual question directly and conversationally. Do not route natural language into a command-menu fallback.",
-          "Use sales memories as hypotheses when provided. Current context and hard safety override learned preferences.",
-          "Avoid starting with any recent opening listed in recentOpenings.",
-          "Do not decide actions, change status, add facts, add raw ids, or expose internals.",
-          "Never show a command menu.",
-          "Never claim final submit happened or will happen. Final submit always remains manual.",
-          "Never bypass CAPTCHA, security, login, passkey, or 2FA checks.",
-          "Never claim files, proof, portfolio, browser fill, Connects, or boost were verified unless deterministic text/context says so.",
-          "Use Proof planned until verification is explicit. Use Proof verified only when the deterministic text already says Proof verified. Never say Proof I used.",
-          "If preservePhrases are provided, include each phrase exactly as written.",
-          "Return JSON only: {\"text\":\"...\"}.",
-          buildSoulPromptSection(`slack_copy:${request.path}`),
-        ].join("\n"),
-      },
-      {
-        role: "user",
-        content: JSON.stringify({
-          path: request.path,
-          intent: request.intent ?? null,
-          userMessage: request.userMessage ?? null,
-          deterministicText: request.deterministicText,
-          context: request.context ?? {},
-          preservePhrases: request.preservePhrases ?? [],
-          recentOpenings: recentOpeningsFor(request),
-          soul: buildSoulPromptContext(`slack_copy:${request.path}`),
-        }),
-      },
-    ],
-  });
-
-  const text = typeof response.data?.text === "string" ? response.data.text : "";
-  if (!response.ok || !text.trim()) {
-    return fallback(response.error ?? response.skippedReason ?? "Kimi/Moonshot copy rewrite failed");
-  }
-  const validationError = validateSlackCopy(text, request);
-  if (validationError) {
-    return fallback(validationError);
-  }
-  const trimmed = text.trim();
-  rememberOpening(request.path, trimmed);
-  return { text: trimmed, usedLlm: true, provider: "kimi" };
+  return fallback(failures.length ? failures.join("; ") : "Slack copy LLM providers unavailable");
 }

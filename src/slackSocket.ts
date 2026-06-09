@@ -1332,6 +1332,52 @@ async function postThreadReply(client: App["client"], channel: string, threadTs:
   await client.chat.postMessage({ channel, thread_ts: threadTs, text });
 }
 
+function splitExactBodyReply(text: string): { lead: string; body: string; tail: string } | null {
+  const firstBreak = text.indexOf("\n\n");
+  const lastBreak = text.lastIndexOf("\n\n");
+  if (firstBreak === -1 || lastBreak === -1 || firstBreak === lastBreak) {
+    return null;
+  }
+  const lead = text.slice(0, firstBreak).trim();
+  const body = text.slice(firstBreak + 2, lastBreak).trim();
+  const tail = text.slice(lastBreak + 2).trim();
+  if (!lead || !body || !tail) {
+    return null;
+  }
+  return { lead, body, tail };
+}
+
+async function userFacingSlackCopyWithExactBody(input: {
+  deterministicText: string;
+  userMessage?: string | null;
+  intent?: string | null;
+  context?: Record<string, unknown>;
+  copyProvider?: SlackCopyProvider;
+}): Promise<string> {
+  const split = splitExactBodyReply(input.deterministicText);
+  if (!split) {
+    return userFacingSlackCopy({
+      deterministicText: input.deterministicText,
+      userMessage: input.userMessage,
+      intent: input.intent,
+      context: input.context,
+      preservePhrases: [input.deterministicText],
+      copyProvider: input.copyProvider,
+    });
+  }
+  const envelope = await userFacingSlackCopy({
+    deterministicText: [split.lead, split.tail].join("\n"),
+    userMessage: input.userMessage,
+    intent: input.intent,
+    context: input.context,
+    copyProvider: input.copyProvider,
+  });
+  const safeEnvelope = /\b(?:copywriter|omitted|proposal body|draft body)\b/i.test(envelope)
+    ? [split.lead, split.tail].join("\n")
+    : envelope;
+  return [safeEnvelope, split.body].join("\n\n");
+}
+
 async function userFacingSlackCopy(input: {
   deterministicText: string;
   userMessage?: string | null;
@@ -1529,7 +1575,14 @@ async function executeConversationPlan(params: {
     return;
   }
   if (params.plan.intent === "show_cover_letter") {
-    await postThreadReply(params.client, params.channelId, params.threadTs, params.plan.reply);
+    const text = await userFacingSlackCopyWithExactBody({
+      deterministicText: params.plan.reply,
+      userMessage: params.userMessage,
+      intent: params.plan.intent,
+      context: { jobId: params.state.jobId, threadStatus: params.state.status, exactProposalBodyPreserved: true },
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
   const text = await userFacingSlackCopy({
@@ -1601,6 +1654,23 @@ function actionHasPausedChallengeQuarantine(action: BrowserActionRecord): boolea
   return /\b(captcha_or_security_challenge|login_required|two_factor_required|passkey|security check|just a moment|cloudflare|captcha)\b/.test(value);
 }
 
+function matchesBlockedStatusIntent(text: string): boolean {
+  const normalized = normalizeSlackTextInput(text).replace(/[.!?]+$/g, "").trim();
+  return /^(?:what(?:'|’)?s blocked|what is blocked|what(?:'|’)?s blocking(?: you)?|what needs unblocking|blocked|why are you blocked)$/i.test(normalized);
+}
+
+function matchesAttentionStatusIntent(text: string): boolean {
+  const normalized = normalizeSlackTextInput(text).replace(/[.!?]+$/g, "").trim();
+  return /^(?:what needs attention|what needs me|what(?:'|’)?s wrong|why are you paused|why is hunting paused|what is stopping you|what needs fixing)$/i.test(normalized);
+}
+
+function matchesSkipBlockedApplicationsIntent(text: string): boolean {
+  const normalized = normalizeSlackTextInput(text).replace(/[.!?]+$/g, "").trim();
+  return /\b(?:skip|clear|archive|move on from|drop)\b.*\b(?:blocked|stale|paused)\b.*\b(?:application|applications|app|apps|apply items|ones|items)\b/i.test(normalized) ||
+    /^(?:skip|clear|archive)\s+all\s+blocked(?:\s+(?:applications|apps|apply items))?$/i.test(normalized) ||
+    /^(?:move on from those|clear the stale blocked ones|skip the stale ones)$/i.test(normalized);
+}
+
 function updateActionQuarantineStatus(action: BrowserActionRecord, status: "retried" | "skipped" | "resolved"): void {
   const current = action.payload.challengeQuarantine && typeof action.payload.challengeQuarantine === "object"
     ? action.payload.challengeQuarantine as Record<string, unknown>
@@ -1612,6 +1682,132 @@ function updateActionQuarantineStatus(action: BrowserActionRecord, status: "retr
       lastSeenAt: new Date().toISOString(),
     },
   });
+}
+
+function uniqueActions(actions: BrowserActionRecord[]): BrowserActionRecord[] {
+  const seen = new Set<number>();
+  const out: BrowserActionRecord[] = [];
+  for (const action of actions) {
+    if (seen.has(action.id)) continue;
+    seen.add(action.id);
+    out.push(action);
+  }
+  return out;
+}
+
+function collectBlockedApplicationActions(): BrowserActionRecord[] {
+  const all = listBrowserActions(null, 1000);
+  const quarantinedIds = new Set(
+    listUnresolvedBrowserChallengeQuarantines()
+      .map((item) => item.actionId)
+      .filter((id): id is number => typeof id === "number")
+  );
+  const blockedQaIds = new Set(
+    getProtectedQaQueueItems(1000)
+      .filter((item) => item.state === "blocked")
+      .map((item) => item.action.id)
+  );
+  return uniqueActions(
+    all.filter((action) =>
+      quarantinedIds.has(action.id) ||
+      blockedQaIds.has(action.id) ||
+      ((action.status === "paused" || action.status === "failed") && actionHasPausedChallengeQuarantine(action))
+    )
+  );
+}
+
+function buildBlockedApplicationsStatusText(kind: "blocked" | "attention"): string {
+  const session = getBrowserSessionStatus();
+  const blockedActions = collectBlockedApplicationActions();
+  const qaItems = getProtectedQaQueueItems(1000);
+  const readyQa = qaItems.filter((item) => item.state === "ready").length;
+  const blockedQa = qaItems.filter((item) => item.state === "blocked").length;
+
+  if (session.blocked) {
+    return [
+      "Chrome is blocked right now.",
+      "Upwork is showing a browser/security check in remote Chrome. Clear that visible check first, then say “retry.”",
+      "I will not bypass it or submit anything.",
+    ].join("\n");
+  }
+
+  if (blockedActions.length > 0) {
+    return [
+      "Nothing is blocking Chrome right now.",
+      `The stale issue is ${blockedActions.length} blocked apply item${blockedActions.length === 1 ? "" : "s"} from the earlier Upwork check. ${blockedQa > 0 ? `${blockedQa} also show up as blocked QA item${blockedQa === 1 ? "" : "s"}.` : "They are not useful unless we rebuild or retry them."}`,
+      readyQa > 0 ? `${readyQa} QA item${readyQa === 1 ? " is" : "s are"} still ready.` : "No ready QA item is waiting.",
+      "My recommendation: skip the stale blocked applications, then run a clean check and restart hunting.",
+    ].join("\n");
+  }
+
+  if (qaItems.length > 0) {
+    return [
+      kind === "attention" ? "The main thing needing attention is QA, not Chrome." : "Chrome is not blocked.",
+      `${qaItems.length} QA application${qaItems.length === 1 ? " is" : "s are"} waiting; ${readyQa} ready, ${blockedQa} blocked.`,
+      readyQa > 0 ? "Best move: open the ready application and review it." : "Best move: skip or rebuild the blocked QA item.",
+    ].join("\n");
+  }
+
+  return [
+    kind === "attention" ? "Nothing obvious needs Steve right now." : "Nothing is blocked right now.",
+    "Chrome is clean, there are no blocked apply items, and the QA queue is empty.",
+    "Best move: run a clean check and restart hunting.",
+  ].join("\n");
+}
+
+function skipBlockedApplications(): {
+  skipped: number;
+  browserBlocked: boolean;
+  text: string;
+} {
+  const session = getBrowserSessionStatus();
+  if (session.blocked) {
+    return {
+      skipped: 0,
+      browserBlocked: true,
+      text: [
+        "I did not skip anything because Chrome is actively blocked.",
+        "Clear the visible browser/security check in remote Chrome first, then say “skip all blocked applications” if you still want me to clear the stale items.",
+        "I will not bypass the check or submit anything.",
+      ].join("\n"),
+    };
+  }
+
+  const blockedActions = collectBlockedApplicationActions();
+  for (const action of blockedActions) {
+    updateBrowserActionStatus(action.id, "cancelled", "Skipped from Slack blocked-application cleanup.");
+    updateActionQuarantineStatus(action, "skipped");
+    markBrowserChallengeSkipped(action.id);
+    const payload = action.payload as { channelId?: string; threadTs?: string };
+    if (payload.channelId && payload.threadTs) {
+      updateSlackThreadStateStatus(payload.channelId, payload.threadTs, "reject_requested");
+    }
+    if (getApplicationStatus(action.jobId)) {
+      updateApplicationStatus(action.jobId, "rejected", "Skipped from Slack blocked-application cleanup.");
+    }
+  }
+
+  if (blockedActions.length === 0) {
+    return {
+      skipped: 0,
+      browserBlocked: false,
+      text: [
+        "There were no blocked applications to skip.",
+        "Chrome is clean, and I did not submit anything.",
+        "Run a check now and I’ll restart hunting if it’s clean.",
+      ].join("\n"),
+    };
+  }
+
+  return {
+    skipped: blockedActions.length,
+    browserBlocked: false,
+    text: [
+      `Done — I skipped ${blockedActions.length} stale blocked apply item${blockedActions.length === 1 ? "" : "s"}.`,
+      "Chrome is clean, and I did not submit anything.",
+      "Run a check now and I’ll restart hunting if it’s clean.",
+    ].join("\n"),
+  };
 }
 
 function actionMatchesSlackThread(action: BrowserActionRecord, state: SlackThreadStateForRetry): boolean {
@@ -2038,7 +2234,7 @@ function shouldFallbackWithoutLlm(params: SlackReasoningGatewayParams, state: Re
 
 function hasExplicitAgentSlackContext(text: string): boolean {
   const withoutUrls = text.replace(/https?:\/\/\S+/gi, " ");
-  return /\b(?:application|proposal|drafts?|prep|listing|cover letter|qa|queue|chrome|browser|blocked|blocker|proof|portfolio|connects|boost|hunting|running|health|retry|submitted|interview|hired|lost|upwork\s+(?:agent|bot|application|listing|proposal)|upload\s+files?|attach\s+files?)\b/i.test(withoutUrls);
+  return /\b(?:application|proposal|drafts?|prep|listing|cover letter|qa|queue|chrome|browser|blocked|blocker|attention|wrong|paused|stopping|proof|portfolio|connects|boost|hunting|running|health|retry|submitted|interview|hired|lost|upwork\s+(?:agent|bot|application|listing|proposal)|upload\s+files?|attach\s+files?)\b/i.test(withoutUrls);
 }
 
 function shouldAllowSlackLearningAndActions(params: SlackReasoningGatewayParams, state: ReturnType<typeof getSlackThreadStateByThreadTs>): boolean {
@@ -2105,6 +2301,84 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
         hasTrackedThread: Boolean(state),
       },
       preservePhrases,
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return;
+  }
+
+  if (canExecuteConversationBrainAction && matchesSkipBlockedApplicationsIntent(params.text)) {
+    const result = skipBlockedApplications();
+    logger.debug(JSON.stringify({
+      slackReplyTrace: true,
+      inbound: params.text,
+      classifiedIntent: "skip_blocked_applications",
+      executionPath: "gateway:skip_blocked_applications",
+      finalComposer: true,
+      replySuppressed: false,
+      skipped: result.skipped,
+      browserBlocked: result.browserBlocked,
+    }));
+    const text = await userFacingSlackCopy({
+      deterministicText: result.text,
+      userMessage: params.text,
+      intent: "skip_blocked_applications",
+      context: {
+        skipped: result.skipped,
+        browserBlocked: result.browserBlocked,
+        finalSubmitManual: true,
+      },
+      preservePhrases: result.text.includes("I did not submit anything") ? ["I did not submit anything"] : [],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return;
+  }
+
+  if (canExecuteConversationBrainAction && matchesBlockedStatusIntent(params.text)) {
+    const deterministicText = buildBlockedApplicationsStatusText("blocked");
+    logger.debug(JSON.stringify({
+      slackReplyTrace: true,
+      inbound: params.text,
+      classifiedIntent: "blocked_status",
+      executionPath: "gateway:blocked_status",
+      finalComposer: true,
+      replySuppressed: false,
+    }));
+    const text = await userFacingSlackCopy({
+      deterministicText,
+      userMessage: params.text,
+      intent: "blocked_status",
+      context: {
+        blockedApplications: collectBlockedApplicationActions().length,
+        unresolvedChallengeActions: listUnresolvedBrowserChallengeQuarantines().length,
+        browserBlocked: getBrowserSessionStatus().blocked,
+      },
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return;
+  }
+
+  if (canExecuteConversationBrainAction && matchesAttentionStatusIntent(params.text)) {
+    const deterministicText = buildBlockedApplicationsStatusText("attention");
+    logger.debug(JSON.stringify({
+      slackReplyTrace: true,
+      inbound: params.text,
+      classifiedIntent: "attention_status",
+      executionPath: "gateway:attention_status",
+      finalComposer: true,
+      replySuppressed: false,
+    }));
+    const text = await userFacingSlackCopy({
+      deterministicText,
+      userMessage: params.text,
+      intent: "attention_status",
+      context: {
+        blockedApplications: collectBlockedApplicationActions().length,
+        unresolvedChallengeActions: listUnresolvedBrowserChallengeQuarantines().length,
+        browserBlocked: getBrowserSessionStatus().blocked,
+      },
       copyProvider: params.copyProvider,
     });
     await postThreadReply(params.client, params.channelId, params.threadTs, text);
