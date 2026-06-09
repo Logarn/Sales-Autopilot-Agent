@@ -261,6 +261,7 @@ async function runTests(): Promise<void> {
       { name: "connects waste memory query", input: "how many Connects are we wasting?", expectType: "memory_query" },
       { name: "mayor fix memory query", input: "what should Mayor fix?", expectType: "memory_query" },
       { name: "recent failures memory query", input: "what failed recently?", expectType: "memory_query" },
+      { name: "proposal style memory query", input: "How should you write Upwork proposals for me?", expectType: "memory_query" },
       { name: "remember sales learning", input: "remember this: fashion Klaviyo jobs should check Fly Boutique first", expectType: "memory_remember", instruction: "fashion Klaviyo jobs should check Fly Boutique first" },
       { name: "forget sales learning", input: "forget that", expectType: "memory_forget", instruction: "latest relevant memory" },
       { name: "unknown", input: "something else", expectType: "unknown" },

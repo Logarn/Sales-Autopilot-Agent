@@ -385,7 +385,8 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
       source: "fallback",
     };
   }
-  if (/\b(?:what did you learn|what have you learned|what patterns are working|what proof is working|what boost strategy is working|how many connects are we wasting|connects waste|wasting connects|why did you choose that|what would you do differently next time|what should mayor fix|what should codex fix|what improvement ideas do you have|what failed recently|what has failed recently)\b/i.test(commandText)) {
+  if (/\b(?:what did you learn|what have you learned|what patterns are working|what proof is working|what boost strategy is working|how many connects are we wasting|connects waste|wasting connects|why did you choose that|what would you do differently next time|what should mayor fix|what should codex fix|what improvement ideas do you have|what failed recently|what has failed recently)\b/i.test(commandText) ||
+    /\bhow\s+should\s+(?:you|we)\s+(?:write|draft|open)\b.*\b(?:upwork\s+)?(?:proposal|proposals|cover\s*letter|cover\s*letters|cv)\b/i.test(commandText)) {
     return {
       type: "memory_query",
       rawText: normalized,
