@@ -2039,23 +2039,65 @@ export interface SlackSocketTextEvent {
   files?: SlackFileLike[];
 }
 
+function logSlackEventRouteTrace(input: {
+  event: SlackSocketTextEvent;
+  route: "ignored" | "admitted";
+  reason: string;
+  promptMode?: SlackPromptAdmission["mode"];
+  ownedConversation?: boolean;
+  botMentioned?: boolean;
+  upworkUrlDetected?: boolean;
+  allowedChannel?: boolean;
+  allowedUser?: boolean;
+}): void {
+  logger.debug(JSON.stringify({
+    slackEventRouteTrace: true,
+    debugOnly: true,
+    route: input.route,
+    reason: input.reason,
+    channelId: input.event.channel,
+    channelType: input.event.channel_type ?? null,
+    isDm: isSlackDmEvent(input.event),
+    isAmbientAgentChannel: isAmbientAgentChannel(input.event.channel),
+    inAllowedChannelList: input.allowedChannel ?? isAllowedChannel(input.event.channel),
+    allowedUser: input.allowedUser ?? isAllowedUser(input.event.user),
+    hasUser: Boolean(input.event.user),
+    hasThread: Boolean(input.event.thread_ts),
+    hasText: Boolean(input.event.text?.trim()),
+    fileCount: input.event.files?.length ?? 0,
+    botMentioned: Boolean(input.botMentioned),
+    upworkUrlDetected: Boolean(input.upworkUrlDetected),
+    promptMode: input.promptMode ?? null,
+    ownedConversation: Boolean(input.ownedConversation),
+  }));
+}
+
 export async function handleSlackSocketTextEvent(rawEvent: SlackSocketTextEvent, client: App["client"]): Promise<void> {
   const files = rawEvent.files ?? [];
-  if (!rawEvent.text && files.length === 0) return;
+  if (!rawEvent.text && files.length === 0) {
+    logSlackEventRouteTrace({ event: rawEvent, route: "ignored", reason: "empty_event" });
+    return;
+  }
   if (rawEvent.bot_id || rawEvent.subtype === "bot_message" || rawEvent.subtype === "message_changed") {
+    logSlackEventRouteTrace({ event: rawEvent, route: "ignored", reason: "bot_or_changed_message" });
     return;
   }
 
   const channelId = rawEvent.channel;
-  if (!isAllowedChannel(channelId) && !isSlackDmEvent(rawEvent) && !isAmbientAgentChannel(channelId)) {
+  const allowedChannel = isAllowedChannel(channelId);
+  if (!allowedChannel && !isSlackDmEvent(rawEvent) && !isAmbientAgentChannel(channelId)) {
+    logSlackEventRouteTrace({ event: rawEvent, route: "ignored", reason: "channel_not_allowed", allowedChannel });
     return;
   }
-  if (!isAllowedUser(rawEvent.user)) {
+  const allowedUser = isAllowedUser(rawEvent.user);
+  if (!allowedUser) {
+    logSlackEventRouteTrace({ event: rawEvent, route: "ignored", reason: "user_not_allowed", allowedChannel, allowedUser });
     return;
   }
 
   const text = rawEvent.text?.trim() ?? "";
   if (shouldSkipDuplicateSlackEvent(rawEvent, text)) {
+    logSlackEventRouteTrace({ event: rawEvent, route: "ignored", reason: "duplicate_event", allowedChannel, allowedUser });
     return;
   }
   const threadTs = rawEvent.thread_ts ?? rawEvent.ts;
@@ -2070,6 +2112,15 @@ export async function handleSlackSocketTextEvent(rawEvent: SlackSocketTextEvent,
     botMentioned,
   });
   if (!admission.prompt) {
+    logSlackEventRouteTrace({
+      event: rawEvent,
+      route: "ignored",
+      reason: admission.reason,
+      botMentioned,
+      upworkUrlDetected: Boolean(upworkUrl),
+      allowedChannel,
+      allowedUser,
+    });
     logSlackReplySuppressed({
       inboundMessage: text,
       classifiedIntent: "not_a_prompt",
@@ -2080,6 +2131,17 @@ export async function handleSlackSocketTextEvent(rawEvent: SlackSocketTextEvent,
   }
   const promptText = stripSlackBotMentions(text);
   if (shouldDebounceRapidSlackPrompt(rawEvent, threadTs, promptText)) {
+    logSlackEventRouteTrace({
+      event: rawEvent,
+      route: "ignored",
+      reason: "rapid_duplicate_prompt",
+      promptMode: admission.mode,
+      ownedConversation: admission.ownedConversation,
+      botMentioned,
+      upworkUrlDetected: Boolean(upworkUrl),
+      allowedChannel,
+      allowedUser,
+    });
     logSlackReplySuppressed({
       inboundMessage: promptText,
       classifiedIntent: "debounced_prompt",
@@ -2097,6 +2159,17 @@ export async function handleSlackSocketTextEvent(rawEvent: SlackSocketTextEvent,
     state: mappedThread,
     activeCta,
     upworkUrl,
+  });
+  logSlackEventRouteTrace({
+    event: rawEvent,
+    route: "admitted",
+    reason: admission.reason,
+    promptMode: admission.mode,
+    ownedConversation: admission.ownedConversation,
+    botMentioned,
+    upworkUrlDetected: Boolean(upworkUrl),
+    allowedChannel,
+    allowedUser,
   });
   await handleSlackReasoningGateway({
     channelId,
