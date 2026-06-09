@@ -151,7 +151,7 @@ async function runShadowSmoke(): Promise<boolean> {
   });
 
   const memory = upsertAgentMemory({
-    memoryType: "writing_preference",
+    memoryType: "proposal_style",
     scope: "global",
     title: "Steve prefers diagnosis-first proposal openers",
     summary: "Steve prefers concise proposal openers that start with diagnosis, not generic intros.",
