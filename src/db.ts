@@ -348,6 +348,62 @@ export interface SlackThreadState {
   updatedAt: string;
 }
 
+export type SlackConversationOwnershipMode =
+  | "dm"
+  | "bot_owned_thread"
+  | "claimed_thread"
+  | "ambient_agent_channel";
+
+interface SlackConversationOwnershipRow {
+  id: number;
+  channel_id: string;
+  root_ts: string;
+  mode: SlackConversationOwnershipMode;
+  owner_user_id: string | null;
+  root_job_url: string | null;
+  application_id: string | null;
+  latest_bot_cta: string | null;
+  pending_action: string | null;
+  active_target: string | null;
+  last_interaction_at: string;
+  disabled: number;
+  closed: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SlackConversationOwnership {
+  id: number;
+  channelId: string;
+  rootTs: string;
+  mode: SlackConversationOwnershipMode;
+  ownerUserId: string | null;
+  rootJobUrl: string | null;
+  applicationId: string | null;
+  latestBotCta: string | null;
+  pendingAction: string | null;
+  activeTarget: string | null;
+  lastInteractionAt: string;
+  disabled: boolean;
+  closed: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpsertSlackConversationOwnershipInput {
+  channelId: string;
+  rootTs: string;
+  mode: SlackConversationOwnershipMode;
+  ownerUserId?: string | null;
+  rootJobUrl?: string | null;
+  applicationId?: string | null;
+  latestBotCta?: string | null;
+  pendingAction?: string | null;
+  activeTarget?: string | null;
+  disabled?: boolean;
+  closed?: boolean;
+}
+
 export type SlackBehaviorMemoryType =
   | "operator_preference"
   | "failed_intent"
@@ -1197,6 +1253,27 @@ CREATE TABLE IF NOT EXISTS slack_thread_state (
 CREATE INDEX IF NOT EXISTS idx_slack_thread_state_channel_thread ON slack_thread_state(channel_id, thread_ts);
 CREATE INDEX IF NOT EXISTS idx_slack_thread_state_job_id ON slack_thread_state(job_id);
 
+CREATE TABLE IF NOT EXISTS slack_conversation_ownership (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id TEXT NOT NULL,
+  root_ts TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  owner_user_id TEXT,
+  root_job_url TEXT,
+  application_id TEXT,
+  latest_bot_cta TEXT,
+  pending_action TEXT,
+  active_target TEXT,
+  last_interaction_at TEXT DEFAULT (datetime('now')),
+  disabled INTEGER NOT NULL DEFAULT 0,
+  closed INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(channel_id, root_ts)
+);
+CREATE INDEX IF NOT EXISTS idx_slack_conversation_ownership_owner ON slack_conversation_ownership(owner_user_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_slack_conversation_ownership_active ON slack_conversation_ownership(channel_id, root_ts, disabled, closed);
+
 CREATE TABLE IF NOT EXISTS slack_behavior_memory (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   type TEXT NOT NULL,
@@ -1785,6 +1862,50 @@ const updateSlackThreadStateStatusStmt = db.prepare(
 const listSlackThreadStatesStmt = db.prepare<[string, number], SlackThreadStateRow>(
   `SELECT id, channel_id, message_ts, thread_ts, upwork_url, job_id, status, created_at, updated_at
    FROM slack_thread_state
+   WHERE channel_id = ?
+   ORDER BY updated_at DESC
+   LIMIT ?`
+);
+const upsertSlackConversationOwnershipStmt = db.prepare(
+  `INSERT INTO slack_conversation_ownership (
+    channel_id,
+    root_ts,
+    mode,
+    owner_user_id,
+    root_job_url,
+    application_id,
+    latest_bot_cta,
+    pending_action,
+    active_target,
+    last_interaction_at,
+    disabled,
+    closed,
+    updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, datetime('now'))
+  ON CONFLICT(channel_id, root_ts) DO UPDATE SET
+    mode = excluded.mode,
+    owner_user_id = COALESCE(excluded.owner_user_id, slack_conversation_ownership.owner_user_id),
+    root_job_url = COALESCE(excluded.root_job_url, slack_conversation_ownership.root_job_url),
+    application_id = COALESCE(excluded.application_id, slack_conversation_ownership.application_id),
+    latest_bot_cta = COALESCE(excluded.latest_bot_cta, slack_conversation_ownership.latest_bot_cta),
+    pending_action = COALESCE(excluded.pending_action, slack_conversation_ownership.pending_action),
+    active_target = COALESCE(excluded.active_target, slack_conversation_ownership.active_target),
+    last_interaction_at = datetime('now'),
+    disabled = excluded.disabled,
+    closed = excluded.closed,
+    updated_at = datetime('now')`
+);
+const getSlackConversationOwnershipStmt = db.prepare<[string, string], SlackConversationOwnershipRow>(
+  `SELECT id, channel_id, root_ts, mode, owner_user_id, root_job_url, application_id, latest_bot_cta,
+          pending_action, active_target, last_interaction_at, disabled, closed, created_at, updated_at
+   FROM slack_conversation_ownership
+   WHERE channel_id = ? AND root_ts = ?
+   LIMIT 1`
+);
+const listSlackConversationOwnershipStmt = db.prepare<[string, number], SlackConversationOwnershipRow>(
+  `SELECT id, channel_id, root_ts, mode, owner_user_id, root_job_url, application_id, latest_bot_cta,
+          pending_action, active_target, last_interaction_at, disabled, closed, created_at, updated_at
+   FROM slack_conversation_ownership
    WHERE channel_id = ?
    ORDER BY updated_at DESC
    LIMIT ?`
@@ -2560,6 +2681,26 @@ function rowToSlackFailureReflection(row: SlackFailureReflectionRow): SlackFailu
     fixType: row.fix_type,
     proposedTask: row.proposed_task,
     createdAt: row.created_at,
+  };
+}
+
+function rowToSlackConversationOwnership(row: SlackConversationOwnershipRow): SlackConversationOwnership {
+  return {
+    id: row.id,
+    channelId: row.channel_id,
+    rootTs: row.root_ts,
+    mode: row.mode,
+    ownerUserId: row.owner_user_id,
+    rootJobUrl: row.root_job_url,
+    applicationId: row.application_id,
+    latestBotCta: row.latest_bot_cta,
+    pendingAction: row.pending_action,
+    activeTarget: row.active_target,
+    lastInteractionAt: row.last_interaction_at,
+    disabled: row.disabled === 1,
+    closed: row.closed === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -3887,6 +4028,16 @@ export function upsertSlackThreadState(input: {
   if (!row) {
     throw new Error(`Failed to persist slack thread mapping for ${input.channelId}/${input.messageTs}`);
   }
+  upsertSlackConversationOwnership({
+    channelId: input.channelId,
+    rootTs: input.threadTs,
+    mode: "bot_owned_thread",
+    rootJobUrl: input.upworkUrl,
+    applicationId: input.jobId ?? null,
+    activeTarget: input.jobId ?? input.upworkUrl,
+    disabled: false,
+    closed: false,
+  });
   return rowToSlackThreadState(row);
 }
 
@@ -3919,6 +4070,36 @@ export function updateSlackThreadStateStatus(
 
 export function listSlackThreadStates(channelId: string, limit = 100): SlackThreadState[] {
   return listSlackThreadStatesStmt.all(channelId, limit).map(rowToSlackThreadState);
+}
+
+export function upsertSlackConversationOwnership(input: UpsertSlackConversationOwnershipInput): SlackConversationOwnership {
+  upsertSlackConversationOwnershipStmt.run(
+    input.channelId,
+    input.rootTs,
+    input.mode,
+    input.ownerUserId ?? null,
+    input.rootJobUrl ?? null,
+    input.applicationId ?? null,
+    input.latestBotCta?.replace(/\s+/g, " ").trim() || null,
+    input.pendingAction?.replace(/\s+/g, " ").trim() || null,
+    input.activeTarget?.replace(/\s+/g, " ").trim() || null,
+    input.disabled ? 1 : 0,
+    input.closed ? 1 : 0
+  );
+  const row = getSlackConversationOwnershipStmt.get(input.channelId, input.rootTs);
+  if (!row) {
+    throw new Error(`Failed to persist Slack conversation ownership for ${input.channelId}/${input.rootTs}`);
+  }
+  return rowToSlackConversationOwnership(row);
+}
+
+export function getSlackConversationOwnership(channelId: string, rootTs: string): SlackConversationOwnership | null {
+  const row = getSlackConversationOwnershipStmt.get(channelId, rootTs);
+  return row ? rowToSlackConversationOwnership(row) : null;
+}
+
+export function listSlackConversationOwnership(channelId: string, limit = 100): SlackConversationOwnership[] {
+  return listSlackConversationOwnershipStmt.all(channelId, Math.max(1, limit)).map(rowToSlackConversationOwnership);
 }
 
 export function upsertSlackBehaviorMemory(input: UpsertSlackBehaviorMemoryInput): SlackBehaviorMemory {

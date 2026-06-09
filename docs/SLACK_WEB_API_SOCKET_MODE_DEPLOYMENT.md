@@ -8,18 +8,15 @@ Webhook posting is fallback only.
 Bot token scopes for `SLACK_BOT_TOKEN`:
 
 - `chat:write` - post parent lead messages and thread replies with `chat.postMessage`.
+- `app_mentions:read` - receive mention events that claim shared-channel threads.
 - `channels:history` - receive message events in public channels where the bot is installed.
+- `im:history` - receive direct messages with the bot.
 - `groups:history` - receive message events in private channels where the bot is installed, if the production channel is private.
 
 Optional, only if intentionally needed:
 
 - `chat:write.public` - only if the bot must post to public channels it has not joined. Prefer inviting the bot to the channel instead.
-
-Not required for PR #14:
-
-- `app_mentions:read`
-- `im:history`
-- `mpim:history`
+- `mpim:history` - only if multi-person DMs are intentionally enabled as an agent surface.
 
 ## Required App-Level Scope
 
@@ -31,10 +28,14 @@ App-level token scope for `SLACK_APP_TOKEN`:
 
 Subscribe to bot events:
 
+- `app_mention` - explicit mention can summon the bot and claim that thread.
 - `message.channels` - public channel messages and thread replies.
+- `message.im` - direct messages with the bot.
 - `message.groups` - private channel messages and thread replies, if the production channel is private.
 
-The Socket Mode handler listens for Slack `message` events, ignores bot messages, maps the event's `thread_ts` to the tracked opportunity, and replies in the same thread.
+The Socket Mode handler listens for Slack `message` and `app_mention` events, ignores bot messages, maps the event's `thread_ts` to the tracked opportunity, and replies in the same thread. Untagged prompt mode is limited to DMs, bot-owned threads, claimed threads, and configured ambient agent channels such as `#sales_leads`.
+
+After changing scopes or event subscriptions in Slack, reinstall the Slack app to the workspace before testing live inbound messages.
 
 ## Required Contabo Environment Variables
 
@@ -47,6 +48,8 @@ SLACK_SOCKET_MODE_ENABLED=true
 SLACK_INBOUND_MODE=socket_mode
 DISCOVERY_SLACK_CHANNEL_ID=C0123456789
 SLACK_ALLOWED_CHANNEL_IDS=C0123456789
+SLACK_AGENT_AMBIENT_CHANNEL_IDS=C0AQW8W6RFU
+SLACK_ALLOWED_USER_IDS=U0123456789
 ```
 
 Fallback only:
@@ -63,6 +66,7 @@ SLACK_POLL_CHANNEL_ID=
 ```
 
 `SLACK_ALLOWED_CHANNEL_IDS` should include the same channel as `DISCOVERY_SLACK_CHANNEL_ID` in production so inbound replies from other channels are ignored.
+`SLACK_ALLOWED_USER_IDS` should include Steve's Slack user ID in production so other Slack users cannot trigger execution on allowed prompt surfaces.
 
 Run `npm run slack:socket` as its own supervised process alongside the lead engine/browser worker processes.
 

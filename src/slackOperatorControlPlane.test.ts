@@ -68,7 +68,7 @@ async function runTests(): Promise<void> {
     buildSlackOperatorReply: (intent: any, deps?: any) => Promise<string>;
     isAllowedRemoteChromeOperatorUrl: (url: string) => boolean;
     parseSlackOperatorIntent: (text: string) => any;
-    tryHandleSlackOperatorCommand: (input: { text: string; channelId: string; threadTs: string; client: any; deps?: any }) => Promise<boolean>;
+    tryHandleSlackOperatorCommand: (input: { text: string; channelId: string; threadTs: string; client: any; deps?: any; copyProvider?: any }) => Promise<boolean>;
   };
   const { runLeadEngineCycle } = require("./leadEngine") as {
     runLeadEngineCycle: (input: { mode: "run_once" | "continuous"; dryRun: boolean }, deps?: any) => Promise<any>;
@@ -208,6 +208,7 @@ async function runTests(): Promise<void> {
     assert(/only open known Upwork job or apply pages/i.test(rejectedOpenReply), "Unsafe Chrome-open intent should get a safe rejection.");
 
     const posted: string[] = [];
+    const copyRequests: any[] = [];
     const handled = await tryHandleSlackOperatorCommand({
       text: "is Chrome okay?",
       channelId: "C123",
@@ -220,8 +221,18 @@ async function runTests(): Promise<void> {
         readHeartbeats: () => [],
         readLeadEngineState: () => null,
       },
+      copyProvider: {
+        isAvailable: () => true,
+        completeJson: async (request: any) => {
+          copyRequests.push(request);
+          const payload = JSON.parse(request.messages[1].content) as { deterministicText: string };
+          return { ok: true, data: { text: `Composed operator reply: ${payload.deterministicText}` } };
+        },
+      },
     });
     assert(handled && posted.some((reply) => reply.includes("Chrome is connected")), "Slack handler should post friendly Chrome health.");
+    assert(copyRequests.length === 1, "Legacy operator helper should invoke the Slack copywriter before posting.");
+    assert(posted[0].startsWith("Composed operator reply:"), "Legacy operator helper should post composed copy, not raw deterministic text.");
 
     setHuntingPaused(true, "Paused from Slack.");
     let discoveryCalled = false;

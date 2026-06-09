@@ -56,12 +56,13 @@ async function runTests(): Promise<void> {
   process.env.PROOF_ASSET_ROOT = proofRoot;
   process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
   process.env.SLACK_ALLOWED_USER_IDS = "U_ALLOWED";
+  process.env.BROWSER_QA_MAX_PROTECTED_TABS = "5";
 
   const { applySlackThreadRevision, buildDraftPreviewFromSlackThread, buildSlackSocketStartupError, handleSlackSocketTextEvent, handleThreadCommand, parseSlackThreadCommand, parseUpworkJobUrlFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread, resetSlackSocketEventDedupeForTests } = require("./slackSocket") as {
     applySlackThreadRevision: (input: { channelId: string; threadTs: string; instruction: string }) => { ok: boolean; text: string; proposalVersion?: number };
     buildDraftPreviewFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string };
     buildSlackSocketStartupError: (input: { socketEnabled: boolean; botToken: string; appToken: string }) => string | null;
-    handleSlackSocketTextEvent: (event: { channel: string; ts: string; text?: string; thread_ts?: string; client_msg_id?: string; event_id?: string; event_ts?: string; user?: string; bot_id?: string; subtype?: string; files?: any[] }, client: any) => Promise<void>;
+    handleSlackSocketTextEvent: (event: { channel: string; channel_type?: string; ts: string; text?: string; thread_ts?: string; client_msg_id?: string; event_id?: string; event_ts?: string; user?: string; bot_id?: string; subtype?: string; files?: any[] }, client: any) => Promise<void>;
     handleThreadCommand: (input: { channelId: string; threadTs: string; text: string; client: any; intentProvider?: any; conversationProvider?: any; copyProvider?: any; focusQaTab?: any; operatorDeps?: any }) => Promise<void>;
     parseSlackThreadCommand: (value: string) => {
       type: string;
@@ -75,12 +76,13 @@ async function runTests(): Promise<void> {
     queuePrepareDraftFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string; actionId?: number };
     resetSlackSocketEventDedupeForTests: () => void;
   };
-  const { closeDb, getApplicationDraft, getApplicationProofPlanOverrides, getApplicationStatus, getBrowserActionById, getSlackThreadStateByThreadTs, listActiveSlackBehaviorMemories, listApplicationAssets, listProposalVersions, listRecentSlackFailureReflections, markJobSeen, mergeBrowserActionPayload, recordProposalVersion, upsertSlackThreadState, listBrowserActions, updateApplicationStatus, updateBrowserActionStatus } = require("./db") as {
+  const { closeDb, getApplicationDraft, getApplicationProofPlanOverrides, getApplicationStatus, getBrowserActionById, getSlackConversationOwnership, getSlackThreadStateByThreadTs, listActiveSlackBehaviorMemories, listApplicationAssets, listProposalVersions, listRecentSlackFailureReflections, markJobSeen, mergeBrowserActionPayload, recordProposalVersion, upsertSlackThreadState, listBrowserActions, updateApplicationStatus, updateBrowserActionStatus } = require("./db") as {
     closeDb: () => void;
     getApplicationDraft: (jobId: string) => { proposalText: string } | null;
     getApplicationProofPlanOverrides: (jobId: string) => any;
     getApplicationStatus: (jobId: string) => string | null;
     getBrowserActionById: (id: number) => { payload: Record<string, unknown>; status: string } | null;
+    getSlackConversationOwnership: (channelId: string, rootTs: string) => { mode: string; ownerUserId: string | null; disabled: boolean; closed: boolean } | null;
     getSlackThreadStateByThreadTs: (channelId: string, threadTs: string) => { status: string } | null;
     listActiveSlackBehaviorMemories: (limit?: number) => Array<{ type: string; rule: string; source: string }>;
     listApplicationAssets: (jobId: string) => Array<{ originalName: string; relativePath: string | null; source: string }>;
@@ -338,7 +340,7 @@ async function runTests(): Promise<void> {
 
     const separateQuestionReplies: string[] = [];
     await handleSlackSocketTextEvent({
-      channel: "C456",
+      channel: "C0AQW8W6RFU",
       ts: "333.889",
       user: "U_ALLOWED",
       text: "what needs attention?",
@@ -346,7 +348,7 @@ async function runTests(): Promise<void> {
       chat: { postMessage: async (payload: { text: string }) => separateQuestionReplies.push(payload.text) },
     });
     await handleSlackSocketTextEvent({
-      channel: "C456",
+      channel: "C0AQW8W6RFU",
       ts: "333.890",
       user: "U_ALLOWED",
       text: "what’s blocked?",
@@ -355,6 +357,18 @@ async function runTests(): Promise<void> {
     });
     assert(separateQuestionReplies.length === 2, "Different Slack messages should not be deduped into one ignored message.");
     assert(!/manual_attention_required|browser_challenge_action_paused|action\s*#?\d+/i.test(separateQuestionReplies.join("\n")), "Normal adjacent status replies should hide raw internals.");
+
+    const compositeStatusReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "C0AQW8W6RFU",
+      ts: "333.891",
+      user: "U_ALLOWED",
+      text: "what is blocked and what needs attention?",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => compositeStatusReplies.push(payload.text) },
+    });
+    assert(compositeStatusReplies.length === 1, "Composite blocked/attention question should get one complete reply.");
+    assert(/Blocked:/i.test(compositeStatusReplies[0]) && /Needs attention:/i.test(compositeStatusReplies[0]), "Composite status reply should answer both blocked and attention parts.");
 
     const trackedThreadUrlReplies: string[] = [];
     await handleSlackSocketTextEvent({
@@ -419,6 +433,166 @@ async function runTests(): Promise<void> {
       jobId: prepareJob.id,
       status: "packet_sent",
     });
+
+    const makeOwnedLeadThread = (id: string, channelId: string, threadTs: string) => {
+      const job = scoreJob({
+        ...prepareJob,
+        id,
+        title: `Owned lead ${id}`,
+        url: `https://www.upwork.com/jobs/~${id.replace(/[^a-z0-9]/gi, "")}`,
+      });
+      job.applicationDraft = buildApplicationDraft(job);
+      markJobSeen(job, false);
+      upsertSlackThreadState({
+        channelId,
+        messageTs: threadTs,
+        threadTs,
+        upworkUrl: job.url,
+        jobId: job.id,
+        status: "packet_sent",
+      });
+      return job;
+    };
+
+    const untaggedApproveJob = makeOwnedLeadThread("untagged-approve-job", "COWN", "own.001");
+    const untaggedApproveReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "COWN",
+      ts: "own.002",
+      thread_ts: "own.001",
+      user: "U_ALLOWED",
+      text: "Yep, go for it",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => untaggedApproveReplies.push(payload.text) },
+    });
+    assert(
+      listBrowserActions(null, 1000).some((action) => action.jobId === untaggedApproveJob.id && action.actionType === "prepare_application_review"),
+      "Bot-owned lead thread should treat untagged affirmative CTA reply as prep_application.",
+    );
+    assert(untaggedApproveReplies.some((reply) => /stop before submit/i.test(reply)), "Untagged CTA approval should preserve final-submit safety.");
+    assert(getSlackConversationOwnership("COWN", "own.001")?.mode === "bot_owned_thread", "Bot-created lead thread should register owned conversation context.");
+
+    const untaggedSkipJob = makeOwnedLeadThread("untagged-skip-job", "CSKIP", "skip.001");
+    const untaggedSkipReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "CSKIP",
+      ts: "skip.002",
+      thread_ts: "skip.001",
+      user: "U_ALLOWED",
+      text: "nah skip this one",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => untaggedSkipReplies.push(payload.text) },
+    });
+    assert(getApplicationStatus(untaggedSkipJob.id) === "rejected", "Untagged skip in a bot-owned lead thread should skip the current lead.");
+    assert(untaggedSkipReplies.some((reply) => /archived|skipped|skip/i.test(reply)), "Untagged skip should acknowledge the current lead.");
+
+    const untaggedDealJob = makeOwnedLeadThread("untagged-deal-job", "CDEAL", "deal.001");
+    const untaggedDealReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "CDEAL",
+      ts: "deal.002",
+      thread_ts: "deal.001",
+      user: "U_ALLOWED",
+      text: "what's the deal here?",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => untaggedDealReplies.push(payload.text) },
+    });
+    assert(untaggedDealReplies.some((reply) => reply.includes("Main risk") || reply.includes(untaggedDealJob.title)), "Untagged lead-thread question should answer the lead context.");
+
+    const salesRunningReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "C0AQW8W6RFU",
+      ts: "ambient.001",
+      user: "U_ALLOWED",
+      text: "are you running?",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => salesRunningReplies.push(payload.text) },
+    });
+    assert(salesRunningReplies.length === 1, "#sales_leads top-level status prompt should answer without a tag.");
+
+    const naturalStatusReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "C0AQW8W6RFU",
+      ts: "ambient.001b",
+      user: "U_ALLOWED",
+      text: "what the fuck are you up to?",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => naturalStatusReplies.push(payload.text) },
+    });
+    assert(naturalStatusReplies.length === 1, "Natural/frustrated status language should be classified as a status check.");
+
+    const dmAttentionReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "D_AGENT_DM",
+      channel_type: "im",
+      ts: "dm.001",
+      user: "U_ALLOWED",
+      text: "what needs attention?",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => dmAttentionReplies.push(payload.text) },
+    });
+    assert(dmAttentionReplies.length === 1, "DM messages from Steve should be treated as prompts.");
+
+    const claimedReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "C_SHARED",
+      ts: "claim.001",
+      user: "U_ALLOWED",
+      text: "<@UAGENT> are you running?",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => claimedReplies.push(payload.text) },
+    });
+    assert(claimedReplies.length === 1, "A mention in an allowed shared channel should summon the bot.");
+    assert(getSlackConversationOwnership("C_SHARED", "claim.001")?.mode === "claimed_thread", "Mentioned shared-channel thread should be claimed.");
+    await handleSlackSocketTextEvent({
+      channel: "C_SHARED",
+      ts: "claim.002",
+      thread_ts: "claim.001",
+      user: "U_ALLOWED",
+      text: "what's blocked?",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => claimedReplies.push(payload.text) },
+    });
+    assert(claimedReplies.length === 2, "A claimed shared-channel thread should answer later untagged replies.");
+
+    const botLoopReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "C0AQW8W6RFU",
+      ts: "bot.001",
+      bot_id: "B_AGENT",
+      subtype: "bot_message",
+      text: "are you running?",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => botLoopReplies.push(payload.text) },
+    });
+    assert(botLoopReplies.length === 0, "Bot-authored Slack messages should not trigger loops.");
+
+    const submitSafetyJob = makeOwnedLeadThread("submit-safety-job", "CSUBMIT", "submit.001");
+    const submitSafetyReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "CSUBMIT",
+      ts: "submit.002",
+      thread_ts: "submit.001",
+      user: "U_ALLOWED",
+      text: "send it",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => submitSafetyReplies.push(payload.text) },
+    });
+    assert(getApplicationStatus(submitSafetyJob.id) !== "submitted", "Submit-adjacent language must not mark or click final submit.");
+    assert(submitSafetyReplies.some((reply) => /final submit.*manual|submit stays manual/i.test(reply)), "Submit-adjacent language should reply with manual-submit safety.");
+
+    const ambiguousAmbientReplies: string[] = [];
+    const actionsBeforeAmbiguous = listBrowserActions(null, 1000).length;
+    await handleSlackSocketTextEvent({
+      channel: "C0AQW8W6RFU",
+      ts: "ambient.002",
+      user: "U_ALLOWED",
+      text: "go for it",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => ambiguousAmbientReplies.push(payload.text) },
+    });
+    assert(ambiguousAmbientReplies.some((reply) => /need the lead|which|Upwork link|QA item/i.test(reply)), "Ambiguous top-level affirmative should ask clarification.");
+    assert(listBrowserActions(null, 1000).length === actionsBeforeAmbiguous, "Ambiguous top-level affirmative should not queue browser action.");
 
     const fileQuestionReplies: string[] = [];
     await handleThreadCommand({
@@ -791,6 +965,7 @@ async function runTests(): Promise<void> {
     assert(queuedActions.length === 1, `Expected exactly one queued prepare_application_review action, got ${queuedActions.length}`);
 
     const multiApprovalReplies: string[] = [];
+    const multiApprovalTexts = ["prep it", "sounds good", "move on it"];
     for (let i = 1; i <= 3; i += 1) {
       const job = scoreJob({
         ...prepareJob,
@@ -811,7 +986,7 @@ async function runTests(): Promise<void> {
       await handleThreadCommand({
         channelId: "CMULTI",
         threadTs: `500.${i}`,
-        text: "prep it",
+        text: multiApprovalTexts[i - 1] ?? "prep it",
         client: {
           chat: {
             postMessage: async (payload: { text: string }) => {
@@ -1004,7 +1179,8 @@ async function runTests(): Promise<void> {
       text: "what’s ready?",
       client: { chat: { postMessage: async (payload: { text: string }) => qaQueueReplies.push(payload.text) } },
     });
-    assert(qaQueueReplies.some((reply) => reply.includes("QA queue") && reply.includes("Say \"open 1\"")), "QA queue should list protected applications with open-index guidance.");
+    assert(qaQueueReplies.some((reply) => reply.includes("Prepared applications") && reply.includes("Application 1") && /ready|review|blocked/i.test(reply)), "Ready status should list prepared applications with index guidance.");
+    assert(!/QA queue|Say "open/i.test(qaQueueReplies.join("\n")), "Ready status should not emit dashboard headings or command-menu copy.");
     assert(!qaQueueReplies.join("\n").includes("action #"), "QA queue should not expose raw action ids.");
 
     const showQaQueueReplies: string[] = [];
@@ -1014,8 +1190,8 @@ async function runTests(): Promise<void> {
       text: "show QA queue.",
       client: { chat: { postMessage: async (payload: { text: string }) => showQaQueueReplies.push(payload.text) } },
     });
-    assert(showQaQueueReplies.some((reply) => reply.includes("QA queue") && (reply.includes("blocked") || reply.includes("ready"))), "Show QA queue should return the compact queue.");
-    assert(!/action\s*#?\d+|Channel message:|Thread:/i.test(showQaQueueReplies.join("\n")), "Show QA queue should not expose raw ids.");
+    assert(showQaQueueReplies.some((reply) => reply.includes("Prepared applications") && (reply.includes("blocked") || reply.includes("ready"))), "Show QA queue should return compact prepared-application facts.");
+    assert(!/QA queue|Say "open|action\s*#?\d+|Channel message:|Thread:/i.test(showQaQueueReplies.join("\n")), "Show QA queue should not expose dashboard headings, command-menu text, or raw ids.");
 
     for (let i = 2; i <= 5; i += 1) {
       const qaJob = scoreJob({

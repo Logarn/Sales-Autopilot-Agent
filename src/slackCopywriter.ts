@@ -210,8 +210,17 @@ function compactSafeFallbackText(request: SlackCopyRequest, reason: string): str
   if (containsOldMenu(deterministic)) {
     return "I’m not sure what you want next. Send the specific change or next step and I’ll handle it without touching final submit.";
   }
-  if (/qa_queue|show_qa_queue/i.test(request.intent ?? "") && /\bQA queue\b/i.test(deterministic)) {
-    return deterministic;
+  if (/qa_queue|show_qa_queue/i.test(request.intent ?? "")) {
+    const qaFallback = deterministic
+      .replace(/^QA queue$/gim, "Prepared applications")
+      .replace(/\bQA queue is empty\b/gi, "No prepared applications are waiting")
+      .replace(/\bQA application tab\b/gi, "prepared application tab")
+      .replace(/\bQA queue\b/gi, "prepared applications")
+      .replace(/^\s*Say "open (\d+)".*$/gim, "Next: ask me to open application $1 when you want to review it.");
+    if (containsRawIds(qaFallback) || containsRawInternalFields(qaFallback)) {
+      return "I have prepared-application details, but the clean copywriter path failed. I’m hiding raw internals here. Ask for debug if you want the raw queue state.";
+    }
+    return qaFallback;
   }
   if (containsRawIds(deterministic) || containsRawInternalFields(deterministic) || containsDashboardDump(deterministic)) {
     if (/health|running|blocked|attention|status/i.test(request.intent ?? "")) {
