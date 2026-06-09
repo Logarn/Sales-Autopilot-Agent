@@ -81,6 +81,28 @@ value_for() {
   printf '%s\n' "${line#*=}"
 }
 
+is_truthy() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+list_contains_id() {
+  local list="$1"
+  local expected="$2"
+  local item
+  IFS=',|' read -r -a items <<< "$list"
+  for item in "${items[@]}"; do
+    item="${item#"${item%%[![:space:]]*}"}"
+    item="${item%"${item##*[![:space:]]}"}"
+    if [[ "$item" == "$expected" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 missing=()
 for key in "${required_keys[@]}"; do
   if ! grep -q -E "^${key}=" "$ENV_FILE"; then
@@ -118,6 +140,22 @@ if [[ "$MODE" != "template" ]]; then
     printf 'Empty required Slack Web API / Socket Mode values in %s:\n' "$ENV_FILE" >&2
     printf '  - %s\n' "${empty_slack[@]}" >&2
     exit 1
+  fi
+
+  socket_enabled="$(value_for SLACK_SOCKET_MODE_ENABLED)"
+  if is_truthy "$socket_enabled"; then
+    inbound_mode="$(value_for SLACK_INBOUND_MODE)"
+    if [[ "$inbound_mode" != "socket_mode" ]]; then
+      echo "SLACK_INBOUND_MODE must be socket_mode when SLACK_SOCKET_MODE_ENABLED=true." >&2
+      exit 1
+    fi
+
+    discovery_channel="$(value_for DISCOVERY_SLACK_CHANNEL_ID)"
+    allowed_channels="$(value_for SLACK_ALLOWED_CHANNEL_IDS)"
+    if ! list_contains_id "$allowed_channels" "$discovery_channel"; then
+      echo "DISCOVERY_SLACK_CHANNEL_ID must be included in SLACK_ALLOWED_CHANNEL_IDS when Socket Mode is enabled." >&2
+      exit 1
+    fi
   fi
 fi
 

@@ -99,6 +99,9 @@ async function runTests(): Promise<void> {
   const { recordBrowserManualAttention } = require("./browserSession") as {
     recordBrowserManualAttention: (input: { reason: string; actionId?: number; jobId?: string; url?: string | null; title?: string | null }) => Promise<unknown>;
   };
+  const { SLACK_ALLOWED_CHANNEL_IDS } = require("./config") as {
+    SLACK_ALLOWED_CHANNEL_IDS: string[];
+  };
   const { markDiscoverySourceChallenge } = require("./browserDiscoverySourceHealth") as {
     markDiscoverySourceChallenge: (source: { sourceType: string; sourceLabel: string; url: string }, reason: string, now?: Date) => unknown;
   };
@@ -537,6 +540,59 @@ async function runTests(): Promise<void> {
       chat: { postMessage: async (payload: { text: string }) => dmAttentionReplies.push(payload.text) },
     });
     assert(dmAttentionReplies.length === 1, "DM messages from Steve should be treated as prompts.");
+
+    const previousAllowedChannelIds = [...SLACK_ALLOWED_CHANNEL_IDS];
+    SLACK_ALLOWED_CHANNEL_IDS.length = 0;
+    SLACK_ALLOWED_CHANNEL_IDS.push("C0AQW8W6RFU");
+    try {
+      const narrowedSalesReplies: string[] = [];
+      await handleSlackSocketTextEvent({
+        channel: "C0AQW8W6RFU",
+        ts: "narrow.001",
+        user: "U_ALLOWED",
+        text: "are you running?",
+      }, {
+        chat: { postMessage: async (payload: { text: string }) => narrowedSalesReplies.push(payload.text) },
+      });
+      assert(narrowedSalesReplies.length === 1, "Allowed #sales_leads messages should be delivered when the public allowlist is narrowed.");
+
+      const unrelatedPublicReplies: string[] = [];
+      await handleSlackSocketTextEvent({
+        channel: "C_UNRELATED",
+        ts: "narrow.002",
+        user: "U_ALLOWED",
+        text: "are you running?",
+      }, {
+        chat: { postMessage: async (payload: { text: string }) => unrelatedPublicReplies.push(payload.text) },
+      });
+      assert(unrelatedPublicReplies.length === 0, "Unrelated public channels without mention should be ignored when the allowlist is narrowed.");
+
+      const narrowedDmReplies: string[] = [];
+      await handleSlackSocketTextEvent({
+        channel: "D_NARROW_DM",
+        channel_type: "im",
+        ts: "narrow.003",
+        user: "U_ALLOWED",
+        text: "what needs attention?",
+      }, {
+        chat: { postMessage: async (payload: { text: string }) => narrowedDmReplies.push(payload.text) },
+      });
+      assert(narrowedDmReplies.length === 1, "DM routing should bypass the public channel allowlist.");
+    } finally {
+      SLACK_ALLOWED_CHANNEL_IDS.length = 0;
+      SLACK_ALLOWED_CHANNEL_IDS.push(...previousAllowedChannelIds);
+    }
+
+    const unauthorizedUserReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "C0AQW8W6RFU",
+      ts: "auth.001",
+      user: "U_INTRUDER",
+      text: "are you running?",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => unauthorizedUserReplies.push(payload.text) },
+    });
+    assert(unauthorizedUserReplies.length === 0, "Non-allowlisted Slack users should not trigger socket handling.");
 
     const claimedReplies: string[] = [];
     await handleSlackSocketTextEvent({
