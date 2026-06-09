@@ -50,13 +50,21 @@ The default audit reports available local files, missing files, mention-only pro
 
 ## Slack Intake
 
-Slack-uploaded files are job-specific. When Steve or Natalie attaches supported files in a tracked job thread, the Slack socket downloads them with the bot token and stores them under:
+Slack-uploaded files are job-specific. When Steve or Natalie attaches supported files in a tracked job thread, the Slack socket downloads them with the bot token, checks the file size and basic file signature, classifies the file, and stores accepted files under:
 
 ```text
-/opt/upwork-agent/shared/proof-assets/slack-intake/<jobId>/
+/opt/upwork-agent/shared/proof-assets/slack-intake/<jobId>/<classification>/
 ```
 
-The agent registers those files against the application and can use them for that Upwork prep run. This does not edit `profile/portfolio-assets.json`; the committed manifest remains the canonical reusable proof library.
+The agent registers accepted files against the current application. This does not edit `profile/portfolio-assets.json`; the committed manifest remains the canonical reusable proof library.
+
+Classification behavior:
+
+- New case studies, proof files, and screenshots are stored for manual proof review. Exact filename replacements for known portfolio attachments may be attached for the current prep plan, but must not be claimed as verified proof until page verification succeeds.
+- Client assets such as logos, brand files, product images, or named creatives are scoped to the current application and may be attached when the browser prep plan needs them.
+- Temporary context such as briefs, notes, requirements, or job context is scoped to the current thread/application and is not attachable proof.
+- Unclear supported files are stored for review and the agent asks Steve what the file is for before using it.
+- Irrelevant or likely sensitive files such as invoices, billing/tax material, credentials, tokens, or secrets are not stored.
 
 Slack app requirements:
 
@@ -64,4 +72,4 @@ Slack app requirements:
 - Socket events must include message/file events for the target channel.
 - Configure `SLACK_FILE_MAX_BYTES` and `SLACK_FILE_ALLOWED_EXTENSIONS` if production limits need to differ from the defaults.
 
-Default accepted extensions are `.pdf`, `.png`, `.jpg`, `.jpeg`, and `.webp`. Unsupported or oversized files are rejected and reported in-thread by filename.
+Default accepted extensions are `.pdf`, `.png`, `.jpg`, `.jpeg`, and `.webp`. Unsupported, oversized, mismatched, irrelevant, or likely sensitive files are rejected and reported in-thread by filename only. Private Slack URLs, bot tokens, and file contents are not printed.
