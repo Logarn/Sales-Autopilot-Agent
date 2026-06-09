@@ -31,6 +31,7 @@ async function runTests(): Promise<void> {
     forgetSalesLearningMemory,
     listAgentMemories,
     listRecentAgentEvents,
+    listRecentSalesLearningEvents,
     listSalesLearningMemories,
     listSalesLearningMemoriesByType,
     markJobSeen,
@@ -42,6 +43,7 @@ async function runTests(): Promise<void> {
     forgetSalesLearningMemory: (input: { id?: number; query?: string; type?: string }) => number;
     listAgentMemories: (limit?: number) => Array<{ id: number; memoryType: string; title: string; summary: string; evidenceCount: number; status: string; version: number; sourceEventIds: number[]; keywords: string[]; lastUsedAt: string | null; supersedesMemoryId: number | null; contradictedByMemoryId: number | null; embeddingId: number | null }>;
     listRecentAgentEvents: (limit?: number) => Array<{ id: number; eventType: string; sourceType: string; jobId: string | null; summary: string; importance: number; privacyLevel: string }>;
+    listRecentSalesLearningEvents: (limit?: number) => Array<{ id: number; eventType: string; jobId: string | null; payload: Record<string, unknown> }>;
     listSalesLearningMemories: (limit?: number) => Array<{ id: number; type: string; hypothesis: string; evidenceCount: number; status: string; confidence: string }>;
     listSalesLearningMemoriesByType: (type: string, limit?: number) => Array<{ id: number; type: string; hypothesis: string; evidenceCount: number; status: string; subject: string }>;
     markJobSeen: (job: any, notified: boolean) => void;
@@ -165,6 +167,12 @@ async function runTests(): Promise<void> {
         expectedValueScore: 88,
         reasons: ["top 3 visibility likely enough"],
         risks: [],
+        visibleBoostBids: [
+          { rank: 1, connects: 42 },
+          { rank: 2, connects: 34 },
+          { rank: 3, connects: 28 },
+        ],
+        chosenBoostRank: 3,
       },
       selectedPortfolioItems: [portfolioItem],
       proposalQuality: { score: 90, issues: [], positiveSignals: ["specific opener"], wordCount: 65 },
@@ -258,6 +266,16 @@ async function runTests(): Promise<void> {
   assert(outcomeMemories.some((memory) => memory.type === "proposal_style"), "outcome should create proposal style memory");
   assert(outcomeMemories.some((memory) => memory.type === "boost_strategy"), "outcome should create boost strategy memory");
   assert(outcomeMemories.some((memory) => memory.type === "timing_hypothesis"), "outcome should create timing hypothesis");
+  assert(outcomeMemories.some((memory) => memory.type === "boost_strategy" && memory.subject.includes("expected_value")), "outcome should record structured boost expected-value attribution");
+  const outcomeEvent = listRecentSalesLearningEvents(20).find((event) => event.eventType === "outcome_recorded" && event.jobId === job.id);
+  assert(Boolean(outcomeEvent), "outcome should record a sales learning event");
+  assert(outcomeEvent?.payload.proposalVersionUsed !== undefined, "outcome event should preserve proposal version attribution");
+  assert(outcomeEvent?.payload.requiredConnects === 12, "outcome event should preserve required Connects");
+  assert(outcomeEvent?.payload.boostConnects === 28, "outcome event should preserve boost Connects");
+  assert(outcomeEvent?.payload.totalConnects === 40, "outcome event should preserve total Connects");
+  assert(outcomeEvent?.payload.boostRank === 3, "outcome event should preserve boost rank");
+  const visibleBoostBids = outcomeEvent?.payload.visibleBoostBids;
+  assert(Array.isArray(visibleBoostBids) && visibleBoostBids.length === 3, "outcome event should preserve visible boost bids");
 
   const prepFailureMemories = recordApplyPreparationFailureLearning({
     jobId: job.id,
