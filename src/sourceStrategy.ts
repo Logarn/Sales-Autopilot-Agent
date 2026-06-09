@@ -191,7 +191,7 @@ function isGoodLead(input: SourceStrategyObservation): boolean {
 }
 
 function isSubmitted(status: SourceStrategyObservation["status"]): boolean {
-  return status === "applied" || status === "submitted" || isPositiveOutcome(status) || status === "lost";
+  return status === "applied" || status === "submitted" || isPositiveOutcome(status) || isNegativeOutcome(status);
 }
 
 function isPositiveOutcome(status: SourceStrategyObservation["status"]): boolean {

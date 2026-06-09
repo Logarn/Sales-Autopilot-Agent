@@ -158,6 +158,24 @@ assert(sparse[0]?.recommendation === "monitor", "One excellent source sample sho
 assert(sparse[0]?.evidenceLevel === "not enough data", "Sparse evidence should be labeled as not enough data.");
 assert(sparse[0]?.caveats.some((caveat) => /sample/i.test(caveat)), "Sparse source should include a sample-size caveat.");
 
+const rejectedMetrics = buildSourceStrategyMetrics({
+  observations: [
+    {
+      sourceLabel: "Rejected Search",
+      leadScore: 40,
+      matchLevel: "low",
+      status: "rejected",
+    },
+  ],
+});
+assert(rejectedMetrics[0]?.submittedCount === 1, "Rejected outcomes should count in the submitted/outcome denominator.");
+assert(rejectedMetrics[0]?.negativeOutcomeCount === 1, "Rejected outcomes should count as negative outcomes.");
+assert(rejectedMetrics[0]?.positiveOutcomeRate === 0, "Rejected-only outcomes should produce a zero positive outcome rate, not missing data.");
+assert(
+  !rejectedMetrics[0]?.caveats.some((caveat) => /outcomes exist/i.test(caveat)),
+  "Rejected outcomes should not be reported as missing outcome data.",
+);
+
 const memoryMetrics = buildSourceStrategyMetrics({
   memories: [
     memory({
