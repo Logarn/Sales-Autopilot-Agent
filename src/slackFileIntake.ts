@@ -64,8 +64,6 @@ interface SlackFileClassificationDecision {
   reason?: string;
 }
 
-let knownPortfolioAttachmentNames: Set<string> | null = null;
-
 function safeJobSegment(jobId: string): string {
   return jobId.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120) || "unknown-job";
 }
@@ -106,36 +104,7 @@ function hasAny(value: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(value));
 }
 
-function loadKnownPortfolioAttachmentNames(): Set<string> {
-  if (knownPortfolioAttachmentNames) return knownPortfolioAttachmentNames;
-  const names = new Set<string>();
-  const manifestPath = path.resolve(process.cwd(), "profile/portfolio-assets.json");
-  try {
-    const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { assets?: Array<{ path?: string }> };
-    for (const asset of parsed.assets ?? []) {
-      if (asset.path) names.add(path.basename(asset.path).toLowerCase());
-    }
-  } catch {
-    // If the optional manifest is unavailable, new Slack proof uploads stay in review.
-  }
-  knownPortfolioAttachmentNames = names;
-  return names;
-}
-
-function isKnownPortfolioAttachmentName(name: string): boolean {
-  return loadKnownPortfolioAttachmentNames().has(path.basename(name).toLowerCase());
-}
-
-function proofReviewDecision(classification: Extract<SlackFileClassification, "case_study" | "proof" | "screenshot">, name: string): SlackFileClassificationDecision {
-  if (isKnownPortfolioAttachmentName(name)) {
-    return {
-      classification,
-      proofType: "file",
-      attachPolicy: "auto_attach",
-      storageBehavior: "application_asset_auto_attach",
-      shouldStore: true,
-    };
-  }
+function proofReviewDecision(classification: Extract<SlackFileClassification, "case_study" | "proof" | "screenshot">): SlackFileClassificationDecision {
   return {
     classification,
     proofType: "file",
@@ -174,15 +143,15 @@ export function classifySlackFileForIntake(file: SlackFileLike): SlackFileClassi
   }
 
   if (hasAny(text, [/\b(?:case[-_ ]?study|portfolio[-_ ]?proof|customer[-_ ]?story|success[-_ ]?story)\b/])) {
-    return proofReviewDecision("case_study", name);
+    return proofReviewDecision("case_study");
   }
 
   if (imageLike && hasAny(text, [/\b(?:screenshot|screen[-_ ]?shot|dashboard|analytics|report|results?|performance|revenue|roi|metric|metrics)\b/])) {
-    return proofReviewDecision("screenshot", name);
+    return proofReviewDecision("screenshot");
   }
 
   if (hasAny(text, [/\b(?:proof|testimonial|review|results?|performance|revenue|roi|metric|metrics|klaviyo|retention|campaign|email[-_ ]?marketing)\b/])) {
-    return proofReviewDecision("proof", name);
+    return proofReviewDecision("proof");
   }
 
   if (hasAny(text, [/\b(?:client[-_ ]?asset|asset|logo|brand|creative|ad[-_ ]?creative|mockup|banner|product[-_ ]?image)\b/])) {

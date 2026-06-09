@@ -60,7 +60,7 @@ The agent registers accepted files against the current application. This does no
 
 Classification behavior:
 
-- New case studies, proof files, and screenshots are stored for manual proof review. Exact filename replacements for known portfolio attachments may be attached for the current prep plan, but must not be claimed as verified proof until page verification succeeds.
+- New case studies, proof files, and screenshots are stored for manual proof review. Slack-uploaded proof is not attached or claimed as verified proof until review/page verification succeeds.
 - Client assets such as logos, brand files, product images, or named creatives are scoped to the current application and may be attached when the browser prep plan needs them.
 - Temporary context such as briefs, notes, requirements, or job context is scoped to the current thread/application and is not attachable proof.
 - Unclear supported files are stored for review and the agent asks Steve what the file is for before using it.

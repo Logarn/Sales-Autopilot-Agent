@@ -85,7 +85,7 @@ async function runTests(): Promise<void> {
     getSlackConversationOwnership: (channelId: string, rootTs: string) => { mode: string; ownerUserId: string | null; disabled: boolean; closed: boolean } | null;
     getSlackThreadStateByThreadTs: (channelId: string, threadTs: string) => { status: string } | null;
     listActiveSlackBehaviorMemories: (limit?: number) => Array<{ type: string; rule: string; source: string }>;
-    listApplicationAssets: (jobId: string) => Array<{ originalName: string; relativePath: string | null; source: string }>;
+    listApplicationAssets: (jobId: string) => Array<{ originalName: string; relativePath: string | null; source: string; attachPolicy: string }>;
     listProposalVersions: (jobId: string) => Array<{ versionNumber: number; source: string; proposalText: string }>;
     listRecentSlackFailureReflections: (limit?: number) => Array<{ whatHappened: string; whyItFailed: string; nextBehavior: string; proposedTask?: string | null }>;
     markJobSeen: (job: any, notified: boolean) => void;
@@ -852,10 +852,11 @@ async function runTests(): Promise<void> {
       global.fetch = originalFetch;
     }
     assert(fileIntakeReplies.some((reply) => reply.includes("Got 2 files") && reply.includes("design-case-studies-steve-logarn.pdf") && reply.includes("truly-beauty-case-study.pdf")), "Slack file upload should be ingested and acknowledged.");
-    assert(listApplicationAssets(prepareJob.id).some((asset) => asset.originalName === "design-case-studies-steve-logarn.pdf" && asset.source === "slack"), "Slack file should be registered to the application.");
+    assert(fileIntakeReplies.some((reply) => reply.includes("Stored for proof review only")), "Slack proof uploads should stay in manual review.");
+    assert(listApplicationAssets(prepareJob.id).some((asset) => asset.originalName === "design-case-studies-steve-logarn.pdf" && asset.source === "slack" && asset.attachPolicy === "manual_review"), "Slack proof file should be registered to the application for manual review.");
     const planAfterSlackFiles = buildBrowserApplyPlan(prepareJob.id).plan;
-    assert(planAfterSlackFiles.attachments.some((attachment: { filePath: string }) => attachment.filePath.includes("slack-intake") && attachment.filePath.endsWith("truly-beauty-case-study.pdf")), "Matching Slack upload should become the attachable browser-prep file.");
-    assert(!planAfterSlackFiles.missingLocalAssets.includes("profile/attachments/truly-beauty-case-study.pdf"), "Matching Slack upload should resolve the missing proof file.");
+    assert(!planAfterSlackFiles.attachments.some((attachment: { filePath: string }) => attachment.filePath.includes("slack-intake") && attachment.filePath.endsWith("truly-beauty-case-study.pdf")), "Matching Slack proof upload should not become an attachable browser-prep file without review.");
+    assert(planAfterSlackFiles.missingLocalAssets.includes("profile/attachments/truly-beauty-case-study.pdf"), "Matching Slack proof upload should not resolve the missing reusable proof file.");
 
     const directDraftPreview = buildDraftPreviewFromSlackThread({ channelId: "C123", threadTs: "111.222" });
     assert(directDraftPreview.ok, "Draft preview helper should return the stored proposal without queuing browser work.");

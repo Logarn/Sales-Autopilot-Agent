@@ -42,7 +42,7 @@ async function runTests(): Promise<void> {
   try {
     assert.equal(classifySlackFileForIntake({ name: "store-logo.png", mimetype: "image/png" }).classification, "client_asset");
     assert.equal(classifySlackFileForIntake({ name: "truly-beauty-case-study.pdf" }).classification, "case_study");
-    assert.equal(classifySlackFileForIntake({ name: "truly-beauty-case-study.pdf" }).attachPolicy, "auto_attach");
+    assert.equal(classifySlackFileForIntake({ name: "truly-beauty-case-study.pdf" }).attachPolicy, "manual_review");
     assert.equal(classifySlackFileForIntake({ name: "new-brand-case-study.pdf" }).attachPolicy, "manual_review");
     assert.equal(classifySlackFileForIntake({ name: "dashboard-screenshot.png", mimetype: "image/png" }).classification, "screenshot");
     assert.equal(classifySlackFileForIntake({ name: "client-context-notes.pdf" }).classification, "temporary_context");
