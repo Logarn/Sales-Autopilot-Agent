@@ -1253,7 +1253,7 @@ async function runTests(): Promise<void> {
       text: "what’s ready?",
       client: { chat: { postMessage: async (payload: { text: string }) => qaQueueReplies.push(payload.text) } },
     });
-    assert(qaQueueReplies.some((reply) => reply.includes("Prepared applications") && reply.includes("Application 1") && /ready|review|blocked/i.test(reply)), "Ready status should list prepared applications with index guidance.");
+    assert(qaQueueReplies.some((reply) => reply.includes("Batch workspace") && reply.includes("Application 1") && /ready|review|blocked/i.test(reply)), "Ready status should list protected batch workspace facts.");
     assert(!/QA queue|Say "open/i.test(qaQueueReplies.join("\n")), "Ready status should not emit dashboard headings or command-menu copy.");
     assert(!qaQueueReplies.join("\n").includes("action #"), "QA queue should not expose raw action ids.");
 
@@ -1264,7 +1264,7 @@ async function runTests(): Promise<void> {
       text: "show QA queue.",
       client: { chat: { postMessage: async (payload: { text: string }) => showQaQueueReplies.push(payload.text) } },
     });
-    assert(showQaQueueReplies.some((reply) => reply.includes("Prepared applications") && (reply.includes("blocked") || reply.includes("ready"))), "Show QA queue should return compact prepared-application facts.");
+    assert(showQaQueueReplies.some((reply) => reply.includes("Batch workspace") && (reply.includes("blocked") || reply.includes("ready"))), "Show QA queue should return compact batch facts.");
     assert(!/QA queue|Say "open|action\s*#?\d+|Channel message:|Thread:/i.test(showQaQueueReplies.join("\n")), "Show QA queue should not expose dashboard headings, command-menu text, or raw ids.");
 
     for (let i = 2; i <= 5; i += 1) {
