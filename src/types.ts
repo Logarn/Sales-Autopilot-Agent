@@ -320,7 +320,10 @@ export type ProposalVersionSource =
   | "upwork_inserted"
   | "remote_chrome_qa"
   | "human_edit_reread"
-  | "final_submitted";
+  | "final_submitted"
+  | "latest_verified_fallback";
+
+export type ProposalVersionConfidence = "high" | "medium" | "low";
 
 export interface ProposalVersionSnapshot {
   id: number;
@@ -330,6 +333,9 @@ export interface ProposalVersionSnapshot {
   label: string;
   proposalText: string;
   screeningAnswers: string[];
+  confidence: ProposalVersionConfidence;
+  isFallback: boolean;
+  fallbackReason: string | null;
   note: string | null;
   createdAt: string;
 }
@@ -340,11 +346,15 @@ export interface ScreeningCoverageItem {
   jobId: string;
   questionIndex: number;
   questionText: string | null;
+  questionFingerprint: string | null;
+  semanticFamily: string | null;
   plannedAnswer: string | null;
   filledAnswer: string | null;
   verifiedAnswer: string | null;
   humanEditedAnswer: string | null;
   finalAnswer: string | null;
+  jobContext: Record<string, unknown> | null;
+  confidence: ProposalVersionConfidence;
   status: ScreeningCoverageStatus;
   updatedAt?: string;
 }

@@ -68,7 +68,7 @@ async function runTests(): Promise<void> {
   };
   const input = {
     job,
-    text: "Need proposal style, Fly Boutique proof, boost/connects, and source judgment for a fashion Klaviyo opportunity.",
+    text: "Need proposal style, screening answers, Fly Boutique proof, boost/connects, and source judgment for a fashion Klaviyo opportunity.",
     limit: 10,
   };
 
@@ -95,6 +95,18 @@ async function runTests(): Promise<void> {
     evidenceCount: 2,
     status: "active",
     keywords: ["fashion", "klaviyo", "proposal", "opener", "retention"],
+  });
+  const screening = upsertAgentMemory({
+    memoryType: "screening_answer",
+    scope: "fashion:klaviyo",
+    title: "fashion:klaviyo:screening approach answers",
+    summary: "For approach-plan screening questions, answer with the first Klaviyo audit step and the revenue leak priority.",
+    hypothesisText: "For approach-plan screening questions, answer with the first Klaviyo audit step and the revenue leak priority.",
+    confidence: "medium",
+    importance: 6,
+    evidenceCount: 2,
+    status: "active",
+    keywords: ["fashion", "klaviyo", "screening", "answer", "question", "approach", "audit"],
   });
   const boost = upsertAgentMemory({
     memoryType: "boost_strategy",
@@ -180,15 +192,17 @@ async function runTests(): Promise<void> {
   const ids = ranked.map((item) => item.memory.id);
   const proofIndex = ids.indexOf(proof.id);
   const styleIndex = ids.indexOf(style.id);
+  const screeningIndex = ids.indexOf(screening.id);
   const boostIndex = ids.indexOf(boost.id);
   const sourceIndex = ids.indexOf(source.id);
   const randomIndex = ids.indexOf(randomKlaviyo.id);
   const staleIndex = ids.indexOf(staleBrowserFailure.id);
-  assert(proofIndex >= 0 && styleIndex >= 0 && boostIndex >= 0 && sourceIndex >= 0, "relevant proof/style/boost/source memories should be retrieved");
+  assert(proofIndex >= 0 && styleIndex >= 0 && screeningIndex >= 0 && boostIndex >= 0 && sourceIndex >= 0, "relevant proof/style/screening/boost/source memories should be retrieved");
   assert(randomIndex >= 0, "random Klaviyo comparison memory should still be eligible");
   assert(staleIndex >= 0, "stale browser comparison memory should still be eligible for ranking");
   assert(proofIndex < randomIndex, "fashion/Klaviyo/Fly Boutique proof should outrank random Klaviyo proof from another vertical");
   assert(styleIndex < randomIndex, "matching proposal style should outrank random Klaviyo keyword match");
+  assert(screeningIndex < randomIndex, "matching screening answer memory should outrank random Klaviyo keyword match");
   assert(boostIndex < randomIndex, "matching boost strategy should outrank random Klaviyo keyword match");
   assert(sourceIndex < staleIndex, "matching source memory should outrank stale browser/source failure in ordinary sales context");
   assert(!ids.includes(forgotten.id), "forgotten memories must remain excluded from retrieval");
@@ -227,6 +241,7 @@ async function runTests(): Promise<void> {
   const promptContext = buildSalesLearningPromptContext({ ...input, limit: 4 });
   const promptText = JSON.stringify(promptContext);
   assert(/Fly Boutique/i.test(promptText), "retrieval output should be injectable into prompt context");
+  assert(/screening|approach-plan/i.test(promptText), "screening answer memories should be injectable into prompt context");
   assert(/Hard safety/i.test(promptText), "prompt context should preserve hard safety guidance");
 
   const fabricatedOldFailure = {

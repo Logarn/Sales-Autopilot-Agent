@@ -628,7 +628,7 @@ export async function writeV3CapturePacketWithLlm(
       intelligence?.proofRecommendations?.join(" "),
       context.autoPrepareNote,
     ].filter(Boolean).join(" "),
-    types: ["proposal_style", "proof_preference", "boost_strategy", "source_quality", "operator_preference"],
+    types: ["proposal_style", "screening_answer", "proof_preference", "boost_strategy", "source_quality", "operator_preference"],
     limit: 8,
   });
   const upworkUrl = job.url || context.upworkUrl;

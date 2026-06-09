@@ -19,6 +19,7 @@ import {
   listActiveSlackBehaviorMemories,
   listBrowserActions,
   getLatestProposalVersion,
+  recordLatestVerifiedProposalFallback,
   recordProposalVersion,
   recordSlackFailureReflection,
   updateApplicationStatus,
@@ -1273,7 +1274,7 @@ export function queueApplicationSnapshotFromSlackThread(input: {
     ok: true,
     actionId: action.id,
     text: input.markSubmittedAfterCapture
-      ? `I queued a read-only final version capture for ${humanApplicationLabel(state.jobId)} before recording the submitted outcome. Final submit remains manual on my side.`
+      ? `I queued a read-only final version capture for ${humanApplicationLabel(state.jobId)} if the application tab is visible; otherwise I will preserve the latest verified version as a lower-confidence fallback. Final submit remains manual on my side.`
       : `I queued a read-only re-read of the remote Chrome application for ${humanApplicationLabel(state.jobId)}. I’ll save the current cover letter/screening text as a new version if the page is readable.`,
   };
 }
@@ -1303,12 +1304,18 @@ export function buildDraftPreviewFromSlackThread(input: {
         proposalText: textToShow,
         screeningAnswers: draft?.structuredProposal?.clientRequestAnswers ?? latestVersion?.screeningAnswers ?? [],
         note: "Slack draft/CV preview shown to Steve.",
-      });
+  });
   updateSlackThreadStateStatus(state.channelId, state.threadTs, "draft_preview_sent");
-  const label = requestedVersion?.label ?? previewVersion?.label ?? latestVersion?.label ?? "current draft";
+  const shownVersion = requestedVersion ?? previewVersion ?? latestVersion;
+  const label = shownVersion?.label ?? "current draft";
   const sourceLine = input.source && !requestedVersion
-    ? `I do not have a ${input.source.replace(/_/g, " ")} capture yet; showing the latest captured draft instead (${label}).`
+    ? shownVersion?.isFallback
+      ? `I do not have a ${input.source.replace(/_/g, " ")} readback; showing the lower-confidence latest verified fallback instead (${label}).`
+      : `I do not have a ${input.source.replace(/_/g, " ")} capture yet; showing the latest captured draft instead (${label}).`
     : `Version: ${label}`;
+  const finalSubmittedQualifier = shownVersion?.isFallback
+    ? "This is a lower-confidence latest verified fallback, not a visible final submitted readback."
+    : "I only call this final submitted text when Steve marked it submitted or the page was captured before that outcome update.";
   return {
     ok: true,
     text: [
@@ -1318,7 +1325,7 @@ export function buildDraftPreviewFromSlackThread(input: {
       textToShow,
       "",
       input.source === "final_submitted"
-        ? "I only call this final submitted text when Steve marked it submitted or the page was captured before that outcome update."
+        ? finalSubmittedQualifier
         : !input.source
           ? "I have not filled the Upwork form yet."
         : "I have not filled the Upwork form yet unless an Upwork inserted/QA version is shown above.",
@@ -3023,13 +3030,24 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, 
       note: "Steve said the application was submitted; capture current remote Chrome text first when possible.",
     });
     if (!result.ok && state.jobId) {
-      updateApplicationStatus(state.jobId, "submitted", "Marked submitted from Slack after Steve submitted manually. Current remote Chrome text could not be queued; final version is last captured QA version if available.");
+      const fallback = recordLatestVerifiedProposalFallback({
+        jobId: state.jobId,
+        reason: "Current remote Chrome text could not be queued for read-only final capture.",
+        note: "Steve said submitted; capture action could not be queued.",
+      });
+      updateApplicationStatus(
+        state.jobId,
+        "submitted",
+        fallback
+          ? `Marked submitted from Slack after Steve submitted manually. Preserved ${fallback.label} as a lower-confidence latest verified fallback.`
+          : "Marked submitted from Slack after Steve submitted manually. Current remote Chrome text could not be queued; final version is last captured QA version if available."
+      );
       updateSlackThreadStateStatus(state.channelId, state.threadTs, "submitted_marked");
     }
     const text = await userFacingSlackCopy({
       deterministicText: result.ok
         ? result.text
-        : `I marked ${humanApplicationLabel(state.jobId)} as submitted in local state. I could not queue a final page capture, so the final version is the last captured QA version if available. Final submit remains manual.`,
+        : `I marked ${humanApplicationLabel(state.jobId)} as submitted in local state. I could not queue a final page capture, so I preserved the latest verified version as a lower-confidence fallback if one was available. Final submit remains manual.`,
       userMessage: params.text,
       intent: "mark_submitted",
       context: { jobId: state.jobId, queued: result.ok },
