@@ -20,6 +20,7 @@ import { readHeartbeats } from "./heartbeat";
 import { isRecoveredBacklogDrain, readLatestState, runLeadEngineCycle, type LeadEngineCycleSummary } from "./leadEngine";
 import { readHuntingControlState, setHuntingPaused } from "./operatorControlState";
 import { getProtectedQaQueueItems } from "./browserQaWorkspace";
+import { rewriteSlackCopyWithKimi, type SlackCopyProvider } from "./slackCopywriter";
 
 type SlackClient = App["client"];
 
@@ -238,20 +239,38 @@ export async function buildSlackOperatorReply(intent: SlackOperatorIntent, deps:
   return result.text;
 }
 
+function preserveOperatorSafetyPhrases(text: string): string[] {
+  return [
+    "Final submit remains manual",
+    "Final submit stays manual",
+    "did not click through login, CAPTCHA, security checks, or submit anything",
+    "did not paste through VNC or click submit",
+  ].filter((phrase) => text.includes(phrase));
+}
+
 export async function tryHandleSlackOperatorCommand(input: {
   text: string;
   channelId: string;
   threadTs: string;
   client: SlackClient;
   deps?: SlackOperatorControlDeps;
+  copyProvider?: SlackCopyProvider;
 }): Promise<boolean> {
   const intent = parseSlackOperatorIntent(input.text);
   if (!intent) return false;
-  const text = await buildSlackOperatorReply(intent, input.deps);
+  const deterministicText = await buildSlackOperatorReply(intent, input.deps);
+  const copy = await rewriteSlackCopyWithKimi({
+    path: "conversation_reply",
+    deterministicText,
+    userMessage: input.text,
+    intent: `operator_${intent.type}`,
+    context: { operatorIntent: intent.type },
+    preservePhrases: preserveOperatorSafetyPhrases(deterministicText),
+  }, input.copyProvider);
   await input.client.chat.postMessage({
     channel: input.channelId,
     thread_ts: input.threadTs,
-    text,
+    text: copy.text,
   });
   return true;
 }

@@ -133,19 +133,18 @@ export function canQueueNewQaPreparation(jobId: string): { ok: boolean; count: n
 
 export function formatProtectedQaQueueReply(items = getProtectedQaQueueItems(1000)): string {
   if (items.length === 0) {
-    return "QA queue is empty. No prepared or blocked applications are waiting in remote Chrome.";
+    return "No prepared applications are waiting in remote Chrome right now.";
   }
   return [
-    "QA queue",
-    "",
+    `Prepared applications: ${items.length} waiting in remote Chrome.`,
     ...items.map((item) => [
-      `${item.index}. ${item.title} - ${humanStatus(item)}`,
-      `   Portfolio: ${item.proof}`,
-      `   Files: ${item.files}`,
-      `   Connects: ${item.connects}${item.boost !== "none" ? ` + boost ${item.boost}` : ""}`,
-      `   Next: ${item.nextAction}`,
-      `   Say "open ${item.index}" to bring it up in remote Chrome.`,
+      `Application ${item.index}: ${item.title} - ${humanStatus(item)}`,
+      `Portfolio: ${item.proof}`,
+      `Files: ${item.files}`,
+      `Connects: ${item.connects}${item.boost !== "none" ? ` + boost ${item.boost}` : ""}`,
+      `Next: ${item.nextAction}. Ask me to open application ${item.index} when you want to review it.`,
     ].join("\n")),
+    "Final submit remains manual.",
   ].join("\n");
 }
 
@@ -194,7 +193,7 @@ export async function focusProtectedQaApplicationTab(input: {
   if (!item) {
     return {
       ok: false,
-      text: "I do not have a protected QA application tab matching that request. Ask “what’s ready?” to see the QA queue.",
+      text: "I do not have a protected application tab matching that request. Ask “what’s ready?” to see the prepared applications.",
     };
   }
   if (!item.applyUrl) {

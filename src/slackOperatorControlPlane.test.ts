@@ -66,7 +66,7 @@ async function runTests(): Promise<void> {
   } = require("./slackOperatorControlPlane") as {
     buildSlackOperatorReply: (intent: any, deps?: any) => Promise<string>;
     parseSlackOperatorIntent: (text: string) => any;
-    tryHandleSlackOperatorCommand: (input: { text: string; channelId: string; threadTs: string; client: any; deps?: any }) => Promise<boolean>;
+    tryHandleSlackOperatorCommand: (input: { text: string; channelId: string; threadTs: string; client: any; deps?: any; copyProvider?: any }) => Promise<boolean>;
   };
   const { runLeadEngineCycle } = require("./leadEngine") as {
     runLeadEngineCycle: (input: { mode: "run_once" | "continuous"; dryRun: boolean }, deps?: any) => Promise<any>;
@@ -185,6 +185,7 @@ async function runTests(): Promise<void> {
     assert(openReply.includes("remote Chrome") && openReply.includes("did not paste") && openReply.includes("click submit"), "Open URL reply should confirm CDP-style control and submit safety.");
 
     const posted: string[] = [];
+    const copyRequests: any[] = [];
     const handled = await tryHandleSlackOperatorCommand({
       text: "is Chrome okay?",
       channelId: "C123",
@@ -197,8 +198,18 @@ async function runTests(): Promise<void> {
         readHeartbeats: () => [],
         readLeadEngineState: () => null,
       },
+      copyProvider: {
+        isAvailable: () => true,
+        completeJson: async (request: any) => {
+          copyRequests.push(request);
+          const payload = JSON.parse(request.messages[1].content) as { deterministicText: string };
+          return { ok: true, data: { text: `Composed operator reply: ${payload.deterministicText}` } };
+        },
+      },
     });
     assert(handled && posted.some((reply) => reply.includes("Chrome is connected")), "Slack handler should post friendly Chrome health.");
+    assert(copyRequests.length === 1, "Legacy operator helper should invoke the Slack copywriter before posting.");
+    assert(posted[0].startsWith("Composed operator reply:"), "Legacy operator helper should post composed copy, not raw deterministic text.");
 
     setHuntingPaused(true, "Paused from Slack.");
     let discoveryCalled = false;

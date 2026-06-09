@@ -86,7 +86,7 @@ import {
   getProtectedQaQueueItems,
   type ProtectedQaFocusResult,
 } from "./browserQaWorkspace";
-import { rewriteSlackCopyWithKimi, type SlackCopyProvider } from "./slackCopywriter";
+import { rewriteSlackCopyWithKimi, type SlackCopyProvider, type SlackCopyResult } from "./slackCopywriter";
 import {
   buildSlackOperatorReply,
   parseSlackOperatorIntent,
@@ -683,8 +683,9 @@ async function handleDiscoveryHuntingCommand(params: {
   copyProvider?: SlackCopyProvider;
 }): Promise<void> {
   if (params.command.type === "discovery_block_status") {
-    const deterministicText = formatDiscoverySourceHealthForSlack({ debug: isDebugStatusRequest(params.text) });
-    const text = isDebugStatusRequest(params.text)
+    const debugRequested = isDebugStatusRequest(params.text);
+    const deterministicText = formatDiscoverySourceHealthForSlack({ debug: debugRequested });
+    const text = debugRequested
       ? deterministicText
       : await userFacingSlackCopy({
         deterministicText,
@@ -692,7 +693,13 @@ async function handleDiscoveryHuntingCommand(params: {
         intent: "discovery_block_status",
         copyProvider: params.copyProvider,
       });
-    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    await postThreadReply(params.client, params.channelId, params.threadTs, text, debugRequested ? {
+      inboundMessage: params.text,
+      classifiedIntent: "discovery_block_status_debug",
+      executionPath: "slackSocket:discovery_block_status_debug",
+      handler: "slackSocket:discovery_block_status_debug",
+      debugOrSystemOnly: true,
+    } : undefined);
     return;
   }
 
@@ -1328,8 +1335,172 @@ export function buildDraftPreviewFromSlackThread(input: {
   };
 }
 
-async function postThreadReply(client: App["client"], channel: string, threadTs: string, text: string): Promise<void> {
-  await client.chat.postMessage({ channel, thread_ts: threadTs, text });
+interface UserFacingSlackCopyInput {
+  deterministicText: string;
+  userMessage?: string | null;
+  intent?: string | null;
+  context?: Record<string, unknown>;
+  preservePhrases?: string[];
+  copyProvider?: SlackCopyProvider;
+  executionPath?: string;
+}
+
+interface SlackReplyPathTrace {
+  inboundMessage: string | null;
+  classifiedIntent: string | null;
+  executionPath: string;
+  handler: string;
+  finalComposerRan: boolean;
+  finalComposerUsedLlm: boolean | null;
+  finalComposerProvider: SlackCopyResult["provider"] | null;
+  finalComposerReason: string | null;
+  replyPosted: boolean;
+  suppressionReason: string | null;
+  debugOrSystemOnly: boolean;
+  exactBodyPreserved: boolean;
+}
+
+const pendingSlackReplyPathTraces = new Map<string, SlackReplyPathTrace[]>();
+const MAX_PENDING_SLACK_REPLY_TRACES = 200;
+
+function redactSlackTraceText(value: string | null): string | null {
+  if (!value) return value;
+  return value
+    .replace(/\b(MEMORI_API_KEY\s*[:=]\s*)[^\s]+/gi, "$1[redacted]")
+    .replace(/\b([A-Z0-9_]*(?:API|TOKEN|SECRET|KEY)[A-Z0-9_]*\s*[:=]\s*)[^\s]+/gi, "$1[redacted]")
+    .replace(/\b(?:xox[baprs]?|xapp)-[A-Za-z0-9-]+/g, "[redacted-slack-token]");
+}
+
+function logSlackReplyPathTrace(trace: SlackReplyPathTrace): void {
+  logger.debug(JSON.stringify({
+    slackReplyPathTrace: true,
+    debugOnly: true,
+    inboundMessage: redactSlackTraceText(trace.inboundMessage),
+    classifiedIntent: trace.classifiedIntent,
+    executionPath: trace.executionPath,
+    handler: trace.handler,
+    finalComposerRan: trace.finalComposerRan,
+    finalComposerUsedLlm: trace.finalComposerUsedLlm,
+    finalComposerProvider: trace.finalComposerProvider,
+    finalComposerReason: trace.finalComposerReason,
+    replyPosted: trace.replyPosted,
+    suppressionReason: trace.suppressionReason,
+    debugOrSystemOnly: trace.debugOrSystemOnly,
+    exactBodyPreserved: trace.exactBodyPreserved,
+  }));
+}
+
+function inferSlackReplyExecutionPath(intent?: string | null): string {
+  const value = intent ?? "";
+  if (value.endsWith(":progress")) return "slackReasoningGateway:progress_reply";
+  if (value.startsWith("operator_")) return "slackReasoningGateway:operator_control_plane";
+  if (value === "skip_blocked_applications") return "slackReasoningGateway:skip_blocked_applications";
+  if (value === "blocked_status") return "slackReasoningGateway:blocked_status";
+  if (value === "attention_status") return "slackReasoningGateway:attention_status";
+  if (value === "capture_upwork_url") return "slackReasoningGateway:capture_upwork_url";
+  if (value === "ingest_file") return "slackReasoningGateway:ingest_file";
+  if (value === "draft_preview" || value === "show_cover_letter") return "slackReasoningGateway:exact_body_reply";
+  return "slackReasoningGateway:conversation_reply";
+}
+
+function buildComposedReplyTrace(input: UserFacingSlackCopyInput, result: SlackCopyResult, overrides: Partial<SlackReplyPathTrace> = {}): SlackReplyPathTrace {
+  const executionPath = overrides.executionPath ?? input.executionPath ?? inferSlackReplyExecutionPath(input.intent);
+  return {
+    inboundMessage: input.userMessage ?? null,
+    classifiedIntent: input.intent ?? null,
+    executionPath,
+    handler: executionPath,
+    finalComposerRan: true,
+    finalComposerUsedLlm: result.usedLlm,
+    finalComposerProvider: result.provider,
+    finalComposerReason: result.reason ?? null,
+    replyPosted: false,
+    suppressionReason: null,
+    debugOrSystemOnly: false,
+    exactBodyPreserved: false,
+    ...overrides,
+  };
+}
+
+function rememberPendingSlackReplyTrace(text: string, trace: SlackReplyPathTrace): void {
+  if (!text.trim()) return;
+  const traces = pendingSlackReplyPathTraces.get(text) ?? [];
+  traces.push(trace);
+  pendingSlackReplyPathTraces.set(text, traces);
+  while (pendingSlackReplyPathTraces.size > MAX_PENDING_SLACK_REPLY_TRACES) {
+    const firstKey = pendingSlackReplyPathTraces.keys().next().value;
+    if (!firstKey) break;
+    pendingSlackReplyPathTraces.delete(firstKey);
+  }
+}
+
+function takePendingSlackReplyTrace(text: string): SlackReplyPathTrace | null {
+  const traces = pendingSlackReplyPathTraces.get(text);
+  if (!traces?.length) return null;
+  const trace = traces.shift() ?? null;
+  if (traces.length === 0) {
+    pendingSlackReplyPathTraces.delete(text);
+  }
+  return trace;
+}
+
+function uncomposedThreadReplyTrace(overrides: Partial<SlackReplyPathTrace> = {}): SlackReplyPathTrace {
+  const executionPath = overrides.executionPath ?? "slackSocket:postThreadReply";
+  return {
+    inboundMessage: null,
+    classifiedIntent: "unclassified_direct_post",
+    executionPath,
+    handler: executionPath,
+    finalComposerRan: false,
+    finalComposerUsedLlm: null,
+    finalComposerProvider: null,
+    finalComposerReason: null,
+    replyPosted: false,
+    suppressionReason: null,
+    debugOrSystemOnly: false,
+    exactBodyPreserved: false,
+    ...overrides,
+  };
+}
+
+function logSlackReplySuppressed(input: {
+  inboundMessage: string | null;
+  classifiedIntent: string | null;
+  executionPath: string;
+  suppressionReason: string;
+  debugOrSystemOnly?: boolean;
+}): void {
+  logSlackReplyPathTrace(uncomposedThreadReplyTrace({
+    inboundMessage: input.inboundMessage,
+    classifiedIntent: input.classifiedIntent,
+    executionPath: input.executionPath,
+    handler: input.executionPath,
+    suppressionReason: input.suppressionReason,
+    debugOrSystemOnly: Boolean(input.debugOrSystemOnly),
+  }));
+}
+
+async function postThreadReply(
+  client: App["client"],
+  channel: string,
+  threadTs: string,
+  text: string,
+  traceOverride?: Partial<SlackReplyPathTrace>,
+): Promise<void> {
+  const trace = traceOverride
+    ? uncomposedThreadReplyTrace(traceOverride)
+    : takePendingSlackReplyTrace(text) ?? uncomposedThreadReplyTrace();
+  let replyPosted = false;
+  try {
+    await client.chat.postMessage({ channel, thread_ts: threadTs, text });
+    replyPosted = true;
+  } finally {
+    logSlackReplyPathTrace({
+      ...trace,
+      replyPosted,
+      suppressionReason: replyPosted ? trace.suppressionReason : "slack_post_failed",
+    });
+  }
 }
 
 function splitExactBodyReply(text: string): { lead: string; body: string; tail: string } | null {
@@ -1347,13 +1518,18 @@ function splitExactBodyReply(text: string): { lead: string; body: string; tail: 
   return { lead, body, tail };
 }
 
-async function userFacingSlackCopyWithExactBody(input: {
-  deterministicText: string;
-  userMessage?: string | null;
-  intent?: string | null;
-  context?: Record<string, unknown>;
-  copyProvider?: SlackCopyProvider;
-}): Promise<string> {
+async function composeUserFacingSlackCopy(input: UserFacingSlackCopyInput): Promise<SlackCopyResult> {
+  return rewriteSlackCopyWithKimi({
+    path: "conversation_reply",
+    deterministicText: input.deterministicText,
+    userMessage: input.userMessage,
+    intent: input.intent,
+    context: input.context,
+    preservePhrases: input.preservePhrases,
+  }, input.copyProvider);
+}
+
+async function userFacingSlackCopyWithExactBody(input: UserFacingSlackCopyInput): Promise<string> {
   const split = splitExactBodyReply(input.deterministicText);
   if (!split) {
     return userFacingSlackCopy({
@@ -1365,35 +1541,24 @@ async function userFacingSlackCopyWithExactBody(input: {
       copyProvider: input.copyProvider,
     });
   }
-  const envelope = await userFacingSlackCopy({
+  const envelope = await composeUserFacingSlackCopy({
     deterministicText: [split.lead, split.tail].join("\n"),
     userMessage: input.userMessage,
     intent: input.intent,
     context: input.context,
     copyProvider: input.copyProvider,
   });
-  const safeEnvelope = /\b(?:copywriter|omitted|proposal body|draft body)\b/i.test(envelope)
+  const safeEnvelope = /\b(?:copywriter|omitted|proposal body|draft body)\b/i.test(envelope.text)
     ? [split.lead, split.tail].join("\n")
-    : envelope;
-  return [safeEnvelope, split.body].join("\n\n");
+    : envelope.text;
+  const text = [safeEnvelope, split.body].join("\n\n");
+  rememberPendingSlackReplyTrace(text, buildComposedReplyTrace(input, envelope, { exactBodyPreserved: true }));
+  return text;
 }
 
-async function userFacingSlackCopy(input: {
-  deterministicText: string;
-  userMessage?: string | null;
-  intent?: string | null;
-  context?: Record<string, unknown>;
-  preservePhrases?: string[];
-  copyProvider?: SlackCopyProvider;
-}): Promise<string> {
-  const result = await rewriteSlackCopyWithKimi({
-    path: "conversation_reply",
-    deterministicText: input.deterministicText,
-    userMessage: input.userMessage,
-    intent: input.intent,
-    context: input.context,
-    preservePhrases: input.preservePhrases,
-  }, input.copyProvider);
+async function userFacingSlackCopy(input: UserFacingSlackCopyInput): Promise<string> {
+  const result = await composeUserFacingSlackCopy(input);
+  rememberPendingSlackReplyTrace(result.text, buildComposedReplyTrace(input, result));
   return result.text;
 }
 
@@ -1517,7 +1682,13 @@ async function executeConversationPlan(params: {
     const result = buildDraftPreviewFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs });
     if (!result.ok) updateSlackThreadStateStatus(params.state.channelId, params.state.threadTs, "error");
     const text = result.ok
-      ? result.text
+      ? await userFacingSlackCopyWithExactBody({
+        deterministicText: result.text,
+        userMessage: params.userMessage,
+        intent: "draft_preview",
+        context: { jobId: params.state.jobId, ok: result.ok, exactProposalBodyPreserved: true },
+        copyProvider: params.copyProvider,
+      })
       : await userFacingSlackCopy({
         deterministicText: result.text,
         userMessage: params.userMessage,
@@ -1750,7 +1921,7 @@ function buildBlockedApplicationsStatusText(kind: "blocked" | "attention"): stri
 
   return [
     kind === "attention" ? "Nothing obvious needs Steve right now." : "Nothing is blocked right now.",
-    "Chrome is clean, there are no blocked apply items, and the QA queue is empty.",
+    "Chrome is clean, there are no blocked apply items, and no prepared applications are waiting.",
     "Best move: run a clean check and restart hunting.",
   ].join("\n");
 }
@@ -1908,6 +2079,12 @@ async function executeConversationBrainDecision(params: {
       });
       return true;
     }
+    logSlackReplySuppressed({
+      inboundMessage: params.text,
+      classifiedIntent: decision.intent,
+      executionPath: "slackReasoningGateway:conversation_brain_ignore",
+      suppressionReason: "brain_decision_ignore",
+    });
     return true;
   }
   if (decision.confidence === "low" && decision.intent !== "clarify") {
@@ -2090,7 +2267,7 @@ async function executeConversationBrainDecision(params: {
       const action = queueItem?.action ?? getBrowserActionById(decision.actionId);
       if (!action) {
         const text = await userFacingSlackCopy({
-          deterministicText: "I could not find that browser step or QA queue item anymore. Ask “what’s ready?” to refresh the queue.",
+          deterministicText: "I could not find that browser step or prepared application anymore. Ask “what’s ready?” to refresh the current state.",
           userMessage: params.text,
           intent: "retry_action",
           copyProvider: params.copyProvider,
@@ -2309,16 +2486,6 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
 
   if (canExecuteConversationBrainAction && matchesSkipBlockedApplicationsIntent(params.text)) {
     const result = skipBlockedApplications();
-    logger.debug(JSON.stringify({
-      slackReplyTrace: true,
-      inbound: params.text,
-      classifiedIntent: "skip_blocked_applications",
-      executionPath: "gateway:skip_blocked_applications",
-      finalComposer: true,
-      replySuppressed: false,
-      skipped: result.skipped,
-      browserBlocked: result.browserBlocked,
-    }));
     const text = await userFacingSlackCopy({
       deterministicText: result.text,
       userMessage: params.text,
@@ -2337,14 +2504,6 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
 
   if (canExecuteConversationBrainAction && matchesBlockedStatusIntent(params.text)) {
     const deterministicText = buildBlockedApplicationsStatusText("blocked");
-    logger.debug(JSON.stringify({
-      slackReplyTrace: true,
-      inbound: params.text,
-      classifiedIntent: "blocked_status",
-      executionPath: "gateway:blocked_status",
-      finalComposer: true,
-      replySuppressed: false,
-    }));
     const text = await userFacingSlackCopy({
       deterministicText,
       userMessage: params.text,
@@ -2362,14 +2521,6 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
 
   if (canExecuteConversationBrainAction && matchesAttentionStatusIntent(params.text)) {
     const deterministicText = buildBlockedApplicationsStatusText("attention");
-    logger.debug(JSON.stringify({
-      slackReplyTrace: true,
-      inbound: params.text,
-      classifiedIntent: "attention_status",
-      executionPath: "gateway:attention_status",
-      finalComposer: true,
-      replySuppressed: false,
-    }));
     const text = await userFacingSlackCopy({
       deterministicText,
       userMessage: params.text,
@@ -2450,10 +2601,22 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
   }
 
   if (!relevant && conversationBrain.ok) {
+    logSlackReplySuppressed({
+      inboundMessage: params.text,
+      classifiedIntent: conversationBrain.decision.intent,
+      executionPath: "slackReasoningGateway:irrelevant_conversation",
+      suppressionReason: "irrelevant_channel_context",
+    });
     return;
   }
 
   if (!relevant) {
+    logSlackReplySuppressed({
+      inboundMessage: params.text,
+      classifiedIntent: "unclassified_irrelevant",
+      executionPath: "slackReasoningGateway:irrelevant_message",
+      suppressionReason: "irrelevant_no_agent_context",
+    });
     return;
   }
 
@@ -2593,7 +2756,7 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, 
     const action = queueItem?.action ?? getBrowserActionById(command.actionId);
     if (!action) {
       const text = await userFacingSlackCopy({
-        deterministicText: "I could not find that browser step or QA queue item anymore. Ask “what’s ready?” to refresh the queue.",
+        deterministicText: "I could not find that browser step or prepared application anymore. Ask “what’s ready?” to refresh the current state.",
         userMessage: params.text,
         intent: "retry_action",
         copyProvider: params.copyProvider,
@@ -2753,7 +2916,13 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, 
       state.jobId && maybeJobStatus ? `Application status: ${maybeJobStatus}` : "Application status: not yet created",
       ...buildThreadStatusDetails(state),
     ].join("\n");
-    await postThreadReply(params.client, params.channelId, params.threadTs, statusText);
+    await postThreadReply(params.client, params.channelId, params.threadTs, statusText, {
+      inboundMessage: params.text,
+      classifiedIntent: "debug_status",
+      executionPath: "slackThreadCommandFallback:debug_status",
+      handler: "slackThreadCommandFallback:debug_status",
+      debugOrSystemOnly: true,
+    });
     updateSlackThreadStateStatus(state.channelId, state.threadTs, "status_checked");
     return;
   }

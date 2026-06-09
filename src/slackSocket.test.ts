@@ -56,6 +56,7 @@ async function runTests(): Promise<void> {
   process.env.PROOF_ASSET_ROOT = proofRoot;
   process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
   process.env.SLACK_ALLOWED_USER_IDS = "U_ALLOWED";
+  process.env.BROWSER_QA_MAX_PROTECTED_TABS = "5";
 
   const { applySlackThreadRevision, buildDraftPreviewFromSlackThread, buildSlackSocketStartupError, handleSlackSocketTextEvent, handleThreadCommand, parseSlackThreadCommand, parseUpworkJobUrlFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread, resetSlackSocketEventDedupeForTests } = require("./slackSocket") as {
     applySlackThreadRevision: (input: { channelId: string; threadTs: string; instruction: string }) => { ok: boolean; text: string; proposalVersion?: number };
@@ -1004,7 +1005,8 @@ async function runTests(): Promise<void> {
       text: "what’s ready?",
       client: { chat: { postMessage: async (payload: { text: string }) => qaQueueReplies.push(payload.text) } },
     });
-    assert(qaQueueReplies.some((reply) => reply.includes("QA queue") && reply.includes("Say \"open 1\"")), "QA queue should list protected applications with open-index guidance.");
+    assert(qaQueueReplies.some((reply) => reply.includes("Prepared applications") && reply.includes("Application 1") && /ready|review|blocked/i.test(reply)), "Ready status should list prepared applications with index guidance.");
+    assert(!/QA queue|Say "open/i.test(qaQueueReplies.join("\n")), "Ready status should not emit dashboard headings or command-menu copy.");
     assert(!qaQueueReplies.join("\n").includes("action #"), "QA queue should not expose raw action ids.");
 
     const showQaQueueReplies: string[] = [];
@@ -1014,8 +1016,8 @@ async function runTests(): Promise<void> {
       text: "show QA queue.",
       client: { chat: { postMessage: async (payload: { text: string }) => showQaQueueReplies.push(payload.text) } },
     });
-    assert(showQaQueueReplies.some((reply) => reply.includes("QA queue") && (reply.includes("blocked") || reply.includes("ready"))), "Show QA queue should return the compact queue.");
-    assert(!/action\s*#?\d+|Channel message:|Thread:/i.test(showQaQueueReplies.join("\n")), "Show QA queue should not expose raw ids.");
+    assert(showQaQueueReplies.some((reply) => reply.includes("Prepared applications") && (reply.includes("blocked") || reply.includes("ready"))), "Show QA queue should return compact prepared-application facts.");
+    assert(!/QA queue|Say "open|action\s*#?\d+|Channel message:|Thread:/i.test(showQaQueueReplies.join("\n")), "Show QA queue should not expose dashboard headings, command-menu text, or raw ids.");
 
     for (let i = 2; i <= 5; i += 1) {
       const qaJob = scoreJob({

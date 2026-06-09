@@ -128,6 +128,26 @@ async function run(): Promise<void> {
   assert(!/Overall health|Workers|browser_challenge_action_paused/i.test(dashboardFallback.text), "Fallback should not expose dashboard/internal wording.");
   assert(dashboardFallback.text.includes("Best move"), "Fallback should keep the practical teammate recommendation.");
 
+  const unavailableProvider: SlackCopyProvider = {
+    isAvailable: () => false,
+    completeJson: async () => ({ ok: false, error: "disabled" }),
+  };
+  const qaFallback = await rewriteSlackCopyWithKimi({
+    path: "conversation_reply",
+    deterministicText: [
+      "QA queue",
+      "",
+      "1. Lifecycle audit - ready",
+      "   Next: review in remote Chrome",
+      "   Say \"open 1\" to bring it up in remote Chrome.",
+    ].join("\n"),
+    userMessage: "what's ready?",
+    intent: "qa_queue",
+  }, unavailableProvider);
+  assert.equal(qaFallback.usedLlm, false);
+  assert(!/QA queue|Say "open/i.test(qaFallback.text), "QA fallback should not pass through dashboard headings or command-menu copy.");
+  assert(/Prepared applications|open application 1/i.test(qaFallback.text), "QA fallback should keep human indexed guidance.");
+
   const connectsDrift = fakeProvider("Connects verified: 12 required. Boost: 18 selected. Submit untouched.");
   const connectsFallback = await rewriteSlackCopyWithKimi({
     path: "qa_handoff",
