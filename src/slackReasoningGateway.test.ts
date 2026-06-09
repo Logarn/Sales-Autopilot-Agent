@@ -555,6 +555,7 @@ async function runTests(): Promise<void> {
 
   const openChromeReplies: string[] = [];
   let openedUrl: string | null = null;
+  const supportedOpenUrl = "https://www.upwork.com/jobs/~0123456789abcdef";
   const openUrlBrain = new FakeConversationProvider([{
     intent: "check_browser",
     confidence: "high",
@@ -564,7 +565,7 @@ async function runTests(): Promise<void> {
     channelId: "C_GATE",
     threadTs: "open-url.001",
     messageTs: "open-url.001",
-    text: "open https://example.com/test in Chrome",
+    text: `open ${supportedOpenUrl} in Chrome`,
     botMentioned: false,
     client: fakeClient(openChromeReplies),
     conversationProvider: openUrlBrain,
@@ -576,9 +577,34 @@ async function runTests(): Promise<void> {
       },
     },
   });
-  assert.equal(openedUrl, "https://example.com/test", "Open URL in Chrome should preserve open_remote_chrome operator action.");
+  assert.equal(openedUrl, supportedOpenUrl, "Supported Upwork URL in Chrome should preserve open_remote_chrome operator action.");
   assert.equal(openUrlBrain.requests.length, 0, "Open URL in Chrome should not wait on generic browser/status LLM classification.");
   assert.match(openChromeReplies.join("\n"), /remote Chrome/i);
+
+  const unsafeOpenReplies: string[] = [];
+  let unsafeOpenedUrl: string | null = null;
+  const unsafeOpenBrain = new FakeConversationProvider([{
+    intent: "check_browser",
+    confidence: "high",
+    actions: ["check_browser"],
+  }]);
+  await handleSlackReasoningGateway({
+    channelId: "C_GATE",
+    threadTs: "unsafe-open-url.001",
+    messageTs: "unsafe-open-url.001",
+    text: "open https://example.com/test in Chrome",
+    botMentioned: true,
+    client: fakeClient(unsafeOpenReplies),
+    conversationProvider: unsafeOpenBrain,
+    copyProvider: new FakeCopyProvider(),
+    operatorDeps: {
+      openRemoteChromeUrl: async (url: string) => {
+        unsafeOpenedUrl = url;
+        return { ok: true, text: "should not open" };
+      },
+    },
+  });
+  assert.equal(unsafeOpenedUrl, null, "Arbitrary URL must not become a remote Chrome open action.");
 
   const progressReplies: string[] = [];
   await handleSlackReasoningGateway({

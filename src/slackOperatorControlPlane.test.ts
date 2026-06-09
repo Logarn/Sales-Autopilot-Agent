@@ -61,10 +61,12 @@ async function runTests(): Promise<void> {
 
   const {
     buildSlackOperatorReply,
+    isAllowedRemoteChromeOperatorUrl,
     parseSlackOperatorIntent,
     tryHandleSlackOperatorCommand,
   } = require("./slackOperatorControlPlane") as {
     buildSlackOperatorReply: (intent: any, deps?: any) => Promise<string>;
+    isAllowedRemoteChromeOperatorUrl: (url: string) => boolean;
     parseSlackOperatorIntent: (text: string) => any;
     tryHandleSlackOperatorCommand: (input: { text: string; channelId: string; threadTs: string; client: any; deps?: any }) => Promise<boolean>;
   };
@@ -82,6 +84,14 @@ async function runTests(): Promise<void> {
     assert(parseSlackOperatorIntent("start hunting")?.type === "start_hunting", "Start hunting should parse.");
     const openIntent = parseSlackOperatorIntent("open https://www.upwork.com/jobs/~0123456789abcdef in Chrome");
     assert(openIntent?.type === "open_remote_chrome", "Open URL in Chrome should parse as remote Chrome control.");
+    const applyOpenIntent = parseSlackOperatorIntent("open https://www.upwork.com/ab/proposals/job/~0123456789abcdef/apply/ in Chrome");
+    assert(applyOpenIntent?.type === "open_remote_chrome", "Supported Upwork apply URL should parse as remote Chrome control.");
+    assert(isAllowedRemoteChromeOperatorUrl("https://www.upwork.com/jobs/~0123456789abcdef"), "Supported Upwork job URL should be allowed.");
+    assert(isAllowedRemoteChromeOperatorUrl("https://www.upwork.com/nx/find-work/best-matches/details/~0123456789abcdef?pageTitle=Job%20Details"), "Supported Upwork job detail URL should be allowed.");
+    assert(!isAllowedRemoteChromeOperatorUrl("https://example.com/jobs/~0123456789abcdef"), "Non-Upwork URL must not be allowed for remote Chrome control.");
+    assert(!isAllowedRemoteChromeOperatorUrl("https://www.upwork.com/ab/account-security/login"), "Upwork login/security URL must not be opened from Slack.");
+    assert(parseSlackOperatorIntent("open https://example.com/jobs/~0123456789abcdef in Chrome") === null, "Arbitrary external URL must not become a Chrome-open intent.");
+    assert(parseSlackOperatorIntent("open https://www.upwork.com/ab/account-security/login in Chrome") === null, "Upwork login/security URL must not become a Chrome-open intent.");
 
     const statusReply = await buildSlackOperatorReply({ type: "service_status" }, {
       buildHealthReport: () => ({
@@ -183,6 +193,15 @@ async function runTests(): Promise<void> {
     });
     assert(openedUrl === "https://www.upwork.com/jobs/~0123456789abcdef", "Remote Chrome open should target the parsed URL.");
     assert(openReply.includes("remote Chrome") && openReply.includes("did not paste") && openReply.includes("click submit"), "Open URL reply should confirm CDP-style control and submit safety.");
+    openedUrl = "";
+    const rejectedOpenReply = await buildSlackOperatorReply({ type: "open_remote_chrome", url: "https://example.com/not-upwork" }, {
+      openRemoteChromeUrl: async (url: string) => {
+        openedUrl = url;
+        return { ok: true, text: "should not open" };
+      },
+    });
+    assert(openedUrl === "", "Unsafe manually constructed Chrome-open intent must not call the browser opener.");
+    assert(/only open known Upwork job or apply pages/i.test(rejectedOpenReply), "Unsafe Chrome-open intent should get a safe rejection.");
 
     const posted: string[] = [];
     const handled = await tryHandleSlackOperatorCommand({
