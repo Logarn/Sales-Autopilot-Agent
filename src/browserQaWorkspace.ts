@@ -7,7 +7,6 @@ import {
   BROWSER_USER_DATA_DIR,
 } from "./config";
 import { buildBrowserApplyPlan } from "./browserApply";
-import { extractUpworkJobIdFromUrl } from "./browserCapture";
 import {
   acquireBrowserSession,
   findChromeExecutable,
@@ -122,10 +121,22 @@ function payloadString(action: BrowserAction, key: string): string | null {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
-function sameUpworkJob(left: string, right: string): boolean {
-  const leftJobId = extractUpworkJobIdFromUrl(left);
-  const rightJobId = extractUpworkJobIdFromUrl(right);
-  return Boolean(leftJobId && rightJobId && leftJobId === rightJobId) || left === right;
+function normalizedSavedApplyUrl(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    const pathname = parsed.pathname.replace(/\/+$/g, "").toLowerCase();
+    if (!/\/ab\/proposals\/job\/~[^/]+\/apply$/i.test(pathname)) return null;
+    const hostname = parsed.hostname.toLowerCase().replace(/^www\./, "");
+    return `${hostname}${pathname}`;
+  } catch {
+    return null;
+  }
+}
+
+function sameSavedApplyTab(candidateUrl: string, savedApplyUrl: string): boolean {
+  const candidate = normalizedSavedApplyUrl(candidateUrl);
+  const saved = normalizedSavedApplyUrl(savedApplyUrl);
+  return Boolean(candidate && saved && candidate === saved);
 }
 
 function queueStateForAction(action: BrowserAction, applicationStatus: string | null): ProtectedQaQueueItem["state"] {
@@ -485,7 +496,7 @@ export async function focusProtectedQaApplicationTab(input: {
   });
   try {
     const context = handle.context as PlaywrightContextLike;
-    const page = (context.pages?.() ?? []).find((candidate) => sameUpworkJob(candidate.url(), item.applyUrl!));
+    const page = (context.pages?.() ?? []).find((candidate) => sameSavedApplyTab(candidate.url(), item.applyUrl!));
     if (!page) {
       markBatchTabMissing(item.jobId);
       return {

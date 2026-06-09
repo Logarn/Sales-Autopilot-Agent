@@ -175,6 +175,7 @@ async function runTests(): Promise<void> {
       acquireSession: async () => ({
         context: {
           pages: () => [
+            { url: () => "https://www.upwork.com/jobs/~batchjob01", bringToFront: async () => { throw new Error("same-job listing tab must not be used"); } },
             { url: () => "https://www.upwork.com/ab/proposals/job/~otherjob/apply/", bringToFront: async () => { throw new Error("random tab must not be used"); } },
             { url: () => "https://www.upwork.com/ab/proposals/job/~batchjob01/apply/", bringToFront: async () => { exactTabBroughtForward = true; } },
           ],
@@ -188,7 +189,7 @@ async function runTests(): Promise<void> {
     const focusMissing = await focusProtectedQaApplicationTab({ index: 1 }, {
       chromium: {},
       acquireSession: async () => ({
-        context: { pages: () => [{ url: () => "https://www.upwork.com/ab/proposals/job/~otherjob/apply/" }] },
+        context: { pages: () => [{ url: () => "https://www.upwork.com/jobs/~batchjob01" }, { url: () => "https://www.upwork.com/ab/proposals/job/~otherjob/apply/" }] },
         close: async () => {},
       }),
     });
