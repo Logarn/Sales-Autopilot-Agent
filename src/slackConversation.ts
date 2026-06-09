@@ -10,7 +10,7 @@ import {
 } from "./db";
 import { OpenAiCompatibleProvider } from "./llm/provider";
 import { logger } from "./logger";
-import { buildJobBlocks, sendSlackPreviewMessage } from "./slack";
+import { buildJobBlocks, sendSlackMessage } from "./slack";
 import {
   buildSalesLearningPromptContext,
   recordApplicationOutcomeLearning,
@@ -129,7 +129,7 @@ async function reviseProposalWithLlm(jobId: string, instruction: string): Promis
           salesLearning: buildSalesLearningPromptContext({
             jobId,
             text: instruction,
-            types: ["proposal_style", "proof_preference", "operator_preference"],
+            types: ["proposal_style", "screening_answer", "proof_preference", "operator_preference"],
           }),
           soul: buildSoulPromptContext("proposal_revision"),
         }),
@@ -148,11 +148,12 @@ async function maybeSendRevisionPreview(jobId: string): Promise<boolean> {
   if (!SLACK_CHANNEL_WEBHOOK_URL.trim()) return false;
   const job = getScoredJobForSlackPreview(jobId);
   if (!job) return false;
-  await sendSlackPreviewMessage({
+  return sendSlackMessage({
     text: `${APP_NAME}: revised proposal ready for review — ${job.title}`,
     blocks: buildJobBlocks(job),
+    copyIntent: "legacy_revision_preview",
+    copyPath: "conversation_reply",
   });
-  return true;
 }
 
 function shouldEnqueueBrowserApply(intent: SlackConversationIntent): boolean {

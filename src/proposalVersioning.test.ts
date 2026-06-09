@@ -18,15 +18,19 @@ async function run(): Promise<void> {
     getApplicationStatus,
     listProposalVersions,
     listScreeningCoverage,
+    listSalesLearningMemoriesByType,
     markJobSeen,
+    recordPlannedScreeningCoverage,
     recordProposalVersion,
     saveApplicationDraft,
   } = require("./db") as {
     closeDb: () => void;
     getApplicationStatus: (jobId: string) => string | null;
-    listProposalVersions: (jobId: string) => Array<{ source: string; label: string; proposalText: string; screeningAnswers: string[] }>;
-    listScreeningCoverage: (jobId: string) => Array<{ questionIndex: number; filledAnswer: string | null; verifiedAnswer: string | null; humanEditedAnswer: string | null; finalAnswer: string | null; status: string }>;
+    listProposalVersions: (jobId: string) => Array<{ source: string; label: string; proposalText: string; screeningAnswers: string[]; confidence: string; isFallback: boolean; fallbackReason: string | null }>;
+    listScreeningCoverage: (jobId: string) => Array<{ questionIndex: number; questionText: string | null; questionFingerprint: string | null; semanticFamily: string | null; filledAnswer: string | null; verifiedAnswer: string | null; humanEditedAnswer: string | null; finalAnswer: string | null; jobContext: Record<string, unknown> | null; confidence: string; status: string }>;
+    listSalesLearningMemoriesByType: (type: string, limit?: number) => Array<{ type: string; hypothesis: string; evidenceCount: number }>;
     markJobSeen: (job: any, notified: boolean) => void;
+    recordPlannedScreeningCoverage: (jobId: string, questions: string[], answers: string[], options?: any) => unknown;
     recordProposalVersion: (input: { jobId: string; source: string; proposalText: string; screeningAnswers?: string[]; note?: string | null }) => unknown;
     saveApplicationDraft: (draft: any) => void;
   };
@@ -146,6 +150,12 @@ async function run(): Promise<void> {
     const initial = listProposalVersions(jobId);
     assert.equal(initial.length, 1, "Draft save should persist draft_v1.");
     assert.equal(initial[0]?.source, "draft_generated");
+    assert.equal(initial[0]?.confidence, "medium", "Generated proposal version should have default confidence metadata.");
+
+    recordPlannedScreeningCoverage(jobId, ["What approach would you take first?"], [plannedAnswer], {
+      jobContext: { title: "Klaviyo lifecycle cleanup", platform: "Klaviyo", vertical: "fashion" },
+      confidence: "medium",
+    });
 
     const slackPreviewText = "  Slack preview keeps exact whitespace.\n\nDo not trim me.  ";
     recordProposalVersion({ jobId, source: "slack_preview", proposalText: slackPreviewText, screeningAnswers: [plannedAnswer], note: "Slack preview shown before filling Upwork." });
@@ -168,10 +178,13 @@ async function run(): Promise<void> {
     assert(listProposalVersions(jobId).some((version) => version.source === "upwork_inserted" && version.proposalText === generatedDraft), "Inserted Upwork draft should create an upwork_inserted version.");
     assert.equal(listScreeningCoverage(jobId)[0]?.filledAnswer, plannedAnswer, "Upwork inserted snapshot should track filled screening answer.");
     assert.equal(listScreeningCoverage(jobId)[0]?.status, "filled", "Upwork inserted snapshot should mark screening answer filled.");
+    assert.equal(listScreeningCoverage(jobId)[0]?.semanticFamily, "approach_plan", "Screening coverage should persist semantic family.");
+    assert(Boolean(listScreeningCoverage(jobId)[0]?.questionFingerprint), "Screening coverage should persist a deterministic question fingerprint.");
+    assert.equal(listScreeningCoverage(jobId)[0]?.jobContext?.platform, "Klaviyo", "Screening coverage should preserve job context.");
 
     const wrongLongestValue = "This screening answer is intentionally much longer than the cover letter and must not be captured as the CV used.";
     const editedCover = "Steve edited exact cover.\n\nThis is the version from the remote Chrome cover letter field.";
-    const editedAnswer = "Steve edited answer.";
+    const editedAnswer = "I would start by auditing the Klaviyo post-purchase flow, then prioritize the first retention leak by revenue impact.";
     const humanEdit = persistApplicationSnapshot({
       jobId,
       plan,
@@ -195,6 +208,30 @@ async function run(): Promise<void> {
     assert.equal(humanEditVersion?.proposalText, editedCover, "Human edit readback should capture the cover letter field, not the longest input.");
     assert.equal(listScreeningCoverage(jobId)[0]?.humanEditedAnswer, editedAnswer, "Human-edited screening answer should be stored.");
     assert.equal(listScreeningCoverage(jobId)[0]?.status, "edited", "Human edit readback should mark screening answer edited.");
+    assert(listSalesLearningMemoriesByType("screening_answer", 50).some((memory) => /concrete first-step plan|platform\/job-specific/i.test(memory.hypothesis)), "Human-edited screening answer should create a screening_answer learning memory.");
+
+    const fallback = persistApplicationSnapshot({
+      jobId,
+      plan,
+      source: "final_submitted",
+      markSubmittedAfterCapture: true,
+      note: "Steve said submitted but the final page was gone.",
+      snapshot: {
+        url: plan.applyUrl,
+        visibleText: "Submitted page no longer exposes fields",
+        inputValues: ["done"],
+        fieldValues: [
+          { kind: "textarea", label: "Cover Letter", name: "cover", ariaLabel: "Cover Letter", placeholder: "Cover letter", value: "done" },
+        ],
+        checkedLabels: [],
+        fileNames: [],
+      },
+    });
+    assert.equal(fallback.ok, false, "Unreadable final submitted readback should fall back instead of claiming final text.");
+    const fallbackVersion = listProposalVersions(jobId).find((version) => version.source === "latest_verified_fallback");
+    assert(fallbackVersion?.isFallback, "Fallback should be stored as a fallback proposal version.");
+    assert.equal(fallbackVersion?.confidence, "low", "Fallback proposal version should be lower confidence.");
+    assert(/lower-confidence|readable application text/i.test(fallback.fallbackReason ?? ""), "Fallback reason should explain lowered confidence.");
 
     const final = persistApplicationSnapshot({
       jobId,
@@ -216,6 +253,7 @@ async function run(): Promise<void> {
     });
     assert(final.ok, `Expected final submitted capture to persist: ${final.fallbackReason ?? ""}`);
     assert.equal(getApplicationStatus(jobId), "submitted", "Submitted capture should mark local application status submitted after Steve manually sent it.");
+    assert.equal(listProposalVersions(jobId).find((version) => version.source === "final_submitted")?.confidence, "high", "Visible final submitted readback should store high confidence.");
     assert.equal(listScreeningCoverage(jobId)[0]?.finalAnswer, editedAnswer, "Final submitted capture should store final screening answer.");
     assert.equal(listScreeningCoverage(jobId)[0]?.status, "verified", "Final submitted capture should mark screening coverage verified.");
   } finally {

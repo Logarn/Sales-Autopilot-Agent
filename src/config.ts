@@ -84,6 +84,7 @@ export const SLACK_POLL_CHANNEL_ID = process.env.SLACK_POLL_CHANNEL_ID ?? "";
 export const DISCOVERY_SLACK_CHANNEL_ID = process.env.DISCOVERY_SLACK_CHANNEL_ID ?? "";
 export const SLACK_SOCKET_MODE_ENABLED = parseBoolean(process.env.SLACK_SOCKET_MODE_ENABLED, false);
 export const SLACK_ALLOWED_CHANNEL_IDS = parseDelimitedListLoose(process.env.SLACK_ALLOWED_CHANNEL_IDS);
+export const SLACK_AGENT_AMBIENT_CHANNEL_IDS = parseDelimitedListLoose(process.env.SLACK_AGENT_AMBIENT_CHANNEL_IDS ?? "C0AQW8W6RFU");
 export const SLACK_ALLOWED_USER_IDS = parseDelimitedListLoose(process.env.SLACK_ALLOWED_USER_IDS);
 export const SLACK_FILE_MAX_BYTES = Math.max(1, parseInteger(process.env.SLACK_FILE_MAX_BYTES, 10 * 1024 * 1024));
 export const SLACK_FILE_ALLOWED_EXTENSIONS = parseDelimitedListLoose(
@@ -132,6 +133,18 @@ export const MOONSHOT_BASE_URL = process.env.MOONSHOT_BASE_URL ?? process.env.KI
 export const MOONSHOT_MODEL = process.env.MOONSHOT_MODEL ?? process.env.KIMI_MODEL ?? "kimi-k2.6";
 export const LLM_NORMALIZATION_ENABLED = parseBoolean(process.env.LLM_NORMALIZATION_ENABLED, false);
 export const LLM_REQUEST_TIMEOUT_MS = Math.max(1000, parseInteger(process.env.LLM_REQUEST_TIMEOUT_MS, 30_000));
+const MEMORI_LEGACY_ACTIVE_RECALL_ENABLED = parseBoolean(process.env.MEMORI_ACTIVE_RECALL_ENABLED, false);
+export const MEMORI_ENABLED = parseBoolean(
+  process.env.MEMORI_ENABLED ?? process.env.MEMORI_SHADOW_ENABLED ?? process.env.MEMORI_ACTIVE_RECALL_ENABLED,
+  false
+);
+export const MEMORI_SHADOW_MODE = parseBoolean(process.env.MEMORI_SHADOW_MODE ?? process.env.MEMORI_SHADOW_ENABLED, true);
+export const MEMORI_ACTIVE_RECALL = parseBoolean(process.env.MEMORI_ACTIVE_RECALL, MEMORI_LEGACY_ACTIVE_RECALL_ENABLED);
+export const MEMORI_SHADOW_ENABLED = MEMORI_ENABLED && MEMORI_SHADOW_MODE;
+export const MEMORI_ACTIVE_RECALL_ENABLED = MEMORI_ENABLED && MEMORI_ACTIVE_RECALL;
+export const MEMORI_API_KEY = process.env.MEMORI_API_KEY ?? "";
+export const MEMORI_API_URL = process.env.MEMORI_API_URL ?? "https://api.memorilabs.ai";
+export const MEMORI_REQUEST_TIMEOUT_MS = Math.max(1000, parseInteger(process.env.MEMORI_REQUEST_TIMEOUT_MS, 10_000));
 export const JOB_INTELLIGENCE_ENABLED = parseBoolean(process.env.JOB_INTELLIGENCE_ENABLED, false);
 export const JOB_INTELLIGENCE_PROVIDER = process.env.JOB_INTELLIGENCE_PROVIDER ?? (XAI_API_KEY ? "xai" : LLM_PROVIDER);
 export const JOB_INTELLIGENCE_MODEL = process.env.JOB_INTELLIGENCE_MODEL ?? (JOB_INTELLIGENCE_PROVIDER.toLowerCase() === "xai" || JOB_INTELLIGENCE_PROVIDER.toLowerCase() === "grok" ? XAI_MODEL : LLM_MODEL);

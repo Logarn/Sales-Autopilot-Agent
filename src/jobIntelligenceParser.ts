@@ -339,7 +339,7 @@ export function buildJobIntelligenceMessages(input: JobIntelligenceInput) {
         draftTextForQaOnly: input.draftText ?? "",
         salesLearning: buildSalesLearningPromptContext({
           text: [input.job.title, input.job.description, input.job.skills?.join(" ") ?? "", input.draftText ?? ""].join("\n"),
-          types: ["proof_preference", "proposal_style", "boost_strategy", "source_quality", "timing_hypothesis"],
+          types: ["proof_preference", "proposal_style", "screening_answer", "boost_strategy", "source_quality", "timing_hypothesis"],
           limit: 6,
         }),
         soul: buildSoulPromptContext("job_intelligence_and_proof_reasoning"),

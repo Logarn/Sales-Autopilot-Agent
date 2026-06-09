@@ -6,6 +6,7 @@ import {
   getScoredJobForSlackPreview,
   listApplicationAssets,
   listProposalVersions,
+  listScreeningCoverage,
   touchAgentMemory,
   recordSalesLearningEvent,
   upsertSalesLearningMemory,
@@ -16,6 +17,7 @@ import {
 import {
   buildBoostExpectedValueSignal,
   buildProposalDiffLearning,
+  buildScreeningAnswerDiffLearning,
   buildSourceTimingAttributionSignals,
   salesLearningSignalsToMemoryInputs,
   type BoostBid,
@@ -245,6 +247,7 @@ function proposalVersionBaseline(jobId: string, currentVersionNumber: number): R
 function isSalesMemoryType(value: unknown): value is SalesLearningMemoryType {
   return typeof value === "string" && [
     "proposal_style",
+    "screening_answer",
     "proof_preference",
     "boost_strategy",
     "timing_hypothesis",
@@ -529,6 +532,68 @@ export function recordProposalVersionDiffLearning(input: {
   });
 }
 
+export function recordScreeningAnswerDiffLearning(input: {
+  jobId: string;
+  source?: string;
+  editor?: string;
+  channelId?: string | null;
+  threadTs?: string | null;
+  includeFinalSubmitted?: boolean;
+}): SalesLearningMemory[] {
+  const job = getJob(input.jobId);
+  const segments = jobSegments(job);
+  const memories: SalesLearningMemory[] = [];
+  const coverage = listScreeningCoverage(input.jobId);
+
+  for (const item of coverage) {
+    const baseline = item.plannedAnswer ?? item.filledAnswer ?? item.verifiedAnswer ?? "";
+    const finalAnswer = input.includeFinalSubmitted
+      ? item.finalAnswer ?? item.humanEditedAnswer ?? ""
+      : item.humanEditedAnswer ?? "";
+    if (!baseline.trim() || !finalAnswer.trim()) continue;
+    if (input.includeFinalSubmitted && item.humanEditedAnswer && clean(item.humanEditedAnswer) === clean(finalAnswer)) {
+      continue;
+    }
+    const learning = buildScreeningAnswerDiffLearning({
+      jobId: input.jobId,
+      scope: segments.scope,
+      questionText: item.questionText ?? `Screening question ${item.questionIndex}`,
+      questionFamily: item.semanticFamily,
+      questionFingerprint: item.questionFingerprint,
+      draftedAnswer: baseline,
+      finalAnswer,
+      editor: input.editor ?? (input.includeFinalSubmitted ? "Steve" : "operator"),
+      source: input.source ?? "screening_answer_diff",
+    });
+    if (learning.signals.length === 0) continue;
+    recordSalesLearningEvent({
+      eventType: "screening_answer_signal",
+      jobId: input.jobId,
+      channelId: input.channelId,
+      threadTs: input.threadTs,
+      source: input.source ?? "screening_answer_diff",
+      payload: {
+        questionIndex: item.questionIndex,
+        questionFingerprint: item.questionFingerprint,
+        semanticFamily: item.semanticFamily,
+        tags: learning.tags,
+        draftedWordCount: learning.generatedWordCount,
+        finalWordCount: learning.finalWordCount,
+        wordDelta: learning.wordDelta,
+        vertical: segments.vertical,
+        platform: segments.platform,
+      },
+    });
+    memories.push(...upsertStructuredSalesLearningSignals(learning.signals, {
+      jobId: input.jobId,
+      channelId: input.channelId,
+      threadTs: input.threadTs,
+    }));
+  }
+
+  return memories;
+}
+
 export function recordApplicationOutcomeLearning(input: {
   jobId: string;
   outcome: ApplicationStatus;
@@ -742,8 +807,8 @@ export async function reflectOnSalesOutcomeWithLlm(input: {
           "You are the Upwork agent's sales-learning reflection loop.",
           "Given one outcome or failure, extract tentative hypotheses that could improve future sales decisions.",
           "Do not create hard rules from one data point. Mark one-off observations tentative and low confidence.",
-          "Focus on proposal style, proof fit, boost/connects strategy, timing, source quality, operator preferences, failure patterns, and code-improvement tasks.",
-          "Return JSON only: {\"memories\":[{\"type\":\"proposal_style|proof_preference|boost_strategy|timing_hypothesis|source_quality|operator_preference|failure_pattern|code_improvement_task\",\"scope\":\"...\",\"subject\":\"...\",\"hypothesis\":\"...\",\"rationale\":\"...\",\"confidence\":\"low|medium|high\",\"status\":\"tentative|active\"}],\"codeImprovementTask\":\"optional\"}.",
+          "Focus on proposal style, screening answers, proof fit, boost/connects strategy, timing, source quality, operator preferences, failure patterns, and code-improvement tasks.",
+          "Return JSON only: {\"memories\":[{\"type\":\"proposal_style|screening_answer|proof_preference|boost_strategy|timing_hypothesis|source_quality|operator_preference|failure_pattern|code_improvement_task\",\"scope\":\"...\",\"subject\":\"...\",\"hypothesis\":\"...\",\"rationale\":\"...\",\"confidence\":\"low|medium|high\",\"status\":\"tentative|active\"}],\"codeImprovementTask\":\"optional\"}.",
           "Never propose bypassing CAPTCHA/security checks or changing final-submit safety.",
           buildSoulPromptSection("self_improvement_memory"),
         ].join("\n"),
@@ -1036,6 +1101,7 @@ function typeRelevance(memory: SalesLearningMemory, queryTokens: Set<string>): n
   if (memory.type === "operator_preference") return 0.75;
   if (memory.type === "proof_preference" && (queryTokens.has("proof") || queryTokens.has("portfolio") || queryTokens.has("case"))) return 1;
   if (memory.type === "proposal_style" && (queryTokens.has("proposal") || queryTokens.has("opener") || queryTokens.has("style"))) return 1;
+  if (memory.type === "screening_answer" && (queryTokens.has("screening") || queryTokens.has("question") || queryTokens.has("answer") || queryTokens.has("application"))) return 1;
   if (memory.type === "boost_strategy" && (queryTokens.has("boost") || queryTokens.has("connects") || queryTokens.has("bid"))) return 1;
   if (memory.type === "source_quality" && (queryTokens.has("source") || queryTokens.has("saved") || queryTokens.has("search"))) return 1;
   if (memory.type === "failure_pattern" && (queryTokens.has("failure") || queryTokens.has("browser") || queryTokens.has("capture"))) return 0.9;

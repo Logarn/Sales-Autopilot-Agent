@@ -27,7 +27,7 @@ export interface SalesLearningInsightReply {
 const TOPIC_TYPES: Record<Exclude<SalesLearningInsightTopic, "general">, SalesLearningMemoryType[]> = {
   proof: ["proof_preference"],
   boost: ["boost_strategy"],
-  proposal: ["proposal_style"],
+  proposal: ["proposal_style", "screening_answer"],
   source: ["source_quality"],
   timing: ["timing_hypothesis"],
   failures: ["failure_pattern", "code_improvement_task"],
@@ -46,7 +46,7 @@ function inferInsightTopic(question?: string | null): SalesLearningInsightTopic 
   const text = clean(question).toLowerCase();
   if (/\bproof|portfolio|file|asset|fly|truly|case study\b/.test(text)) return "proof";
   if (/\bboost|connects|bid|top\s*[1234]|visibility\b/.test(text)) return "boost";
-  if (/\bproposal|draft|cv|cover letter|opener|style|wording|copy\b/.test(text)) return "proposal";
+  if (/\bproposal|draft|cv|cover letter|opener|style|wording|copy|screening|answer|question\b/.test(text)) return "proposal";
   if (/\bsource|feed|saved search|best matches|noisy|challenge\b/.test(text)) return "source";
   if (/\btiming|when|day|hour|fresh|old job|posted\b/.test(text)) return "timing";
   if (/\bfail|block|mistake|what went wrong|improve|fix next\b/.test(text)) return "failures";
@@ -125,7 +125,7 @@ function topicLead(topic: SalesLearningInsightTopic): string {
     case "boost":
       return "Here is what I am seeing on boost and Connects:";
     case "proposal":
-      return "Here is what I am learning about proposal style:";
+      return "Here is what I am learning about proposal style and screening answers:";
     case "source":
       return "Here is what I am seeing from the lead sources:";
     case "timing":
@@ -144,7 +144,7 @@ function emptyReply(topic: SalesLearningInsightTopic): string {
     case "boost":
       return "Evidence level: not enough data. I do not have enough boost outcome data yet. I will keep tracking required Connects, visible bids, chosen boost, and outcomes before making stronger calls.";
     case "proposal":
-      return "Evidence level: not enough data. I do not have enough proposal edit data yet. I will learn from Steve and Natalie edits as drafts move through QA.";
+      return "Evidence level: not enough data. I do not have enough proposal or screening-answer edit data yet. I will learn from Steve and Natalie edits as drafts move through QA.";
     default:
       return "Evidence level: not enough data. I do not have enough durable learning yet. I will keep logging outcomes, corrections, proof choices, boost decisions, sources, and timing.";
   }

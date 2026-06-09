@@ -8,7 +8,7 @@ import type { ApplicationStatus } from "./types";
 
 const HARD_OPTIONAL_BOOST_CAP = 50;
 
-export type SalesLearningSignalKind = "proposal_diff" | "boost_expected_value" | "source_timing_attribution";
+export type SalesLearningSignalKind = "proposal_diff" | "screening_answer_diff" | "boost_expected_value" | "source_timing_attribution";
 
 export interface StructuredSalesLearningSignal {
   kind: SalesLearningSignalKind;
@@ -42,6 +42,18 @@ export interface ProposalDiffResult {
   wordDelta: number;
   finalWordCount: number;
   generatedWordCount: number;
+}
+
+export interface ScreeningAnswerDiffInput {
+  questionText: string;
+  draftedAnswer: string;
+  finalAnswer: string;
+  scope?: string;
+  questionFamily?: string | null;
+  questionFingerprint?: string | null;
+  editor?: "Steve" | "Natalie" | "operator" | string;
+  source?: string;
+  jobId?: string | null;
 }
 
 export interface BoostBid {
@@ -304,6 +316,91 @@ export function buildProposalDiffLearning(input: ProposalDiffInput): ProposalDif
     wordDelta,
     finalWordCount: finalWords,
     generatedWordCount: generatedWords,
+  };
+}
+
+export function buildScreeningAnswerDiffLearning(input: ScreeningAnswerDiffInput): ProposalDiffResult {
+  const question = compact(input.questionText, 220);
+  const drafted = clean(input.draftedAnswer);
+  const final = clean(input.finalAnswer);
+  const draftedWords = wordCount(drafted);
+  const finalWords = wordCount(final);
+  const wordDelta = finalWords - draftedWords;
+  if (!question || !hasMaterialDraftChange(drafted, final)) {
+    return { signals: [], memoryInputs: [], tags: [], wordDelta, finalWordCount: finalWords, generatedWordCount: draftedWords };
+  }
+
+  const proofAdded = containsAny(final, PROOF_FRAMING_PATTERNS) && !containsAny(drafted, PROOF_FRAMING_PATTERNS);
+  const directPlanAdded = containsAny(final, DIRECT_DIAGNOSIS_PATTERNS) || containsAny(final, [
+    /\b(?:first|start|audit|check|prioritize|map|fix|review)\b/i,
+    /\b(?:I'?d|I would)\s+(?:start|audit|check|prioritize|fix|map)\b/i,
+  ]);
+  const shorter = draftedWords > 0 && finalWords > 0 && finalWords <= Math.floor(draftedWords * 0.85);
+  const specificityAdded = /\b(?:klaviyo|shopify|flow|segment|campaign|revenue|retention|deliverability|audit|lifecycle)\b/i.test(final)
+    && !/\b(?:klaviyo|shopify|flow|segment|campaign|revenue|retention|deliverability|audit|lifecycle)\b/i.test(drafted);
+  const genericRemoved = containsAny(drafted, GENERIC_INTRO_PATTERNS) && !containsAny(final, GENERIC_INTRO_PATTERNS);
+
+  const tags = unique([
+    proofAdded ? "screening_proof_added" : null,
+    directPlanAdded ? "screening_direct_plan_added" : null,
+    specificityAdded ? "screening_specificity_added" : null,
+    shorter ? "screening_shorter_answer" : null,
+    genericRemoved ? "screening_generic_intro_removed" : null,
+  ]);
+
+  if (tags.length === 0) {
+    return { signals: [], memoryInputs: [], tags, wordDelta, finalWordCount: finalWords, generatedWordCount: draftedWords };
+  }
+
+  const scope = clean(input.scope) || "screening:global";
+  const family = clean(input.questionFamily) || "general";
+  const editor = clean(input.editor) || "Steve/Natalie";
+  const signal: StructuredSalesLearningSignal = {
+    kind: "screening_answer_diff",
+    type: "screening_answer",
+    scope,
+    subject: `${scope}:screening:${family}`,
+    hypothesis: `For similar ${family.replace(/_/g, " ")} screening questions, ${editor} edits favor ${[
+      directPlanAdded ? "a concrete first-step plan" : null,
+      proofAdded ? "proof-backed answers" : null,
+      specificityAdded ? "platform/job-specific details" : null,
+      shorter ? "shorter answers" : null,
+      genericRemoved ? "less generic framing" : null,
+    ].filter(Boolean).join(", ")}.`,
+    rationale: [
+      `Question: ${question}.`,
+      `Draft answer: ${compact(drafted, 180) || "none"}.`,
+      `Final answer: ${compact(final, 180) || "none"}.`,
+      `Length changed from ${draftedWords} to ${finalWords} words.`,
+    ].join(" "),
+    confidence: confidenceFromSignalCount(tags.length),
+    evidenceCount: 1,
+    status: "tentative",
+    source: input.source ?? "screening_answer_diff",
+    examples: unique([question, final ? `final: ${compact(final, 180)}` : null]),
+    tags,
+    metadata: {
+      jobId: input.jobId ?? null,
+      editor,
+      questionFamily: family,
+      questionFingerprint: input.questionFingerprint ?? null,
+      draftedWordCount: draftedWords,
+      finalWordCount: finalWords,
+      wordDelta,
+      proofAdded,
+      directPlanAdded,
+      specificityAdded,
+      shorter,
+      genericRemoved,
+    },
+  };
+  return {
+    signals: [signal],
+    memoryInputs: [toMemoryInput(signal)],
+    tags,
+    wordDelta,
+    finalWordCount: finalWords,
+    generatedWordCount: draftedWords,
   };
 }
 

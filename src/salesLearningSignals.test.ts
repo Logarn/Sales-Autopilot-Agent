@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import {
   buildBoostExpectedValueSignal,
   buildProposalDiffLearning,
+  buildScreeningAnswerDiffLearning,
   buildSourceTimingAttributionSignals,
   salesLearningSignalsToMemoryInputs,
 } from "./salesLearningSignals";
@@ -50,6 +51,29 @@ const unchangedProposal = buildProposalDiffLearning({
 });
 assert(unchangedProposal.signals.length === 0, "Identical proposal readback must not create a proposal_style_signal.");
 assert(unchangedProposal.memoryInputs.length === 0, "Identical proposal readback must not create proposal memory input.");
+
+const screeningEdit = buildScreeningAnswerDiffLearning({
+  scope: "fashion:klaviyo",
+  questionText: "What approach would you take first?",
+  questionFamily: "approach_plan",
+  questionFingerprint: "abc123",
+  editor: "Steve",
+  draftedAnswer: "I can help with flows and campaigns.",
+  finalAnswer: "I would start by auditing the Klaviyo post-purchase flow, then prioritize the first retention leak by revenue impact.",
+});
+assert(screeningEdit.signals.length === 1, "Material screening answer edit should produce one signal.");
+const screeningSignal = screeningEdit.signals[0]!;
+assert(screeningSignal.type === "screening_answer", "Screening answer diff should map to screening_answer.");
+assert(screeningSignal.tags.includes("screening_direct_plan_added"), "Concrete first-step plan should be detected.");
+assert(screeningSignal.tags.includes("screening_specificity_added"), "Platform/job specificity should be detected.");
+assert(screeningEdit.memoryInputs[0]?.type === "screening_answer", "Screening answer diff should convert to a memory input.");
+
+const unchangedScreening = buildScreeningAnswerDiffLearning({
+  questionText: "What approach would you take first?",
+  draftedAnswer: "I would audit Klaviyo flows first.",
+  finalAnswer: "I would audit Klaviyo flows first.",
+});
+assert(unchangedScreening.signals.length === 0, "Identical screening readback must not create a screening_answer signal.");
 
 const boostSignal = buildBoostExpectedValueSignal({
   scope: "fashion:klaviyo",

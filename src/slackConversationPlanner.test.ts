@@ -87,6 +87,43 @@ assert.deepEqual(everything.actions, ["queue_prepare_application"]);
 assert(everything.reply.includes("all safe prep steps"));
 assert(everything.reply.includes("stop before submit"));
 
+const ctaAffirmative = planSlackConversation({
+  ...baseInput,
+  latestMessage: "Yep, go for it",
+  activeCta: {
+    action: "prep_application",
+    source: "latest_bot_cta",
+    text: "Reply prep it if you want me to handle the draft and proof.",
+  },
+});
+assert.equal(ctaAffirmative.intent, "prepare_application");
+assert.deepEqual(ctaAffirmative.actions, ["queue_prepare_application"]);
+assert(ctaAffirmative.reply.includes("stop before submit"));
+
+const ctaSoundsGood = planSlackConversation({
+  ...baseInput,
+  latestMessage: "sounds good",
+  activeCta: {
+    action: "prep_application",
+    source: "latest_bot_cta",
+    text: "Reply prep it if you want me to handle the draft and proof.",
+  },
+});
+assert.equal(ctaSoundsGood.intent, "prepare_application");
+
+const noTargetAffirmative = planSlackConversation({ ...baseInput, job: null, draft: null, activeCta: null, latestMessage: "go for it" });
+assert.equal(noTargetAffirmative.intent, "unknown_clarify");
+assert.equal(noTargetAffirmative.clarificationNeeded, true);
+assert.deepEqual(noTargetAffirmative.actions, ["none"]);
+
+const dangerousSubmit = planSlackConversation({ ...baseInput, latestMessage: "send it" });
+assert.equal(dangerousSubmit.intent, "status_summary");
+assert.deepEqual(dangerousSubmit.actions, ["none"]);
+assert.match(dangerousSubmit.reply, /final submit stays manual/i);
+
+const naturalStatus = planSlackConversation({ ...baseInput, latestMessage: "what the fuck are you up to?" });
+assert.equal(naturalStatus.intent, "status_summary");
+
 const ambiguous = planSlackConversation({ ...baseInput, latestMessage: "Something else." });
 assert.equal(ambiguous.intent, "unknown_clarify");
 assert(!ambiguous.reply.includes("I can help with the draft, files, proof, boost, or status."));

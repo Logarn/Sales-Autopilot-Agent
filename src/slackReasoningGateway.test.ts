@@ -65,6 +65,16 @@ function fakeClient(replies: string[]) {
 
 const bannedNormalCopy = /\b(field_preparation_incomplete|manual_attention_required|browserSessionState|source cooldown|manual:upwork-|action\s*#\d+|queue internals|\{[\s\S]*"[^"]+"[\s\S]*\}|the agent)\b/i;
 
+function parseSlackReplyPathTraces(logs: string[]): Array<Record<string, unknown>> {
+  return logs
+    .filter((line) => line.includes("slackReplyPathTrace"))
+    .map((line) => {
+      const jsonStart = line.indexOf("{");
+      assert(jsonStart >= 0, "Trace log should include a JSON payload.");
+      return JSON.parse(line.slice(jsonStart)) as Record<string, unknown>;
+    });
+}
+
 async function runTests(): Promise<void> {
   const tempDb = resolve(process.cwd(), "data/.tmp-slack-reasoning-gateway/jobs.db");
   cleanupDatabase(tempDb);
@@ -73,6 +83,18 @@ async function runTests(): Promise<void> {
   process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
   process.env.SLACK_ALLOWED_USER_IDS = "U_ALLOWED";
   process.env.SLACK_COPY_LLM_ENABLED = "false";
+  process.env.LOG_LEVEL = "debug";
+
+  const originalConsoleLog = console.log;
+  const debugLogs: string[] = [];
+  console.log = (...args: unknown[]) => {
+    const line = args.map((arg) => String(arg)).join(" ");
+    if (line.includes("[DEBUG]")) {
+      debugLogs.push(line);
+      return;
+    }
+    originalConsoleLog(...args);
+  };
 
   const {
     handleSlackReasoningGateway,
@@ -205,6 +227,16 @@ async function runTests(): Promise<void> {
   assert.doesNotMatch(healthReplies[0], bannedNormalCopy, "Health reply must not expose backend jargon.");
   assert.doesNotMatch(healthReplies[0], /Overall health|Workers|browserSessionState|browser_challenge_action_paused/i, "Health reply should not sound like a dashboard.");
   assert.match(healthReplies[0], /Yeah|running|Slack|Chrome|Final submit/i, "Health reply should sound like a teammate status with a clear safety state.");
+  const healthTrace = parseSlackReplyPathTraces(debugLogs).find((trace) =>
+    trace.inboundMessage === "Are you running?" &&
+    (trace.classifiedIntent === "answer_health" || trace.classifiedIntent === "operator_service_status") &&
+    trace.replyPosted === true
+  );
+  assert(healthTrace, "Health reply should emit a debug-only reply-path trace.");
+  assert.equal(healthTrace.finalComposerRan, true, "Health trace should prove the final composer ran.");
+  assert.equal(healthTrace.finalComposerProvider, "kimi", "Health trace should record the composer provider.");
+  assert.equal(healthTrace.finalComposerUsedLlm, true, "Health trace should record provider-backed composition.");
+  assert.match(String(healthTrace.executionPath), /operator_control_plane|conversation_reply/, "Health trace should record the handler path.");
   const healthPrompt = JSON.stringify(healthPlanner.requests[0]);
   assert.match(healthPrompt, /browserSession/i, "Planner prompt should include browser session context.");
   assert.match(healthPrompt, /serviceState/i, "Planner prompt should include service context.");
@@ -555,6 +587,7 @@ async function runTests(): Promise<void> {
 
   const openChromeReplies: string[] = [];
   let openedUrl: string | null = null;
+  const supportedOpenUrl = "https://www.upwork.com/jobs/~0123456789abcdef";
   const openUrlBrain = new FakeConversationProvider([{
     intent: "check_browser",
     confidence: "high",
@@ -564,7 +597,7 @@ async function runTests(): Promise<void> {
     channelId: "C_GATE",
     threadTs: "open-url.001",
     messageTs: "open-url.001",
-    text: "open https://example.com/test in Chrome",
+    text: `open ${supportedOpenUrl} in Chrome`,
     botMentioned: false,
     client: fakeClient(openChromeReplies),
     conversationProvider: openUrlBrain,
@@ -576,9 +609,34 @@ async function runTests(): Promise<void> {
       },
     },
   });
-  assert.equal(openedUrl, "https://example.com/test", "Open URL in Chrome should preserve open_remote_chrome operator action.");
+  assert.equal(openedUrl, supportedOpenUrl, "Supported Upwork URL in Chrome should preserve open_remote_chrome operator action.");
   assert.equal(openUrlBrain.requests.length, 0, "Open URL in Chrome should not wait on generic browser/status LLM classification.");
   assert.match(openChromeReplies.join("\n"), /remote Chrome/i);
+
+  const unsafeOpenReplies: string[] = [];
+  let unsafeOpenedUrl: string | null = null;
+  const unsafeOpenBrain = new FakeConversationProvider([{
+    intent: "check_browser",
+    confidence: "high",
+    actions: ["check_browser"],
+  }]);
+  await handleSlackReasoningGateway({
+    channelId: "C_GATE",
+    threadTs: "unsafe-open-url.001",
+    messageTs: "unsafe-open-url.001",
+    text: "open https://example.com/test in Chrome",
+    botMentioned: true,
+    client: fakeClient(unsafeOpenReplies),
+    conversationProvider: unsafeOpenBrain,
+    copyProvider: new FakeCopyProvider(),
+    operatorDeps: {
+      openRemoteChromeUrl: async (url: string) => {
+        unsafeOpenedUrl = url;
+        return { ok: true, text: "should not open" };
+      },
+    },
+  });
+  assert.equal(unsafeOpenedUrl, null, "Arbitrary URL must not become a remote Chrome open action.");
 
   const progressReplies: string[] = [];
   await handleSlackReasoningGateway({
@@ -606,6 +664,23 @@ async function runTests(): Promise<void> {
   const eventHandler = source.slice(source.indexOf("export async function handleSlackSocketTextEvent"), source.indexOf("type SlackThreadStateForRetry"));
   assert.match(eventHandler, /handleSlackReasoningGateway/, "Inbound Slack socket messages should route through the reasoning gateway.");
   assert.doesNotMatch(eventHandler, /handleSlackFilesMessage|handleUrlMessage|parseSlackOperatorIntent/, "Inbound socket handler should not branch to deterministic handlers before the gateway.");
+  const postThreadReplyBody = source.slice(source.indexOf("async function postThreadReply"), source.indexOf("function splitExactBodyReply"));
+  assert.equal([...source.matchAll(/client\.chat\.postMessage/g)].length, 1, "slackSocket should funnel Slack thread posts through postThreadReply.");
+  assert.match(postThreadReplyBody, /takePendingSlackReplyTrace/, "postThreadReply should attach pending composer trace metadata.");
+  assert.match(postThreadReplyBody, /logSlackReplyPathTrace/, "postThreadReply should emit debug-only reply-path traces.");
+
+  const operatorSource = readFileSync(resolve(process.cwd(), "src/slackOperatorControlPlane.ts"), "utf8");
+  const operatorHandler = operatorSource.slice(operatorSource.indexOf("export async function tryHandleSlackOperatorCommand"));
+  assert.match(operatorHandler, /rewriteSlackCopyWithKimi/, "Legacy operator helper should route normal replies through the SoulMD copywriter before posting.");
+  assert.match(operatorHandler, /text: copy\.text/, "Legacy operator helper should post composed copy, not deterministic text.");
+
+  const slackWebhookSource = readFileSync(resolve(process.cwd(), "src/slack.ts"), "utf8");
+  const sendSlackMessageBody = slackWebhookSource.slice(slackWebhookSource.indexOf("export async function sendSlackMessage"), slackWebhookSource.indexOf("export async function flushSlackQueue"));
+  assert.match(sendSlackMessageBody, /finalizeSoulSlackPayload/, "Production webhook sends should finalize SoulMD copy before using the preview sender.");
+  assert.match(sendSlackMessageBody, /sendSlackPreviewMessage\(finalized\)/, "sendSlackPreviewMessage should remain the final transport after payload finalization.");
+  const legacyConversationSource = readFileSync(resolve(process.cwd(), "src/slackConversation.ts"), "utf8");
+  assert.doesNotMatch(legacyConversationSource, /sendSlackPreviewMessage/, "Legacy revision previews should use sendSlackMessage so SoulMD finalization runs.");
+  assert.match(legacyConversationSource, /sendSlackMessage/, "Legacy revision previews should use the finalized Slack send path.");
 
   const ignoredReplies: string[] = [];
   await handleSlackSocketTextEvent({
@@ -953,6 +1028,7 @@ async function runTests(): Promise<void> {
 	  assert.equal(getBrowserActionById(skippedActionId)?.status, "cancelled", "Skip should cancel the paused quarantined action.");
 	  assert.equal(listUnresolvedBrowserChallengeQuarantines().some((item) => item.actionId === skippedActionId), false, "Skip should clear unresolved quarantine blocker.");
 
+	  console.log = originalConsoleLog;
 	  console.log("slack reasoning gateway tests passed");
 	}
 
