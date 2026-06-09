@@ -336,6 +336,26 @@ async function runTests(): Promise<void> {
     });
     assert(duplicateEventReplies.length === 1, "Duplicate Slack message/app_mention delivery should only produce one reply.");
 
+    const separateQuestionReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "C456",
+      ts: "333.889",
+      user: "U_ALLOWED",
+      text: "what needs attention?",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => separateQuestionReplies.push(payload.text) },
+    });
+    await handleSlackSocketTextEvent({
+      channel: "C456",
+      ts: "333.890",
+      user: "U_ALLOWED",
+      text: "what’s blocked?",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => separateQuestionReplies.push(payload.text) },
+    });
+    assert(separateQuestionReplies.length === 2, "Different Slack messages should not be deduped into one ignored message.");
+    assert(!/manual_attention_required|browser_challenge_action_paused|action\s*#?\d+/i.test(separateQuestionReplies.join("\n")), "Normal adjacent status replies should hide raw internals.");
+
     const trackedThreadUrlReplies: string[] = [];
     await handleSlackSocketTextEvent({
       channel: "C456",

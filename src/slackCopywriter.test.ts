@@ -30,6 +30,7 @@ async function run(): Promise<void> {
   assert(kimi.requests[0]?.messages.some((message) => message.content.includes("Operating constitution from soul.md")), "Kimi copywriter prompt should include soul.md.");
   assert(kimi.requests[0]?.messages.some((message) => message.content.includes("Fucking Lead Closer")), "Kimi copywriter prompt should include the soul.md identity.");
   assert(kimi.requests[0]?.messages.some((message) => message.content.includes("Say \"I.\"")), "Kimi copywriter prompt should include first-person teammate guidance.");
+  assert(kimi.requests[0]?.messages.some((message) => message.content.includes("sharp senior SDR/operator teammate")), "Kimi copywriter prompt should force teammate-style Slack copy.");
 
   const leadPacket = fakeProvider("🚀 This one is worth a real shot. Review it in VNC when ready; I’ll stop before submit.\nhttps://www.upwork.com/jobs/~1234567890");
   const leadPacketCopy = await rewriteSlackCopyWithKimi({
@@ -86,6 +87,17 @@ async function run(): Promise<void> {
   }, rawInternal.provider);
   assert.equal(rawInternalFallback.usedLlm, false);
   assert(!/manual:upwork|field_preparation_incomplete|manual_attention_required/i.test(rawInternalFallback.text), "Fallback should hide raw internal apply-prep states.");
+
+  const dashboardDump = fakeProvider("Overall health: not healthy\nWorkers: 0 active heartbeats, 1 stale\nbrowser_challenge_action_paused");
+  const dashboardFallback = await rewriteSlackCopyWithKimi({
+    path: "conversation_reply",
+    deterministicText: "Yeah — I’m up. Slack is live and Chrome is connected.\nI’m paused because 4 old apply items are still sitting from the earlier Upwork check. Browser itself looks clean now.\nBest move: skip the stale blocked applications, then I’ll restart hunting if the next check is clean.",
+    userMessage: "are you running?",
+    intent: "answer_health",
+  }, dashboardDump.provider);
+  assert.equal(dashboardFallback.usedLlm, false, "Dashboard-style Kimi output should be rejected for normal Slack copy.");
+  assert(!/Overall health|Workers|browser_challenge_action_paused/i.test(dashboardFallback.text), "Fallback should not expose dashboard/internal wording.");
+  assert(dashboardFallback.text.includes("Best move"), "Fallback should keep the practical teammate recommendation.");
 
   const connectsDrift = fakeProvider("Connects verified: 12 required. Boost: 18 selected. Submit untouched.");
   const connectsFallback = await rewriteSlackCopyWithKimi({

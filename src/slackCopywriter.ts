@@ -67,8 +67,24 @@ function containsRawInternalFields(text: string): boolean {
     /\bfield_preparation_incomplete\b/i,
     /\bmanual_attention_required\b/i,
     /\bbrowser_attention_required\b/i,
+    /\bbrowserSessionState\b/i,
+    /\bbrowser_challenge_action_paused\b/i,
+    /\bcaptcha_or_security_challenge\b/i,
+    /\btoo_many_pending_capture_actions\b/i,
     /\blead decision\b/i,
     /\bqueue internals\b/i,
+  ].some((pattern) => pattern.test(text));
+}
+
+function containsDashboardDump(text: string): boolean {
+  return [
+    /^Overall health:/im,
+    /^Workers:/im,
+    /^Heartbeats:/im,
+    /^Findings:/im,
+    /^QA queue$/im,
+    /\b0 active heartbeat/i,
+    /\bstale heartbeat/i,
   ].some((pattern) => pattern.test(text));
 }
 
@@ -161,6 +177,7 @@ function validateSlackCopy(text: string, request: SlackCopyRequest): string | nu
   if (containsOldMenu(trimmed)) return "old command menu";
   if (containsRawIds(trimmed)) return "raw ids in non-debug copy";
   if (containsRawInternalFields(trimmed)) return "raw internal fields in non-debug copy";
+  if (containsDashboardDump(trimmed)) return "dashboard dump in non-debug copy";
   if (/\bthe agent\b/i.test(trimmed)) return "third-person agent language";
   if (violatesSubmitBoundary(trimmed)) return "submit boundary violation";
   if (violatesProofWording(trimmed, request.deterministicText)) return "proof wording drift";
@@ -222,6 +239,10 @@ export async function rewriteSlackCopyWithKimi(
           "You write Steve-facing Slack copy for an Upwork application agent.",
           "Rewrite the deterministic response into natural, concise Slack copy. Keep the meaning and safety state.",
           "Reason first from the current context, then write the message. Do not expose the reasoning.",
+          "You are a sharp senior SDR/operator teammate, not a dashboard, bot, CLI, or monitoring page.",
+          "Use first person. Be short, direct, context-aware, and useful. Prefer one clear recommendation.",
+          "Push toward resolution: say what is true, what matters, and what Steve should do next.",
+          "Never output dashboard headings like Overall health, Workers, Heartbeats, Findings, QA queue, or raw service state unless debug was explicitly requested.",
           "For lead packets: be concise, human, commercially opinionated, and varied; include the Upwork link; include one clear next-step CTA; avoid raw packet fields.",
           "For normal Slack replies: answer the actual question directly and conversationally. Do not route natural language into a command-menu fallback.",
           "Use sales memories as hypotheses when provided. Current context and hard safety override learned preferences.",

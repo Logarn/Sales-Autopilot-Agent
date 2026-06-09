@@ -91,6 +91,7 @@ async function runTests(): Promise<void> {
 	    listBrowserActions,
 	    listRecentSlackFailureReflections,
 	    markJobSeen,
+	    mergeBrowserActionPayload,
 	    saveApplicationDraft,
 	    updateBrowserActionStatus,
 	    upsertSlackThreadState,
@@ -101,6 +102,7 @@ async function runTests(): Promise<void> {
 	    listBrowserActions: (status?: string | null, limit?: number) => Array<{ actionType: string; jobId: string; status: string }>;
 	    listRecentSlackFailureReflections: (limit?: number) => Array<{ userMessage: string; whatHappened: string }>;
 	    markJobSeen: (job: any, notified: boolean) => void;
+	    mergeBrowserActionPayload: (id: number, patch: Record<string, unknown>) => unknown;
 	    saveApplicationDraft: (draft: any) => void;
 	    updateBrowserActionStatus: (id: number, status: string, lastError?: string | null) => void;
 	    upsertSlackThreadState: (input: Record<string, unknown>) => unknown;
@@ -201,10 +203,138 @@ async function runTests(): Promise<void> {
   assert.equal(healthReplies.length, 1, "Gateway should post one health reply.");
   assert.match(healthReplies[0], /^Copy \d+:/, "Health reply should be written by the Slack copywriter.");
   assert.doesNotMatch(healthReplies[0], bannedNormalCopy, "Health reply must not expose backend jargon.");
+  assert.doesNotMatch(healthReplies[0], /Overall health|Workers|browserSessionState|browser_challenge_action_paused/i, "Health reply should not sound like a dashboard.");
+  assert.match(healthReplies[0], /Yeah|running|Slack|Chrome|Final submit/i, "Health reply should sound like a teammate status with a clear safety state.");
   const healthPrompt = JSON.stringify(healthPlanner.requests[0]);
   assert.match(healthPrompt, /browserSession/i, "Planner prompt should include browser session context.");
   assert.match(healthPrompt, /serviceState/i, "Planner prompt should include service context.");
   assert.match(healthPrompt, /inbound/i, "Planner prompt should include inbound Slack context.");
+
+  const staleBlockedActionId = enqueueBrowserAction({
+    jobId: "stale-blocked-job",
+    actionType: "prepare_application_review",
+    payload: {
+      channelId: "C_GATE",
+      threadTs: "stale-blocked.001",
+    },
+  });
+  mergeBrowserActionPayload(staleBlockedActionId, {
+    channelId: "C_GATE",
+    threadTs: "stale-blocked.001",
+    challengeQuarantine: {
+      status: "paused",
+      challengeType: "captcha_or_security_challenge",
+    },
+  });
+  updateBrowserActionStatus(staleBlockedActionId, "paused", "Detected state: captcha_or_security_challenge.");
+
+  const blockedStatusReplies: string[] = [];
+  await handleSlackReasoningGateway({
+    channelId: "C_GATE",
+    threadTs: "blocked-status.001",
+    messageTs: "blocked-status.001",
+    text: "what’s blocked?",
+    botMentioned: false,
+    client: fakeClient(blockedStatusReplies),
+    conversationProvider: new FakeConversationProvider([{ intent: "ignore", confidence: "high", actions: ["none"] }]),
+    copyProvider: new FakeCopyProvider(),
+  });
+  assert.equal(blockedStatusReplies.length, 1, "Blocked status question should get a reply.");
+  assert.match(blockedStatusReplies[0], /Nothing is blocking Chrome right now/i, "Blocked status should answer the blocked state first.");
+  assert.match(blockedStatusReplies[0], /stale issue|skip the stale blocked applications/i, "Blocked status should recommend the practical cleanup.");
+  assert.doesNotMatch(blockedStatusReplies[0], /QA queue|manual_attention_required|captcha_or_security_challenge|browser_challenge_action_paused|action\s*#?\d+/i, "Blocked status must not become a queue dump or expose internals.");
+
+  const attentionReplies: string[] = [];
+  await handleSlackReasoningGateway({
+    channelId: "C_GATE",
+    threadTs: "attention.001",
+    messageTs: "attention.001",
+    text: "what needs attention?",
+    botMentioned: false,
+    client: fakeClient(attentionReplies),
+    conversationProvider: new FakeConversationProvider([{ intent: "ignore", confidence: "high", actions: ["none"] }]),
+    copyProvider: new FakeCopyProvider(),
+  });
+  assert.equal(attentionReplies.length, 1, "Needs-attention question should not be swallowed.");
+  assert.match(attentionReplies[0], /stale issue|blocked apply/i, "Needs-attention reply should summarize the actual blocker.");
+  assert.doesNotMatch(attentionReplies[0], /manual_attention_required|browser_challenge_action_paused|action\s*#?\d+/i, "Needs-attention reply should hide backend state.");
+
+  const missingTabReplies: string[] = [];
+  await handleSlackReasoningGateway({
+    channelId: "C_GATE",
+    threadTs: "missing-tab.001",
+    messageTs: "missing-tab.001",
+    text: "open blocked application",
+    botMentioned: false,
+    client: fakeClient(missingTabReplies),
+    conversationProvider: new FakeConversationProvider([{
+      intent: "open_application_page",
+      confidence: "high",
+      actions: ["open_application_page"],
+      qaQuery: "blocked",
+    }]),
+    copyProvider: new FakeCopyProvider(),
+    focusQaTab: async () => ({
+      ok: false,
+      text: [
+        "I found the protected QA item, but the matching remote Chrome tab is gone.",
+        "There is nothing useful to bring forward, and I did not reuse another tab or click submit.",
+        "Best move: skip this stale blocked item and rebuild it from the listing if you still want to apply.",
+      ].join("\n"),
+    }),
+  });
+  assert.equal(missingTabReplies.length, 1, "Open blocked application should answer even when the tab is gone.");
+  assert.match(missingTabReplies[0], /tab is gone|nothing useful to bring forward/i, "Missing-tab copy should explain the practical state.");
+  assert.match(missingTabReplies[0], /skip|rebuild|retry|Best move/i, "Missing-tab copy should offer a practical next move.");
+  assert.doesNotMatch(missingTabReplies[0], /action\s*#?\d+|manual_attention_required|captcha_or_security_challenge/i, "Missing-tab copy should hide internals.");
+
+  const skipBlockedReplies: string[] = [];
+  await handleSlackReasoningGateway({
+    channelId: "C_GATE",
+    threadTs: "skip-blocked.001",
+    messageTs: "skip-blocked.001",
+    text: "skip all blocked applications",
+    botMentioned: false,
+    client: fakeClient(skipBlockedReplies),
+    conversationProvider: new FakeConversationProvider([{ intent: "ignore", confidence: "high", actions: ["none"] }]),
+    copyProvider: new FakeCopyProvider(),
+  });
+  assert.equal(skipBlockedReplies.length, 1, "Skip-all blocked applications should always acknowledge.");
+  assert.equal(getBrowserActionById(staleBlockedActionId)?.status, "cancelled", "Skip-all blocked applications should cancel stale quarantined actions.");
+  assert.match(skipBlockedReplies[0], /Done|skipped/i, "Skip-all reply should confirm the cleanup.");
+  assert.match(skipBlockedReplies[0], /I did not submit anything/i, "Skip-all reply should preserve final-submit safety.");
+  assert.doesNotMatch(skipBlockedReplies[0], /manual_attention_required|captcha_or_security_challenge|browser_challenge_action_paused|action\s*#?\d+/i, "Skip-all reply should hide internals.");
+
+  const separateAttentionReplies: string[] = [];
+  const separateOpenReplies: string[] = [];
+  await handleSlackReasoningGateway({
+    channelId: "C_GATE",
+    threadTs: "separate.001",
+    messageTs: "separate.001",
+    text: "what needs attention?",
+    botMentioned: false,
+    client: fakeClient(separateAttentionReplies),
+    conversationProvider: new FakeConversationProvider([{ intent: "ignore", confidence: "high", actions: ["none"] }]),
+    copyProvider: new FakeCopyProvider(),
+  });
+  await handleSlackReasoningGateway({
+    channelId: "C_GATE",
+    threadTs: "separate.001",
+    messageTs: "separate.002",
+    text: "open blocked application",
+    botMentioned: false,
+    client: fakeClient(separateOpenReplies),
+    conversationProvider: new FakeConversationProvider([{
+      intent: "open_application_page",
+      confidence: "high",
+      actions: ["open_application_page"],
+      qaQuery: "blocked",
+    }]),
+    copyProvider: new FakeCopyProvider(),
+    focusQaTab: async () => ({ ok: false, text: "I found the QA item, but the matching remote Chrome tab is gone. I did not reuse another tab or click submit. Best move: skip or rebuild it." }),
+  });
+  assert.equal(separateAttentionReplies.length, 1, "First distinct Slack message should get its own reply.");
+  assert.equal(separateOpenReplies.length, 1, "Second distinct Slack message should not be swallowed by dedupe.");
 
   const followUpReplies: string[] = [];
   await handleSlackReasoningGateway({

@@ -220,7 +220,11 @@ export async function focusProtectedQaApplicationTab(input: {
       return {
         ok: false,
         item,
-        text: "I found the protected QA item, but the matching remote Chrome tab is not open anymore. I did not reuse another tab or click submit.",
+        text: [
+          "I found the protected QA item, but the matching remote Chrome tab is gone.",
+          "There is nothing useful to bring forward, and I did not reuse another tab or click submit.",
+          "Best move: skip this stale blocked item and rebuild it from the listing if you still want to apply.",
+        ].join("\n"),
       };
     }
     if (typeof page.bringToFront === "function") {
