@@ -34,7 +34,13 @@ function withEnv(values: Record<string, string | undefined>, fn: () => Promise<v
 }
 
 async function run(): Promise<void> {
-  const { getLlmProviderConfig, getJobIntelligenceProviderConfig, getSlackCopyProviderConfig, OpenAiCompatibleProvider } = await loadProvider();
+  const {
+    getLlmProviderConfig,
+    getJobIntelligenceProviderConfig,
+    getSlackCopyProviderConfig,
+    getSlackCopyProviderFallbackConfigs,
+    OpenAiCompatibleProvider,
+  } = await loadProvider();
 
   withEnv({
     LLM_PROVIDER: "openai",
@@ -100,14 +106,31 @@ async function run(): Promise<void> {
     SLACK_COPY_PROVIDER: "kimi",
     MOONSHOT_API_KEY: "moonshot-key",
     MOONSHOT_BASE_URL: "https://api.moonshot.ai/v1",
-    SLACK_COPY_MODEL: "kimi-k2.5",
+    SLACK_COPY_MODEL: "kimi-k2.6",
   }, () => {
     const config = getSlackCopyProviderConfig();
     assert.equal(config.enabled, true);
     assert.equal(config.provider, "moonshot");
     assert.equal(config.apiKey, "moonshot-key");
-    assert.equal(config.model, "kimi-k2.5");
+    assert.equal(config.model, "kimi-k2.6");
     assert.equal(config.baseUrl, "https://api.moonshot.ai/v1");
+  });
+
+  withEnv({
+    SLACK_COPY_LLM_ENABLED: "true",
+    SLACK_COPY_PROVIDER: "kimi",
+    MOONSHOT_API_KEY: "moonshot-key",
+    MOONSHOT_BASE_URL: "https://api.moonshot.ai/v1",
+    SLACK_COPY_MODEL: "kimi-k2.6",
+    XAI_API_KEY: "xai-key",
+    XAI_BASE_URL: "https://api.x.ai/v1",
+    XAI_MODEL: "grok-4.3",
+  }, () => {
+    const configs = getSlackCopyProviderFallbackConfigs();
+    assert.equal(configs[0]?.provider, "moonshot");
+    assert.equal(configs[0]?.model, "kimi-k2.6");
+    assert.equal(configs[1]?.provider, "xai");
+    assert.equal(configs[1]?.model, "grok-4.3");
   });
 
   const originalFetch = globalThis.fetch;

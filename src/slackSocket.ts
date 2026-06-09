@@ -1332,6 +1332,52 @@ async function postThreadReply(client: App["client"], channel: string, threadTs:
   await client.chat.postMessage({ channel, thread_ts: threadTs, text });
 }
 
+function splitExactBodyReply(text: string): { lead: string; body: string; tail: string } | null {
+  const firstBreak = text.indexOf("\n\n");
+  const lastBreak = text.lastIndexOf("\n\n");
+  if (firstBreak === -1 || lastBreak === -1 || firstBreak === lastBreak) {
+    return null;
+  }
+  const lead = text.slice(0, firstBreak).trim();
+  const body = text.slice(firstBreak + 2, lastBreak).trim();
+  const tail = text.slice(lastBreak + 2).trim();
+  if (!lead || !body || !tail) {
+    return null;
+  }
+  return { lead, body, tail };
+}
+
+async function userFacingSlackCopyWithExactBody(input: {
+  deterministicText: string;
+  userMessage?: string | null;
+  intent?: string | null;
+  context?: Record<string, unknown>;
+  copyProvider?: SlackCopyProvider;
+}): Promise<string> {
+  const split = splitExactBodyReply(input.deterministicText);
+  if (!split) {
+    return userFacingSlackCopy({
+      deterministicText: input.deterministicText,
+      userMessage: input.userMessage,
+      intent: input.intent,
+      context: input.context,
+      preservePhrases: [input.deterministicText],
+      copyProvider: input.copyProvider,
+    });
+  }
+  const envelope = await userFacingSlackCopy({
+    deterministicText: [split.lead, split.tail].join("\n"),
+    userMessage: input.userMessage,
+    intent: input.intent,
+    context: input.context,
+    copyProvider: input.copyProvider,
+  });
+  const safeEnvelope = /\b(?:copywriter|omitted|proposal body|draft body)\b/i.test(envelope)
+    ? [split.lead, split.tail].join("\n")
+    : envelope;
+  return [safeEnvelope, split.body].join("\n\n");
+}
+
 async function userFacingSlackCopy(input: {
   deterministicText: string;
   userMessage?: string | null;
@@ -1529,7 +1575,14 @@ async function executeConversationPlan(params: {
     return;
   }
   if (params.plan.intent === "show_cover_letter") {
-    await postThreadReply(params.client, params.channelId, params.threadTs, params.plan.reply);
+    const text = await userFacingSlackCopyWithExactBody({
+      deterministicText: params.plan.reply,
+      userMessage: params.userMessage,
+      intent: params.plan.intent,
+      context: { jobId: params.state.jobId, threadStatus: params.state.status, exactProposalBodyPreserved: true },
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
   const text = await userFacingSlackCopy({

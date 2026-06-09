@@ -1225,6 +1225,7 @@ async function postSoulAwareBrowserThreadMessage(input: {
     channel: input.thread.channelId,
     threadTs: input.thread.threadTs,
     text: copy.text,
+    soulComposed: true,
   });
 }
 
