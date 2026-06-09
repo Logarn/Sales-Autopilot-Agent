@@ -1191,6 +1191,7 @@ async function runTests(): Promise<void> {
     assert(blockedPrepCompletionText.includes("*Proof planned:*"), "Blocked prep diagnostics should use planned proof wording until verification succeeds.");
     assert(blockedPrepCompletionText.includes("truly-beauty-case-study.pdf"), "Blocked prep diagnostics should list the missing file name");
     assert(blockedPrepCompletionText.includes("reply “retry”"), "Blocked prep diagnostics should give a concise next step");
+    assert(blockedPrepCompletionText.includes("Nothing submitted: I did not click the final Upwork submit button."), "Blocked prep diagnostics should explicitly say nothing was submitted.");
     assert(!blockedPrepCompletionText.includes("*Proof I used:*"), "Blocked prep diagnostics must not use verified/used proof wording.");
     assert(!blockedPrepCompletionText.includes("Stop before submit:"), "Blocked prep diagnostics should not include internal submit-guard debug lines");
     for (const noisy of ["manual review", "platformEligibility", "lead decision", "packet", "source context", "action id"]) {
