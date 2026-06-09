@@ -7,6 +7,9 @@ import {
 } from "./config";
 import type { AgentMemory, AgentMemoryConfidence, AgentMemoryStatus } from "./db";
 
+const MEMORI_PUBLIC_PROD_API_KEY = "96a7ea3e-11c2-428c-b9ae-5a168363dc80";
+const MEMORI_PUBLIC_STAGING_API_KEY = "c18b1022-7fe2-42af-ab01-b1f9139184f0";
+
 export type MemoriSourceOfTruth = "local";
 export type MemoriSkipReason =
   | "disabled"
@@ -78,12 +81,35 @@ export interface MemoriShadowPayload {
   metadata: Record<string, unknown>;
 }
 
+export interface MemoriHttpTrace {
+  phase: string;
+  method: string;
+  endpoint: string;
+  ok: boolean;
+  status?: number;
+  statusText?: string;
+  bodySnippet?: string;
+}
+
+export interface MemoriClientDiagnostics {
+  phase?: string;
+  endpoint?: string;
+  status?: number;
+  statusText?: string;
+  bodySnippet?: string;
+  errorName?: string;
+  errorMessage?: string;
+  cause?: unknown;
+  traces?: MemoriHttpTrace[];
+}
+
 export interface MemoriShadowWriteResult {
   ok: boolean;
   shadowed: boolean;
   sourceOfTruth: MemoriSourceOfTruth;
   skippedReason?: MemoriSkipReason;
   payload?: MemoriShadowPayload;
+  diagnostics?: MemoriClientDiagnostics;
 }
 
 export interface MemoriRecallInput {
@@ -105,10 +131,11 @@ export interface MemoriRecallResult {
   semanticScoresByMemoryId: Record<number, number>;
   attributions: MemoriRecallAttribution[];
   fallbackReason?: MemoriSkipReason;
+  diagnostics?: MemoriClientDiagnostics;
 }
 
 export interface MemoriClient {
-  shadowWrite(payload: MemoriShadowPayload, config: MemoriAdapterConfig): Promise<void>;
+  shadowWrite(payload: MemoriShadowPayload, config: MemoriAdapterConfig): Promise<void | MemoriHttpTrace[]>;
   recall(input: {
     query: string;
     localMemoryIds: number[];
@@ -120,6 +147,29 @@ export interface MemoriClient {
     text?: string;
     metadata?: Record<string, unknown>;
   }>>;
+}
+
+interface MemoriRemoteRecallItem {
+  id?: number;
+  localMemoryId?: number;
+  local_memory_id?: number;
+  score?: number;
+  rank_score?: number;
+  similarity?: number;
+  content?: string;
+  reason?: string;
+  text?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export class MemoriHttpError extends Error {
+  readonly diagnostics: MemoriClientDiagnostics;
+
+  constructor(message: string, diagnostics: MemoriClientDiagnostics) {
+    super(message);
+    this.name = "MemoriHttpError";
+    this.diagnostics = diagnostics;
+  }
 }
 
 const FINAL_SUBMIT_OVERRIDE_PATTERNS = [
@@ -163,72 +213,242 @@ function defaultConfig(): MemoriAdapterConfig {
   };
 }
 
-function memoriEndpoint(config: MemoriAdapterConfig, path: string): string {
-  const base = config.apiUrl.replace(/\/+$/, "");
-  return /\/(?:memories|memory|shadow|recall)(?:\/|$)/i.test(new URL(base).pathname)
-    ? base
-    : `${base}${path}`;
+function normalizeMemoriApiUrl(apiUrl: string): string {
+  const parsed = new URL(apiUrl);
+  if (parsed.hostname === "api.memori.ai") {
+    parsed.hostname = "api.memorilabs.ai";
+  }
+  return parsed.toString().replace(/\/+$/, "");
+}
+
+function memoriEndpoint(config: MemoriAdapterConfig, path: string, options: { collector?: boolean } = {}): string {
+  const base = normalizeMemoriApiUrl(config.apiUrl);
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const parsed = new URL(base);
+  if (options.collector) {
+    parsed.hostname = parsed.hostname
+      .replace(/^api\./, "collector.")
+      .replace(/^staging-api\./, "staging-collector.");
+  }
+  const normalizedBase = parsed.toString().replace(/\/+$/, "");
+  const basePath = parsed.pathname.replace(/\/+$/, "");
+  if (/\/v1$/i.test(basePath) && normalizedPath.startsWith("/v1/")) {
+    return `${normalizedBase}${normalizedPath.slice(3)}`;
+  }
+  return `${normalizedBase}${normalizedPath}`;
+}
+
+function memoriHeaders(config: MemoriAdapterConfig): Record<string, string> {
+  const isStaging = /staging/i.test(normalizeMemoriApiUrl(config.apiUrl));
+  const publicKey = isStaging ? MEMORI_PUBLIC_STAGING_API_KEY : MEMORI_PUBLIC_PROD_API_KEY;
+  return {
+    "Authorization": `Bearer ${config.apiKey}`,
+    "Content-Type": "application/json",
+    "X-Memori-API-Key": publicKey,
+  };
+}
+
+function redactString(input: string, secrets: string[]): string {
+  let output = input
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/g, "Bearer [REDACTED]")
+    .replace(/\b(?:sk|mk|memori)[-_][A-Za-z0-9._~+/=-]{8,}/gi, "[REDACTED]");
+  for (const secret of secrets.filter((item) => item.length >= 4)) {
+    output = output.split(secret).join("[REDACTED]");
+  }
+  return output;
+}
+
+function snippet(input: string, secrets: string[], max = 500): string {
+  const compact = input.replace(/\s+/g, " ").trim();
+  return redactString(compact.length > max ? `${compact.slice(0, max - 3)}...` : compact, secrets);
 }
 
 async function postMemoriJson<T>(input: {
+  phase: string;
   endpoint: string;
   body: unknown;
   config: MemoriAdapterConfig;
-}): Promise<T> {
+}): Promise<{ data: T; trace: MemoriHttpTrace }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), input.config.requestTimeoutMs);
   try {
     const response = await fetch(input.endpoint, {
       method: "POST",
-      headers: {
-        "Authorization": `Bearer ${input.config.apiKey}`,
-        "Content-Type": "application/json",
-      },
+      headers: memoriHeaders(input.config),
       body: JSON.stringify(input.body),
       signal: controller.signal,
     });
+    const responseText = await response.text();
+    const trace: MemoriHttpTrace = {
+      phase: input.phase,
+      method: "POST",
+      endpoint: input.endpoint,
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      bodySnippet: snippet(responseText, [input.config.apiKey]),
+    };
     if (!response.ok) {
-      throw new Error(`Memori request failed with status ${response.status}`);
+      throw new MemoriHttpError(`Memori ${input.phase} failed with status ${response.status}`, trace);
     }
-    return await response.json() as T;
+    if (!responseText.trim()) {
+      return { data: {} as T, trace };
+    }
+    try {
+      return { data: JSON.parse(responseText) as T, trace };
+    } catch {
+      return { data: {} as T, trace };
+    }
   } finally {
     clearTimeout(timeout);
   }
 }
 
+function payloadAttribution(payload: MemoriShadowPayload): { entity: { id: string }; process: { id: string } } {
+  const attribution = payload.attribution ?? {};
+  const entityId = clean(
+    typeof attribution.entityId === "string"
+      ? attribution.entityId
+      : typeof attribution.ownerUserId === "string"
+        ? attribution.ownerUserId
+        : "steve",
+    120
+  ) || "steve";
+  const processId = clean(
+    typeof attribution.processId === "string"
+      ? attribution.processId
+      : "upwork-autonomous-agent",
+    120
+  ) || "upwork-autonomous-agent";
+  return {
+    entity: { id: entityId },
+    process: { id: processId },
+  };
+}
+
+function payloadSession(payload: MemoriShadowPayload): { id: string } {
+  return { id: `local-agent-memory-${payload.localSource.localMemoryId}` };
+}
+
+function shadowConversation(payload: MemoriShadowPayload): Array<{ role: string; text: string; type: string }> {
+  const summary = [
+    payload.content.summary,
+    payload.content.hypothesis ? `Hypothesis: ${payload.content.hypothesis}` : null,
+    payload.content.keywords.length ? `Keywords: ${payload.content.keywords.join(", ")}` : null,
+  ].filter(Boolean).join("\n");
+  return [
+    {
+      role: "user",
+      type: "text",
+      text: `Remember this local ${payload.localSource.memoryType} memory for Steve. Local memory id: ${payload.localSource.localMemoryId}.`,
+    },
+    {
+      role: "assistant",
+      type: "text",
+      text: `${payload.content.title}\n${summary}`,
+    },
+  ];
+}
+
+function remoteLocalMemoryId(input: {
+  localMemoryId?: number;
+  local_memory_id?: number;
+  id?: number;
+  content?: string;
+  reason?: string;
+  text?: string;
+  metadata?: Record<string, unknown>;
+}): number | null {
+  for (const value of [input.localMemoryId, input.local_memory_id, input.metadata?.localMemoryId, input.metadata?.local_memory_id]) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && /^\d+$/.test(value)) return Number(value);
+  }
+  const text = [input.content, input.reason, input.text, JSON.stringify(input.metadata ?? {})].filter(Boolean).join(" ");
+  const match = text.match(/\blocal\s+memory\s+id\s*:?\s*#?(\d+)\b/i);
+  return match ? Number(match[1]) : null;
+}
+
+function remoteMatchesLocalMemory(input: {
+  content?: string;
+  reason?: string;
+  text?: string;
+  metadata?: Record<string, unknown>;
+}, localMemory: MemoriLocalMemory): boolean {
+  const text = clean([input.content, input.reason, input.text, JSON.stringify(input.metadata ?? {})].filter(Boolean).join(" "), 4000).toLowerCase();
+  if (!text) return false;
+  const title = clean(localMemory.title, 240).toLowerCase();
+  const summary = clean(localMemory.summary, 600).toLowerCase();
+  return Boolean(title && text.includes(title)) || Boolean(summary.length >= 40 && text.includes(summary.slice(0, 120)));
+}
+
 const defaultMemoriClient: MemoriClient = {
   async shadowWrite(payload, config) {
-    await postMemoriJson({
-      endpoint: memoriEndpoint(config, "/v1/memories/shadow"),
-      body: payload,
+    const attribution = payloadAttribution(payload);
+    const session = payloadSession(payload);
+    const conversation = shadowConversation(payload);
+    const conversationResponse = await postMemoriJson({
+      phase: "conversation_messages",
+      endpoint: memoriEndpoint(config, "/v1/cloud/conversation/messages"),
+      body: {
+        attribution,
+        messages: conversation,
+        session,
+      },
       config,
     });
+    const augmentationResponse = await postMemoriJson({
+      phase: "augmentation",
+      endpoint: memoriEndpoint(config, "/v1/cloud/augmentation", { collector: true }),
+      body: {
+        conversation: {
+          messages: conversation.map((message) => ({ role: message.role, content: message.text })),
+          summary: payload.content.summary,
+        },
+        session,
+        meta: {
+          attribution,
+          framework: null,
+          llm: {
+            model: {
+              provider: "local",
+              sdk: { version: null },
+              version: "upwork-agent",
+            },
+          },
+          platform: { provider: "upwork-agent" },
+          sdk: { lang: "javascript", version: "upwork-agent-memori-shadow" },
+          storage: { cockroachdb: false, dialect: "sqlite" },
+        },
+      },
+      config,
+    });
+    return [conversationResponse.trace, augmentationResponse.trace];
   },
   async recall(input, config) {
-    const response = await postMemoriJson<{ memories?: Array<{
-      localMemoryId?: number;
-      local_memory_id?: number;
-      score?: number;
-      reason?: string;
-      text?: string;
-      metadata?: Record<string, unknown>;
-    }>; results?: Array<{
-      localMemoryId?: number;
-      local_memory_id?: number;
-      score?: number;
-      reason?: string;
-      text?: string;
-      metadata?: Record<string, unknown>;
-    }> }>({
-      endpoint: memoriEndpoint(config, "/v1/memories/recall"),
-      body: input,
+    const localMemoryById = new Map(input.localMemoryIds.map((id) => [id, true]));
+    const response = await postMemoriJson<{
+      memories?: MemoriRemoteRecallItem[];
+      results?: MemoriRemoteRecallItem[];
+      facts?: MemoriRemoteRecallItem[];
+    }>({
+      phase: "recall",
+      endpoint: memoriEndpoint(config, "/v1/cloud/recall"),
+      body: {
+        attribution: {
+          entity: { id: "steve" },
+          process: { id: "upwork-autonomous-agent" },
+        },
+        query: input.query,
+        session: null,
+      },
       config,
     });
-    return (response.memories ?? response.results ?? []).map((memory) => ({
-      localMemoryId: memory.localMemoryId ?? memory.local_memory_id,
-      score: memory.score,
-      reason: memory.reason,
-      text: memory.text,
+    const remote: MemoriRemoteRecallItem[] = response.data.memories ?? response.data.results ?? response.data.facts ?? [];
+    return remote.map((memory) => ({
+      localMemoryId: remoteLocalMemoryId(memory) ?? (localMemoryById.has(Number(memory.id)) ? Number(memory.id) : undefined),
+      score: memory.score ?? memory.rank_score ?? memory.similarity,
+      reason: memory.reason ?? memory.content,
+      text: memory.text ?? memory.content,
       metadata: memory.metadata,
     }));
   },
@@ -293,6 +513,27 @@ function callerAttribution(input: Record<string, unknown> | undefined): Record<s
   return Object.fromEntries(
     Object.entries(input ?? {}).filter(([key]) => !RESERVED_ATTRIBUTION_KEYS.has(key))
   );
+}
+
+export function memoriErrorDiagnostics(error: unknown, secrets: string[] = [MEMORI_API_KEY]): MemoriClientDiagnostics {
+  if (error instanceof MemoriHttpError) {
+    return {
+      ...error.diagnostics,
+      bodySnippet: error.diagnostics.bodySnippet ? snippet(error.diagnostics.bodySnippet, secrets) : undefined,
+    };
+  }
+  const record = error && typeof error === "object" ? error as Record<string, unknown> : {};
+  const cause = record.cause && typeof record.cause === "object"
+    ? Object.fromEntries(Object.entries(record.cause as Record<string, unknown>)
+      .filter(([key]) => ["code", "errno", "syscall", "hostname", "host", "port", "address", "message", "name"].includes(key))
+      .map(([key, value]) => [key, typeof value === "string" ? snippet(value, secrets, 240) : value]))
+    : undefined;
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    errorName: error instanceof Error ? error.name : typeof error,
+    errorMessage: snippet(message, secrets, 300),
+    cause,
+  };
 }
 
 export function buildMemoriShadowPayload(input: MemoriShadowWriteInput): { ok: true; payload: MemoriShadowPayload } | { ok: false; reason: MemoriSkipReason } {
@@ -362,10 +603,22 @@ export async function shadowWriteMemoriMemory(input: MemoriShadowWriteInput & {
     return { ok: true, shadowed: false, sourceOfTruth: "local", skippedReason: built.reason };
   }
   try {
-    await client.shadowWrite(redactMemoriPayload(built.payload, [config.apiKey]) as MemoriShadowPayload, config);
-    return { ok: true, shadowed: true, sourceOfTruth: "local", payload: built.payload };
-  } catch {
-    return { ok: true, shadowed: false, sourceOfTruth: "local", skippedReason: "client_failed" };
+    const traces = await client.shadowWrite(built.payload, config);
+    return {
+      ok: true,
+      shadowed: true,
+      sourceOfTruth: "local",
+      payload: built.payload,
+      diagnostics: Array.isArray(traces) ? { traces } : undefined,
+    };
+  } catch (error) {
+    return {
+      ok: true,
+      shadowed: false,
+      sourceOfTruth: "local",
+      skippedReason: "client_failed",
+      diagnostics: memoriErrorDiagnostics(error, [config.apiKey]),
+    };
   }
 }
 
@@ -395,6 +648,7 @@ export async function recallMemoriAttributions(input: MemoriRecallInput & {
   const client = input.client ?? defaultMemoriClient;
 
   const localIds = new Set(input.localMemories.map((memory) => memory.id));
+  const localMemoryById = new Map(input.localMemories.map((memory) => [memory.id, memory]));
   try {
     const remote = await client.recall({
       query: clean(input.query, 500),
@@ -403,7 +657,11 @@ export async function recallMemoriAttributions(input: MemoriRecallInput & {
     }, config);
     const attributions = remote
       .map((item): MemoriRecallAttribution | null => {
-        const localMemoryId = typeof item.localMemoryId === "number" ? item.localMemoryId : null;
+        let localMemoryId = typeof item.localMemoryId === "number" ? item.localMemoryId : null;
+        if (!localMemoryId || !localIds.has(localMemoryId)) {
+          const matched = input.localMemories.find((memory) => remoteMatchesLocalMemory(item, memory));
+          localMemoryId = matched?.id ?? null;
+        }
         if (!localMemoryId || !localIds.has(localMemoryId)) return null;
         const score = typeof item.score === "number" && Number.isFinite(item.score) ? Math.max(0, Math.min(1, item.score)) : 0;
         const reason = clean(item.reason ?? item.text ?? "Memori shadow recall matched this local memory.", 240);
@@ -423,31 +681,22 @@ export async function recallMemoriAttributions(input: MemoriRecallInput & {
       semanticScoresByMemoryId: Object.fromEntries(attributions.map((item) => [item.localMemoryId, item.score])),
       attributions,
     };
-  } catch {
+  } catch (error) {
     return {
       sourceOfTruth: "local",
       activeRecallUsed: false,
       semanticScoresByMemoryId: {},
       attributions: [],
       fallbackReason: "client_failed",
+      diagnostics: memoriErrorDiagnostics(error, [config.apiKey]),
     };
   }
 }
 
 export function redactMemoriPayload<T>(value: T, secrets: string[] = [MEMORI_API_KEY]): T {
   const filteredSecrets = secrets.filter((secret) => secret.length >= 4);
-  const redactString = (input: string): string => {
-    let output = input
-      .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/g, "Bearer [REDACTED]")
-      .replace(/\b(?:sk|mk|memori)[-_][A-Za-z0-9._~+/=-]{8,}/gi, "[REDACTED]");
-    for (const secret of filteredSecrets) {
-      output = output.split(secret).join("[REDACTED]");
-    }
-    return output;
-  };
-
   const visit = (item: unknown): unknown => {
-    if (typeof item === "string") return redactString(item);
+    if (typeof item === "string") return redactString(item, filteredSecrets);
     if (Array.isArray(item)) return item.map(visit);
     if (item && typeof item === "object") {
       return Object.fromEntries(Object.entries(item as Record<string, unknown>).map(([key, nested]) => [
