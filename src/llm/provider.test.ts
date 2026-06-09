@@ -1,5 +1,20 @@
 import assert from "node:assert/strict";
 
+const SECRET_ENV_KEYS = [
+  "LLM_API_KEY",
+  "OPENAI_API_KEY",
+  "OPENROUTER_API_KEY",
+  "XAI_API_KEY",
+  "GROK_API_KEY",
+  "MOONSHOT_API_KEY",
+  "KIMI_API_KEY",
+  "LMSTUDIO_API_KEY",
+] as const;
+
+for (const key of SECRET_ENV_KEYS) {
+  process.env[key] = "";
+}
+
 async function loadProvider() {
   const resolved = await import("./provider");
   return resolved;
