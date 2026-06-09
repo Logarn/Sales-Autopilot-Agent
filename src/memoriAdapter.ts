@@ -143,6 +143,16 @@ const UNVERIFIED_PROOF_PATTERNS = [
   /\b(uploaded|selected|attached)\b.*\bverified\b/i,
 ];
 
+const RESERVED_ATTRIBUTION_KEYS = new Set([
+  "activeRecallEligible",
+  "adapter",
+  "kind",
+  "localSource",
+  "localSourceOfTruth",
+  "shadowOnly",
+  "sourceOfTruth",
+]);
+
 function defaultConfig(): MemoriAdapterConfig {
   return {
     shadowEnabled: MEMORI_SHADOW_ENABLED,
@@ -279,6 +289,12 @@ function normalizeKeywords(memory: MemoriLocalMemory): string[] {
     .slice(0, 20);
 }
 
+function callerAttribution(input: Record<string, unknown> | undefined): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(input ?? {}).filter(([key]) => !RESERVED_ATTRIBUTION_KEYS.has(key))
+  );
+}
+
 export function buildMemoriShadowPayload(input: MemoriShadowWriteInput): { ok: true; payload: MemoriShadowPayload } | { ok: false; reason: MemoriSkipReason } {
   const memory = input.memory;
   if (!memory) {
@@ -316,7 +332,7 @@ export function buildMemoriShadowPayload(input: MemoriShadowWriteInput): { ok: t
         keywords: normalizeKeywords(memory),
       },
       attribution: {
-        ...(input.attribution ?? {}),
+        ...callerAttribution(input.attribution),
         adapter: "memori_shadow",
         kind: input.kind ?? "agent_memory",
         localSourceOfTruth: true,

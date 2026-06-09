@@ -3663,7 +3663,7 @@ export function upsertAgentMemory(input: UpsertAgentMemoryInput): AgentMemory {
     attribution: {
       source: "local_agent_memory_persistence",
     },
-  });
+  }).catch(() => undefined);
   return memory;
 }
 
