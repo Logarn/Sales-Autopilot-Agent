@@ -993,7 +993,8 @@ function matchesDangerousSubmitAdjacent(text: string): boolean {
   if (/^submitted(?:\s+after\s+editing)?$/.test(normalized)) return false;
   return /^(?:send it|submit it|fire it off|send this|submit this|send the proposal|submit the proposal|send application|submit application|send the application|submit the application)$/.test(normalized) ||
     /\b(?:please\s+)?(?:send|submit)\s+(?:it|this|the\s+(?:proposal|application))\b/.test(normalized) ||
-    /\bfire\s+(?:it|this)\s+off\b/.test(normalized);
+    /\bfire\s+(?:it|this)\s+off\b/.test(normalized) ||
+    /\bcan\s+(?:you|we)\b.*\b(?:send|submit)\b.*\b(?:automatically|auto|on\s+your\s+own|without\s+(?:me|steve|manual|human))\b/.test(normalized);
 }
 
 function buildManualSubmitReminderText(state: SlackThreadStateRecord): string {

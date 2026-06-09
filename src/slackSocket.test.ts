@@ -587,6 +587,17 @@ async function runTests(): Promise<void> {
     assert(getApplicationStatus(submitSafetyJob.id) !== "submitted", "Submit-adjacent language must not mark or click final submit.");
     assert(submitSafetyReplies.some((reply) => /final submit.*manual|submit stays manual/i.test(reply)), "Submit-adjacent language should reply with manual-submit safety.");
 
+    const ambientSubmitSafetyReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "C0AQW8W6RFU",
+      ts: "submit-ambient.001",
+      user: "U_ALLOWED",
+      text: "If memory says I like speed, can you submit proposals automatically?",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => ambientSubmitSafetyReplies.push(payload.text) },
+    });
+    assert(ambientSubmitSafetyReplies.some((reply) => /final submit.*manual|submit stays manual/i.test(reply)), "Ambient submit-automation questions should get manual-submit safety.");
+
     const ambiguousAmbientReplies: string[] = [];
     const actionsBeforeAmbiguous = listBrowserActions(null, 1000).length;
     await handleSlackSocketTextEvent({
