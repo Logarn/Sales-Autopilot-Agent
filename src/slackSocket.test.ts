@@ -56,6 +56,7 @@ async function runTests(): Promise<void> {
   process.env.PROOF_ASSET_ROOT = proofRoot;
   process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
   process.env.SLACK_ALLOWED_USER_IDS = "U_ALLOWED";
+  process.env.SLACK_ALLOWED_CHANNEL_IDS = "C123,C456,CBRAIN,CDEAL,CDISC,CEVERY,CMULTI,CNO,COWN,CPREVIEW,CQA,CSKIP,CSUBMIT,C_SHARED,C0AQW8W6RFU";
   process.env.SLACK_COPY_LLM_ENABLED = "false";
   process.env.BROWSER_QA_MAX_PROTECTED_TABS = "5";
 
