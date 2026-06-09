@@ -143,19 +143,22 @@ if [[ "$MODE" != "template" ]]; then
   fi
 
   socket_enabled="$(value_for SLACK_SOCKET_MODE_ENABLED)"
-  if is_truthy "$socket_enabled"; then
-    inbound_mode="$(value_for SLACK_INBOUND_MODE)"
-    if [[ "$inbound_mode" != "socket_mode" ]]; then
-      echo "SLACK_INBOUND_MODE must be socket_mode when SLACK_SOCKET_MODE_ENABLED=true." >&2
-      exit 1
-    fi
+  if ! is_truthy "$socket_enabled"; then
+    echo "Production Contabo env must set SLACK_SOCKET_MODE_ENABLED=true." >&2
+    exit 1
+  fi
 
-    discovery_channel="$(value_for DISCOVERY_SLACK_CHANNEL_ID)"
-    allowed_channels="$(value_for SLACK_ALLOWED_CHANNEL_IDS)"
-    if ! list_contains_id "$allowed_channels" "$discovery_channel"; then
-      echo "DISCOVERY_SLACK_CHANNEL_ID must be included in SLACK_ALLOWED_CHANNEL_IDS when Socket Mode is enabled." >&2
-      exit 1
-    fi
+  inbound_mode="$(value_for SLACK_INBOUND_MODE)"
+  if [[ "$inbound_mode" != "socket_mode" ]]; then
+    echo "SLACK_INBOUND_MODE must be socket_mode when SLACK_SOCKET_MODE_ENABLED=true." >&2
+    exit 1
+  fi
+
+  discovery_channel="$(value_for DISCOVERY_SLACK_CHANNEL_ID)"
+  allowed_channels="$(value_for SLACK_ALLOWED_CHANNEL_IDS)"
+  if ! list_contains_id "$allowed_channels" "$discovery_channel"; then
+    echo "DISCOVERY_SLACK_CHANNEL_ID must be included in SLACK_ALLOWED_CHANNEL_IDS when Socket Mode is enabled." >&2
+    exit 1
   fi
 fi
 
