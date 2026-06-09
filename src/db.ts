@@ -29,6 +29,7 @@ import {
   ScreeningCoverageStatus,
   StructuredProposalDraft,
 } from "./types";
+import type { OperatorReportSnapshot } from "./operatorReports";
 
 interface SeenStats {
   total: number;
@@ -154,6 +155,13 @@ export interface ApplicationAnalytics {
   hireRate: number;
   topAttachments: Array<{ name: string; count: number }>;
   topHighlights: Array<{ name: string; count: number }>;
+}
+
+export interface OperatorReportPeriodInput {
+  label: string;
+  start: Date;
+  end: Date;
+  now?: Date;
 }
 
 export interface OutcomeLearningSegment {
@@ -4026,6 +4034,215 @@ export function getApplicationAnalytics(): ApplicationAnalytics {
     hireRate: appliedRows.length ? hiredRows.length / appliedRows.length : 0,
     topAttachments: topCounts(attachments),
     topHighlights: topCounts(highlights),
+  };
+}
+
+function compactOperatorReportText(value: string | null | undefined, limit = 180): string {
+  const compacted = (value ?? "").replace(/\s+/g, " ").trim();
+  if (compacted.length <= limit) return compacted;
+  return `${compacted.slice(0, limit - 3).trim()}...`;
+}
+
+function metric(value: number, evidence: string): { value: number; evidence: string } {
+  return { value, evidence };
+}
+
+function countBetween(sql: string, startIso: string, endIso: string): number {
+  return db.prepare<[string, string], CountRow>(sql).get(startIso, endIso)?.count ?? 0;
+}
+
+function countStatusEvents(toStatus: ApplicationStatus, startIso: string, endIso: string): number {
+  return db
+    .prepare<[ApplicationStatus, string, string], CountRow>(
+      `SELECT COUNT(DISTINCT job_id) as count
+       FROM application_events
+       WHERE to_status = ?
+         AND datetime(created_at) >= datetime(?)
+         AND datetime(created_at) < datetime(?)`
+    )
+    .get(toStatus, startIso, endIso)?.count ?? 0;
+}
+
+export function getOperatorReportDbSnapshot(input: OperatorReportPeriodInput): OperatorReportSnapshot {
+  const startIso = input.start.toISOString();
+  const endIso = input.end.toISOString();
+  const generatedAt = (input.now ?? new Date()).toISOString();
+
+  const leadsFound = countBetween(
+    `SELECT COUNT(*) as count
+     FROM seen_jobs
+     WHERE datetime(seen_at) >= datetime(?)
+       AND datetime(seen_at) < datetime(?)`,
+    startIso,
+    endIso
+  );
+  const qualifiedLeads = countBetween(
+    `SELECT COUNT(*) as count
+     FROM seen_jobs
+     WHERE match_level IN ('high', 'medium')
+       AND datetime(seen_at) >= datetime(?)
+       AND datetime(seen_at) < datetime(?)`,
+    startIso,
+    endIso
+  );
+  const applicationsPrepared = countBetween(
+    `SELECT COUNT(*) as count
+     FROM applications
+     WHERE datetime(generated_at) >= datetime(?)
+       AND datetime(generated_at) < datetime(?)`,
+    startIso,
+    endIso
+  );
+  const applicationsSubmitted = countBetween(
+    `SELECT COUNT(*) as count
+     FROM applications
+     WHERE submitted_at IS NOT NULL
+       AND datetime(submitted_at) >= datetime(?)
+       AND datetime(submitted_at) < datetime(?)`,
+    startIso,
+    endIso
+  );
+  const connectsUsed = db
+    .prepare<[string, string], { total: number | null }>(
+      `SELECT COALESCE(SUM(actual_total_connects), 0) as total
+       FROM applications
+       WHERE submitted_at IS NOT NULL
+         AND datetime(submitted_at) >= datetime(?)
+         AND datetime(submitted_at) < datetime(?)`
+    )
+    .get(startIso, endIso)?.total ?? 0;
+
+  const sourceRow = db
+    .prepare<[string, string], { label: string; leads: number; qualified: number; positive_outcomes: number }>(
+      `SELECT COALESCE(NULLIF(TRIM(s.source_query), ''), 'unknown source') as label,
+              COUNT(*) as leads,
+              SUM(CASE WHEN s.match_level IN ('high', 'medium') THEN 1 ELSE 0 END) as qualified,
+              SUM(CASE WHEN a.status IN ('replied', 'interview', 'hired') THEN 1 ELSE 0 END) as positive_outcomes
+       FROM seen_jobs s
+       LEFT JOIN applications a ON a.job_id = s.id
+       WHERE datetime(s.seen_at) >= datetime(?)
+         AND datetime(s.seen_at) < datetime(?)
+       GROUP BY label
+       ORDER BY positive_outcomes DESC, qualified DESC, leads DESC, label ASC
+       LIMIT 1`
+    )
+    .get(startIso, endIso);
+
+  const proofRows = db
+    .prepare<[string, string], { attachments_used: string | null; profile_highlights_used: string | null }>(
+      `SELECT attachments_used, profile_highlights_used
+       FROM applications
+       WHERE submitted_at IS NOT NULL
+         AND datetime(submitted_at) >= datetime(?)
+         AND datetime(submitted_at) < datetime(?)`
+    )
+    .all(startIso, endIso);
+  const assetRows = db
+    .prepare<[string, string], { original_name: string }>(
+      `SELECT aa.original_name
+       FROM application_assets aa
+       LEFT JOIN applications a ON a.job_id = aa.job_id
+       WHERE datetime(COALESCE(a.submitted_at, aa.created_at)) >= datetime(?)
+         AND datetime(COALESCE(a.submitted_at, aa.created_at)) < datetime(?)`
+    )
+    .all(startIso, endIso);
+  const proofCandidates = [
+    ...proofRows.flatMap((row) => [
+      ...parseJsonStringArray(row.attachments_used),
+      ...parseJsonStringArray(row.profile_highlights_used),
+    ]),
+    ...assetRows.map((row) => row.original_name),
+  ];
+  const topProof = topCounts(proofCandidates)[0] ?? null;
+
+  const blockedItems = db
+    .prepare<[string, string], { job_id: string; title: string | null; status: string; updated_at: string }>(
+      `SELECT ba.job_id, s.title, ba.status, ba.updated_at
+       FROM browser_actions ba
+       LEFT JOIN seen_jobs s ON s.id = ba.job_id
+       WHERE ba.status IN ('paused', 'failed')
+         AND datetime(ba.updated_at) >= datetime(?)
+         AND datetime(ba.updated_at) < datetime(?)
+       ORDER BY datetime(ba.updated_at) DESC, ba.id DESC
+       LIMIT 6`
+    )
+    .all(startIso, endIso)
+    .map((row) => ({
+      label: row.title ?? row.job_id,
+      evidence: `browser_actions.status=${row.status}`,
+      detail: `job_id=${row.job_id}; updated_at=${row.updated_at}`,
+    }));
+
+  const lessons = db
+    .prepare<[string, string], { type: string; subject: string; hypothesis: string; confidence: string; evidence_count: number; updated_at: string }>(
+      `SELECT type, subject, hypothesis, confidence, evidence_count, updated_at
+       FROM sales_learning_memories
+       WHERE status IN ('tentative', 'active')
+         AND datetime(updated_at) >= datetime(?)
+         AND datetime(updated_at) < datetime(?)
+       ORDER BY evidence_count DESC, confidence DESC, datetime(updated_at) DESC
+       LIMIT 6`
+    )
+    .all(startIso, endIso)
+    .map((row) => ({
+      label: `${row.type}: ${row.subject}`,
+      evidence: `sales_learning_memories evidence_count=${row.evidence_count}; confidence=${row.confidence}`,
+      detail: compactOperatorReportText(row.hypothesis),
+    }));
+
+  const steveActionItems = db
+    .prepare<[string], { job_id: string; title: string | null; status: ApplicationStatus; updated_at: string }>(
+      `SELECT a.job_id, s.title, a.status, a.updated_at
+       FROM applications a
+       LEFT JOIN seen_jobs s ON s.id = a.job_id
+       WHERE a.status IN ('prepared_for_qa', 'needs_review', 'approved')
+         AND datetime(a.updated_at) < datetime(?)
+       ORDER BY datetime(a.updated_at) DESC
+       LIMIT 6`
+    )
+    .all(endIso)
+    .map((row) => {
+      const action = row.status === "approved" ? "manual final submit or outcome marking" : "manual QA/review";
+      return {
+        label: row.title ?? row.job_id,
+        evidence: `applications.status=${row.status}`,
+        detail: `${action}; job_id=${row.job_id}; updated_at=${row.updated_at}`,
+      };
+    });
+
+  return {
+    generatedAt,
+    period: {
+      label: input.label,
+      startIso,
+      endIso,
+    },
+    leadsFound: metric(leadsFound, "seen_jobs.seen_at"),
+    qualifiedLeads: metric(qualifiedLeads, "seen_jobs.match_level in high/medium"),
+    applicationsPrepared: metric(applicationsPrepared, "applications.generated_at"),
+    applicationsSubmitted: metric(applicationsSubmitted, "applications.submitted_at"),
+    replies: metric(countStatusEvents("replied", startIso, endIso), "application_events.to_status=replied"),
+    interviews: metric(countStatusEvents("interview", startIso, endIso), "application_events.to_status=interview"),
+    wins: metric(countStatusEvents("hired", startIso, endIso), "application_events.to_status=hired"),
+    losses: metric(countStatusEvents("lost", startIso, endIso), "application_events.to_status=lost"),
+    connectsUsed: metric(connectsUsed, "applications.actual_total_connects for submitted_at period"),
+    bestSource: sourceRow
+      ? {
+          label: sourceRow.label,
+          evidence: "seen_jobs.source_query joined to applications.status",
+          detail: `leads=${sourceRow.leads}; qualified=${sourceRow.qualified}; positive_outcomes=${sourceRow.positive_outcomes}`,
+        }
+      : null,
+    bestProof: topProof
+      ? {
+          label: topProof.name,
+          evidence: "application_assets and applications proof/highlight fields",
+          detail: `uses=${topProof.count}`,
+        }
+      : null,
+    blockedItems,
+    lessons,
+    steveActionItems,
   };
 }
 
