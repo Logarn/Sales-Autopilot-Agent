@@ -1107,6 +1107,8 @@ async function runTests(): Promise<void> {
     assert(!prepCompletionText.includes("*Apply URL:*"), "Prep completion alert should not require URL copy/paste into VNC");
     assert(prepCompletionText.includes("• *Cover letter:* filled"), "Prep completion alert should only claim filled cover letter when verified");
     assert(prepCompletionText.includes("• *Screening answers:* filled"), "Prep completion alert should summarize verified screening answers compactly");
+    assert(prepCompletionText.includes("• *Proof files:* Truly Beauty case study"), "Prep completion alert should include proof files checklist item.");
+    assert(prepCompletionText.includes("• *Portfolio:* none"), "Prep completion alert should include portfolio checklist item.");
     assert(!prepCompletionText.includes("*Cover letter draft:*"), "Prep completion alert should keep QA handoff compact; draft is available by asking in Slack.");
     assert(!prepCompletionText.includes("*Screening answers filled:*"), "Prep completion alert should keep QA handoff compact.");
     assert(prepCompletionText.includes("• *Connects:* 4 required"), "Prep completion alert should summarize Connects");
@@ -1114,6 +1116,8 @@ async function runTests(): Promise<void> {
     assert(prepCompletionText.includes("*Proof verified:*"), "Prep completion alert should use verified proof wording only after page verification");
     assert(!prepCompletionText.includes("*Proof I used:*"), "Prep completion alert must not use old proof wording");
     assert(prepCompletionText.includes("You can correct proof here in Slack"), "Prep completion alert should explain natural proof corrections");
+    assert(prepCompletionText.includes("Nothing submitted: I did not click the final Upwork submit button."), "Prep completion alert should explicitly say nothing was submitted.");
+    assert(prepCompletionText.includes("• *Final submit:* untouched — nothing submitted"), "Prep completion alert should include final-submit checklist item.");
     assert(prepCompletionText.includes("manually click *Send for 4 Connects*"), "Prep completion alert should preserve final submit safety");
     assert(!prepCompletionText.includes("Fields filled:"), "Prep completion alert should not include internal field inventory");
     assert(!prepCompletionText.includes("Auto-attach assets:"), "Prep completion alert should not include exhaustive proof inventory");
@@ -1204,6 +1208,7 @@ async function runTests(): Promise<void> {
     assert(blockedPrepCompletionText.includes("*Proof planned:*"), "Blocked prep diagnostics should use planned proof wording until verification succeeds.");
     assert(blockedPrepCompletionText.includes("truly-beauty-case-study.pdf"), "Blocked prep diagnostics should list the missing file name");
     assert(blockedPrepCompletionText.includes("reply “retry”"), "Blocked prep diagnostics should give a concise next step");
+    assert(blockedPrepCompletionText.includes("Nothing submitted: I did not click the final Upwork submit button."), "Blocked prep diagnostics should explicitly say nothing was submitted.");
     assert(!blockedPrepCompletionText.includes("*Proof I used:*"), "Blocked prep diagnostics must not use verified/used proof wording.");
     assert(!blockedPrepCompletionText.includes("Stop before submit:"), "Blocked prep diagnostics should not include internal submit-guard debug lines");
     for (const noisy of ["manual review", "platformEligibility", "lead decision", "packet", "source context", "action id"]) {
@@ -1238,7 +1243,7 @@ async function runTests(): Promise<void> {
     assert(kimiQaRequests.some((request) => request.messages?.[1]?.content?.includes("\"path\":\"qa_handoff\"")), "Kimi QA handoff request should use the qa_handoff path.");
     assert(kimiQaRequests.some((request) => JSON.stringify(request).includes("Operating constitution from soul.md")), "Kimi QA handoff request should include soul.md context.");
     assert(kimiQaHandoffText.includes("*Proof planned:*"), "Kimi QA handoff must preserve planned proof wording.");
-    assert(kimiQaHandoffText.includes("• *Submit:* untouched"), "Kimi QA handoff must preserve submit untouched.");
+    assert(kimiQaHandoffText.includes("• *Final submit:* untouched — nothing submitted"), "Kimi QA handoff must preserve final-submit untouched.");
 
     let globalBlockerText = "";
     const globalBlockerPost = await postPrepareDraftStatus(
@@ -1316,7 +1321,8 @@ async function runTests(): Promise<void> {
     assert(connectsCopyText.includes("Connects:* not verified") || connectsCopyText.includes("Connects:* unknown"), "Connects should be marked not verified, not claimed.");
     assert(connectsCopyText.includes("Boost:* not set yet"), "Unknown Connects should prevent boost.");
     assert(connectsCopyText.includes("*Proof planned:*"), "Unverified proof should stay planned.");
-    assert(connectsCopyText.includes("• *Submit:* untouched"), "Connects-not-verified handoff should preserve submit safety.");
+    assert(connectsCopyText.includes("Nothing submitted: I did not click the final Upwork submit button."), "Connects-not-verified handoff should say nothing was submitted.");
+    assert(connectsCopyText.includes("• *Final submit:* untouched — nothing submitted"), "Connects-not-verified handoff should preserve final-submit safety.");
     assert(connectsCopyText.includes("“open it”"), "Connects-not-verified handoff should offer tab focus.");
     assert(!connectsCopyText.includes("clear the remote Chrome issue"), "Connects-not-verified copy should not tell Steve to clear Chrome.");
     assert(!/field_preparation_incomplete|manual_attention_required|manual browser attention|manual:upwork/i.test(connectsCopyText), "Connects-not-verified copy should hide backend state and raw job ids.");
