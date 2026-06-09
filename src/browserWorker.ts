@@ -1054,6 +1054,8 @@ function buildPrepareDraftStatusMessage(input: {
     selectedFiles.length > 0 ? `Files: ${selectedFiles.join(", ")}` : null,
   ].filter((item): item is string => Boolean(item));
   const plannedProofSummary = plannedProofParts.length > 0 ? plannedProofParts.join("; ") : "none selected";
+  const proofFilesSummary = selectedFiles.length > 0 ? selectedFiles.join(", ") : "none";
+  const portfolioSummary = selectedPortfolio.length > 0 ? selectedPortfolio.join(", ") : "none";
   const attachmentsVerified = selectedFiles.length === 0 || attachmentVerification?.status === "verified";
   const portfolioVerified = selectedPortfolio.length === 0 || highlightVerification?.status === "verified";
   const proofVerified = plannedProofParts.length > 0 && attachmentsVerified && portfolioVerified;
@@ -1084,14 +1086,17 @@ function buildPrepareDraftStatusMessage(input: {
       "✅ *Ready for QA*",
       "",
       "I prepared this in remote Chrome and stopped before submit.",
+      "Nothing submitted: I did not click the final Upwork submit button.",
       "",
       [
         `• *Cover letter:* ${coverLetterSummary}`,
         `• *Screening answers:* ${screeningSummary}`,
         `• *${proofLabel}:* ${plannedProofSummary}`,
+        `• *Proof files:* ${proofFilesSummary}`,
+        `• *Portfolio:* ${portfolioSummary}`,
         `• *Connects:* ${connectsSummary}`,
         `• *Boost:* ${boostSummary}`,
-        "• *Submit:* untouched",
+        "• *Final submit:* untouched — nothing submitted",
       ].join("\n"),
       "",
       correctionLine,
@@ -1105,15 +1110,18 @@ function buildPrepareDraftStatusMessage(input: {
       "⚠️ *I couldn’t verify the Connects cost yet.*",
       "",
       "I can see the proposal page, but the Connects section isn’t readable right now. I left submit untouched and skipped boost for now.",
+      "Nothing submitted: I did not click the final Upwork submit button.",
       "",
       "What I planned:",
       [
         `• *Cover letter:* ${coverLetterSummary}`,
         `• *Screening answers:* ${screeningSummary}`,
         `• *${proofLabel}:* ${plannedProofSummary}`,
+        `• *Proof files:* ${proofFilesSummary}`,
+        `• *Portfolio:* ${portfolioSummary}`,
         "• *Connects:* not verified",
         "• *Boost:* not set yet",
-        "• *Submit:* untouched",
+        "• *Final submit:* untouched — nothing submitted",
       ].join("\n"),
       "",
       `*Next:* I’ll keep the application open in remote Chrome. Reply “retry” after the page finishes loading, or “open it” and I’ll bring the tab forward.`,
@@ -1134,14 +1142,17 @@ function buildPrepareDraftStatusMessage(input: {
     isBrowserChallengeState(diagnostics.state)
       ? blockerReason
       : `I reached the Upwork apply page, but ${blockerReason}`,
+    "Nothing submitted: I did not click the final Upwork submit button.",
     "",
     "What I planned:",
     [
       `• *Cover letter:* ${diagnostics.coverLetterPresent ? "drafted" : "not generated yet"}`,
       `• *${proofLabel}:* ${plannedProofSummary}`,
+      `• *Proof files:* ${proofFilesSummary}`,
+      `• *Portfolio:* ${portfolioSummary}`,
       `• *Connects:* ${connectsSummary}`,
       `• *Boost:* ${boostSummary}`,
-      "• *Submit:* untouched",
+      "• *Final submit:* untouched — nothing submitted",
     ].join("\n"),
     "",
     `*Next:* ${nextStep}`,
@@ -1181,7 +1192,8 @@ export async function postPrepareDraftStatus(
       boostVerified: Boolean(input.diagnostics.boostConnects && input.diagnostics.boostConnects > 0),
     },
     preservePhrases: [
-      "• *Submit:* untouched",
+      "Nothing submitted: I did not click the final Upwork submit button.",
+      "• *Final submit:* untouched — nothing submitted",
       ...(deterministicText.includes("Proof planned") ? ["Proof planned"] : []),
       ...(deterministicText.includes("Proof verified") ? ["Proof verified"] : []),
       ...(deterministicText.includes("reply “retry”") ? ["reply “retry”"] : []),
