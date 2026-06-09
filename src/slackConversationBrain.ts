@@ -63,6 +63,29 @@ export type SlackConversationBrainAction =
 
 export type SlackConversationBrainConfidence = "high" | "medium" | "low";
 export type SlackConversationBrainFixType = "memory" | "prompt" | "config" | "code_pr";
+export type SlackConversationBrainIntentCategory =
+  | "question"
+  | "command"
+  | "approval"
+  | "rejection_skip"
+  | "correction"
+  | "status_check"
+  | "debug_request"
+  | "feedback_opinion"
+  | "unknown_ambiguous";
+export type SlackConversationBrainTarget =
+  | "current_thread_lead"
+  | "explicit_upwork_url"
+  | "qa_item_number"
+  | "current_batch_item"
+  | "unknown";
+export type SlackConversationBrainSafetyDecision =
+  | "safe_execute"
+  | "clarify_before_execute"
+  | "manual_submit_reminder"
+  | "blocked_by_browser_security"
+  | "debug_only"
+  | "no_action";
 
 export interface SlackConversationBrainProvider {
   isAvailable(): boolean;
@@ -85,10 +108,14 @@ export interface SlackConversationFailureReflection {
 }
 
 export interface SlackConversationBrainDecision {
+  intentCategory: SlackConversationBrainIntentCategory;
   intent: SlackConversationBrainIntent;
+  target: SlackConversationBrainTarget;
+  safetyDecision: SlackConversationBrainSafetyDecision;
   confidence: SlackConversationBrainConfidence;
   reply: string | null;
   actions: SlackConversationBrainAction[];
+  contextSignals: string[];
   memoryUpdate: SlackConversationMemoryUpdate | null;
   needsHumanClarification: boolean;
   codeImprovementNeeded: boolean;
@@ -159,6 +186,11 @@ export interface SlackConversationBrainInput {
     blocked: boolean;
     reason?: string | null;
   } | null;
+  activeCta?: {
+    action: "prep_application" | "retry" | "review" | "none";
+    source: "latest_bot_cta" | "thread_status" | "thread_reply" | "none";
+    text: string | null;
+  } | null;
   serviceState?: {
     slackListening?: boolean | null;
     leadEngine?: string | null;
@@ -188,6 +220,11 @@ export interface SlackConversationBrainInput {
     scope: string;
     confidence: SlackConversationBrainConfidence;
   }>;
+  previousCorrections?: Array<{
+    userMessage: string;
+    whatHappened: string;
+    nextBehavior: string;
+  }>;
   salesLearning?: {
     relevantMemories: Array<{
       type: string;
@@ -206,10 +243,14 @@ export interface SlackConversationBrainInput {
 }
 
 interface RawSlackConversationBrainDecision {
+  intentCategory?: unknown;
   intent?: unknown;
+  target?: unknown;
+  safetyDecision?: unknown;
   confidence?: unknown;
   reply?: unknown;
   actions?: unknown;
+  contextSignals?: unknown;
   memoryUpdate?: unknown;
   memoryUpdates?: unknown;
   needsHumanClarification?: unknown;
@@ -290,6 +331,35 @@ const MEMORY_TYPES = new Set<SlackBehaviorMemoryType>([
 ]);
 
 const FIX_TYPES = new Set<SlackConversationBrainFixType>(["memory", "prompt", "config", "code_pr"]);
+
+const INTENT_CATEGORIES = new Set<SlackConversationBrainIntentCategory>([
+  "question",
+  "command",
+  "approval",
+  "rejection_skip",
+  "correction",
+  "status_check",
+  "debug_request",
+  "feedback_opinion",
+  "unknown_ambiguous",
+]);
+
+const TARGETS = new Set<SlackConversationBrainTarget>([
+  "current_thread_lead",
+  "explicit_upwork_url",
+  "qa_item_number",
+  "current_batch_item",
+  "unknown",
+]);
+
+const SAFETY_DECISIONS = new Set<SlackConversationBrainSafetyDecision>([
+  "safe_execute",
+  "clarify_before_execute",
+  "manual_submit_reminder",
+  "blocked_by_browser_security",
+  "debug_only",
+  "no_action",
+]);
 
 export const SLACK_CONVERSATION_ALLOWED_ACTIONS: SlackConversationBrainAction[] = [
   "answer_health",
@@ -375,6 +445,39 @@ function normalizeIntent(value: unknown): SlackConversationBrainIntent {
     : "clarify";
 }
 
+function normalizeIntentCategory(value: unknown, intent: SlackConversationBrainIntent): SlackConversationBrainIntentCategory {
+  if (typeof value === "string" && INTENT_CATEGORIES.has(value as SlackConversationBrainIntentCategory)) {
+    return value as SlackConversationBrainIntentCategory;
+  }
+  if (intent === "debug_details") return "debug_request";
+  if (intent === "reject") return "rejection_skip";
+  if (intent === "answer_health" || intent === "check_browser" || intent === "check_services" || intent === "qa_queue") return "status_check";
+  if (intent === "full_safe_prep" || intent === "draft_preview_first" || intent === "retry_action" || intent === "focus_qa_tab" || intent === "open_application_page") return "command";
+  if (intent === "clarify") return "unknown_ambiguous";
+  return "question";
+}
+
+function normalizeTarget(value: unknown, input: SlackConversationBrainInput): SlackConversationBrainTarget {
+  if (typeof value === "string" && TARGETS.has(value as SlackConversationBrainTarget)) {
+    return value as SlackConversationBrainTarget;
+  }
+  if (input.inbound?.upworkUrl) return "explicit_upwork_url";
+  if (input.thread?.jobId || input.thread?.upworkUrl) return "current_thread_lead";
+  return "unknown";
+}
+
+function normalizeSafetyDecision(value: unknown, input: SlackConversationBrainInput, intent: SlackConversationBrainIntent): SlackConversationBrainSafetyDecision {
+  if (typeof value === "string" && SAFETY_DECISIONS.has(value as SlackConversationBrainSafetyDecision)) {
+    return value as SlackConversationBrainSafetyDecision;
+  }
+  if (intent === "debug_details") return "debug_only";
+  if (input.browserSession?.blocked) return "blocked_by_browser_security";
+  if (intent === "clarify") return "clarify_before_execute";
+  if (intent === "mark_submitted") return "manual_submit_reminder";
+  if (intent === "ignore") return "no_action";
+  return "safe_execute";
+}
+
 function normalizeActions(value: unknown, allowed: SlackConversationBrainAction[]): SlackConversationBrainAction[] {
   const allowedSet = new Set(allowed);
   const raw = Array.isArray(value) ? value : [];
@@ -384,6 +487,15 @@ function normalizeActions(value: unknown, allowed: SlackConversationBrainAction[
     .filter((item) => ACTIONS.has(item) && allowedSet.has(item));
   const unique = [...new Set(actions)];
   return unique.length > 0 ? unique : ["none"];
+}
+
+function normalizeContextSignals(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .slice(0, 12);
 }
 
 function normalizeMemoryUpdate(value: unknown): SlackConversationMemoryUpdate | null {
@@ -437,11 +549,18 @@ function normalizeDecision(raw: RawSlackConversationBrainDecision, input: SlackC
   const rawIdsAllowed = intent === "debug_details" || /\b(debug|raw status|technical details)\b/i.test(input.latestUserMessage);
   const rawMemoryUpdates = Array.isArray(raw.memoryUpdates) ? raw.memoryUpdates : [raw.memoryUpdate];
   const memoryUpdate = rawMemoryUpdates.map(normalizeMemoryUpdate).find(Boolean) ?? null;
+  const intentCategory = normalizeIntentCategory(raw.intentCategory, intent);
+  const target = normalizeTarget(raw.target, input);
+  const safetyDecision = normalizeSafetyDecision(raw.safetyDecision, input, intent);
   return {
+    intentCategory,
     intent,
+    target,
+    safetyDecision,
     confidence: confidence(raw.confidence),
     reply: cleanText(raw.reply, 1600, { rawIdsAllowed }),
     actions: normalizeActions(raw.actions, input.allowedActions),
+    contextSignals: normalizeContextSignals(raw.contextSignals),
     memoryUpdate,
     needsHumanClarification: asBoolean(raw.needsHumanClarification),
     codeImprovementNeeded: asBoolean(raw.codeImprovementNeeded),
@@ -480,10 +599,12 @@ function buildPromptInput(input: SlackConversationBrainInput): Record<string, un
     connects: input.connects,
     browserAction: input.browserAction,
     browserSession: input.browserSession ?? null,
+    activeCta: input.activeCta ?? null,
     serviceState: input.serviceState ?? null,
     inbound: input.inbound ?? null,
     qaQueue: input.qaQueue.slice(0, 5),
     behaviorMemories: input.behaviorMemories.slice(0, 25),
+    previousCorrections: (input.previousCorrections ?? []).slice(0, 5),
     salesLearning: input.salesLearning ?? { relevantMemories: [], guidance: [] },
     allowedActions: input.allowedActions,
     hardSafetyRules: input.hardSafetyRules,
@@ -508,7 +629,10 @@ export async function planSlackConversationWithLlm(
         content: [
           "You are the Upwork agent's Slack conversation brain.",
           "Reason about Steve's latest message using the structured thread state before responding.",
-          "Return JSON only with: intent, confidence, reply, actions, progressReplyNeeded, progressReply, memoryUpdate, needsHumanClarification, codeImprovementNeeded, failureReflection, safety, instruction, qaIndex, qaQuery, actionId, outcomeStatus.",
+          "Return JSON only with: intentCategory, intent, target, safetyDecision, confidence, reply, actions, contextSignals, progressReplyNeeded, progressReply, memoryUpdate, needsHumanClarification, codeImprovementNeeded, failureReflection, safety, instruction, qaIndex, qaQuery, actionId, outcomeStatus.",
+          "intentCategory must be one of: question, command, approval, rejection_skip, correction, status_check, debug_request, feedback_opinion, unknown_ambiguous.",
+          "target must be one of: current_thread_lead, explicit_upwork_url, qa_item_number, current_batch_item, unknown.",
+          "safetyDecision must be one of: safe_execute, clarify_before_execute, manual_submit_reminder, blocked_by_browser_security, debug_only, no_action.",
           "Allowed intents: answer_file_capability_question, answer_health, explain_health_findings, show_cover_letter, full_safe_prep, draft_preview_first, retry_action, focus_qa_tab, open_application_page, qa_queue, capture_upwork_url, ingest_file, revise_proof_plan, revise_draft, status_summary, explain_risk, explain_proof, explain_boost, pause_hunting, start_hunting, check_browser, check_services, debug_details, reject, mark_submitted, record_outcome, clarify, ignore.",
           "Allowed actions are provided in the user payload. Propose only those action names.",
           "Every normal inbound Slack message is coming through this gateway. Reason first from context, then select one or more allowed actions.",
@@ -516,6 +640,11 @@ export async function planSlackConversationWithLlm(
           "For Upwork links, use capture_upwork_url when the message is relevant to this agent.",
           "For Slack file attachments in a tracked thread, use ingest_file.",
           "Use action queue_prepare_application for full safe prep. It means draft/files/proof/portfolio/Connects/boost only, then stop before submit.",
+          "If activeCta.action is prep_application and Steve replies with an affirmative like yes, yep, yeah, go for it, do it, sounds good, move on it, let's run it, handle it, prep it, or go ahead, classify as intentCategory approval, target current_thread_lead, intent full_safe_prep, action queue_prepare_application.",
+          "If no active CTA and no target are present, vague affirmatives such as go for it or sounds good require clarify and no browser action.",
+          "Correction language like 'no, I meant you can prep it' must re-run intent against the thread state. If target and action are clear, execute the corrected safe action.",
+          "Dangerous submit-adjacent language like send it, submit it, or fire it off must not submit. Use safetyDecision manual_submit_reminder and offer prep/review instead.",
+          "Composite status questions should answer each requested part, for example blocked plus needs attention.",
           "Use action send_draft_preview when Steve asks to see the draft here first. Do not fill Upwork for that request.",
           "Use action retry_browser_action for retry. If the thread has a retryable browser action, do not require an action id.",
           "Use action focus_qa_tab for open this, bring this up, show application page, or open draft in Chrome.",

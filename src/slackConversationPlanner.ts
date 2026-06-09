@@ -32,6 +32,11 @@ export type SlackConversationAction =
 export interface SlackConversationPlannerInput {
   latestMessage: string;
   threadHistory: string[];
+  activeCta?: {
+    action: "prep_application" | "retry" | "review" | "none";
+    source: "latest_bot_cta" | "thread_status" | "thread_reply" | "none";
+    text: string | null;
+  } | null;
   job: ScoredJob | null;
   draft: ApplicationDraft | null;
   currentBrowserAction: BrowserAction | null;
@@ -72,6 +77,29 @@ function fileNames(paths: string[]): string[] {
 function conciseJobLabel(job: ScoredJob | null): string {
   if (!job) return "this lead";
   return job.title.length > 72 ? `${job.title.slice(0, 69)}...` : job.title;
+}
+
+function isVagueAffirmative(text: string): boolean {
+  return /^(?:yes|yep|yeah|yup|sure|sure thing|ok|okay|go for it|do it|sounds good|move on it|let'?s run it|handle it|prep it|go ahead)(?:\s+please)?$/.test(text) ||
+    /^(?:yes|yep|yeah|yup|sure|ok|okay),?\s+(?:go for it|do it|sounds good|move on it|let'?s run it|handle it|prep it|go ahead)$/.test(text) ||
+    /\b(?:go for it|sounds good|move on it|let'?s run it|handle it|prep it|go ahead)\b/.test(text);
+}
+
+function isPrepCorrection(text: string): boolean {
+  return /\b(?:no|nope|not that|i meant|meant|instead)\b.*\b(?:prep|prepare|put (?:it|this) in upwork|fill (?:it|this) in upwork|open the app|open the application)\b/.test(text);
+}
+
+function isDangerousSubmitAdjacent(text: string): boolean {
+  if (/^(?:i|we)\s+(?:sent|submitted)\b/.test(text)) return false;
+  if (/^submitted(?:\s+after\s+editing)?$/.test(text)) return false;
+  return /^(?:send it|submit it|fire it off|send this|submit this|send the proposal|submit the proposal|send application|submit application|send the application|submit the application)$/.test(text) ||
+    /\b(?:please\s+)?(?:send|submit)\s+(?:it|this|the\s+(?:proposal|application))\b/.test(text) ||
+    /\bfire\s+(?:it|this)\s+off\b/.test(text);
+}
+
+function isNaturalStatus(text: string): boolean {
+  const clean = text.replace(/[.!?]+$/g, "").trim();
+  return /^(?:what the fuck are you up to|wtf are you up to|what are you up to|are we live|are you live|you running|are you running|what(?:'|’)?s waiting on me|what is waiting on me|what needs me now)$/.test(clean);
 }
 
 function fileCapabilityReply(input: SlackConversationPlannerInput): string {
@@ -175,6 +203,39 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
     };
   }
 
+  if (isDangerousSubmitAdjacent(text)) {
+    return {
+      intent: "status_summary",
+      confidence: "high",
+      reply: `I can prep or review ${conciseJobLabel(input.job)}, but final submit stays manual. I will not click the final Upwork submit button.`,
+      actions: ["none"],
+      clarificationNeeded: false,
+      debugRequested: false,
+    };
+  }
+
+  if (input.activeCta?.action === "prep_application" && (isVagueAffirmative(text) || isPrepCorrection(text))) {
+    return {
+      intent: "prepare_application",
+      confidence: "high",
+      reply: "Got it — I’ll prep the safe fields for this lead and stop before submit.",
+      actions: ["queue_prepare_application"],
+      clarificationNeeded: false,
+      debugRequested: false,
+    };
+  }
+
+  if (!input.activeCta && isVagueAffirmative(text)) {
+    return {
+      intent: "unknown_clarify",
+      confidence: "medium",
+      reply: "I can do that, but I need the lead, QA item, or Upwork link you mean before I touch the browser.",
+      actions: ["none"],
+      clarificationNeeded: true,
+      debugRequested: false,
+    };
+  }
+
   if (/\b(can|could|are you able to|would you be able to)\b.*\b(upload|attach|use)\b.*\b(file|files|pdf|pdfs|asset|assets)\b/.test(text) ||
     /\b(upload|attach)\b.*\bfrom here\b/.test(text)) {
     return {
@@ -270,7 +331,7 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
     };
   }
 
-  if (/\b(why|risk|red flags?|concern)\b/.test(text)) {
+  if (/\b(why|risk|red flags?|concern|what'?s the deal here|what is the deal here|deal here)\b/.test(text)) {
     const risk = input.job?.scoreBreakdown.risks.slice(0, 2).join("; ") || input.draft?.redFlags.slice(0, 2).join("; ") || "No major risk is recorded yet.";
     return {
       intent: "explain_risk",
@@ -304,7 +365,7 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
     };
   }
 
-  if (/^(status|where are we|what now|what's next|next)$/i.test(input.latestMessage.trim())) {
+  if (/^(status|where are we|what now|what's next|next)$/i.test(input.latestMessage.trim()) || isNaturalStatus(text)) {
     return {
       intent: "status_summary",
       confidence: "high",

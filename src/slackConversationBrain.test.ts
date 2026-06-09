@@ -63,6 +63,11 @@ const baseInput: SlackConversationBrainInput = {
     retryable: true,
     lastError: "captcha_or_security_challenge",
   },
+  activeCta: {
+    action: "prep_application",
+    source: "latest_bot_cta",
+    text: "Reply \"prep it\" if you want me to handle the draft and proof.",
+  },
   qaQueue: [{
     index: 1,
     title: "Klaviyo lifecycle work",
@@ -78,6 +83,11 @@ const baseInput: SlackConversationBrainInput = {
     rule: "CV means cover letter/proposal draft.",
     scope: "global",
     confidence: "high",
+  }],
+  previousCorrections: [{
+    userMessage: "Yep, go for it @Fucking Lead Closer",
+    whatHappened: "The bot treated an affirmative CTA reply as an ambiguous edit request.",
+    nextBehavior: "Resolve affirmative replies against the active thread CTA before asking for clarification.",
   }],
   salesLearning: {
     relevantMemories: [{
@@ -101,10 +111,14 @@ const baseInput: SlackConversationBrainInput = {
 
 async function runTests(): Promise<void> {
   const provider = new FakeProvider({
+    intentCategory: "question",
     intent: "show_cover_letter",
+    target: "current_thread_lead",
+    safetyDecision: "safe_execute",
     confidence: "high",
     reply: "You’re right — I should have shown the draft. Here it is.",
     actions: ["none"],
+    contextSignals: ["thread_state", "active_cta", "previous_correction"],
     memoryUpdate: {
       type: "operator_preference",
       rule: "When Steve says CV in an Upwork thread, show the cover letter/proposal draft.",
@@ -122,8 +136,12 @@ async function runTests(): Promise<void> {
   });
   const result = await planSlackConversationWithLlm(baseInput, provider);
   assert.equal(result.ok, true);
+  assert.equal(result.ok && result.decision.intentCategory, "question");
   assert.equal(result.ok && result.decision.intent, "show_cover_letter");
+  assert.equal(result.ok && result.decision.target, "current_thread_lead");
+  assert.equal(result.ok && result.decision.safetyDecision, "safe_execute");
   assert.equal(result.ok && result.decision.actions[0], "none");
+  assert.deepEqual(result.ok && result.decision.contextSignals, ["thread_state", "active_cta", "previous_correction"]);
   assert.equal(result.ok && result.decision.memoryUpdate?.type, "operator_preference");
   assert.equal(result.ok && result.decision.failureReflection?.fixType, "memory");
   assert.equal(result.ok && result.decision.safety.finalSubmit, "manual_only");
@@ -134,6 +152,10 @@ async function runTests(): Promise<void> {
   assert.match(prompt, /Fashion\/Klaviyo jobs tend to use Fly Boutique/i, "Brain prompt should include relevant sales memories.");
   assert.match(prompt, /Use sales memories as hypotheses/i, "Brain prompt should include sales-memory guidance.");
   assert.match(prompt, /Final submit remains manual/i, "Brain prompt should include hard safety rules.");
+  assert.match(prompt, /activeCta/i, "Brain prompt should include active CTA context.");
+  assert.match(prompt, /Yep, go for it/i, "Brain prompt should include previous Steve correction examples.");
+  assert.match(prompt, /intentCategory/i, "Brain prompt should require the intent category schema.");
+  assert.match(prompt, /safetyDecision/i, "Brain prompt should require the safety decision schema.");
   assert.match(prompt, /Return JSON only/i, "Brain prompt should require structured JSON.");
   assert.match(prompt, /Operating constitution from soul\.md/i, "Brain prompt should include soul.md.");
   assert.match(prompt, /Fucking Lead Closer/i, "Brain prompt should include the soul.md identity.");
