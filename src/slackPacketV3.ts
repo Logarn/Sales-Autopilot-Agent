@@ -477,7 +477,7 @@ function variantIndex(seed: string, count: number): number {
   return count > 0 ? hash % count : 0;
 }
 
-function conciseLeadSentence(job: ScoredJob, context: SlackPacketV3Context, proceeding: boolean, connectsUnknown: boolean): string {
+function leadScope(job: ScoredJob, context: SlackPacketV3Context): string {
   const intelligence = context.jobIntelligence ?? job.applicationDraft?.jobIntelligence;
   const platform = concisePlatform(job, context);
   const clientType = conciseClientType(job, context).toLowerCase();
@@ -488,6 +488,11 @@ function conciseLeadSentence(job: ScoredJob, context: SlackPacketV3Context, proc
       "project",
     86,
   );
+  return `${platform} ${task.toLowerCase()} for ${articleFor(clientType)} ${clientType}`;
+}
+
+function conciseFitReason(job: ScoredJob, context: SlackPacketV3Context): string {
+  const intelligence = context.jobIntelligence ?? job.applicationDraft?.jobIntelligence;
   const reason = firstUsefulLine(
     [
       intelligence?.fitScoreReasoning,
@@ -497,8 +502,12 @@ function conciseLeadSentence(job: ScoredJob, context: SlackPacketV3Context, proc
     "it matches Steve's profile",
     90,
   );
-  const scope = `${platform} ${task.toLowerCase()} for ${articleFor(clientType)} ${clientType}`;
-  const fitReason = humanizeSlackText(reason, "it lines up with Steve’s wheelhouse").toLowerCase();
+  return humanizeSlackText(reason, "it lines up with Steve’s wheelhouse").toLowerCase();
+}
+
+function conciseLeadSentence(job: ScoredJob, context: SlackPacketV3Context, proceeding: boolean, connectsUnknown: boolean): string {
+  const scope = leadScope(job, context);
+  const fitReason = conciseFitReason(job, context);
   if (proceeding) {
     const connectsNote = connectsUnknown ? " The Connects aren’t visible yet, so I’ll check them on the apply page before doing anything risky." : "";
     const variants = [
@@ -539,7 +548,7 @@ function conciseRisk(job: ScoredJob, context: SlackPacketV3Context): string {
   return humanizeSlackText(raw, "none obvious");
 }
 
-function conciseRequiredConnects(job: ScoredJob, context: SlackPacketV3Context, proceeding: boolean): string {
+function conciseRequiredConnects(job: ScoredJob, context: SlackPacketV3Context): string {
   const source = getConnectsSource(job, context);
   const draft = job.applicationDraft;
   const sourceRequired = source.sourceBacked?.requiredConnects;
@@ -553,6 +562,59 @@ function conciseRequiredConnects(job: ScoredJob, context: SlackPacketV3Context, 
   return String(requiredValue);
 }
 
+function visibleBoostConnects(job: ScoredJob, context: SlackPacketV3Context): number | null {
+  const draft = job.applicationDraft;
+  const value = context.suggestedBoostConnects ??
+    draft?.connectsStrategy?.suggestedBoostConnects ??
+    draft?.suggestedBoostConnects ??
+    job.scoreBreakdown?.connectsStrategy?.suggestedBoostConnects;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function connectsBoostNote(job: ScoredJob, context: SlackPacketV3Context, connectsLabel: string): string {
+  const boost = visibleBoostConnects(job, context);
+  if (/unknown/i.test(connectsLabel)) {
+    return boost === null
+      ? "Connects are not visible yet; verify on the apply page before spending."
+      : `Connects are not visible yet; do not boost ${boost} until required Connects are confirmed.`;
+  }
+  return boost === null
+    ? `${connectsLabel} required; no boost suggested from visible data.`
+    : `${connectsLabel} required; boost suggestion ${boost} if the apply page confirms it.`;
+}
+
+function proofAngle(job: ScoredJob, context: SlackPacketV3Context): string {
+  const intelligence = context.jobIntelligence ?? job.applicationDraft?.jobIntelligence;
+  const proof = firstUsefulLine(
+    [
+      intelligence?.proofRecommendations?.[0],
+      context.proofRecommendations?.[0],
+      intelligence?.proposalAngle,
+    ],
+    "proof not selected yet",
+    120,
+  );
+  if (/proof not selected yet/i.test(proof)) {
+    return "Proof not selected yet; use only verified portfolio evidence during prep.";
+  }
+  return `Lead with ${humanizeSlackText(proof, "the closest verified portfolio proof")}.`;
+}
+
+function leadRecommendation(
+  leadDecision: ReturnType<typeof decideLeadHandling>,
+  postingDecision: SlackLeadPostingDecision,
+  proceeding: boolean,
+): "prep" | "maybe" | "skip" {
+  if (!postingDecision.shouldPost || leadDecision.decision === "skip") return "skip";
+  return proceeding ? "prep" : "maybe";
+}
+
+function recommendationLine(value: "prep" | "maybe" | "skip"): string {
+  if (value === "prep") return "*Recommendation:* prep";
+  if (value === "maybe") return "*Recommendation:* maybe";
+  return "*Recommendation:* skip";
+}
+
 function conciseNextAction(
   leadDecision: ReturnType<typeof decideLeadHandling>,
   postingDecision: SlackLeadPostingDecision,
@@ -562,10 +624,11 @@ function conciseNextAction(
   if (proceeding) {
     return "I’m preparing this now; review it in VNC when I say it’s ready. I’ll stop before submit.";
   }
-  void leadDecision;
-  void postingDecision;
+  if (!postingDecision.shouldPost || leadDecision.decision === "skip") {
+    return "I’m not preparing this unless you ask me to override. I’ll stop before submit.";
+  }
   void context;
-  return "Reply *“prep it”* if you want me to prepare the draft.";
+  return "Reply *“prep it”* if you want me to prepare the draft. I’ll stop before submit.";
 }
 
 export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Context): SlackPacketV3Message {
@@ -579,21 +642,21 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
   const autoPrepareQueued = isAutoPrepareQueued(context);
   const autoPrepareBlocked = isAutoPrepareBlocked(context);
   const autoPrepareProceeding = isAutoPrepareProceeding(context, autoPrepareQueued) || (!autoPrepareBlocked && leadDecision.shouldAutoPrepare);
-  const connectsLabel = conciseRequiredConnects(job, context, autoPrepareProceeding);
+  const connectsLabel = conciseRequiredConnects(job, context);
   const connectsUnknown = connectsLabel.toLowerCase().includes("unknown");
+  const recommendation = leadRecommendation(leadDecision, postingDecision, autoPrepareProceeding);
 
   const text = [
     `🚀 *New lead: ${compactTitle(title)}*`,
     "",
     `${LEAD_MENTIONS} — ${conciseLeadSentence(job, context, autoPrepareProceeding, connectsUnknown)}`,
     "",
-    [
-      `• *Fit:* ${fitLabel(job)}`,
-      `• *Platform:* ${concisePlatform(job, context)}`,
-      `• *Budget:* ${job.budget || "unknown"}`,
-      `• *Connects:* ${connectsLabel}`,
-      `• *Risk:* ${conciseRisk(job, context)}`,
-    ].join("\n"),
+    `*Hot take:* ${autoPrepareProceeding ? "Strong enough to stage now." : recommendation === "skip" ? "Not worth staging by default." : "Useful lead, but get a quick yes before spending time or Connects."}`,
+    `*Why it fits:* ${fitLabel(job)} fit on ${leadScope(job, context)} because ${conciseFitReason(job, context)}.`,
+    `*Proof angle:* ${proofAngle(job, context)}`,
+    `*Risks/watchouts:* ${conciseRisk(job, context)}`,
+    `*Connects/boost:* ${connectsBoostNote(job, context, connectsLabel)}`,
+    recommendationLine(recommendation),
     "",
     `*Next:* ${conciseNextAction(leadDecision, postingDecision, context, autoPrepareProceeding)}`,
     "",
@@ -607,6 +670,18 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
 
 export function buildV3CapturePacketText(job: ScoredJob, context: SlackPacketV3Context): string {
   return buildV3CapturePacket(job, context).text;
+}
+
+function isSdrDecisionPacket(text: string): boolean {
+  return [
+    "*Hot take:*",
+    "*Why it fits:*",
+    "*Proof angle:*",
+    "*Risks/watchouts:*",
+    "*Connects/boost:*",
+    "*Recommendation:*",
+    "*Next:*",
+  ].every((label) => text.includes(label));
 }
 
 export async function writeV3CapturePacketWithLlm(
@@ -666,13 +741,14 @@ export async function writeV3CapturePacketWithLlm(
       },
     },
     preservePhrases: [
+      LEAD_MENTIONS,
       upworkUrl,
       "stop before submit",
     ].filter((value): value is string => Boolean(value)),
   }, copyProvider);
 
-  if (!copy.usedLlm) {
-    return { text: copy.text, blocks: [{ type: "section", text: { type: "mrkdwn", text: copy.text } }] };
+  if (!copy.usedLlm || !isSdrDecisionPacket(copy.text)) {
+    return packet;
   }
 
   return {

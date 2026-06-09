@@ -96,8 +96,8 @@ function fakeLeadProvider(): { requests: LlmJsonRequest[]; provider: { isAvailab
         const url = payload.context?.upworkUrl ?? "https://www.upwork.com/jobs/~1234567890";
         const repeated = (payload.recentOpenings ?? []).some((opening) => opening.includes("this deserves a serious look"));
         const text = repeated
-          ? `I’d move this one into prep. The fit is strong enough to spend the time, and I’ll stop before submit.\n\nNext: review it in VNC when I post the QA handoff.\n${url}`
-          : `This deserves a serious look. The fit is strong enough to spend the time, and I’ll stop before submit.\n\nNext: review it in VNC when I post the QA handoff.\n${url}`;
+          ? `*Hot take:* <@U0A2X5BCNKC> <@U0AHJFYV42K> I’d move this one into prep.\n*Why it fits:* It is a Klaviyo retention job for an ecommerce brand.\n*Proof angle:* Lead with Truly Beauty case study.\n*Risks/watchouts:* Client spend is light.\n*Connects/boost:* 4 required; no boost suggested from visible data.\n*Recommendation:* prep\n*Next:* Review it in VNC when I post the QA handoff; I’ll stop before submit.\n${url}`
+          : `*Hot take:* <@U0A2X5BCNKC> <@U0AHJFYV42K> This deserves a serious look.\n*Why it fits:* It is a Klaviyo retention job for an ecommerce brand.\n*Proof angle:* Lead with Truly Beauty case study.\n*Risks/watchouts:* Client spend is light.\n*Connects/boost:* 4 required; no boost suggested from visible data.\n*Recommendation:* prep\n*Next:* Review it in VNC when I post the QA handoff; I’ll stop before submit.\n${url}`;
         return { ok: true, data: { text } as T };
       },
     },
@@ -151,7 +151,7 @@ async function runTests(): Promise<void> {
   });
   const text = packet.text;
 
-  assert(text.length < 900, "lead alert should stay short enough for a fast scan");
+  assert(text.length < 1300, "lead alert should stay short enough for a fast scan");
   assertIncludes(text, "🚀 *New lead: Email Marketing Specialist Needed*", "lead heading");
   assertIncludes(text, "<@U0A2X5BCNKC> <@U0AHJFYV42K>", "lead alert should tag Steve/Natalie");
   assert(
@@ -159,11 +159,12 @@ async function runTests(): Promise<void> {
     "human lead sentence should vary while preserving prep intent",
   );
   assertIncludes(text, "Klaviyo email flows and campaign support", "human lead sentence");
-  assertIncludes(text, "• *Fit:* Medium", "fit summary");
-  assertIncludes(text, "• *Platform:* Klaviyo", "platform summary");
-  assertIncludes(text, "• *Connects:* 4", "connects summary");
-  assertIncludes(text, "• *Budget:* $12-$35/hr", "budget summary");
-  assertIncludes(text, "• *Risk:* Client has weak spend history and budget looks low", "single risk");
+  assertIncludes(text, "*Hot take:* Strong enough to stage now.", "hot take");
+  assertIncludes(text, "*Why it fits:* Medium fit on Klaviyo email flows and campaign support", "why it fits");
+  assertIncludes(text, "*Proof angle:* Lead with Truly Beauty case study", "proof angle");
+  assertIncludes(text, "*Risks/watchouts:* Client has weak spend history and budget looks low", "single risk");
+  assertIncludes(text, "*Connects/boost:* 4 required; no boost suggested from visible data.", "connects and boost");
+  assertIncludes(text, "*Recommendation:* prep", "prep recommendation");
   assertIncludes(text, "*Next:* I’m preparing this now; review it in VNC when I say it’s ready.", "autonomous next action");
   assertIncludes(text, "stop before submit", "manual submit boundary");
   assertIncludes(text, job.url, "job url");
@@ -179,7 +180,6 @@ async function runTests(): Promise<void> {
     "Screening answers",
     "How would you improve",
     "Suggested proof",
-    "Truly Beauty",
     "figma.com",
     "profile/attachments",
     "Client quality signals",
@@ -212,8 +212,11 @@ async function runTests(): Promise<void> {
   }, llm.provider);
   assertEqual(llm.requests.length, 1, "lead packet should invoke LLM writer when available");
   assert(llmPacket.text.includes(job.url), "LLM lead packet must include the Upwork link");
-  assert(llmPacket.text.includes("Next:"), "LLM lead packet must include one clear CTA");
+  assert(llmPacket.text.includes("*Hot take:*"), "LLM lead packet must preserve SDR packet labels");
+  assert(llmPacket.text.includes("*Recommendation:* prep"), "LLM lead packet must preserve a recommendation");
+  assert(llmPacket.text.includes("*Next:*"), "LLM lead packet must include one clear CTA");
   assert(llmPacket.text.includes("stop before submit"), "LLM lead packet must preserve final-submit boundary");
+  assert(llmPacket.text.includes("<@U0A2X5BCNKC> <@U0AHJFYV42K>"), "LLM lead packet must preserve lead mentions");
   for (const noisy of ["packet_sent", "action #", "platformEligibility", "source_context_unavailable", "Job ID:"]) {
     assertNotIncludes(llmPacket.text, noisy, `LLM lead packet should hide ${noisy}`);
   }
@@ -239,8 +242,8 @@ async function runTests(): Promise<void> {
     suggestedBid: "$35/hr",
     jobIntelligence: intelligence,
   }, llm.provider);
-  const firstOpening = llmPacket.text.split(/\n/)[0];
-  const secondOpening = similarPacket.text.split(/\n/)[0];
+  const firstOpening = llmPacket.text.split(/\n/).find((line) => line.includes("*Hot take:*")) ?? "";
+  const secondOpening = similarPacket.text.split(/\n/).find((line) => line.includes("*Hot take:*")) ?? "";
   assert(firstOpening !== secondOpening, `two similar LLM-written leads should avoid identical openings: ${firstOpening}`);
 
   const fallbackPacket = await writeV3CapturePacketWithLlm(job, {
@@ -253,6 +256,8 @@ async function runTests(): Promise<void> {
     jobIntelligence: intelligence,
   }, unavailableLeadProvider());
   assert(fallbackPacket.text.includes(job.url), "lead fallback should include the Upwork link");
+  assert(fallbackPacket.text.includes("*Hot take:*"), "lead fallback should stay an SDR decision packet");
+  assert(fallbackPacket.text.includes("*Recommendation:* prep"), "lead fallback should keep a recommendation");
   assert(fallbackPacket.text.includes("stop before submit"), "lead fallback should keep final submit manual");
   assert(!fallbackPacket.text.includes("I can help with the draft, files, proof, boost, or status"), "lead fallback must not dump command-menu copy");
 
@@ -288,12 +293,14 @@ async function runTests(): Promise<void> {
     jobIntelligence: intelligence,
     autoPrepareNote: "Not auto-preparing because Connects spend needs manual review.",
   }).text;
-  assertIncludes(unknownText, "• *Connects:* unknown for now", "missing Connects should render unknown");
+  assertIncludes(unknownText, "*Connects/boost:* Connects are not visible yet; verify on the apply page before spending.", "missing Connects should render unknown");
   assert(
     /This is relevant|Worth a look|This could be useful/.test(unknownText),
     "borderline lead should sound conversational without fixed boilerplate",
   );
-  assertIncludes(unknownText, "*Next:* Reply *“prep it”* if you want me to prepare the draft.", "borderline lead should ask for a clear next action");
+  assertIncludes(unknownText, "*Hot take:* Useful lead, but get a quick yes before spending time or Connects.", "borderline hot take");
+  assertIncludes(unknownText, "*Recommendation:* maybe", "borderline recommendation");
+  assertIncludes(unknownText, "*Next:* Reply *“prep it”* if you want me to prepare the draft. I’ll stop before submit.", "borderline lead should ask for a clear next action");
   assertNotIncludes(unknownText, "Connects: 0", "missing Connects must not render as zero");
   for (const noisy of ["manual review", "platformEligibility", "lead decision", "packet", "source context", "action id"]) {
     assertNotIncludes(unknownText, noisy, `borderline lead should hide ${noisy}`);

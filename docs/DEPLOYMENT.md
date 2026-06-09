@@ -10,6 +10,10 @@ Primary detailed runbook:
 
 - [docs/CONTABO_RUNBOOK.md](CONTABO_RUNBOOK.md)
 
+Mayor-driven production checklist and report helper:
+
+- [docs/MAYOR_PRODUCTION_PLAYBOOK.md](MAYOR_PRODUCTION_PLAYBOOK.md)
+
 ## What the agent does
 
 The agent is a Slack-first Upwork lead pipeline:
