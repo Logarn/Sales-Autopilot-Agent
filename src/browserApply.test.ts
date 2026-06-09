@@ -25,6 +25,8 @@ async function runTests(): Promise<void> {
   process.env.DB_PATH = tempDb;
   process.env.PROOF_ASSET_ROOT = proofRoot;
   process.env.DISCOVERY_SLACK_CHANNEL_ID = "C123";
+  process.env.SLACK_BOT_TOKEN = "";
+  process.env.SLACK_CHANNEL_WEBHOOK_URL = "";
 
   const { buildApplicationDraft } = require("./agent") as {
     buildApplicationDraft: (job: any) => any;
