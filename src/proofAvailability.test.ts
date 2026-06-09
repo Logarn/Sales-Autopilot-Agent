@@ -50,7 +50,7 @@ function runTests(): void {
       warnings: [],
     };
 
-    const report = buildProofAvailabilityReport(selection, { cwd: tempDir });
+    const report = buildProofAvailabilityReport(selection, { cwd: tempDir, assetRoot: "." });
     assert.equal(report.find((item) => item.name === "Available proof")?.status, "available_uploadable");
     assert.equal(report.find((item) => item.name === "Missing proof")?.status, "missing_manual_upload");
     assert.equal(report.find((item) => item.name === "Manual review proof")?.requiresManualReview, true);
