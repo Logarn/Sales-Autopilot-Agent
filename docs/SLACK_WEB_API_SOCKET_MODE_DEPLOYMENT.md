@@ -49,6 +49,7 @@ SLACK_INBOUND_MODE=socket_mode
 DISCOVERY_SLACK_CHANNEL_ID=C0123456789
 SLACK_ALLOWED_CHANNEL_IDS=C0123456789
 SLACK_AGENT_AMBIENT_CHANNEL_IDS=C0AQW8W6RFU
+SLACK_ALLOWED_USER_IDS=U0123456789
 ```
 
 Fallback only:
@@ -65,6 +66,7 @@ SLACK_POLL_CHANNEL_ID=
 ```
 
 `SLACK_ALLOWED_CHANNEL_IDS` should include the same channel as `DISCOVERY_SLACK_CHANNEL_ID` in production so inbound replies from other channels are ignored.
+`SLACK_ALLOWED_USER_IDS` should include Steve's Slack user ID in production so other Slack users cannot trigger execution on allowed prompt surfaces.
 
 Run `npm run slack:socket` as its own supervised process alongside the lead engine/browser worker processes.
 
