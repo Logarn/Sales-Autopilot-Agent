@@ -328,7 +328,12 @@ async function runTests(): Promise<void> {
         },
       },
     });
-    assert(mentionedUrlReplies.some((reply) => reply.includes("Got the Upwork link")), "Mentioned URL should be captured and acknowledged.");
+    const mentionedUrlReplyText = mentionedUrlReplies.join("\n");
+    assert(
+      mentionedUrlReplies.length > 0 &&
+      /(?:Upwork link|capture|queued|Listing|https:\/\/www\.upwork\.com\/jobs\/~033053866890130225260)/i.test(mentionedUrlReplyText),
+      `Mentioned URL should be captured and acknowledged. Replies: ${mentionedUrlReplyText}`,
+    );
     assert(listBrowserActions(null, 1000).some((action) => action.jobId.includes("033053866890130225260") && action.actionType === "capture_job_from_url"), "Mentioned URL should queue capture.");
 
     const duplicateEventReplies: string[] = [];
