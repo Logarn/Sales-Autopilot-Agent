@@ -26,6 +26,7 @@ import {
   getBrowserActionById,
   getApplicationDraft,
   getLatestProposalVersion,
+  getScoredJobForSlackPreview,
   getSlackThreadStateByJobId,
   getSlackThreadStateByThreadTs,
   incrementBrowserActionAttempts,
@@ -34,6 +35,7 @@ import {
   markJobSeen,
   mergeBrowserActionPayload,
   recordPlannedScreeningCoverage,
+  recordLatestVerifiedProposalFallback,
   recordProposalVersion,
   updateApplicationStatus,
   updateBrowserActionStatus,
@@ -91,6 +93,7 @@ import {
   recordApplyPreparationFailureLearning,
   recordBrowserApplyPlanLearning,
   recordProposalStyleSignal,
+  recordScreeningAnswerDiffLearning,
   recordProposalVersionDiffLearning,
 } from "./salesLearningMemory";
 
@@ -721,6 +724,20 @@ export async function selectPageForBrowserAction(
     reason: protectedApplyUrls.length > 0
       ? "Opened a new page because existing apply tabs are protected while awaiting QA."
       : "Opened a new page because no matching existing Upwork page was found.",
+  };
+}
+
+function selectVisibleApplicationSnapshotPage(
+  context: { pages?: () => PlaywrightPageLike[] },
+  targetUrl: string,
+): { page: PlaywrightPageLike; reusedExistingPage: true; reason: string } | null {
+  const pages = context.pages?.() ?? [];
+  const exactMatch = pages.find((candidate) => urlsReferToSameUpworkJob(candidate.url(), targetUrl) || candidate.url() === targetUrl);
+  if (!exactMatch) return null;
+  return {
+    page: exactMatch,
+    reusedExistingPage: true,
+    reason: `Reused visible application tab for read-only snapshot: ${exactMatch.url()}`,
   };
 }
 
@@ -1867,9 +1884,24 @@ function proposalVersionSourceFromPayload(value: unknown): ProposalVersionSource
     value === "upwork_inserted" ||
     value === "remote_chrome_qa" ||
     value === "human_edit_reread" ||
-    value === "final_submitted"
+    value === "final_submitted" ||
+    value === "latest_verified_fallback"
     ? value
     : "human_edit_reread";
+}
+
+function screeningJobContext(input: { jobId: string; plan?: BrowserApplyFillPlan | null }): Record<string, unknown> {
+  const draft = getApplicationDraft(input.jobId);
+  const scoredJob = getScoredJobForSlackPreview(input.jobId);
+  return {
+    jobId: input.jobId,
+    title: input.plan?.jobTitle ?? scoredJob?.title ?? null,
+    sourceUrl: input.plan?.sourceUrl ?? scoredJob?.url ?? null,
+    vertical: draft?.jobIntelligence?.ecommerceVertical ?? null,
+    platform: draft?.jobIntelligence?.primaryPlatform ?? null,
+    taskType: draft?.jobIntelligence?.taskType ?? null,
+    sourceQuery: scoredJob?.sourceQuery ?? null,
+  };
 }
 
 export function persistApplicationSnapshot(input: {
@@ -1886,16 +1918,29 @@ export function persistApplicationSnapshot(input: {
   const values = uniqueNonEmpty(input.snapshot.inputValues);
   const coverLetter = bestCoverLetterValue(input.snapshot, plannedCover);
   if (!coverLetter || coverLetter.length < 20) {
+    const reason = "Remote Chrome did not expose readable application text; final version is the last captured QA/readback version if available.";
+    const fallback = input.markSubmittedAfterCapture
+      ? recordLatestVerifiedProposalFallback({
+        jobId: input.jobId,
+        reason,
+        note: "Steve said submitted, but the page no longer exposed readable proposal text.",
+      })
+      : null;
     if (input.markSubmittedAfterCapture) {
       updateApplicationStatus(
         input.jobId,
         "submitted",
-        "Steve said submitted, but the page no longer exposed readable proposal text. Final version is the last captured QA version if available."
+        fallback
+          ? `Steve said submitted, but final readback was unavailable. Preserved ${fallback.label} as a lower-confidence latest verified fallback.`
+          : "Steve said submitted, but the page no longer exposed readable proposal text. Final version is the last captured QA version if available."
       );
     }
     return {
       ok: false,
-      fallbackReason: "Remote Chrome did not expose readable application text; final version is the last captured QA/readback version if available.",
+      label: fallback?.label,
+      fallbackReason: fallback
+        ? `Remote Chrome did not expose readable application text; preserved ${fallback.label} as a lower-confidence latest verified fallback.`
+        : reason,
     };
   }
 
@@ -1909,20 +1954,27 @@ export function persistApplicationSnapshot(input: {
       answer;
   });
   const beforeVersion = getLatestProposalVersion(input.jobId);
+  const versionConfidence = input.source === "final_submitted" || input.source === "human_edit_reread" || input.source === "remote_chrome_qa" ? "high" : "medium";
   const version = recordProposalVersion({
     jobId: input.jobId,
     source: input.source,
     proposalText: coverLetter,
     screeningAnswers,
+    confidence: versionConfidence,
     note: input.note ?? null,
   });
 
   const existingCoverage = listScreeningCoverage(input.jobId);
   if (existingCoverage.length === 0 && plannedScreening.length > 0) {
-    recordPlannedScreeningCoverage(input.jobId, [], plannedScreening);
+    recordPlannedScreeningCoverage(input.jobId, [], plannedScreening, {
+      jobContext: screeningJobContext({ jobId: input.jobId, plan: input.plan }),
+      confidence: "medium",
+    });
   }
   const coverage = listScreeningCoverage(input.jobId);
   const count = Math.max(coverage.length, plannedScreening.length, screeningAnswers.length);
+  const jobContext = screeningJobContext({ jobId: input.jobId, plan: input.plan });
+  const coverageConfidence = input.source === "final_submitted" || input.source === "human_edit_reread" || input.source === "remote_chrome_qa" ? "high" : "medium";
   for (let index = 0; index < count; index += 1) {
     const current = coverage.find((item) => item.questionIndex === index + 1);
     const plannedAnswer = current?.plannedAnswer ?? plannedScreening[index] ?? null;
@@ -1935,8 +1987,10 @@ export function persistApplicationSnapshot(input: {
       plannedAnswer,
       filledAnswer: input.source === "upwork_inserted" ? answer : current?.filledAnswer ?? null,
       verifiedAnswer: input.source === "remote_chrome_qa" ? answer : current?.verifiedAnswer ?? null,
-      humanEditedAnswer: edited ? answer : current?.humanEditedAnswer ?? null,
+      humanEditedAnswer: input.source === "human_edit_reread" && edited ? answer : current?.humanEditedAnswer ?? null,
       finalAnswer: input.source === "final_submitted" ? answer : current?.finalAnswer ?? null,
+      jobContext,
+      confidence: coverageConfidence,
       status: input.source === "final_submitted" || input.source === "remote_chrome_qa"
         ? "verified"
         : edited
@@ -1960,7 +2014,15 @@ export function persistApplicationSnapshot(input: {
     recordProposalVersionDiffLearning({
       jobId: input.jobId,
       source: `remote_chrome_${input.source}`,
-      editor: input.source === "final_submitted" ? "Steve" : "operator",
+      editor: input.source === "final_submitted" || input.source === "human_edit_reread" ? "Steve" : "operator",
+    });
+  }
+  if (input.source === "human_edit_reread" || input.source === "final_submitted") {
+    recordScreeningAnswerDiffLearning({
+      jobId: input.jobId,
+      source: `remote_chrome_${input.source}`,
+      editor: "Steve",
+      includeFinalSubmitted: input.source === "final_submitted",
     });
   }
   if (input.markSubmittedAfterCapture) {
@@ -2348,17 +2410,34 @@ async function inspectWithBrowser(
     const sourceContextCapture = sourceContextAttempted ? await tryCaptureDiscoverySourceContext(sessionHandle.context, action, url) : null;
     const shouldDirectFallback = !sourceContextAttempted || shouldUseDirectFallbackForCaptureAction(action);
     const protectedApplyUrls = currentProtectedQaApplyUrls();
-    const selectedPage = sourceContextCapture || !shouldDirectFallback ? null : await selectPageForBrowserAction(sessionHandle.context, url, { protectedApplyUrls });
+    const selectedPage = sourceContextCapture || !shouldDirectFallback
+      ? null
+      : action.actionType === "capture_application_snapshot"
+        ? selectVisibleApplicationSnapshotPage(sessionHandle.context, url)
+        : await selectPageForBrowserAction(sessionHandle.context, url, { protectedApplyUrls });
     const page = selectedPage?.page;
-    const tabHygiene = await cleanStaleWorkTabs({ context: sessionHandle.context, selectedPage: page, targetUrl: url, protectedApplyUrls });
+    const tabHygiene = action.actionType === "capture_application_snapshot"
+      ? {
+        openPagesBefore: openPages.length,
+        upworkWorkTabsBefore: openPages.filter((candidate) => isUpworkWorkTabUrl(candidate.url())).length,
+        staleWorkTabsClosed: 0,
+        staleWorkTabsIgnored: 0,
+      }
+      : await cleanStaleWorkTabs({ context: sessionHandle.context, selectedPage: page, targetUrl: url, protectedApplyUrls });
     if (page && (!selectedPage.reusedExistingPage || !urlsReferToSameUpworkJob(page.url(), url))) {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
     }
-    const unavailableDetection: BrowserStateDetection = { state: "source_context_unavailable", source: "none", summary: "Discovery source context did not contain readable target job content; direct fallback is disabled for discovery-origin captures." };
+    const unavailableDetection: BrowserStateDetection = {
+      state: "source_context_unavailable",
+      source: "none",
+      summary: action.actionType === "capture_application_snapshot"
+        ? "Visible application tab was not available; preserving latest verified proposal version as lower-confidence fallback."
+        : "Discovery source context did not contain readable target job content; direct fallback is disabled for discovery-origin captures.",
+    };
     const unavailableSnapshot: PageSnapshot = { url: currentPageUrlBeforeCapture, title: currentPageTitleBeforeCapture, textExcerpt: "" };
     const settled = sourceContextCapture
       ? { snapshot: sourceContextCapture.snapshot, bodyText: sourceContextCapture.bodyText, detection: sourceContextCapture.detection, samples: [{ step: 1, url: sourceContextCapture.sourcePageUrl, title: sourceContextCapture.snapshot.title, textExcerpt: sourceContextCapture.snapshot.textExcerpt, detection: sourceContextCapture.detection }] }
-      : !shouldDirectFallback
+      : !shouldDirectFallback || (action.actionType === "capture_application_snapshot" && !selectedPage)
         ? { snapshot: unavailableSnapshot, bodyText: "", detection: unavailableDetection, samples: [{ step: 1, url: currentPageUrlBeforeCapture, title: "", textExcerpt: "", detection: unavailableDetection }] }
         : await settlePageAndDetect(page!, action);
     let { snapshot, bodyText, detection, samples } = settled;
@@ -3016,14 +3095,37 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       const payloadPlan = action.payload.applyPlan as BrowserApplyFillPlan | undefined;
       const snapshotInput = applicationSnapshot ?? null;
       if (!snapshotInput) {
-        const message = "Application snapshot could not read remote Chrome fields before the browser session closed.";
-        updateBrowserActionStatus(action.id, "failed", message);
+        const reason = "Application snapshot could not read visible remote Chrome fields; final version is the last captured QA/readback version if available.";
+        const fallback = action.payload.markSubmittedAfterCapture === true
+          ? recordLatestVerifiedProposalFallback({
+            jobId: action.jobId,
+            reason,
+            note: "Steve said submitted, but no visible application tab was available for read-only capture.",
+          })
+          : null;
+        if (action.payload.markSubmittedAfterCapture === true) {
+          updateApplicationStatus(
+            action.jobId,
+            "submitted",
+            fallback
+              ? `Steve said submitted, but no visible application tab was available. Preserved ${fallback.label} as a lower-confidence latest verified fallback.`
+              : "Steve said submitted, but no visible application tab was available. Final version is the last captured QA/readback version if available."
+          );
+        }
+        const message = fallback
+          ? `No visible application tab was available; preserved ${fallback.label} as a lower-confidence latest verified fallback.`
+          : "Application snapshot could not read remote Chrome fields before the browser session closed.";
+        updateBrowserActionStatus(action.id, fallback ? "completed" : "failed", message);
         if (thread) {
           await postSoulAwareBrowserThreadMessage({
             thread,
             intent: "application_snapshot_failed",
-            deterministicText: `${message} Final version is the last captured QA/readback version if available.`,
-            preservePhrases: ["Final version is the last captured QA/readback version if available."],
+            deterministicText: fallback
+              ? `${message} I will not claim final submitted text beyond that fallback.`
+              : `${message} Final version is the last captured QA/readback version if available.`,
+            preservePhrases: fallback
+              ? ["I will not claim final submitted text beyond that fallback."]
+              : ["Final version is the last captured QA/readback version if available."],
           });
         }
         return result;
@@ -3187,6 +3289,10 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       });
 
       markJobSeen(scored, false);
+      recordPlannedScreeningCoverage(scored.id, applicationQuestions, questionAnswers, {
+        jobContext: screeningJobContext({ jobId: scored.id, plan: null }),
+        confidence: applicationQuestions.length > 0 ? "medium" : "low",
+      });
       let packetPosted = false;
       let autoPrepareDecision: AutoPrepareDraftDecision = {
         shouldQueue: false,

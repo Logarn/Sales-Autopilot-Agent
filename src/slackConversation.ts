@@ -129,7 +129,7 @@ async function reviseProposalWithLlm(jobId: string, instruction: string): Promis
           salesLearning: buildSalesLearningPromptContext({
             jobId,
             text: instruction,
-            types: ["proposal_style", "proof_preference", "operator_preference"],
+            types: ["proposal_style", "screening_answer", "proof_preference", "operator_preference"],
           }),
           soul: buildSoulPromptContext("proposal_revision"),
         }),

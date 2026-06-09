@@ -341,7 +341,7 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   const salesLearning = buildSalesLearningPromptContext({
     job,
     text: [job.title, job.description].join("\n"),
-    types: ["proposal_style", "proof_preference", "boost_strategy", "source_quality", "timing_hypothesis"],
+    types: ["proposal_style", "screening_answer", "proof_preference", "boost_strategy", "source_quality", "timing_hypothesis"],
     limit: 6,
   });
   const salesLearningGuidance = salesLearning.relevantMemories

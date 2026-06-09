@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
 import { DB_PATH, TIMEZONE } from "./config";
 import { areNearDuplicateJobs, buildJobFingerprint } from "./dedupe";
@@ -20,6 +21,7 @@ import {
   MatchLevel,
   PortfolioItem,
   ProofPlanOverrideState,
+  ProposalVersionConfidence,
   ProposalVersionSnapshot,
   ProposalVersionSource,
   ScoredJob,
@@ -251,6 +253,9 @@ export interface RecordProposalVersionInput {
   source: ProposalVersionSource;
   proposalText: string;
   screeningAnswers?: string[];
+  confidence?: ProposalVersionConfidence;
+  isFallback?: boolean;
+  fallbackReason?: string | null;
   label?: string;
   note?: string | null;
   versionNumber?: number;
@@ -503,6 +508,7 @@ export type SalesLearningEventType =
   | "proposal_draft_created"
   | "proposal_revision"
   | "draft_style_signal"
+  | "screening_answer_signal"
   | "proof_decision"
   | "proof_correction"
   | "boost_decision"
@@ -514,6 +520,7 @@ export type SalesLearningEventType =
 
 export type SalesLearningMemoryType =
   | "proposal_style"
+  | "screening_answer"
   | "proof_preference"
   | "boost_strategy"
   | "timing_hypothesis"
@@ -1159,6 +1166,9 @@ interface ApplicationProposalVersionRow {
   label: string;
   proposal_text: string;
   screening_answers: string | null;
+  confidence: ProposalVersionConfidence | null;
+  is_fallback: number | null;
+  fallback_reason: string | null;
   note: string | null;
   created_at: string;
 }
@@ -1167,11 +1177,15 @@ interface ApplicationScreeningCoverageRow {
   job_id: string;
   question_index: number;
   question_text: string | null;
+  question_fingerprint: string | null;
+  semantic_family: string | null;
   planned_answer: string | null;
   filled_answer: string | null;
   verified_answer: string | null;
   human_edited_answer: string | null;
   final_answer: string | null;
+  job_context: string | null;
+  confidence: ProposalVersionConfidence | null;
   status: ScreeningCoverageStatus;
   updated_at: string;
 }
@@ -1616,6 +1630,9 @@ CREATE TABLE IF NOT EXISTS application_proposal_versions (
   label TEXT NOT NULL,
   proposal_text TEXT NOT NULL,
   screening_answers TEXT NOT NULL DEFAULT '[]',
+  confidence TEXT NOT NULL DEFAULT 'medium',
+  is_fallback INTEGER NOT NULL DEFAULT 0,
+  fallback_reason TEXT,
   note TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   UNIQUE(job_id, version_number)
@@ -1628,11 +1645,15 @@ CREATE TABLE IF NOT EXISTS application_screening_coverage (
   job_id TEXT NOT NULL,
   question_index INTEGER NOT NULL,
   question_text TEXT,
+  question_fingerprint TEXT,
+  semantic_family TEXT,
   planned_answer TEXT,
   filled_answer TEXT,
   verified_answer TEXT,
   human_edited_answer TEXT,
   final_answer TEXT,
+  job_context TEXT,
+  confidence TEXT NOT NULL DEFAULT 'medium',
   status TEXT NOT NULL DEFAULT 'unknown',
   updated_at TEXT DEFAULT (datetime('now')),
   PRIMARY KEY(job_id, question_index)
@@ -1696,12 +1717,16 @@ CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_updated_at ON worker_heartbeats
 CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_status ON worker_heartbeats(status);
 `);
 
-function ensureSeenJobsColumn(name: string, definition: string): void {
-  const columns = db.prepare<[], { name: string }>("PRAGMA table_info(seen_jobs)").all();
+function ensureTableColumn(tableName: string, name: string, definition: string): void {
+  const columns = db.prepare<[], { name: string }>(`PRAGMA table_info(${tableName})`).all();
   const exists = columns.some((column) => column.name === name);
   if (!exists) {
-    db.exec(`ALTER TABLE seen_jobs ADD COLUMN ${name} ${definition}`);
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${name} ${definition}`);
   }
+}
+
+function ensureSeenJobsColumn(name: string, definition: string): void {
+  ensureTableColumn("seen_jobs", name, definition);
 }
 
 ensureSeenJobsColumn("description", "TEXT");
@@ -1718,11 +1743,7 @@ ensureSeenJobsColumn("proposal_count", "INTEGER");
 ensureSeenJobsColumn("competition_level", "TEXT");
 
 function ensureApplicationsColumn(name: string, definition: string): void {
-  const columns = db.prepare<[], { name: string }>("PRAGMA table_info(applications)").all();
-  const exists = columns.some((column) => column.name === name);
-  if (!exists) {
-    db.exec(`ALTER TABLE applications ADD COLUMN ${name} ${definition}`);
-  }
+  ensureTableColumn("applications", name, definition);
 }
 
 ensureApplicationsColumn("actual_required_connects", "INTEGER");
@@ -1741,8 +1762,17 @@ ensureApplicationsColumn("job_intelligence", "TEXT");
 ensureApplicationsColumn("connects_strategy", "TEXT");
 ensureApplicationsColumn("structured_proposal", "TEXT");
 ensureApplicationsColumn("proof_plan_overrides", "TEXT NOT NULL DEFAULT '{}'");
+ensureTableColumn("application_proposal_versions", "confidence", "TEXT NOT NULL DEFAULT 'medium'");
+ensureTableColumn("application_proposal_versions", "is_fallback", "INTEGER NOT NULL DEFAULT 0");
+ensureTableColumn("application_proposal_versions", "fallback_reason", "TEXT");
+ensureTableColumn("application_screening_coverage", "question_fingerprint", "TEXT");
+ensureTableColumn("application_screening_coverage", "semantic_family", "TEXT");
+ensureTableColumn("application_screening_coverage", "job_context", "TEXT");
+ensureTableColumn("application_screening_coverage", "confidence", "TEXT NOT NULL DEFAULT 'medium'");
 ensureSeenJobsColumn("fingerprint", "TEXT");
 db.exec("CREATE INDEX IF NOT EXISTS idx_seen_jobs_fingerprint ON seen_jobs(fingerprint)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_application_screening_coverage_fingerprint ON application_screening_coverage(question_fingerprint)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_application_screening_coverage_family ON application_screening_coverage(semantic_family)");
 
 const countStmt = db.prepare<[], CountRow>("SELECT COUNT(*) as count FROM seen_jobs");
 const isSeenStmt = db.prepare<[string], SeenRow>(
@@ -3060,24 +3090,27 @@ const insertProposalVersionStmt = db.prepare(
     label,
     proposal_text,
     screening_answers,
+    confidence,
+    is_fallback,
+    fallback_reason,
     note
-  ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 );
 const listProposalVersionsStmt = db.prepare<[string], ApplicationProposalVersionRow>(
-  `SELECT id, job_id, version_number, source, label, proposal_text, screening_answers, note, created_at
+  `SELECT id, job_id, version_number, source, label, proposal_text, screening_answers, confidence, is_fallback, fallback_reason, note, created_at
    FROM application_proposal_versions
    WHERE job_id = ?
    ORDER BY version_number ASC, id ASC`
 );
 const latestProposalVersionStmt = db.prepare<[string], ApplicationProposalVersionRow>(
-  `SELECT id, job_id, version_number, source, label, proposal_text, screening_answers, note, created_at
+  `SELECT id, job_id, version_number, source, label, proposal_text, screening_answers, confidence, is_fallback, fallback_reason, note, created_at
    FROM application_proposal_versions
    WHERE job_id = ?
    ORDER BY version_number DESC, id DESC
    LIMIT 1`
 );
 const latestProposalVersionBySourceStmt = db.prepare<[string, ProposalVersionSource], ApplicationProposalVersionRow>(
-  `SELECT id, job_id, version_number, source, label, proposal_text, screening_answers, note, created_at
+  `SELECT id, job_id, version_number, source, label, proposal_text, screening_answers, confidence, is_fallback, fallback_reason, note, created_at
    FROM application_proposal_versions
    WHERE job_id = ? AND source = ?
    ORDER BY version_number DESC, id DESC
@@ -3088,27 +3121,36 @@ const upsertScreeningCoverageStmt = db.prepare(
     job_id,
     question_index,
     question_text,
+    question_fingerprint,
+    semantic_family,
     planned_answer,
     filled_answer,
     verified_answer,
     human_edited_answer,
     final_answer,
+    job_context,
+    confidence,
     status,
     updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
   ON CONFLICT(job_id, question_index) DO UPDATE SET
     question_text = COALESCE(excluded.question_text, application_screening_coverage.question_text),
+    question_fingerprint = COALESCE(excluded.question_fingerprint, application_screening_coverage.question_fingerprint),
+    semantic_family = COALESCE(excluded.semantic_family, application_screening_coverage.semantic_family),
     planned_answer = COALESCE(excluded.planned_answer, application_screening_coverage.planned_answer),
     filled_answer = COALESCE(excluded.filled_answer, application_screening_coverage.filled_answer),
     verified_answer = COALESCE(excluded.verified_answer, application_screening_coverage.verified_answer),
     human_edited_answer = COALESCE(excluded.human_edited_answer, application_screening_coverage.human_edited_answer),
     final_answer = COALESCE(excluded.final_answer, application_screening_coverage.final_answer),
+    job_context = COALESCE(application_screening_coverage.job_context, excluded.job_context),
+    confidence = COALESCE(excluded.confidence, application_screening_coverage.confidence),
     status = excluded.status,
     updated_at = datetime('now')`
 );
 const listScreeningCoverageStmt = db.prepare<[string], ApplicationScreeningCoverageRow>(
-  `SELECT job_id, question_index, question_text, planned_answer, filled_answer, verified_answer,
-          human_edited_answer, final_answer, status, updated_at
+  `SELECT job_id, question_index, question_text, question_fingerprint, semantic_family,
+          planned_answer, filled_answer, verified_answer, human_edited_answer, final_answer,
+          job_context, confidence, status, updated_at
    FROM application_screening_coverage
    WHERE job_id = ?
    ORDER BY question_index ASC`
@@ -3557,7 +3599,45 @@ function proposalVersionLabel(source: ProposalVersionSource, versionNumber: numb
       return `human_edit_reread_v${versionNumber}`;
     case "final_submitted":
       return `final_submitted_v${versionNumber}`;
+    case "latest_verified_fallback":
+      return `latest_verified_fallback_v${versionNumber}`;
   }
+}
+
+function normalizeProposalVersionConfidence(value: unknown): ProposalVersionConfidence {
+  return value === "high" || value === "medium" || value === "low" ? value : "medium";
+}
+
+function normalizeScreeningQuestionText(value: string | null | undefined): string {
+  return (value ?? "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .replace(/\b(?:please|kindly|question|answer|required|optional)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function screeningQuestionFingerprint(questionText: string | null | undefined): string | null {
+  const normalized = normalizeScreeningQuestionText(questionText);
+  if (!normalized) return null;
+  return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
+}
+
+function inferScreeningQuestionFamily(questionText: string | null | undefined): string | null {
+  const text = normalizeScreeningQuestionText(questionText);
+  if (!text) return null;
+  if (/\b(hourly|rate|budget|price|cost|retainer|fee)\b/.test(text)) return "rate_budget";
+  if (/\b(experience|worked|similar|case|portfolio|example|proof|result)\b/.test(text)) return "relevant_experience";
+  if (/\b(approach|plan|strategy|steps|process|how would|what would|first)\b/.test(text)) return "approach_plan";
+  if (/\b(availability|start|timeline|deadline|hours|when)\b/.test(text)) return "availability_timeline";
+  if (/\b(tool|platform|klaviyo|shopify|mailchimp|hubspot|crm|esp|sms)\b/.test(text)) return "platform_tools";
+  if (/\b(why|fit|hire|choose|best)\b/.test(text)) return "fit_reason";
+  return "general";
+}
+
+function stringifyScreeningJobContext(value: Record<string, unknown> | null | undefined): string | null {
+  if (!value || typeof value !== "object") return null;
+  return JSON.stringify(value);
 }
 
 function rowToProposalVersion(row: ApplicationProposalVersionRow): ProposalVersionSnapshot {
@@ -3569,6 +3649,9 @@ function rowToProposalVersion(row: ApplicationProposalVersionRow): ProposalVersi
     label: row.label,
     proposalText: row.proposal_text,
     screeningAnswers: parseJsonStringArray(row.screening_answers),
+    confidence: normalizeProposalVersionConfidence(row.confidence),
+    isFallback: row.is_fallback === 1,
+    fallbackReason: row.fallback_reason,
     note: row.note,
     createdAt: row.created_at,
   };
@@ -3585,6 +3668,9 @@ export function recordProposalVersion(input: RecordProposalVersionInput): Propos
     label,
     proposalText,
     JSON.stringify(input.screeningAnswers ?? []),
+    normalizeProposalVersionConfidence(input.confidence),
+    input.isFallback ? 1 : 0,
+    input.fallbackReason ?? null,
     input.note ?? null
   );
   const row = latestProposalVersionStmt.get(input.jobId);
@@ -3603,6 +3689,7 @@ export function ensureInitialProposalVersion(draft: ApplicationDraft): ProposalV
     source: "draft_generated",
     proposalText: draft.proposalText,
     screeningAnswers: draft.structuredProposal?.clientRequestAnswers ?? [],
+    confidence: "medium",
     label: "draft_v1",
     versionNumber: 1,
     note: "Initial generated application draft.",
@@ -3618,31 +3705,72 @@ export function getLatestProposalVersion(jobId: string, source?: ProposalVersion
   return row ? rowToProposalVersion(row) : null;
 }
 
+const VERIFIED_FALLBACK_PROPOSAL_SOURCES = new Set<ProposalVersionSource>([
+  "remote_chrome_qa",
+  "human_edit_reread",
+  "upwork_inserted",
+]);
+
+export function recordLatestVerifiedProposalFallback(input: {
+  jobId: string;
+  reason: string;
+  note?: string | null;
+}): ProposalVersionSnapshot | null {
+  const latest = getLatestProposalVersion(input.jobId);
+  if (latest?.source === "latest_verified_fallback" && latest.isFallback) {
+    return latest;
+  }
+  const fallback = [...listProposalVersions(input.jobId)]
+    .reverse()
+    .find((version) => VERIFIED_FALLBACK_PROPOSAL_SOURCES.has(version.source));
+  if (!fallback?.proposalText.trim()) {
+    return null;
+  }
+  return recordProposalVersion({
+    jobId: input.jobId,
+    source: "latest_verified_fallback",
+    proposalText: fallback.proposalText,
+    screeningAnswers: fallback.screeningAnswers,
+    confidence: "low",
+    isFallback: true,
+    fallbackReason: input.reason,
+    note: input.note ?? `No final submitted readback was visible; preserving ${fallback.label} as the lower-confidence latest verified fallback.`,
+  });
+}
+
 function rowToScreeningCoverage(row: ApplicationScreeningCoverageRow): ScreeningCoverageItem {
   return {
     jobId: row.job_id,
     questionIndex: row.question_index,
     questionText: row.question_text,
+    questionFingerprint: row.question_fingerprint,
+    semanticFamily: row.semantic_family,
     plannedAnswer: row.planned_answer,
     filledAnswer: row.filled_answer,
     verifiedAnswer: row.verified_answer,
     humanEditedAnswer: row.human_edited_answer,
     finalAnswer: row.final_answer,
+    jobContext: parseJsonObject<Record<string, unknown>>(row.job_context) ?? null,
+    confidence: normalizeProposalVersionConfidence(row.confidence),
     status: row.status,
     updatedAt: row.updated_at,
   };
 }
 
-export function upsertScreeningCoverageItem(item: Omit<ScreeningCoverageItem, "updatedAt">): ScreeningCoverageItem {
+export function upsertScreeningCoverageItem(item: Omit<ScreeningCoverageItem, "updatedAt" | "questionFingerprint" | "semanticFamily" | "jobContext" | "confidence"> & Partial<Pick<ScreeningCoverageItem, "questionFingerprint" | "semanticFamily" | "jobContext" | "confidence">>): ScreeningCoverageItem {
   upsertScreeningCoverageStmt.run(
     item.jobId,
     item.questionIndex,
     item.questionText ?? null,
+    item.questionFingerprint ?? screeningQuestionFingerprint(item.questionText),
+    item.semanticFamily ?? inferScreeningQuestionFamily(item.questionText),
     item.plannedAnswer ?? null,
     item.filledAnswer ?? null,
     item.verifiedAnswer ?? null,
     item.humanEditedAnswer ?? null,
     item.finalAnswer ?? null,
+    stringifyScreeningJobContext(item.jobContext),
+    normalizeProposalVersionConfidence(item.confidence),
     item.status
   );
   const row = listScreeningCoverageStmt.all(item.jobId).find((candidate) => candidate.question_index === item.questionIndex);
@@ -3652,19 +3780,24 @@ export function upsertScreeningCoverageItem(item: Omit<ScreeningCoverageItem, "u
   return rowToScreeningCoverage(row);
 }
 
-export function recordPlannedScreeningCoverage(jobId: string, questions: string[], answers: string[]): ScreeningCoverageItem[] {
+export function recordPlannedScreeningCoverage(jobId: string, questions: string[], answers: string[], options: { jobContext?: Record<string, unknown> | null; confidence?: ProposalVersionConfidence } = {}): ScreeningCoverageItem[] {
   const count = Math.max(questions.length, answers.length);
   const rows: ScreeningCoverageItem[] = [];
   for (let index = 0; index < count; index += 1) {
+    const questionText = questions[index] ?? null;
     rows.push(upsertScreeningCoverageItem({
       jobId,
       questionIndex: index + 1,
-      questionText: questions[index] ?? null,
+      questionText,
+      questionFingerprint: screeningQuestionFingerprint(questionText),
+      semanticFamily: inferScreeningQuestionFamily(questionText),
       plannedAnswer: answers[index] ?? null,
       filledAnswer: null,
       verifiedAnswer: null,
       humanEditedAnswer: null,
       finalAnswer: null,
+      jobContext: options.jobContext ?? null,
+      confidence: options.confidence ?? "medium",
       status: answers[index] ? "planned" : "unknown",
     }));
   }
