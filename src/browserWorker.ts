@@ -1174,6 +1174,19 @@ export async function postPrepareDraftStatus(
   } = {},
 ): Promise<"posted" | "skipped" | "failed"> {
   const deterministicText = buildPrepareDraftStatusMessage(input);
+  const criticalHandoffPhrases = deterministicText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) =>
+      line === "✅ *Ready for QA*" ||
+      line.startsWith("⚠️ *") ||
+      line.startsWith("• *") ||
+      line.includes("remote Chrome") ||
+      line.includes("VNC") ||
+      line.includes("Nothing submitted: I did not click the final Upwork submit button.") ||
+      line.includes("You can correct proof here in Slack") ||
+      line.includes("manually click *")
+    );
   const copy = await rewriteSlackCopyWithKimi({
     path: "qa_handoff",
     deterministicText,
@@ -1192,6 +1205,7 @@ export async function postPrepareDraftStatus(
       boostVerified: Boolean(input.diagnostics.boostConnects && input.diagnostics.boostConnects > 0),
     },
     preservePhrases: [
+      ...criticalHandoffPhrases,
       "Nothing submitted: I did not click the final Upwork submit button.",
       "• *Final submit:* untouched — nothing submitted",
       ...(deterministicText.includes("Proof planned") ? ["Proof planned"] : []),
