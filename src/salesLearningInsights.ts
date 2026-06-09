@@ -176,6 +176,8 @@ function boostSpendSummary(memories: SalesLearningMemory[]): string | null {
   let negativeSignals = 0;
   let positiveSignals = 0;
   let unknownSignals = 0;
+  let negativeExamples = 0;
+  let positiveExamples = 0;
   let negativeTotalConnects = 0;
   let negativeBoostConnects = 0;
   let positiveTotalConnects = 0;
@@ -191,12 +193,14 @@ function boostSpendSummary(memories: SalesLearningMemory[]): string | null {
     const evidence = Math.max(1, memory.evidenceCount);
     if (outcome === "replied" || outcome === "interview" || outcome === "hired" || outcome === "reply") {
       positiveSignals += evidence;
-      positiveTotalConnects += (totalConnects ?? 0) * evidence;
-      positiveBoostConnects += (boostConnects ?? 0) * evidence;
+      positiveExamples += 1;
+      positiveTotalConnects += totalConnects ?? 0;
+      positiveBoostConnects += boostConnects ?? 0;
     } else if (outcome === "lost" || outcome === "rejected") {
       negativeSignals += evidence;
-      negativeTotalConnects += (totalConnects ?? 0) * evidence;
-      negativeBoostConnects += (boostConnects ?? 0) * evidence;
+      negativeExamples += 1;
+      negativeTotalConnects += totalConnects ?? 0;
+      negativeBoostConnects += boostConnects ?? 0;
     } else {
       unknownSignals += evidence;
     }
@@ -207,10 +211,10 @@ function boostSpendSummary(memories: SalesLearningMemory[]): string | null {
   const totalSignals = negativeSignals + positiveSignals + unknownSignals;
   const evidence = totalSignals >= 6 ? "strong" : totalSignals >= 2 ? "tentative" : "not enough data";
   const negativePart = negativeSignals
-    ? `${negativeTotalConnects} total Connects, including ${negativeBoostConnects} boost Connects, are tied to ${negativeSignals} known negative boost signal${negativeSignals === 1 ? "" : "s"}`
+    ? `${negativeTotalConnects} total Connects, including ${negativeBoostConnects} boost Connects, are visible on ${negativeExamples} known negative boost example${negativeExamples === 1 ? "" : "s"} covering ${negativeSignals} signal${negativeSignals === 1 ? "" : "s"}`
     : "No known negative boost spend is recorded yet";
   const positivePart = positiveSignals
-    ? `${positiveTotalConnects} total Connects, including ${positiveBoostConnects} boost Connects, are tied to ${positiveSignals} positive signal${positiveSignals === 1 ? "" : "s"}`
+    ? `${positiveTotalConnects} total Connects, including ${positiveBoostConnects} boost Connects, are visible on ${positiveExamples} positive example${positiveExamples === 1 ? "" : "s"} covering ${positiveSignals} signal${positiveSignals === 1 ? "" : "s"}`
     : "no positive boost spend is recorded yet";
   const unknownPart = unknownSignals
     ? ` ${unknownSignals} boost signal${unknownSignals === 1 ? "" : "s"} still lack outcome attribution.`

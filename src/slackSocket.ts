@@ -287,17 +287,27 @@ function parseOutcomeCommand(commandText: string, rawText: string): ParsedSlackS
     {
       status: "hired",
       label: "hired",
-      pattern: /^(?:hired|got\s+hired|we\s+got\s+hired|won|closed\s+won|mark\s+(?:as\s+)?hired)$/i,
+      pattern: /^(?:hired|got\s+hired|we\s+got\s+hired|mark\s+(?:as\s+)?hired)$/i,
+    },
+    {
+      status: "hired",
+      label: "won",
+      pattern: /^(?:won(?:\s+this)?|closed\s+won)$/i,
     },
     {
       status: "lost",
       label: "lost",
-      pattern: /^(?:lost|closed\s+lost|did\s+not\s+win|didn't\s+win|not\s+hired|mark\s+(?:as\s+)?lost)$/i,
+      pattern: /^(?:lost(?:\s+this)?|closed\s+lost|did\s+not\s+win|didn't\s+win|not\s+hired|mark\s+(?:as\s+)?lost)$/i,
     },
     {
       status: "lost",
-      label: "ignored/no reply",
-      pattern: /^(?:ignored|no\s+reply|no\s+response|ghosted|client\s+ghosted|bad\s+lead|mark\s+(?:as\s+)?ignored)$/i,
+      label: "client ghosted",
+      pattern: /^(?:ghosted|client\s+ghosted|ignored|no\s+reply|no\s+response|mark\s+(?:as\s+)?ignored)$/i,
+    },
+    {
+      status: "lost",
+      label: "bad lead",
+      pattern: /^(?:bad\s+lead)$/i,
     },
   ];
   const match = outcomePatterns.find((candidate) => candidate.pattern.test(commandText));

@@ -109,8 +109,9 @@ assert(!boost.text.includes("Fly Boutique"), "Boost answer should not include pr
 
 const waste = buildSalesLearningInsightReply({ memories, question: "how many Connects are we wasting?", limit: 3 });
 assert(waste.topic === "boost", "Connects waste question should choose boost topic.");
-assert(waste.text.includes("68 total Connects"), "Connects waste answer should total known negative Connects with evidence count.");
-assert(waste.text.includes("44 boost Connects"), "Connects waste answer should total known negative boost Connects with evidence count.");
+assert(waste.text.includes("34 total Connects"), "Connects waste answer should total visible known negative Connects only.");
+assert(waste.text.includes("22 boost Connects"), "Connects waste answer should total visible known negative boost Connects only.");
+assert(waste.text.includes("covering 2 signals"), "Connects waste answer should report evidence count separately from visible spend.");
 assert(waste.text.includes("waste candidates"), "Connects waste answer should avoid fake certainty.");
 
 const empty = buildSalesLearningInsightReply({ memories: [], question: "what source is working?" });
