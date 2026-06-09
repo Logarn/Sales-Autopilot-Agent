@@ -71,6 +71,38 @@ async function runTests(): Promise<void> {
   const captured = capturedPayload as MemoriShadowPayload | null;
   assert(captured?.shadowOnly === true && captured.activeRecallEligible === false, "shadow payload must stay shadow-only");
 
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; headers: Record<string, string>; body: Record<string, any> }> = [];
+  globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+    fetchCalls.push({
+      url: String(url),
+      headers: init?.headers as Record<string, string>,
+      body: JSON.parse(String(init?.body ?? "{}")),
+    });
+    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const sdkPathWrite = await shadowWriteMemoriMemory({
+      memory: localMemory,
+      config: {
+        shadowEnabled: true,
+        apiKey: "memori-test-key",
+        apiUrl: "https://api.memori.ai",
+        requestTimeoutMs: 1000,
+      },
+    });
+    assert(sdkPathWrite.ok && sdkPathWrite.shadowed, "default Memori client should shadow write through SDK-compatible endpoints");
+    assert(fetchCalls.length === 2, "default Memori client should write conversation and augmentation requests");
+    assert(fetchCalls[0].url === "https://api.memorilabs.ai/v1/cloud/conversation/messages", "legacy Memori host should normalize to the current conversation endpoint");
+    assert(fetchCalls[1].url === "https://collector.memorilabs.ai/v1/cloud/augmentation", "augmentation should use the SDK collector endpoint");
+    assert(!fetchCalls.some((call) => /memories\/shadow|sdk\/augmentation|api\.memori\.ai/i.test(call.url)), "deprecated Memori shadow endpoints must not be used");
+    assert(fetchCalls.every((call) => call.headers.Authorization === ["Bearer", "memori-test-key"].join(" ")), "user Memori key should be sent only as a bearer token");
+    assert(fetchCalls.every((call) => call.headers["X-Memori-API-Key"]), "SDK public key header should be present");
+    assert(fetchCalls.every((call) => call.body.session?.id), "Memori writes should include a stable session id");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
   const fallback = await recallMemoriAttributions({
     query: "fashion klaviyo opener",
     localMemories: [localMemory],

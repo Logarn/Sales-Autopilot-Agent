@@ -72,6 +72,8 @@
     "validate:contabo-env": "bash scripts/validate-contabo-env.sh",
     "preflight:contabo": "bash scripts/preflight-contabo.sh",
     "production:smoke": "bash scripts/production-smoke.sh",
+    "memori:smoke": "tsx src/memoriDiagnosticsCli.ts smoke",
+    "memori:diagnose": "tsx src/memoriDiagnosticsCli.ts diagnose",
     "discovery:run-once": "tsx src/discoveryScheduler.ts --run-once",
     "discovery:scheduler": "tsx src/discoveryScheduler.ts --scheduler",
     "skills:list": "tsx src/skills.ts list",
