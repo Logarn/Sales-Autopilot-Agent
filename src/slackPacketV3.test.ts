@@ -171,6 +171,18 @@ async function runTests(): Promise<void> {
   assertIncludes(text, "stop before submit", "manual submit boundary");
   assertIncludes(text, job.url, "job url");
 
+  const actionPrefixedProofText = buildV3CapturePacket(job, {
+    upworkUrl: job.url,
+    captureStatus: "packet_sent",
+    requiredConnects: 4,
+    jobIntelligence: {
+      ...intelligence,
+      proofRecommendations: ["Lead with retention audit and priority lifecycle fixes."],
+    },
+  }).text;
+  assertIncludes(actionPrefixedProofText, "*Proof angle:* Lead with retention audit and priority lifecycle fixes.", "action-prefixed proof angle");
+  assertNotIncludes(actionPrefixedProofText, "Lead with Lead with", "proof angle should not duplicate lead-with phrasing");
+
   for (const noisy of [
     "Debug:",
     "action #",

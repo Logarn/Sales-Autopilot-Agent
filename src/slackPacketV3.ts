@@ -614,10 +614,13 @@ function proofAngle(job: ScoredJob, context: SlackPacketV3Context): string {
     return "Proof not selected yet; use only verified portfolio evidence during prep.";
   }
   const rawLooksLikeFileLabel = /\b[\w .'’()-]+\.(?:pdf|png|jpe?g|webp)\b/i.test(rawProof);
-  const cleanedProof = humanizeSlackText(rawProof, selectedPortfolioProof ?? "the closest verified portfolio proof")
-    .replace(/^(?:lead with|use)\s+/i, "")
-    .trim();
-  const proof = rawLooksLikeFileLabel && selectedPortfolioProof ? selectedPortfolioProof : cleanedProof;
+  const cleanedProof = humanizeSlackText(rawProof, selectedPortfolioProof ?? "the closest verified portfolio proof").replace(/[.]+$/, "").trim();
+  if (!rawLooksLikeFileLabel && /^(cite|mention|frame|position)\b/i.test(cleanedProof)) {
+    return `${cleanedProof}.`;
+  }
+  const proof = rawLooksLikeFileLabel && selectedPortfolioProof
+    ? selectedPortfolioProof
+    : cleanedProof.replace(/^(?:lead with|use)\s+/i, "").trim();
   return `Lead with ${proof || "the closest verified portfolio proof"}.`;
 }
 
