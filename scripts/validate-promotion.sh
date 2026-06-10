@@ -36,6 +36,7 @@ run npx tsx src/proofPlanOverrides.test.ts
 run npx tsx src/slackPacketV3.test.ts
 run npx tsx src/slackSocket.test.ts
 run npx tsx src/browserDiscoveryTool.test.ts
+run npx tsx src/browserIncidentDedupe.test.ts
 run npx tsx src/browserApply.test.ts
 run npx tsx src/leadEngine.test.ts
 run npx tsx src/health.test.ts

@@ -72,6 +72,7 @@ import {
   formatBrowserSessionStatus,
   getBrowserSessionStatus,
   markBrowserChallengeResolved,
+  markBrowserManualAttentionThreadAlert,
   recordBrowserManualAttention,
 } from "./browserSession";
 import { hasAllowedCaptureSourceMetadata } from "./browserDiscoveryTool";
@@ -1173,6 +1174,18 @@ export async function postPrepareDraftStatus(
     copyProvider?: SlackCopyProvider;
   } = {},
 ): Promise<"posted" | "skipped" | "failed"> {
+  if (isBrowserChallengeState(input.diagnostics.state)) {
+    const incident = markBrowserManualAttentionThreadAlert({
+      actionId: input.diagnostics.actionId,
+      jobId: input.diagnostics.jobId,
+      url: input.diagnostics.applyUrl ?? input.diagnostics.sourceUrl,
+      reason: input.diagnostics.state,
+    });
+    if (!incident.shouldPost) {
+      logger.info(`Suppressed duplicate browser-check QA handoff. incidentKey=${incident.incidentKey}`);
+      return "skipped";
+    }
+  }
   const deterministicText = buildPrepareDraftStatusMessage(input);
   const criticalHandoffPhrases = deterministicText
     .split(/\r?\n/)
@@ -3228,7 +3241,17 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         const alreadyManual = thread ? getSlackThreadStateByThreadTs(thread.channelId, thread.threadTs)?.status === "manual_attention_required" : false;
         if (thread) {
           updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "manual_attention_required");
-          if (!alreadyManual) {
+          const incident = ["login_required", "two_factor_required", "captcha_or_security_challenge"].includes(threadStatus)
+            ? markBrowserManualAttentionThreadAlert({
+                actionId: action.id,
+                jobId: action.jobId,
+                applicationId: typeof action.payload.applicationId === "string" ? action.payload.applicationId : null,
+                url: snapshot?.url ?? url,
+                title: snapshot?.title ?? null,
+                reason: threadStatus,
+              })
+            : { shouldPost: !alreadyManual, incidentKey: "", duplicate: alreadyManual };
+          if (!alreadyManual && incident.shouldPost) {
             await postSoulAwareBrowserThreadMessage({
               thread,
               intent: "browser_capture_blocked",
@@ -3246,6 +3269,8 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
               ].filter((line): line is string => Boolean(line)).join("\n"),
               preservePhrases: ["reply “retry”"],
             });
+          } else if (!incident.shouldPost) {
+            logger.info(`Suppressed duplicate browser capture blocker reply. incidentKey=${incident.incidentKey}`);
           }
           if (["login_required", "two_factor_required", "captcha_or_security_challenge"].includes(threadStatus)) {
             await quarantineBrowserChallenge({

@@ -18,9 +18,10 @@ function cleanupDatabase(path: string): void {
 }
 
 async function runTests(): Promise<void> {
-  const tempDb = resolve(process.cwd(), "data/.tmp-browser-apply.db");
+  const tempDir = resolve(process.cwd(), "data/.tmp-browser-apply");
+  const tempDb = resolve(tempDir, "jobs.db");
   const proofRoot = resolve(process.cwd(), "data/.tmp-browser-apply-proof-assets");
-  cleanupDatabase(tempDb);
+  rmSync(tempDir, { recursive: true, force: true });
   rmSync(proofRoot, { recursive: true, force: true });
   process.env.DB_PATH = tempDb;
   process.env.PROOF_ASSET_ROOT = proofRoot;
@@ -1470,6 +1471,22 @@ async function runTests(): Promise<void> {
     assert(browserChallengeText.includes("Upwork is asking for a browser check"), "Actual security challenges should keep browser-check copy.");
     assert(browserChallengeText.includes("clear it in remote Chrome"), "Actual security challenges should ask Steve to clear Chrome.");
     assert(!/captcha_or_security_challenge|manual_attention_required|manual:upwork/i.test(browserChallengeText), "Browser-check copy should hide raw challenge state.");
+    let duplicateBrowserChallengePosts = 0;
+    const duplicateBrowserChallengePost = await postPrepareDraftStatus(
+      {
+        thread: { channelId: "C123", messageTs: "999.555", threadTs: "999.555" },
+        heading: "⚠️ Draft preparation paused.",
+        diagnostics: browserChallengeDiagnostics,
+      },
+      {
+        postThreadMessage: async () => {
+          duplicateBrowserChallengePosts += 1;
+          return true;
+        },
+      },
+    );
+    assert(duplicateBrowserChallengePost === "skipped", "Repeated browser-check QA handoff should be suppressed for the same incident.");
+    assert(duplicateBrowserChallengePosts === 0, "Suppressed browser-check QA handoff must not post another Slack message.");
 
     const designJob = scoreJob({
       id: "design-job-1",

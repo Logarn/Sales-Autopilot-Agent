@@ -47,6 +47,25 @@ export interface BrowserChallengeQuarantineRecord {
   repeatCount: number;
 }
 
+export type BrowserManualAttentionIncidentStatus = "active" | "resolved" | "skipped";
+
+export interface BrowserManualAttentionIncidentRecord {
+  key: string;
+  group: string;
+  target: string;
+  reason: string;
+  status: BrowserManualAttentionIncidentStatus;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastMainAlertAt?: string;
+  lastThreadAlertAt?: string;
+  actionIds: number[];
+  jobIds: string[];
+  urls: string[];
+  titles: string[];
+  repeatCount: number;
+}
+
 export interface BrowserSessionRecord {
   state: BrowserSessionState;
   updatedAt: string;
@@ -56,6 +75,7 @@ export interface BrowserSessionRecord {
   lastAlertKey?: string;
   challengeEvents: BrowserManualAttentionEvent[];
   quarantinedActions?: BrowserChallengeQuarantineRecord[];
+  manualAttentionIncidents?: BrowserManualAttentionIncidentRecord[];
 }
 
 export interface BrowserSessionStatus extends BrowserSessionRecord {
@@ -70,6 +90,7 @@ const DEFAULT_SESSION: BrowserSessionRecord = {
   updatedAt: new Date(0).toISOString(),
   challengeEvents: [],
   quarantinedActions: [],
+  manualAttentionIncidents: [],
 };
 
 function sessionPath(): string {
@@ -90,6 +111,7 @@ function readRawSession(): BrowserSessionRecord {
       ...parsed,
       challengeEvents: Array.isArray(parsed.challengeEvents) ? parsed.challengeEvents : [],
       quarantinedActions: Array.isArray(parsed.quarantinedActions) ? parsed.quarantinedActions : [],
+      manualAttentionIncidents: Array.isArray(parsed.manualAttentionIncidents) ? parsed.manualAttentionIncidents : [],
     };
   } catch {
     return { ...DEFAULT_SESSION, updatedAt: nowIso() };
@@ -108,6 +130,211 @@ function quarantineKey(input: { actionId?: number; jobId?: string; applicationId
   if (input.jobId) return `job:${input.jobId}`;
   if (input.source) return `source:${input.source}`;
   return "browser-session";
+}
+
+function uniqueNumbers(values: Array<number | undefined>): number[] {
+  return Array.from(new Set(values.filter((value): value is number => typeof value === "number" && Number.isFinite(value))));
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return Array.from(new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))).slice(0, 10);
+}
+
+function jobTokenFromJobId(value?: string | null): string | null {
+  const normalized = value?.trim();
+  if (!normalized) return null;
+  const upwork = normalized.match(/upwork[-:_~]?([A-Za-z0-9_-]{8,})/i)?.[1];
+  if (upwork) return upwork;
+  return normalized.replace(/^manual:/i, "").toLowerCase();
+}
+
+function jobTokenFromUrl(value?: string | null): string | null {
+  if (!value?.trim()) return null;
+  try {
+    const url = new URL(value.trim());
+    const match = decodeURIComponent(url.pathname).match(/~([A-Za-z0-9_-]{8,})/);
+    return match?.[1] ?? null;
+  } catch {
+    const match = value.match(/~([A-Za-z0-9_-]{8,})/);
+    return match?.[1] ?? null;
+  }
+}
+
+function manualAttentionIncidentGroup(reason: string): string {
+  if (/captcha|security|challenge|just.?a.?moment|cloudflare|browser_session_unhealthy|manual_attention_required/i.test(reason)) {
+    return "browser_check";
+  }
+  if (/login|password|two_factor|2fa|passkey/i.test(reason)) {
+    return "auth_check";
+  }
+  if (/cdp|browser_unavailable|browser_profile_in_use/i.test(reason)) {
+    return "browser_unavailable";
+  }
+  return "manual_attention";
+}
+
+function manualAttentionIncidentTarget(event: Pick<BrowserManualAttentionEvent, "actionId" | "jobId" | "applicationId" | "url">): string {
+  const jobToken = jobTokenFromUrl(event.url) ?? jobTokenFromJobId(event.applicationId ?? undefined) ?? jobTokenFromJobId(event.jobId);
+  if (jobToken) return `job:${jobToken}`;
+  if (event.url?.trim()) return `url:${event.url.trim().replace(/[?#].*$/, "")}`;
+  if (event.actionId) return `action:${event.actionId}`;
+  return "session";
+}
+
+export function browserManualAttentionIncidentKey(event: Pick<BrowserManualAttentionEvent, "actionId" | "jobId" | "applicationId" | "url" | "reason">): { key: string; group: string; target: string } {
+  const group = manualAttentionIncidentGroup(event.reason);
+  const target = manualAttentionIncidentTarget(event);
+  return { group, target, key: `${group}:${target}` };
+}
+
+function activeIncidentMatches(
+  incident: BrowserManualAttentionIncidentRecord,
+  identity: { key: string; group: string; target: string },
+  event?: Pick<BrowserManualAttentionEvent, "actionId" | "jobId" | "applicationId" | "url">,
+): boolean {
+  if (incident.status !== "active" || incident.group !== identity.group) return false;
+  if (incident.key === identity.key) return true;
+  if (identity.group === "browser_check" && (incident.target === "session" || identity.target === "session")) return true;
+  if (event?.actionId && incident.actionIds.includes(event.actionId)) return true;
+  if (event?.jobId && incident.jobIds.includes(event.jobId)) return true;
+  if (event?.applicationId && incident.jobIds.includes(event.applicationId)) return true;
+  if (event?.url && incident.urls.includes(event.url)) return true;
+  return false;
+}
+
+function findActiveManualAttentionIncident(
+  incidents: BrowserManualAttentionIncidentRecord[] | undefined,
+  identity: { key: string; group: string; target: string },
+  event?: Pick<BrowserManualAttentionEvent, "actionId" | "jobId" | "applicationId" | "url">,
+): BrowserManualAttentionIncidentRecord | null {
+  return (incidents ?? []).find((incident) => activeIncidentMatches(incident, identity, event)) ?? null;
+}
+
+function upsertManualAttentionIncident(
+  incidents: BrowserManualAttentionIncidentRecord[] | undefined,
+  event: BrowserManualAttentionEvent,
+  now: Date,
+): { incidents: BrowserManualAttentionIncidentRecord[]; incident: BrowserManualAttentionIncidentRecord; duplicate: boolean } {
+  const identity = browserManualAttentionIncidentKey(event);
+  const existing = findActiveManualAttentionIncident(incidents, identity, event);
+  const seenAt = nowIso(now);
+  const base: BrowserManualAttentionIncidentRecord = existing ?? {
+    key: identity.key,
+    group: identity.group,
+    target: identity.target,
+    reason: event.reason,
+    status: "active",
+    firstSeenAt: event.at,
+    lastSeenAt: event.at,
+    actionIds: [],
+    jobIds: [],
+    urls: [],
+    titles: [],
+    repeatCount: 0,
+  };
+  const incident: BrowserManualAttentionIncidentRecord = {
+    ...base,
+    lastSeenAt: seenAt,
+    actionIds: uniqueNumbers([...base.actionIds, event.actionId]),
+    jobIds: uniqueStrings([...base.jobIds, event.jobId, event.applicationId ?? undefined]),
+    urls: uniqueStrings([...base.urls, event.url]),
+    titles: uniqueStrings([...base.titles, event.title]),
+    repeatCount: base.repeatCount + 1,
+  };
+  return {
+    incidents: [...(incidents ?? []).filter((item) => item.key !== base.key), incident],
+    incident,
+    duplicate: Boolean(existing),
+  };
+}
+
+function markIncidentAlert(
+  record: BrowserSessionRecord,
+  incidentKey: string,
+  alertType: "main" | "thread",
+  now: Date,
+): BrowserSessionRecord {
+  const timestamp = nowIso(now);
+  return {
+    ...record,
+    manualAttentionIncidents: (record.manualAttentionIncidents ?? []).map((incident) =>
+      incident.key === incidentKey
+        ? {
+            ...incident,
+            ...(alertType === "main" ? { lastMainAlertAt: timestamp } : { lastThreadAlertAt: timestamp }),
+          }
+        : incident
+    ),
+  };
+}
+
+export function markBrowserManualAttentionThreadAlert(input: {
+  actionId?: number;
+  jobId?: string;
+  applicationId?: string | null;
+  url?: string | null;
+  title?: string | null;
+  reason: string;
+  now?: Date;
+}): { shouldPost: boolean; incidentKey: string; duplicate: boolean } {
+  const now = input.now ?? new Date();
+  const event: BrowserManualAttentionEvent = {
+    at: nowIso(now),
+    actionId: input.actionId,
+    jobId: input.jobId,
+    applicationId: input.applicationId ?? null,
+    url: input.url,
+    title: input.title,
+    reason: input.reason,
+  };
+  const record = readRawSession();
+  const upserted = upsertManualAttentionIncident(record.manualAttentionIncidents, event, now);
+  const legacyDuplicate = record.lastAlertKey === alertKey(event) && upserted.incident.repeatCount > 1;
+  const duplicate = Boolean(upserted.incident.lastMainAlertAt || upserted.incident.lastThreadAlertAt) || legacyDuplicate;
+  const updated: BrowserSessionRecord = {
+    ...record,
+    updatedAt: nowIso(now),
+    manualAttentionIncidents: upserted.incidents,
+  };
+  writeSession(duplicate ? updated : markIncidentAlert(updated, upserted.incident.key, "thread", now));
+  return { shouldPost: !duplicate, incidentKey: upserted.incident.key, duplicate };
+}
+
+export function shouldSuppressBrowserManualAttentionChannelPost(input: {
+  actionId?: number;
+  jobId?: string;
+  applicationId?: string | null;
+  url?: string | null;
+  reason: string;
+}): boolean {
+  const identity = browserManualAttentionIncidentKey({
+    actionId: input.actionId,
+    jobId: input.jobId,
+    applicationId: input.applicationId ?? null,
+    url: input.url ?? null,
+    reason: input.reason,
+  });
+  const incident = findActiveManualAttentionIncident(readRawSession().manualAttentionIncidents, identity, {
+    actionId: input.actionId,
+    jobId: input.jobId,
+    applicationId: input.applicationId ?? null,
+    url: input.url ?? null,
+  });
+  return Boolean(incident?.lastMainAlertAt || incident?.lastThreadAlertAt);
+}
+
+function resolveManualAttentionIncidents(
+  incidents: BrowserManualAttentionIncidentRecord[] | undefined,
+  actionId?: number,
+  status: "resolved" | "skipped" = "resolved",
+  now = new Date(),
+): BrowserManualAttentionIncidentRecord[] {
+  const seenAt = nowIso(now);
+  return (incidents ?? []).map((incident) =>
+    incident.status === "active" && (!actionId || incident.actionIds.includes(actionId))
+      ? { ...incident, status, lastSeenAt: seenAt }
+      : incident
+  );
 }
 
 function upsertQuarantine(
@@ -154,6 +381,10 @@ function updateQuarantineStatus(
     quarantinedActions: quarantinedActions.map((item) =>
       item === last ? { ...item, status, lastSeenAt: nowIso(now) } : item
     ),
+    manualAttentionIncidents:
+      status === "resolved" || status === "skipped"
+        ? resolveManualAttentionIncidents(record.manualAttentionIncidents, actionId, status, now)
+        : record.manualAttentionIncidents ?? [],
   };
   writeSession(updated);
   return updated;
@@ -210,6 +441,7 @@ export function clearBrowserManualAttention(actionId?: number): BrowserSessionRe
         ? { ...item, status: "resolved", lastSeenAt: nowIso() }
         : item
     ),
+    manualAttentionIncidents: resolveManualAttentionIncidents(record.manualAttentionIncidents, actionId),
   };
   writeSession(updated);
   return updated;
@@ -245,14 +477,14 @@ function recentChallengeEvents(events: BrowserManualAttentionEvent[], now: Date)
   return events.filter((event) => Date.parse(event.at) >= cutoff);
 }
 
-async function maybeSendManualAttentionAlert(record: BrowserSessionRecord, event: BrowserManualAttentionEvent, now: Date): Promise<BrowserSessionRecord> {
+async function maybeSendManualAttentionAlert(record: BrowserSessionRecord, event: BrowserManualAttentionEvent, now: Date, incidentKey: string): Promise<BrowserSessionRecord> {
   const key = alertKey(event);
-  const lastAlertAt = record.lastAlertSentAt ? Date.parse(record.lastAlertSentAt) : 0;
-  const withinCooldown = lastAlertAt > 0 && now.getTime() - lastAlertAt < BROWSER_MANUAL_ATTENTION_ALERT_COOLDOWN_MS;
-  const duplicate = record.lastAlertKey === key;
+  const incident = (record.manualAttentionIncidents ?? []).find((item) => item.key === incidentKey);
+  const legacyDuplicate = record.lastAlertKey === key && (incident?.repeatCount ?? 0) > 1;
+  const duplicate = Boolean(incident?.lastMainAlertAt || incident?.lastThreadAlertAt) || legacyDuplicate;
 
-  if (withinCooldown || duplicate) {
-    logger.info(`Manual browser attention alert suppressed. duplicate=${duplicate} cooldownRemainingMs=${withinCooldown ? BROWSER_MANUAL_ATTENTION_ALERT_COOLDOWN_MS - (now.getTime() - lastAlertAt) : 0}`);
+  if (duplicate) {
+    logger.info(`Manual browser attention alert suppressed. duplicate=${duplicate} incidentKey=${incidentKey}`);
     return record;
   }
 
@@ -270,12 +502,14 @@ async function maybeSendManualAttentionAlert(record: BrowserSessionRecord, event
     ],
   });
 
-  if (!sent) return record;
-  return {
+  if (!sent) {
+    logger.info(`Manual browser attention alert queued or failed; marking incident ${incidentKey} as alerted to avoid queue storms.`);
+  }
+  return markIncidentAlert({
     ...record,
     lastAlertSentAt: nowIso(now),
     lastAlertKey: key,
-  };
+  }, incidentKey, "main", now);
 }
 
 export async function recordBrowserManualAttention(input: {
@@ -311,6 +545,7 @@ export async function recordBrowserManualAttention(input: {
   const existing = readRawSession();
   const events = recentChallengeEvents([...existing.challengeEvents, event], now);
   const unhealthy = events.length > BROWSER_SESSION_CHALLENGE_THRESHOLD;
+  const incidentUpdate = upsertManualAttentionIncident(existing.manualAttentionIncidents, event, now);
   let updated: BrowserSessionRecord = {
     ...existing,
     state: unhealthy ? "browser_session_unhealthy" : "manual_attention_required",
@@ -319,8 +554,9 @@ export async function recordBrowserManualAttention(input: {
     lastManualAttention: event,
     challengeEvents: events,
     quarantinedActions: upsertQuarantine(existing.quarantinedActions ?? [], event),
+    manualAttentionIncidents: incidentUpdate.incidents,
   };
-  updated = await maybeSendManualAttentionAlert(updated, event, now);
+  updated = await maybeSendManualAttentionAlert(updated, event, now, incidentUpdate.incident.key);
   writeSession(updated);
 
   if (unhealthy) {

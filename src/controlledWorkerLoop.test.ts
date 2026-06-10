@@ -36,10 +36,18 @@ async function run(): Promise<void> {
 	  const {
 	    clearBrowserManualAttention,
 	    listBrowserChallengeQuarantines,
+	    markBrowserManualAttentionThreadAlert,
 	    recordBrowserManualAttention,
 	  } = require("./browserSession") as {
 	    clearBrowserManualAttention: (actionId?: number) => unknown;
 	    listBrowserChallengeQuarantines: (status?: string) => Array<{ actionId?: number; repeatCount: number; status: string; retryCommand?: string }>;
+	    markBrowserManualAttentionThreadAlert: (input: {
+	      actionId?: number;
+	      jobId?: string;
+	      reason: string;
+	      url?: string | null;
+	      title?: string | null;
+	    }) => { shouldPost: boolean; incidentKey: string; duplicate: boolean };
 	    recordBrowserManualAttention: (input: {
 	      actionId: number;
 	      jobId: string;
@@ -185,6 +193,14 @@ async function run(): Promise<void> {
 	  });
 	  const repeatedQuarantine = repeatedRecord.quarantinedActions?.find((item) => item.actionId === challengeId);
 	  assert.equal(repeatedQuarantine?.repeatCount, 2, "same action challenge should increment quarantine repeat count for backoff");
+	  const duplicateThreadAlert = markBrowserManualAttentionThreadAlert({
+	    actionId: challengeId,
+	    jobId: "cw:test:challenge",
+	    reason: "captcha_or_security_challenge",
+	    url: "https://www.upwork.com/jobs/~022060000000000000007",
+	    title: "Just a moment...",
+	  });
+	  assert.equal(duplicateThreadAlert.shouldPost, false, "thread/browser-check handoff should be suppressed after a main incident alert");
 	  mergeBrowserActionPayload(challengeId, {
 	    challengeQuarantine: {
 	      actionId: challengeId,
@@ -200,6 +216,14 @@ async function run(): Promise<void> {
 	  assert(challengePayload?.backoffUntil, "repeated challenge should stamp a per-action backoff window");
 	  assert.equal(listBrowserChallengeQuarantines("paused").some((item) => item.actionId === challengeId), true, "paused quarantine should be queryable");
 	  clearBrowserManualAttention(challengeId);
+	  const reblockedThreadAlert = markBrowserManualAttentionThreadAlert({
+	    actionId: challengeId,
+	    jobId: "cw:test:challenge",
+	    reason: "captcha_or_security_challenge",
+	    url: "https://www.upwork.com/jobs/~022060000000000000007",
+	    title: "Just a moment...",
+	  });
+	  assert.equal(reblockedThreadAlert.shouldPost, true, "resolved then reblocked browser-check incident should be allowed to alert again");
 	  updateBrowserActionStatus(challengeId, "cancelled", "test cleanup");
   updateBrowserActionStatus(afterChallengeId, "cancelled", "test cleanup");
 
