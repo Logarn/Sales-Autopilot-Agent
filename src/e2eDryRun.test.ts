@@ -15,13 +15,18 @@ function cleanup(tempDir: string): void {
 
 async function runTests(): Promise<void> {
   const tempDir = resolve(process.cwd(), "data/.tmp-e2e-dry-run");
+  const proofRoot = resolve(tempDir, "proof-assets");
   cleanup(tempDir);
   mkdirSync(tempDir, { recursive: true });
+  mkdirSync(proofRoot, { recursive: true });
 
   process.env.DB_PATH = resolve(tempDir, "jobs.db");
   process.env.BROWSER_WORKER_ENABLED = "true";
   process.env.BROWSER_DRY_RUN = "true";
   process.env.BROWSER_ARTIFACT_DIR = resolve(tempDir, "artifacts");
+  process.env.PROOF_ASSET_ROOT = proofRoot;
+  process.env.SLACK_BOT_TOKEN = "";
+  process.env.SLACK_CHANNEL_WEBHOOK_URL = "";
 
   const { scoreJob } = require("./filter") as { scoreJob: (job: any) => any };
   const { buildApplicationDraft } = require("./agent") as { buildApplicationDraft: (job: any) => any };
