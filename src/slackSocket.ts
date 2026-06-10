@@ -2501,6 +2501,9 @@ async function executeConversationPlan(params: {
     userMessage: params.userMessage,
     intent: params.plan.intent,
     context: { jobId: params.state.jobId, threadStatus: params.state.status },
+    preservePhrases: params.plan.intent === "answer_file_capability_question"
+      ? ["reusable proof", "attach them in this Slack thread", "stop before submit"]
+      : [],
     copyProvider: params.copyProvider,
   });
   await postThreadReply(params.client, params.channelId, params.threadTs, text);
