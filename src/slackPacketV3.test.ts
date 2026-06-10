@@ -141,6 +141,8 @@ async function runTests(): Promise<void> {
     upworkUrl: job.url,
     captureStatus: "packet_sent",
     browserCaptureActionId: 11,
+    browserDraftStatus: "queued",
+    browserDraftActionId: 42,
     autoPrepareNote: "Strong fit. I’m preparing the Upwork draft now. Final submit remains manual.",
     requiredConnects: 4,
     suggestedBoostConnects: 0,
@@ -165,7 +167,7 @@ async function runTests(): Promise<void> {
   assertIncludes(text, "*Risks/watchouts:* Client has weak spend history and budget looks low", "single risk");
   assertIncludes(text, "*Connects/boost:* 4 required; no boost suggested from visible data.", "connects and boost");
   assertIncludes(text, "*Recommendation:* prep", "prep recommendation");
-  assertIncludes(text, "*Next:* I’m preparing this now; review it in VNC when I say it’s ready.", "autonomous next action");
+  assertIncludes(text, "*Next:* Prep is queued; review it in VNC when I say it’s ready.", "autonomous next action");
   assertIncludes(text, "stop before submit", "manual submit boundary");
   assertIncludes(text, job.url, "job url");
 
@@ -204,6 +206,8 @@ async function runTests(): Promise<void> {
   const llmPacket = await writeV3CapturePacketWithLlm(job, {
     upworkUrl: job.url,
     captureStatus: "packet_sent",
+    browserDraftStatus: "queued",
+    browserDraftActionId: 42,
     autoPrepareNote: "Strong fit. I’m preparing the Upwork draft now. Final submit remains manual.",
     requiredConnects: 4,
     suggestedBoostConnects: 0,
@@ -236,6 +240,8 @@ async function runTests(): Promise<void> {
   const similarPacket = await writeV3CapturePacketWithLlm(similarJob, {
     upworkUrl: similarJob.url,
     captureStatus: "packet_sent",
+    browserDraftStatus: "queued",
+    browserDraftActionId: 43,
     autoPrepareNote: "Strong fit. I’m preparing the Upwork draft now. Final submit remains manual.",
     requiredConnects: 4,
     suggestedBoostConnects: 0,
@@ -249,6 +255,8 @@ async function runTests(): Promise<void> {
   const fallbackPacket = await writeV3CapturePacketWithLlm(job, {
     upworkUrl: job.url,
     captureStatus: "packet_sent",
+    browserDraftStatus: "queued",
+    browserDraftActionId: 42,
     autoPrepareNote: "Strong fit. I’m preparing the Upwork draft now. Final submit remains manual.",
     requiredConnects: 4,
     suggestedBoostConnects: 0,
@@ -260,6 +268,39 @@ async function runTests(): Promise<void> {
   assert(fallbackPacket.text.includes("*Recommendation:* prep"), "lead fallback should keep a recommendation");
   assert(fallbackPacket.text.includes("stop before submit"), "lead fallback should keep final submit manual");
   assert(!fallbackPacket.text.includes("I can help with the draft, files, proof, boost, or status"), "lead fallback must not dump command-menu copy");
+
+  const autoPrepRecommendedJob = createScoredJob({
+    score: 94,
+    matchLevel: "high",
+    clientSpend: 12000,
+    scoreBreakdown: {
+      ...job.scoreBreakdown!,
+      clientQualityScore: { score: 82, reasons: ["Strong client history"], risks: [] },
+      finalScore: 94,
+      risks: [],
+    },
+  });
+  autoPrepRecommendedJob.applicationDraft = {
+    ...autoPrepRecommendedJob.applicationDraft!,
+    connectsStrategy: {
+      ...autoPrepRecommendedJob.applicationDraft!.connectsStrategy!,
+      decision: "safe_apply",
+      risks: [],
+    },
+  };
+  const recommendationOnlyText = buildV3CapturePacket(autoPrepRecommendedJob, {
+    upworkUrl: autoPrepRecommendedJob.url,
+    captureStatus: "packet_sent",
+    autoPrepareNote: "Strong fit. I’m preparing the Upwork draft now. Final submit remains manual.",
+    requiredConnects: 4,
+    suggestedBoostConnects: 0,
+    suggestedBid: "$35/hr",
+    jobIntelligence: intelligence,
+  }).text;
+  assertIncludes(recommendationOnlyText, "*Recommendation:* prep", "recommendation-only lead should still recommend prep");
+  assertIncludes(recommendationOnlyText, "*Next:* If you want this prepared, just say so naturally. I’ll stop before submit.", "recommendation-only lead should use natural CTA");
+  assertNotIncludes(recommendationOnlyText, "I’m preparing this now", "recommendation-only lead must not claim preparation started");
+  assertNotIncludes(recommendationOnlyText, "Prep is queued", "recommendation-only lead must not claim a queued action");
 
   const unknownConnectsJob = createScoredJob({
     connectsCost: 0,
@@ -300,7 +341,7 @@ async function runTests(): Promise<void> {
   );
   assertIncludes(unknownText, "*Hot take:* Useful lead, but get a quick yes before spending time or Connects.", "borderline hot take");
   assertIncludes(unknownText, "*Recommendation:* maybe", "borderline recommendation");
-  assertIncludes(unknownText, "*Next:* Reply *“prep it”* if you want me to prepare the draft. I’ll stop before submit.", "borderline lead should ask for a clear next action");
+  assertIncludes(unknownText, "*Next:* If you want this prepared, just say so naturally. I’ll stop before submit.", "borderline lead should ask for a clear next action");
   assertNotIncludes(unknownText, "Connects: 0", "missing Connects must not render as zero");
   for (const noisy of ["manual review", "platformEligibility", "lead decision", "packet", "source context", "action id"]) {
     assertNotIncludes(unknownText, noisy, `borderline lead should hide ${noisy}`);

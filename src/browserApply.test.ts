@@ -389,7 +389,8 @@ async function runTests(): Promise<void> {
     assert(webhookPostedText.includes("*Connects/boost:*"), "Review-needed lead should include Connects/boost guidance");
     assert(webhookPostedText.includes(manualReviewJob.url), "Review-needed lead should include the Upwork link");
     assert(webhookPostedText.includes("stop before submit"), "Review-needed lead should preserve the final-submit boundary");
-    assert(/Next:.*prep it/i.test(webhookPostedText), "Review-needed lead should ask for a clear next action");
+    assert(webhookPostedText.includes("If you want this prepared, just say so naturally"), "Review-needed lead should ask for a natural clear next action");
+    assert(!/Reply .*prep it/i.test(webhookPostedText), "Review-needed lead should not require an exact prep command");
     assert(!webhookPostedText.includes("Available replies"), "Normal lead alert should not include a command menu");
     assert(!webhookPostedText.includes("Debug:"), "Normal lead alert should not include debug lines");
     for (const noisy of ["manual review", "platformEligibility", "lead decision", "packet", "source context", "action id"]) {
@@ -444,7 +445,8 @@ async function runTests(): Promise<void> {
       },
     );
     assert(normalDiscovery.status === "posted", "Eligible discovery lead should post");
-    assert(/Next:.*preparing.*stop before submit/i.test(webhookPostedText), "Post-to-Slack lead should use concise autonomous prep wording");
+    assert(webhookPostedText.includes("If you want this prepared, just say so naturally"), "Post-to-Slack lead should use natural CTA copy when prep is not queued");
+    assert(!/Next:.*(?:preparing|queued)/i.test(webhookPostedText), "Post-to-Slack lead must not claim prep started without a queued action");
     assert(!webhookPostedText.includes("Screening answers"), "Initial lead alert must not include screening answers");
     assert(!webhookPostedText.includes("Proposal preview"), "Initial lead alert must not include proposal preview");
 
@@ -753,7 +755,8 @@ async function runTests(): Promise<void> {
     );
     assert(connectsManualReviewDiscovery.status === "posted", "Eligible connects-manual-review discovery lead should post");
     assert(connectsManualReviewDiscovery.outcome === "posted", "Eligible connects-manual-review discovery lead should count as posted");
-    assert(/Next:.*prep it/i.test(webhookPostedText), "Connects review-needed lead should ask for a clear next action");
+    assert(webhookPostedText.includes("If you want this prepared, just say so naturally"), "Connects review-needed lead should ask for a natural clear next action");
+    assert(!/Reply .*prep it/i.test(webhookPostedText), "Connects review-needed lead should not require an exact prep command");
     for (const noisy of ["manual review", "platformEligibility", "lead decision", "packet", "source context", "action id"]) {
       assert(!webhookPostedText.toLowerCase().includes(noisy.toLowerCase()), `Connects lead alert should hide ${noisy}`);
     }

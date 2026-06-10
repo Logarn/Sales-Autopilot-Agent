@@ -222,14 +222,6 @@ function blockSection(text: string): Record<string, unknown> {
   };
 }
 
-function isAutoPrepareQueued(context: SlackPacketV3Context): boolean {
-  return Boolean(
-    (context.browserDraftActionId || context.browserDraftStatus) &&
-      context.autoPrepareNote &&
-      /Strong fit\. I’m preparing the Upwork draft now\./.test(context.autoPrepareNote),
-  );
-}
-
 function isRetryRelevant(context: SlackPacketV3Context): boolean {
   return [context.captureStatus, context.browserDraftStatus, context.autoPrepareNote]
     .filter(Boolean)
@@ -383,25 +375,31 @@ function isAutoPrepareBlocked(context: SlackPacketV3Context): boolean {
   return /not auto-prepar|manual attention|blocked|failed|paused|incomplete|retry/i.test(context.autoPrepareNote ?? "");
 }
 
-function isAutoPrepareProceeding(context: SlackPacketV3Context, autoPrepareQueued: boolean): boolean {
+function hasAutoPrepareActionEvidence(context: SlackPacketV3Context): boolean {
+  const status = context.browserDraftStatus?.trim().toLowerCase() ?? "";
+  return Boolean(
+    context.browserDraftActionId ||
+      /^(?:queued|pending|in_progress|preparing)$/.test(status),
+  );
+}
+
+function isAutoPrepareProceeding(context: SlackPacketV3Context): boolean {
   if (isAutoPrepareBlocked(context)) return false;
-  if (autoPrepareQueued) return true;
-  return /prepar|staging|queued|draft/i.test(context.autoPrepareNote ?? "");
+  return hasAutoPrepareActionEvidence(context);
 }
 
 function formatAutonomousPrepStatus(
   leadDecision: ReturnType<typeof decideLeadHandling>,
   context: SlackPacketV3Context,
-  autoPrepareQueued: boolean,
 ): string {
   const note = context.autoPrepareNote?.trim();
-  const proceeding = isAutoPrepareProceeding(context, autoPrepareQueued);
+  const proceeding = isAutoPrepareProceeding(context);
   const statusLine = isAutoPrepareBlocked(context)
     ? `Not proceeding: ${note}`
     : proceeding
       ? `Proceeding: ${note ?? "draft staging is queued for manual review."}`
       : leadDecision.shouldAutoPrepare
-        ? "Proceeding: lead passed auto-prep policy; draft staging continues outside Slack. Final submit remains manual."
+        ? "Recommended: this lead passes prep policy, but I do not see a queued prep action in this packet yet. Final submit remains manual."
         : `Not proceeding: ${leadDecision.reason}`;
 
   return [
@@ -499,16 +497,16 @@ function conciseFitReason(job: ScoredJob, context: SlackPacketV3Context): string
       job.scoreBreakdown?.reasons?.[0],
       job.applicationDraft?.fitReasons?.[0],
     ],
-    "it matches Steve's profile",
+    "it matches my profile",
     90,
   );
-  return humanizeSlackText(reason, "it lines up with Steve’s wheelhouse").toLowerCase();
+  return humanizeSlackText(reason, "it lines up with my wheelhouse").toLowerCase();
 }
 
-function conciseLeadSentence(job: ScoredJob, context: SlackPacketV3Context, proceeding: boolean, connectsUnknown: boolean): string {
+function conciseLeadSentence(job: ScoredJob, context: SlackPacketV3Context, prepRecommended: boolean, connectsUnknown: boolean): string {
   const scope = leadScope(job, context);
   const fitReason = conciseFitReason(job, context);
-  if (proceeding) {
+  if (prepRecommended) {
     const connectsNote = connectsUnknown ? " The Connects aren’t visible yet, so I’ll check them on the apply page before doing anything risky." : "";
     const variants = [
       `This is worth prepping: ${scope}. ${fitLabel(job)} fit because ${fitReason}.${connectsNote}`,
@@ -603,10 +601,10 @@ function proofAngle(job: ScoredJob, context: SlackPacketV3Context): string {
 function leadRecommendation(
   leadDecision: ReturnType<typeof decideLeadHandling>,
   postingDecision: SlackLeadPostingDecision,
-  proceeding: boolean,
+  prepRecommended: boolean,
 ): "prep" | "maybe" | "skip" {
   if (!postingDecision.shouldPost || leadDecision.decision === "skip") return "skip";
-  return proceeding ? "prep" : "maybe";
+  return prepRecommended ? "prep" : "maybe";
 }
 
 function recommendationLine(value: "prep" | "maybe" | "skip"): string {
@@ -620,15 +618,19 @@ function conciseNextAction(
   postingDecision: SlackLeadPostingDecision,
   context: SlackPacketV3Context,
   proceeding: boolean,
+  recommendation: "prep" | "maybe" | "skip",
 ): string {
   if (proceeding) {
-    return "I’m preparing this now; review it in VNC when I say it’s ready. I’ll stop before submit.";
+    return "Prep is queued; review it in VNC when I say it’s ready. I’ll stop before submit.";
   }
   if (!postingDecision.shouldPost || leadDecision.decision === "skip") {
     return "I’m not preparing this unless you ask me to override. I’ll stop before submit.";
   }
+  if (recommendation === "prep") {
+    return "If you want this prepared, just say so naturally. I’ll stop before submit.";
+  }
   void context;
-  return "Reply *“prep it”* if you want me to prepare the draft. I’ll stop before submit.";
+  return "If you want this prepared, just say so naturally. I’ll stop before submit.";
 }
 
 export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Context): SlackPacketV3Message {
@@ -639,17 +641,17 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
 
   const title = job.title || "Untitled Upwork job";
   const url = job.url || context.upworkUrl || "(Upwork URL missing)";
-  const autoPrepareQueued = isAutoPrepareQueued(context);
   const autoPrepareBlocked = isAutoPrepareBlocked(context);
-  const autoPrepareProceeding = isAutoPrepareProceeding(context, autoPrepareQueued) || (!autoPrepareBlocked && leadDecision.shouldAutoPrepare);
+  const autoPrepareProceeding = isAutoPrepareProceeding(context);
+  const prepRecommended = !autoPrepareBlocked && (autoPrepareProceeding || leadDecision.shouldAutoPrepare);
   const connectsLabel = conciseRequiredConnects(job, context);
   const connectsUnknown = connectsLabel.toLowerCase().includes("unknown");
-  const recommendation = leadRecommendation(leadDecision, postingDecision, autoPrepareProceeding);
+  const recommendation = leadRecommendation(leadDecision, postingDecision, prepRecommended);
 
   const text = [
     `🚀 *New lead: ${compactTitle(title)}*`,
     "",
-    `${LEAD_MENTIONS} — ${conciseLeadSentence(job, context, autoPrepareProceeding, connectsUnknown)}`,
+    `${LEAD_MENTIONS} — ${conciseLeadSentence(job, context, recommendation === "prep", connectsUnknown)}`,
     "",
     `*Hot take:* ${autoPrepareProceeding ? "Strong enough to stage now." : recommendation === "skip" ? "Not worth staging by default." : "Useful lead, but get a quick yes before spending time or Connects."}`,
     `*Why it fits:* ${fitLabel(job)} fit on ${leadScope(job, context)} because ${conciseFitReason(job, context)}.`,
@@ -658,7 +660,7 @@ export function buildV3CapturePacket(job: ScoredJob, context: SlackPacketV3Conte
     `*Connects/boost:* ${connectsBoostNote(job, context, connectsLabel)}`,
     recommendationLine(recommendation),
     "",
-    `*Next:* ${conciseNextAction(leadDecision, postingDecision, context, autoPrepareProceeding)}`,
+    `*Next:* ${conciseNextAction(leadDecision, postingDecision, context, autoPrepareProceeding, recommendation)}`,
     "",
     url,
   ].join("\n");
