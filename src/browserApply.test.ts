@@ -147,35 +147,81 @@ async function runTests(): Promise<void> {
     url?: string;
     visibleText?: string;
     inputValues?: string[];
+    fields?: Array<{
+      value: string;
+      kind?: "input" | "textarea";
+      type?: string;
+      label?: string;
+      id?: string;
+      name?: string;
+      ariaLabel?: string;
+      placeholder?: string;
+      dataTest?: string;
+      checked?: boolean;
+      files?: string[];
+    }>;
     checkedLabels?: string[];
     fileNames?: string[];
   }) {
+    const makeElement = (field: {
+      value: string;
+      kind?: "input" | "textarea";
+      type?: string;
+      label?: string;
+      id?: string;
+      name?: string;
+      ariaLabel?: string;
+      placeholder?: string;
+      dataTest?: string;
+      checked?: boolean;
+      files?: string[];
+    }) => ({
+      value: field.value,
+      checked: field.checked ?? false,
+      type: field.type ?? "text",
+      name: field.name ?? null,
+      tagName: field.kind === "textarea" ? "TEXTAREA" : "INPUT",
+      files: (field.files ?? []).map((name) => ({ name })),
+      getAttribute: (name: string) => {
+        if (name === "type") return field.type ?? null;
+        if (name === "id") return field.id ?? null;
+        if (name === "name") return field.name ?? null;
+        if (name === "aria-label") return field.ariaLabel ?? null;
+        if (name === "placeholder") return field.placeholder ?? null;
+        if (name === "data-test") return field.dataTest ?? null;
+        return null;
+      },
+      closest: () => field.label ? ({ textContent: field.label }) : null,
+    });
     return {
       url: () => input.url ?? "https://www.upwork.com/ab/proposals/job/~beautyjob123456/apply/",
       locator: () => ({ first: () => ({ textContent: async () => input.visibleText ?? "" }) }),
       evaluate: async (fn: () => unknown) => {
         const holder = globalThis as unknown as { document?: unknown };
         const previousDocument = holder.document;
-        const inputElements = (input.inputValues ?? []).map((value) => ({
-          value,
-          checked: false,
-          type: "text",
-          files: [],
-          getAttribute: () => null,
-          closest: () => null,
-        }));
+        const inputElements = input.fields
+          ? input.fields.map(makeElement)
+          : (input.inputValues ?? []).map((value) => makeElement({
+              value,
+              kind: value.length > 40 ? "textarea" : "input",
+              ariaLabel: /^\$?\d+(?:\.\d+)?$/.test(value) ? "Hourly rate" : undefined,
+            }));
         const checkedElements = (input.checkedLabels ?? []).map((label) => ({
           value: "",
           checked: true,
           type: "checkbox",
+          tagName: "INPUT",
+          name: null,
           files: [],
-          getAttribute: () => label,
+          getAttribute: (name: string) => name === "aria-label" ? label : null,
           closest: () => ({ textContent: label }),
         }));
         const fileElements = (input.fileNames ?? []).map((name) => ({
           value: "",
           checked: false,
           type: "file",
+          tagName: "INPUT",
+          name: null,
           files: [{ name }],
           getAttribute: () => null,
           closest: () => null,
@@ -1079,11 +1125,30 @@ async function runTests(): Promise<void> {
     });
     assert(unsetBoostVerification.find((item) => item.field === "boostConnects")?.status === "skipped_by_strategy", "Visible boost table should stay unset unless explicitly approved.");
 
+    const pollutedApplyVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({
+        visibleText: "Required for proposal: 8 Connects\nSend for 8 Connects",
+        fields: [
+          { kind: "textarea", label: "Cover letter", value: verificationPlan.coverLetter },
+          { kind: "input", type: "hidden", name: "question-1", value: "1" },
+          { kind: "input", type: "radio", label: "Yes", name: "screening-radio", value: "true", checked: true },
+          { kind: "input", type: "hidden", name: "question-id", value: "1828757710371885667" },
+          { kind: "input", ariaLabel: "Hourly rate", dataTest: "currency-input", value: "3535" },
+        ],
+      }),
+      plan: { ...verificationPlan, rate: "$35/hr" },
+      fields: { attemptedFields: ["coverLetter", "screeningAnswers:2", "rate"], skippedFields: [], manualFields: ["finalSubmit"] },
+      bodyText: "Required for proposal: 8 Connects\nSend for 8 Connects",
+    });
+    assert(pollutedApplyVerification.find((item) => item.field === "coverLetter")?.status === "verified", "Cover letter should still verify from its textarea.");
+    assert(pollutedApplyVerification.find((item) => item.field === "screeningAnswers")?.status === "attempted_unverified", "Radio/hidden field values must not verify screening answers.");
+    assert(pollutedApplyVerification.find((item) => item.field === "rate")?.status === "attempted_unverified", "Concatenated stale rate values like 3535 must not verify as a $35 bid.");
+
     writeFileSync(resolve(proofRoot, "package.json"), "{}");
     const verifiedApplyVerification = await verifyApplyPreparationOnPage({
       page: fakeApplyPage({
         visibleText: "Required for proposal: 8 Connects\nSend for 8 Connects\npackage.json",
-        inputValues: [verificationPlan.coverLetter, ...verificationPlan.screeningAnswers, "$35"],
+        inputValues: [verificationPlan.coverLetter, ...verificationPlan.screeningAnswers, "$50"],
         checkedLabels: ["Klaviyo retention proof"],
         fileNames: ["package.json"],
       }),
@@ -1096,6 +1161,7 @@ async function runTests(): Promise<void> {
     });
     assert(verifiedApplyVerification.find((item) => item.field === "coverLetter")?.status === "verified", "Cover letter should verify after fill when intended text is present.");
     assert(verifiedApplyVerification.find((item) => item.field === "screeningAnswers")?.status === "verified", "Screening answers should verify after fill when answer text is present.");
+    assert(verifiedApplyVerification.find((item) => item.field === "rate")?.status === "verified", "Rate should verify only when the visible rate field contains the planned bid.");
     assert(verifiedApplyVerification.find((item) => item.field === "attachments")?.status === "verified", "Attachments should verify when uploaded file names are visible.");
     assert(verifiedApplyVerification.find((item) => item.field === "profileHighlights")?.status === "verified", "Profile highlights should verify only when checked labels are visible.");
     assert(Boolean(verifiedApplyVerification.find((item) => item.field === "attachments")?.detail.includes("package.json")), "Attachment verification should name verified files.");

@@ -203,14 +203,29 @@ export function getProtectedQaQueueItems(limit = BROWSER_QA_MAX_PROTECTED_TABS):
     });
 }
 
+function activeQaPreparationReservations(): Set<string> {
+  const reservations = new Set<string>();
+  for (const item of getProtectedQaQueueItems(1000)) {
+    reservations.add(item.jobId);
+  }
+  for (const action of listBrowserActions(null, 1000)) {
+    if (action.actionType !== "prepare_application_review") continue;
+    if (action.status !== "pending" && action.status !== "in_progress") continue;
+    const applicationStatus = getApplicationStatus(action.jobId);
+    if (applicationStatus === "submitted" || applicationStatus === "applied" || applicationStatus === "rejected") continue;
+    reservations.add(action.jobId);
+  }
+  return reservations;
+}
+
 export function canQueueNewQaPreparation(jobId: string): { ok: boolean; count: number; max: number } {
-  const items = getProtectedQaQueueItems(1000);
-  if (items.some((item) => item.jobId === jobId)) {
-    return { ok: true, count: items.length, max: BROWSER_QA_MAX_PROTECTED_TABS };
+  const reservations = activeQaPreparationReservations();
+  if (reservations.has(jobId)) {
+    return { ok: true, count: reservations.size, max: BROWSER_QA_MAX_PROTECTED_TABS };
   }
   return {
-    ok: items.length < BROWSER_QA_MAX_PROTECTED_TABS,
-    count: items.length,
+    ok: reservations.size < BROWSER_QA_MAX_PROTECTED_TABS,
+    count: reservations.size,
     max: BROWSER_QA_MAX_PROTECTED_TABS,
   };
 }

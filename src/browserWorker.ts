@@ -280,10 +280,13 @@ export interface ApplyVerificationSnapshot {
   inputValues: string[];
   fieldValues: Array<{
     kind: "input" | "textarea";
+    inputType: string | null;
     label: string;
+    id: string | null;
     name: string | null;
     ariaLabel: string | null;
     placeholder: string | null;
+    dataTest: string | null;
     value: string;
   }>;
   checkedLabels: string[];
@@ -375,8 +378,15 @@ function isConnectsNotVerified(diagnostics: Pick<ApplyPreparationDiagnostics, "s
 }
 
 function getUnverifiedRequiredApplyFields(results: ApplyFieldVerification[]): string[] {
-  const required = ["targetTab", "coverLetter", "requiredConnects"];
-  return required.filter((field) => getVerification(results, field)?.status !== "verified");
+  const alwaysRequired = ["targetTab", "coverLetter", "rate", "requiredConnects"];
+  const plannedRequired = ["screeningAnswers", "boostConnects", "attachments", "profileHighlights"];
+  const failures = alwaysRequired.filter((field) => getVerification(results, field)?.status !== "verified");
+  for (const field of plannedRequired) {
+    const verificationResult = getVerification(results, field);
+    if (!verificationResult || verificationResult.status === "verified" || verificationResult.status === "skipped_by_strategy") continue;
+    failures.push(field);
+  }
+  return failures;
 }
 
 function loadOptions(): BrowserWorkerOptions {
@@ -1555,6 +1565,7 @@ async function tryFillFirst(page: PlaywrightPageLike, selectors: string[], value
     const locator = page.locator(selector).first();
     try {
       if ((await locator.count()) > 0) {
+        await locator.fill("", { timeout: 1500 });
         await locator.fill(value, { timeout: 1500 });
         return true;
       }
@@ -1879,32 +1890,49 @@ function longestValue(values: string[]): string | null {
 }
 
 function fieldDescriptor(field: ApplyVerificationSnapshot["fieldValues"][number]): string {
-  return [field.kind, field.label, field.name, field.ariaLabel, field.placeholder].filter(Boolean).join(" ").toLowerCase();
+  return [field.kind, field.inputType, field.label, field.id, field.name, field.ariaLabel, field.placeholder, field.dataTest].filter(Boolean).join(" ").toLowerCase();
 }
 
-function bestCoverLetterValue(snapshot: ApplyVerificationSnapshot, expected: string | null | undefined): string | null {
-  const fieldValues = snapshot.fieldValues.map((field) => field.value).filter((value) => value.trim().length > 0);
-  const allValues = uniqueNonEmpty([...fieldValues, ...snapshot.inputValues]);
-  const matched = bestMatchingValue(allValues, expected);
-  if (matched) return matched;
+function isUserTextField(field: ApplyVerificationSnapshot["fieldValues"][number]): boolean {
+  if (field.kind === "textarea") return true;
+  const inputType = (field.inputType ?? "text").toLowerCase();
+  return !["button", "checkbox", "file", "hidden", "image", "radio", "reset", "submit"].includes(inputType);
+}
 
-  const coverLike = snapshot.fieldValues
+function coverLetterFieldValues(snapshot: ApplyVerificationSnapshot): string[] {
+  const textareas = snapshot.fieldValues
+    .filter((field) => field.kind === "textarea" && isUserTextField(field))
     .filter((field) => /\b(?:cover|letter|proposal|message)\b/i.test(fieldDescriptor(field)))
     .map((field) => field.value)
     .filter((value) => value.trim().length > 0);
-  if (coverLike.length > 0) return longestValue(coverLike);
-
-  const textareas = snapshot.fieldValues
-    .filter((field) => field.kind === "textarea")
+  if (textareas.length > 0) return textareas;
+  return snapshot.fieldValues
+    .filter((field) => field.kind === "textarea" && isUserTextField(field))
     .map((field) => field.value)
     .filter((value) => value.trim().length > 0);
-  if (textareas.length > 0) return longestValue(textareas);
+}
+
+function rateFieldValues(snapshot: ApplyVerificationSnapshot): string[] {
+  return snapshot.fieldValues
+    .filter((field) => field.kind === "input" && isUserTextField(field))
+    .filter((field) => /\b(?:bid|hourly|rate|currency|amount|terms)\b/i.test(fieldDescriptor(field)))
+    .map((field) => field.value)
+    .filter((value) => value.trim().length > 0);
+}
+
+function bestCoverLetterValue(snapshot: ApplyVerificationSnapshot, expected: string | null | undefined): string | null {
+  const matched = bestMatchingValue(coverLetterFieldValues(snapshot), expected);
+  if (matched) return matched;
+
+  const coverLike = coverLetterFieldValues(snapshot);
+  if (coverLike.length > 0) return longestValue(coverLike);
 
   return null;
 }
 
 function screeningValuesForIndex(snapshot: ApplyVerificationSnapshot, coverLetter: string, index: number): string[] {
   const nonCoverFields = snapshot.fieldValues.filter((field) => {
+    if (!isUserTextField(field)) return false;
     if (field.value === coverLetter) return false;
     return !/\b(?:cover|letter|proposal|message)\b/i.test(fieldDescriptor(field));
   });
@@ -2137,18 +2165,28 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
         };
       }).document;
       const nodes = Array.from(documentLike?.querySelectorAll?.("textarea,input") ?? []);
+      const isUserTextNode = (node: LooseElement) => {
+        const tagName = String(node.tagName ?? "").toLowerCase();
+        if (tagName === "textarea") return true;
+        const inputType = String(node.type ?? "text").toLowerCase();
+        return !["button", "checkbox", "file", "hidden", "image", "radio", "reset", "submit"].includes(inputType);
+      };
       const inputValues = nodes
+        .filter(isUserTextNode)
         .map((node) => typeof node.value === "string" ? node.value : "")
         .filter((value) => value.trim().length > 0);
       const fieldValues = nodes
         .map((node) => {
           const value = typeof node.value === "string" ? node.value : "";
           const label = node.closest?.("label")?.textContent ?? "";
+          const inputType = node.type ?? node.getAttribute?.("type") ?? null;
+          const id = node.getAttribute?.("id") ?? null;
           const ariaLabel = node.getAttribute?.("aria-label") ?? null;
           const placeholder = node.getAttribute?.("placeholder") ?? null;
           const name = node.name ?? node.getAttribute?.("name") ?? null;
+          const dataTest = node.getAttribute?.("data-test") ?? null;
           const kind: "input" | "textarea" = String(node.tagName ?? "").toLowerCase() === "textarea" ? "textarea" : "input";
-          return { kind, label, name, ariaLabel, placeholder, value };
+          return { kind, inputType, label, id, name, ariaLabel, placeholder, dataTest, value };
         })
         .filter((field) => field.value.trim().length > 0);
       const checkedLabels = nodes
@@ -2208,18 +2246,19 @@ export async function verifyApplyPreparationOnPage(input: {
 
   if (!plan.coverLetter.trim()) {
     results.push(verification("coverLetter", "skipped_by_strategy", "No cover letter text was available in the plan."));
-  } else if (textCollectionContains(snapshot.inputValues, plan.coverLetter)) {
+  } else if (textCollectionContains(coverLetterFieldValues(snapshot), plan.coverLetter)) {
     results.push(verification("coverLetter", "verified", "Cover letter field contains the intended text.", { expected: significantExpectedText(plan.coverLetter) }));
   } else if (fields.skippedFields.includes("coverLetter") || fields.manualFields.includes("coverLetter")) {
     results.push(verification("coverLetter", "blocked_by_upwork_ui", "Cover letter field was not filled by the Upwork UI.", { expected: significantExpectedText(plan.coverLetter) }));
   } else {
-    results.push(verification("coverLetter", "attempted_unverified", "Cover letter fill was attempted, but the field did not verify with the intended text.", { expected: significantExpectedText(plan.coverLetter), actual: snapshot.inputValues.join(" | ").slice(0, 500) }));
+    results.push(verification("coverLetter", "attempted_unverified", "Cover letter fill was attempted, but the field did not verify with the intended text.", { expected: significantExpectedText(plan.coverLetter), actual: coverLetterFieldValues(snapshot).join(" | ").slice(0, 500) }));
   }
 
   if (plan.screeningAnswers.length === 0) {
     results.push(verification("screeningAnswers", "skipped_by_strategy", "No screening answers were generated for this application."));
   } else {
-    const verifiedCount = plan.screeningAnswers.filter((answer) => textCollectionContains(snapshot.inputValues, answer)).length;
+    const coverLetterValue = bestCoverLetterValue(snapshot, plan.coverLetter) ?? "";
+    const verifiedCount = plan.screeningAnswers.filter((answer, index) => textCollectionContains(screeningValuesForIndex(snapshot, coverLetterValue, index), answer)).length;
     if (verifiedCount === plan.screeningAnswers.length) {
       results.push(verification("screeningAnswers", "verified", `${verifiedCount}/${plan.screeningAnswers.length} screening answers are present.`));
     } else if (verifiedCount > 0) {
@@ -2234,12 +2273,12 @@ export async function verifyApplyPreparationOnPage(input: {
   const rateValue = rateNeedle(plan.rate);
   if (!rateValue) {
     results.push(verification("rate", "skipped_by_strategy", "No safe rate value was available in the plan."));
-  } else if (snapshot.inputValues.some((value) => rateFieldValueMatches(value, rateValue))) {
+  } else if (rateFieldValues(snapshot).some((value) => rateFieldValueMatches(value, rateValue))) {
     results.push(verification("rate", "verified", `Rate field contains ${rateValue}.`, { expected: rateValue }));
   } else if (fields.skippedFields.includes("rate")) {
     results.push(verification("rate", "blocked_by_upwork_ui", "Rate field was not fillable.", { expected: rateValue }));
   } else {
-    results.push(verification("rate", "attempted_unverified", "Rate fill was attempted, but the value was not verified.", { expected: rateValue }));
+    results.push(verification("rate", "attempted_unverified", "Rate fill was attempted, but the value was not verified.", { expected: rateValue, actual: rateFieldValues(snapshot).join(" | ").slice(0, 200) }));
   }
 
   if (plan.connects.required === null) {
@@ -2342,10 +2381,14 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
 
   const rateInputValue = hourlyRateInputValue(plan.rate);
   if (rateInputValue && await tryFillFirst(page, [
-    "[data-test='hourly-rate'] input[data-test='currency-input']",
     "[data-test='up-fe-rate-widget'] [data-test='hourly-rate'] input",
-    "input[name*='rate']",
-    "input[aria-label*='rate' i]",
+    "[data-test='up-fe-rate-widget'] input[data-test='currency-input']",
+    "[data-test='hourly-rate'] input[data-test='currency-input']",
+    "input[aria-label*='hourly rate' i]",
+    "input[aria-label*='bid' i]",
+    "input[name*='hourlyRate' i]",
+    "input[name*='hourly-rate' i]",
+    "input[name*='bid' i]",
   ], rateInputValue)) {
     attemptedFields.push("rate");
   } else {
