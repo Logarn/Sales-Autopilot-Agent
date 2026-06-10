@@ -98,7 +98,7 @@ async function run(): Promise<void> {
   const missingLeadLink = fakeProvider("🚀 This one is worth a real shot. Reply “prep it” and I’ll stop before submit.");
   const linkFallback = await rewriteSlackCopyWithKimi({
     path: "lead_packet",
-    deterministicText: "New lead: Klaviyo Shopify work. Next: reply prep it. I’ll stop before submit.\nhttps://www.upwork.com/jobs/~1234567890",
+    deterministicText: "New lead: Klaviyo Shopify work. Next: if you want this prepared, just say so naturally. I’ll stop before submit.\nhttps://www.upwork.com/jobs/~1234567890",
     intent: "new_lead_packet",
     context: { title: "Klaviyo Shopify work", matchLevel: "high", upworkUrl: "https://www.upwork.com/jobs/~1234567890" },
     preservePhrases: ["stop before submit", "https://www.upwork.com/jobs/~1234567890"],
@@ -111,13 +111,24 @@ async function run(): Promise<void> {
   const repeatedOpening = fakeProvider("This is worth prepping. Reply “prep it” and I’ll stop before submit.\nhttps://www.upwork.com/jobs/~1234567890");
   const repeatedOpeningFallback = await rewriteSlackCopyWithKimi({
     path: "lead_packet",
-    deterministicText: "New lead: Klaviyo Shopify work. Next: reply prep it. I’ll stop before submit.\nhttps://www.upwork.com/jobs/~1234567890",
+    deterministicText: "New lead: Klaviyo Shopify work. Next: if you want this prepared, just say so naturally. I’ll stop before submit.\nhttps://www.upwork.com/jobs/~1234567890",
     intent: "new_lead_packet",
     context: { title: "Klaviyo Shopify work", matchLevel: "high", upworkUrl: "https://www.upwork.com/jobs/~1234567890" },
     recentPhrases: ["This is worth prepping."],
     preservePhrases: ["stop before submit", "https://www.upwork.com/jobs/~1234567890"],
   }, repeatedOpening.provider);
   assert.equal(repeatedOpeningFallback.usedLlm, false, "Lead copy should reject identical recent openings.");
+
+  const exactCommandCta = fakeProvider("🚀 This one is worth a real shot. Reply “prep it” and I’ll stop before submit.\nhttps://www.upwork.com/jobs/~1234567890");
+  const exactCommandFallback = await rewriteSlackCopyWithKimi({
+    path: "lead_packet",
+    deterministicText: "New lead: Klaviyo Shopify work. Next: if you want this prepared, just say so naturally. I’ll stop before submit.\nhttps://www.upwork.com/jobs/~1234567890",
+    intent: "new_lead_packet",
+    context: { title: "Klaviyo Shopify work", matchLevel: "high", upworkUrl: "https://www.upwork.com/jobs/~1234567890" },
+    preservePhrases: ["stop before submit", "https://www.upwork.com/jobs/~1234567890"],
+  }, exactCommandCta.provider);
+  assert.equal(exactCommandFallback.usedLlm, false, "Lead packet copy should reject exact command CTAs.");
+  assert(exactCommandFallback.text.includes("just say so naturally"), "Exact-command fallback should keep the natural-reply CTA.");
 
   const rawId = fakeProvider("Retry browser action #123 in thread 111.222.");
   const rawFallback = await rewriteSlackCopyWithKimi({

@@ -196,6 +196,10 @@ function hasClearLeadCta(text: string): boolean {
   return /\b(?:reply|review|open|check|tell me|say|look at|approve|skip|prep it)\b/i.test(text);
 }
 
+function requiresExactLeadCommand(text: string): boolean {
+  return /\b(?:reply|say|tell me)\s+[*_`"“”'‘’]*prep it[*_`"“”'‘’]*/i.test(text);
+}
+
 function validateSlackCopy(text: string, request: SlackCopyRequest): string | null {
   const trimmed = text.trim();
   if (!trimmed) return "empty copy";
@@ -213,6 +217,7 @@ function validateSlackCopy(text: string, request: SlackCopyRequest): string | nu
   if (request.path === "lead_packet") {
     const upworkUrl = extractUpworkUrl(request);
     if (upworkUrl && !trimmed.includes(upworkUrl)) return "missing Upwork link";
+    if (requiresExactLeadCommand(trimmed)) return "exact command CTA";
     if (!hasClearLeadCta(trimmed)) return "missing clear lead CTA";
   }
   return null;
@@ -246,7 +251,7 @@ function compactSafeFallbackText(request: SlackCopyRequest, reason: string): str
     const url = extractUpworkUrl(request);
     const title = typeof request.context?.title === "string" ? request.context.title : "New Upwork lead";
     const fit = typeof request.context?.matchLevel === "string" ? request.context.matchLevel : "review";
-    const cta = deterministic.match(/\*Next:\*\s*([^\n]+)/i)?.[1]?.trim() ?? "Review this and reply with the next call.";
+    const cta = deterministic.match(/(?:\*Next:\*|Next:)\s*([^\n]+)/i)?.[1]?.trim() ?? "Review this and reply with the next call.";
     return [
       `New lead: ${title}`,
       `Fit: ${fit}. I’ll keep prep inside the guardrails and stop before submit.`,
@@ -287,12 +292,12 @@ export async function rewriteSlackCopyWithKimi(
         {
           role: "system",
           content: [
-            "You write Steve-facing Slack copy for an Upwork application agent.",
+            "You write operator-facing Slack copy for an Upwork application agent.",
             "Rewrite the deterministic response into natural, concise Slack copy. Keep the meaning and safety state.",
             "Reason first from the current context, then write the message. Do not expose the reasoning.",
             "You are a sharp senior SDR/operator teammate, not a dashboard, bot, CLI, or monitoring page.",
             "Use first person. Be short, direct, context-aware, and useful. Prefer one clear recommendation.",
-            "Push toward resolution: say what is true, what matters, and what Steve should do next.",
+            "Push toward resolution: say what is true, what matters, and what action is needed next.",
             "Never output dashboard headings like Overall health, Workers, Heartbeats, Findings, QA queue, or raw service state unless debug was explicitly requested.",
             "For lead packets: be concise, human, commercially opinionated, and varied; include the Upwork link; include one clear next-step CTA; avoid raw packet fields.",
             "For normal Slack replies: answer the actual question directly and conversationally. Do not route natural language into a command-menu fallback.",
