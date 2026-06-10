@@ -108,6 +108,15 @@ async function runTests(): Promise<void> {
   const { markDiscoverySourceChallenge } = require("./browserDiscoverySourceHealth") as {
     markDiscoverySourceChallenge: (source: { sourceType: string; sourceLabel: string; url: string }, reason: string, now?: Date) => unknown;
   };
+
+  function cancelPendingPrepareReservations(exceptIds = new Set<number>()): void {
+    for (const action of listBrowserActions(null, 1000)) {
+      if (action.actionType !== "prepare_application_review") continue;
+      if (action.status !== "pending" && action.status !== "in_progress") continue;
+      if (exceptIds.has(action.id)) continue;
+      updateBrowserActionStatus(action.id, "cancelled", "test cleanup before QA reservation cap assertion");
+    }
+  }
   const { buildApplicationDraft } = require("./agent") as { buildApplicationDraft: (job: any) => any };
   const { buildBrowserApplyPlan } = require("./browserApply") as { buildBrowserApplyPlan: (jobId: string) => { plan: any } };
   const { scoreJob } = require("./filter") as { scoreJob: (job: any) => any };
@@ -1005,6 +1014,7 @@ async function runTests(): Promise<void> {
     });
     assert(unmappedReplies.some((reply) => reply.includes("can’t find the job tied to this thread")), "Unmapped approve_prepare should reply with useful mapping guidance.");
 
+    cancelPendingPrepareReservations();
     const prepareResult = queuePrepareDraftFromSlackThread({ channelId: "C123", threadTs: "111.222" });
     assert(prepareResult.ok, `Expected prepare draft queue to succeed, got: ${prepareResult.text}`);
     assert(typeof prepareResult.actionId === "number", "Prepare draft should return an action id.");
@@ -1105,6 +1115,7 @@ async function runTests(): Promise<void> {
     assert(multiApprovalActions.every((action) => action.status === "pending"), "Multiple Slack approvals should queue pending browser work, not run it inline.");
     assert(multiApprovalReplies.filter((reply) => reply.includes("stop before submit")).length === 3, "Each queued approval should acknowledge the manual-submit boundary.");
     assert(!multiApprovalReplies.join("\n").includes("Browser queue:"), "Queued approvals should not dump queue internals by default.");
+    cancelPendingPrepareReservations(new Set([prepareResult.actionId!]));
 
     await recordBrowserManualAttention({ reason: "captcha_or_security_challenge", actionId: prepareResult.actionId, jobId: prepareJob.id, url: prepareJob.url, title: "Just a moment..." });
     const blockedReplies: string[] = [];
@@ -1360,7 +1371,7 @@ async function runTests(): Promise<void> {
     assert(showQaQueueReplies.some((reply) => reply.includes("Batch workspace") && (reply.includes("blocked") || reply.includes("ready"))), "Show QA queue should return compact batch facts.");
     assert(!/QA queue|Say "open|action\s*#?\d+|Channel message:|Thread:/i.test(showQaQueueReplies.join("\n")), "Show QA queue should not expose dashboard headings, command-menu text, or raw ids.");
 
-    for (let i = 2; i <= 5; i += 1) {
+    for (let i = 2; i <= 4; i += 1) {
       const qaJob = scoreJob({
         ...prepareJob,
         id: `qa-full-job-${i}`,
@@ -1379,8 +1390,8 @@ async function runTests(): Promise<void> {
       });
       const qaPrep = queuePrepareDraftFromSlackThread({ channelId: "CQA", threadTs: `700.${i}` });
       assert(qaPrep.ok && typeof qaPrep.actionId === "number", `QA protected setup ${i} should queue before cap.`);
-      updateBrowserActionStatus(qaPrep.actionId!, i === 5 ? "paused" : "completed", i === 5 ? "captcha_or_security_challenge" : "Prepared for QA.");
-      updateApplicationStatus(qaJob.id, i === 5 ? "needs_review" : "prepared_for_qa", "Test protected QA hold.");
+      updateBrowserActionStatus(qaPrep.actionId!, "completed", "Prepared for QA.");
+      updateApplicationStatus(qaJob.id, "prepared_for_qa", "Test protected QA hold.");
       mergeBrowserActionPayload(qaPrep.actionId!, {
         qaHold: {
           protected: true,
@@ -1388,10 +1399,29 @@ async function runTests(): Promise<void> {
           do_not_reuse: true,
           jobId: qaJob.id,
           applyUrl: `https://www.upwork.com/ab/proposals/job/~qafulljob${i}/apply/`,
-          status: i === 5 ? "needs_review" : "prepared_for_qa",
+          status: "prepared_for_qa",
         },
       });
     }
+
+    const fifthQaJob = scoreJob({
+      ...prepareJob,
+      id: "qa-full-job-5",
+      title: "QA full job 5",
+      url: "https://www.upwork.com/jobs/~qafulljob5",
+    });
+    fifthQaJob.applicationDraft = buildApplicationDraft(fifthQaJob);
+    markJobSeen(fifthQaJob, false);
+    upsertSlackThreadState({
+      channelId: "CQA",
+      messageTs: "700.5",
+      threadTs: "700.5",
+      upworkUrl: fifthQaJob.url,
+      jobId: fifthQaJob.id,
+      status: "packet_sent",
+    });
+    const fifthQaPrep = queuePrepareDraftFromSlackThread({ channelId: "CQA", threadTs: "700.5" });
+    assert(fifthQaPrep.ok && typeof fifthQaPrep.actionId === "number", "Fifth QA prep should reserve the final QA slot while pending.");
 
     const cappedJob = scoreJob({
       ...prepareJob,
@@ -1410,8 +1440,21 @@ async function runTests(): Promise<void> {
       status: "packet_sent",
     });
     const cappedPrep = queuePrepareDraftFromSlackThread({ channelId: "CQA", threadTs: "701.001" });
-    assert(!cappedPrep.ok, "Sixth protected QA prep should pause instead of queueing another apply tab.");
-    assert(cappedPrep.text.includes("5 applications waiting for QA"), "Max protected QA tabs message should tell Steve to submit/skip one.");
+    assert(!cappedPrep.ok, "Sixth QA prep should pause when the fifth slot is still queued.");
+    assert(cappedPrep.text.includes("5 applications waiting for QA"), "Max protected QA tabs message should count queued/preparing QA reservations.");
+
+    updateBrowserActionStatus(fifthQaPrep.actionId!, "paused", "captcha_or_security_challenge");
+    updateApplicationStatus(fifthQaJob.id, "needs_review", "Test protected QA hold.");
+    mergeBrowserActionPayload(fifthQaPrep.actionId!, {
+      qaHold: {
+        protected: true,
+        doNotReuse: true,
+        do_not_reuse: true,
+        jobId: fifthQaJob.id,
+        applyUrl: "https://www.upwork.com/ab/proposals/job/~qafulljob5/apply/",
+        status: "needs_review",
+      },
+    });
 
     const queueRetryReplies: string[] = [];
     await handleThreadCommand({
