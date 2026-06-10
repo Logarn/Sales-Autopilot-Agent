@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { runBrowserSessionClear } from "./browserSessionCli";
+import { runBrowserSessionClear, runBrowserSessionRecoverStaleTerminal } from "./browserSessionCli";
 import { getChromeProfileProcessDiagnostics } from "./browserSessionControl";
 import { BrowserSessionStatus, buildManualAttentionSlackText } from "./browserSession";
 import { BrowserSessionInspection } from "./browserSessionInspector";
@@ -60,11 +60,13 @@ async function call(input: {
   initialSession?: BrowserSessionStatus;
   action?: BrowserAction | null;
   visible?: BrowserSessionInspection;
+  staleRecovery?: boolean;
 }) {
   let currentSession = input.initialSession ?? session();
   let currentAction = input.action === undefined ? action() : input.action;
   let clearCalls = 0;
-  const outcome = await runBrowserSessionClear(input.id === undefined ? 9 : input.id, {
+  const runner = input.staleRecovery ? runBrowserSessionRecoverStaleTerminal : runBrowserSessionClear;
+  const outcome = await runner(input.id === undefined ? 9 : input.id, {
     getSessionStatus: () => currentSession,
     getActionById: () => currentAction,
     inspectVisibleSession: async () => input.visible ?? visible(),
@@ -100,6 +102,11 @@ async function runTests(): Promise<void> {
   assert.equal(result.result.actionStatusUnchanged, "pending");
   assert.equal(result.clearCalls, 0);
 
+  result = await call({ action: action({ status: "cancelled" }) });
+  assert.equal(result.result.reason, "action_is_not_paused", "normal clear should still refuse terminal actions");
+  assert.equal(result.result.actionStatusUnchanged, "cancelled");
+  assert.equal(result.clearCalls, 0);
+
   result = await call({ visible: visible({ internalState: "captcha_or_security_challenge", sessionState: "manual_attention_required", manualAttentionRequired: true, blocked: true, title: "Challenge - Upwork" }) });
   assert.equal(result.result.reason, "visible_browser_still_requires_manual_attention");
   assert.equal(result.result.visibleSessionState, "manual_attention_required");
@@ -115,7 +122,8 @@ async function runTests(): Promise<void> {
     reason: "captcha_or_security_challenge",
   });
   assert.match(manualAttentionCopy, /browser check/i, "Actual security challenges should use browser-check wording.");
-  assert.match(manualAttentionCopy, /I paused safely and did not submit anything/i, "Browser-check copy should preserve submit safety.");
+  assert.match(manualAttentionCopy, /paused.*safely/i, "Browser-check copy should say the action paused safely.");
+  assert.match(manualAttentionCopy, /did not submit/i, "Browser-check copy should preserve submit safety.");
   assert.doesNotMatch(manualAttentionCopy, /manual:upwork|captcha_or_security_challenge|manual_attention_required|field_preparation_incomplete|action\s*#?\d+/i, "Normal browser-check copy should hide raw ids and internal states.");
 
   result = await call({ visible: visible({ internalState: "unknown", sessionState: "unknown", currentUrl: "https://www.upwork.com/?__cf_chl_tk=abc", title: "Challenge" }) });
@@ -128,11 +136,21 @@ async function runTests(): Promise<void> {
   assert.equal(cleanUnknown.result.actionStatusUnchanged, "paused");
   assert.equal(cleanUnknown.clearCalls, 1);
 
+  result = await call({
+    action: action({ status: "cancelled" }),
+    staleRecovery: true,
+    visible: visible({ internalState: "unknown", sessionState: "unknown", currentUrl: "https://www.upwork.com/nx/find-work/", title: "Upwork", summary: "Could not confidently classify the browser session." }),
+  });
+  assert.equal(result.result.reason, "visible_browser_not_confirmed_logged_in");
+  assert.match(result.result.operatorReport ?? "", /not confirmed logged in/i);
+  assert.equal(result.clearCalls, 0);
+
   result = await call({});
   assert.equal(result.result.ok, true);
   assert.equal(result.result.tool, "browser.session.clear");
   assert.equal(result.result.cleared, true);
   assert.equal(result.result.actionId, 9);
+  assert.equal(result.result.recoveryKind, "paused_action_manual_retry");
   assert.equal(result.result.previousSessionState, "manual_attention_required");
   assert.equal(result.result.sessionState, "healthy");
   assert.equal(result.result.visibleSessionState, "logged_in");
@@ -144,6 +162,47 @@ async function runTests(): Promise<void> {
   const json = JSON.stringify(result.result);
   assert.ok(json.length < 1000, "session clear JSON should be compact");
   assert.doesNotMatch(json, /<html|<body|document\.querySelector|window\.TOP_NAV_USER_CONFIG/i);
+
+  result = await call({ action: action({ status: "cancelled" }), staleRecovery: true });
+  assert.equal(result.result.ok, true);
+  assert.equal(result.result.tool, "browser.session.recover_stale");
+  assert.equal(result.result.cleared, true);
+  assert.equal(result.result.actionId, 9);
+  assert.equal(result.result.recoveryKind, "stale_terminal_manual_attention");
+  assert.equal(result.result.previousSessionState, "manual_attention_required");
+  assert.equal(result.result.sessionState, "healthy");
+  assert.equal(result.result.visibleSessionState, "logged_in");
+  assert.equal(result.result.blocked, false);
+  assert.equal(result.result.actionStatusUnchanged, "cancelled", "stale recovery must not mutate the terminal browser action");
+  assert.match(result.result.operatorReport ?? "", /cleared stale manual-attention browser state/i);
+  assert.match(result.result.operatorReport ?? "", /final submit remains manual/i);
+  assert.equal(result.clearCalls, 1);
+
+  result = await call({ action: action({ status: "completed" }), staleRecovery: true });
+  assert.equal(result.result.ok, true, "completed terminal actions can also leave stale session state behind");
+  assert.equal(result.result.actionStatusUnchanged, "completed");
+  assert.equal(result.clearCalls, 1);
+
+  result = await call({ action: action({ status: "pending" }), staleRecovery: true });
+  assert.equal(result.result.reason, "action_is_not_terminal");
+  assert.equal(result.result.actionStatusUnchanged, "pending");
+  assert.equal(result.clearCalls, 0);
+
+  result = await call({ action: action({ status: "paused" }), staleRecovery: true });
+  assert.equal(result.result.reason, "action_is_not_terminal", "stale recovery must not replace the paused-action retry flow");
+  assert.equal(result.result.actionStatusUnchanged, "paused");
+  assert.equal(result.clearCalls, 0);
+
+  result = await call({
+    action: action({ status: "cancelled" }),
+    staleRecovery: true,
+    visible: visible({ internalState: "captcha_or_security_challenge", sessionState: "manual_attention_required", manualAttentionRequired: true, blocked: true, title: "Just a moment..." }),
+  });
+  assert.equal(result.result.reason, "visible_browser_still_requires_manual_attention");
+  assert.equal(result.result.visibleSessionState, "manual_attention_required");
+  assert.equal(result.result.actionStatusUnchanged, "cancelled");
+  assert.match(result.result.operatorReport ?? "", /did not clear/i);
+  assert.equal(result.clearCalls, 0);
 
   const profile = "/opt/upwork-agent/shared/browser-profile";
   const oneParentWithChildren = getChromeProfileProcessDiagnostics({

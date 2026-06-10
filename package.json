@@ -57,6 +57,7 @@
     "browser:session:check": "bash scripts/check-browser-session.sh",
     "browser:cdp:check": "tsx src/browserSessionCli.ts --check",
     "browser:session:clear": "tsx src/browserSessionCli.ts --clear",
+    "browser:session:recover-stale": "tsx src/browserSessionCli.ts --recover-stale",
     "browser:tool": "tsx src/browserToolCli.ts",
     "browser:worker": "tsx src/browserWorker.ts",
     "browser:worker:controlled": "tsx src/browserWorker.ts --controlled 2",

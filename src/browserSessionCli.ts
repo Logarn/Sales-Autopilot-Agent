@@ -23,18 +23,21 @@ import { BrowserAction } from "./types";
 import * as path from "node:path";
 
 const CLEAR_TOOL = "browser.session.clear";
+const RECOVER_STALE_TOOL = "browser.session.recover_stale";
 
 export interface BrowserSessionClearResult {
   ok: boolean;
-  tool: typeof CLEAR_TOOL;
+  tool: typeof CLEAR_TOOL | typeof RECOVER_STALE_TOOL;
   cleared: boolean;
   actionId?: number;
+  recoveryKind?: "paused_action_manual_retry" | "stale_terminal_manual_attention";
   previousSessionState?: string;
   sessionState?: string;
   visibleSessionState?: string;
   blocked?: boolean;
   actionStatusUnchanged?: string;
   reason?: string;
+  operatorReport?: string;
   error?: string;
 }
 
@@ -58,17 +61,19 @@ function parseActionId(value: string | undefined): number | null {
 function compactResult(result: BrowserSessionClearResult): BrowserSessionClearResult {
   const compact: BrowserSessionClearResult = {
     ok: result.ok,
-    tool: CLEAR_TOOL,
+    tool: result.tool,
     cleared: result.cleared,
   };
   for (const key of [
     "actionId",
+    "recoveryKind",
     "previousSessionState",
     "sessionState",
     "visibleSessionState",
     "blocked",
     "actionStatusUnchanged",
     "reason",
+    "operatorReport",
     "error",
   ] as const) {
     const value = result[key];
@@ -77,6 +82,15 @@ function compactResult(result: BrowserSessionClearResult): BrowserSessionClearRe
     }
   }
   return compact;
+}
+
+function isBlockedStoredSession(status: BrowserSessionStatus): boolean {
+  const blockedStates = new Set(["manual_attention_required", "cooling_down", "disabled_until_manual_retry", "browser_session_unhealthy"]);
+  return status.blocked && blockedStates.has(status.state);
+}
+
+function terminalActionStatus(status: BrowserAction["status"]): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
 }
 
 function hasRestrictedManualAttentionMarkers(value: string): boolean {
@@ -103,14 +117,17 @@ function visibleSessionIsCleanEnough(inspection: BrowserSessionInspection): bool
   return false;
 }
 
+function visibleSessionIsConfirmedLoggedInAndClean(inspection: BrowserSessionInspection): boolean {
+  return inspection.sessionState === "logged_in" && visibleSessionIsCleanEnough(inspection);
+}
+
 export async function runBrowserSessionClear(actionId: number | null, deps: BrowserSessionClearDeps): Promise<{ result: BrowserSessionClearResult; exitCode: number }> {
   if (!actionId) {
     return { result: compactResult({ ok: false, tool: CLEAR_TOOL, cleared: false, error: "Missing required --id value." }), exitCode: 1 };
   }
 
   const before = deps.getSessionStatus();
-  const blockedStates = new Set(["manual_attention_required", "cooling_down", "disabled_until_manual_retry", "browser_session_unhealthy"]);
-  if (!before.blocked || !blockedStates.has(before.state)) {
+  if (!isBlockedStoredSession(before)) {
     return {
       result: compactResult({ ok: false, tool: CLEAR_TOOL, cleared: false, actionId, sessionState: before.state, blocked: before.blocked, reason: "stored_session_is_not_blocked" }),
       exitCode: 1,
@@ -177,11 +194,122 @@ export async function runBrowserSessionClear(actionId: number | null, deps: Brow
       tool: CLEAR_TOOL,
       cleared: true,
       actionId,
+      recoveryKind: "paused_action_manual_retry",
       previousSessionState: before.state,
       sessionState: after.state,
       visibleSessionState: visible.sessionState,
       blocked: after.blocked,
       actionStatusUnchanged: unchangedAction.status,
+    }),
+    exitCode: 0,
+  };
+}
+
+export async function runBrowserSessionRecoverStaleTerminal(actionId: number | null, deps: BrowserSessionClearDeps): Promise<{ result: BrowserSessionClearResult; exitCode: number }> {
+  if (!actionId) {
+    return { result: compactResult({ ok: false, tool: RECOVER_STALE_TOOL, cleared: false, error: "Missing required --id value." }), exitCode: 1 };
+  }
+
+  const before = deps.getSessionStatus();
+  if (!isBlockedStoredSession(before)) {
+    return {
+      result: compactResult({ ok: false, tool: RECOVER_STALE_TOOL, cleared: false, actionId, sessionState: before.state, blocked: before.blocked, reason: "stored_session_is_not_blocked" }),
+      exitCode: 1,
+    };
+  }
+  if (before.lastManualAttention?.actionId !== actionId) {
+    return {
+      result: compactResult({ ok: false, tool: RECOVER_STALE_TOOL, cleared: false, actionId, sessionState: before.state, blocked: before.blocked, reason: "manual_attention_action_id_mismatch" }),
+      exitCode: 1,
+    };
+  }
+
+  const action = deps.getActionById(actionId);
+  if (!action) {
+    return {
+      result: compactResult({ ok: false, tool: RECOVER_STALE_TOOL, cleared: false, actionId, sessionState: before.state, blocked: before.blocked, reason: "action_not_found" }),
+      exitCode: 1,
+    };
+  }
+  if (!terminalActionStatus(action.status)) {
+    return {
+      result: compactResult({ ok: false, tool: RECOVER_STALE_TOOL, cleared: false, actionId, sessionState: before.state, blocked: before.blocked, actionStatusUnchanged: action.status, reason: "action_is_not_terminal" }),
+      exitCode: 1,
+    };
+  }
+
+  const visible = await deps.inspectVisibleSession();
+  if (!visibleSessionIsConfirmedLoggedInAndClean(visible)) {
+    return {
+      result: compactResult({
+        ok: false,
+        tool: RECOVER_STALE_TOOL,
+        cleared: false,
+        actionId,
+        sessionState: before.state,
+        visibleSessionState: visible.sessionState,
+        blocked: true,
+        actionStatusUnchanged: action.status,
+        reason: visibleSessionIsCleanEnough(visible) ? "visible_browser_not_confirmed_logged_in" : "visible_browser_still_requires_manual_attention",
+        operatorReport: visibleSessionIsCleanEnough(visible)
+          ? "I did not clear the stale browser state because the visible browser is not confirmed logged in."
+          : "I did not clear the stale browser state because the visible browser still needs a human security or login check.",
+      }),
+      exitCode: 2,
+    };
+  }
+
+  deps.clearManualAttention(actionId);
+  const after = deps.getSessionStatus();
+  const unchangedAction = deps.getActionById(actionId);
+  if (after.blocked) {
+    return {
+      result: compactResult({
+        ok: false,
+        tool: RECOVER_STALE_TOOL,
+        cleared: false,
+        actionId,
+        previousSessionState: before.state,
+        sessionState: after.state,
+        visibleSessionState: visible.sessionState,
+        blocked: after.blocked,
+        actionStatusUnchanged: unchangedAction?.status,
+        reason: "stored_session_remains_blocked_after_recovery",
+      }),
+      exitCode: 1,
+    };
+  }
+  if (unchangedAction?.status !== action.status) {
+    return {
+      result: compactResult({
+        ok: false,
+        tool: RECOVER_STALE_TOOL,
+        cleared: false,
+        actionId,
+        previousSessionState: before.state,
+        sessionState: after.state,
+        visibleSessionState: visible.sessionState,
+        blocked: after.blocked,
+        actionStatusUnchanged: unchangedAction?.status,
+        reason: "action_status_changed_unexpectedly",
+      }),
+      exitCode: 1,
+    };
+  }
+
+  return {
+    result: compactResult({
+      ok: true,
+      tool: RECOVER_STALE_TOOL,
+      cleared: true,
+      actionId,
+      recoveryKind: "stale_terminal_manual_attention",
+      previousSessionState: before.state,
+      sessionState: after.state,
+      visibleSessionState: visible.sessionState,
+      blocked: after.blocked,
+      actionStatusUnchanged: unchangedAction.status,
+      operatorReport: `I cleared stale manual-attention browser state for terminal action #${actionId} after visible browser inspection reported ${visible.sessionState}. The action stayed ${unchangedAction.status}; no browser work was started and final submit remains manual.`,
     }),
     exitCode: 0,
   };
@@ -302,20 +430,24 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (mode === "--clear") {
+  if (mode === "--clear" || mode === "--recover-stale") {
     let exitCode = 1;
     let result: BrowserSessionClearResult;
     try {
-      const outcome = await runBrowserSessionClear(parseActionId(argValue("--id")), {
+      const id = parseActionId(argValue("--id"));
+      const deps: BrowserSessionClearDeps = {
         getSessionStatus: () => getBrowserSessionStatus(),
         getActionById: (id) => getBrowserActionById(id),
         inspectVisibleSession: async () => (await inspectVisibleCdpSession()).inspection,
         clearManualAttention: (id) => clearBrowserManualAttention(id),
-      });
+      };
+      const outcome = mode === "--recover-stale"
+        ? await runBrowserSessionRecoverStaleTerminal(id, deps)
+        : await runBrowserSessionClear(id, deps);
       result = outcome.result;
       exitCode = outcome.exitCode;
     } catch (error) {
-      result = compactResult({ ok: false, tool: CLEAR_TOOL, cleared: false, actionId: parseActionId(argValue("--id")) ?? undefined, error: error instanceof Error ? error.message : String(error) });
+      result = compactResult({ ok: false, tool: mode === "--recover-stale" ? RECOVER_STALE_TOOL : CLEAR_TOOL, cleared: false, actionId: parseActionId(argValue("--id")) ?? undefined, error: error instanceof Error ? error.message : String(error) });
       exitCode = 1;
     } finally {
       closeDb();
@@ -329,6 +461,7 @@ async function main(): Promise<void> {
   console.log("  npm run browser:session");
   console.log("  npm run browser:cdp:check");
   console.log("  npm run browser:session:clear -- --id <paused-action-id>");
+  console.log("  npm run browser:session:recover-stale -- --id <terminal-action-id>");
   process.exitCode = 1;
 }
 
