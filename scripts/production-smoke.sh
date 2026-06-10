@@ -63,7 +63,7 @@ run check_service_active upwork-agent-health.timer
 if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]] && systemctl is-active --quiet upwork-agent-lead-engine.service; then
   echo "upwork-agent-lead-engine.service: active"
 else
-  run npm run -s agent:run-once:dry
+  run bash scripts/agent-dry-run-smoke.sh
 fi
 
 run npm run -s browser:tool -- session.check

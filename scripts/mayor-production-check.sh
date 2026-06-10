@@ -283,7 +283,7 @@ run_step "production smoke" env ENV_FILE="$ENV_FILE" npm run production:smoke
 if template_env; then
   note_step "controlled dry run" "skipped" "template env has no live credentials"
 else
-  run_step "controlled dry run" env ENV_FILE="$ENV_FILE" npm run agent:run-once:dry
+  run_step "controlled dry run" env ENV_FILE="$ENV_FILE" bash scripts/agent-dry-run-smoke.sh
 fi
 
 if [[ "$START_LEAD_ENGINE" -eq 1 ]]; then
