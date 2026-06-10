@@ -109,6 +109,17 @@ function trimTerminalPunctuation(value: string): string {
   return value.trim().replace(/[.!?]+$/g, "");
 }
 
+function displayPortfolioExample(item: PortfolioItem): string {
+  const withoutExtension = item.name
+    .replace(/\.(pdf|png|jpe?g)$/i, "")
+    .replace(/\s*[-–]\s*case study$/i, " case study")
+    .trim();
+  if (/^portfolio$/i.test(withoutExtension)) return "general retention portfolio";
+  if (/^lifely$/i.test(withoutExtension)) return "Lifely case study";
+  if (/^truly beauty$/i.test(withoutExtension)) return "Truly Beauty case study";
+  return withoutExtension;
+}
+
 function extractClientRequestAnswers(
   job: ScoredJob,
   profile: FreelancerProfile,
@@ -126,7 +137,7 @@ function extractClientRequestAnswers(
     add(`Rate: ${trimTerminalPunctuation(suggestedBid)}. If this becomes a retainer, I would scope the first month around audit, priority fixes, and reporting before expanding.`);
   }
   if (/portfolio|example|case stud|sample|previous work|proof/i.test(source)) {
-    const namedExamples = portfolioItems.map((item) => `${item.name}${item.result ? ` (${item.result})` : ""}`);
+    const namedExamples = portfolioItems.map((item) => `${displayPortfolioExample(item)}${item.result ? ` (${item.result})` : ""}`);
     const fallbackExamples = proofPoints.filter((point) => /beauty|dtc|klaviyo|retention|lifecycle|shopify|revenue/i.test(point)).slice(0, 2);
     const examples = [...namedExamples, ...fallbackExamples].slice(0, 2);
     add(examples.length ? `Relevant examples: ${examples.join("; ")}.` : "Relevant proof: DTC lifecycle, Klaviyo, segmentation, and retention work tied to repeat purchase and revenue.");
@@ -259,9 +270,36 @@ function cleanProposal(text: string, bannedPhrases: string[]): string {
   return cleaned.replace(/\n{3,}/g, "\n\n").replace(/ {2,}/g, " ").trim();
 }
 
+function parseBudgetNumbers(value: string): number[] {
+  return (value.match(/\d+(?:,\d{3})*(?:\.\d+)?/g) ?? [])
+    .map((item) => Number(item.replace(/,/g, "")))
+    .filter((item) => Number.isFinite(item) && item > 0);
+}
+
+function isHourlyBudget(value: string): boolean {
+  return /\/\s*hr|hourly|per\s+hour/i.test(value);
+}
+
+function formatHourlyRate(value: number): string {
+  const rounded = Number.isInteger(value) ? value.toFixed(0) : value.toFixed(2).replace(/0+$/g, "").replace(/\.$/, "");
+  return `$${rounded}/hr`;
+}
+
 function suggestBid(job: ScoredJob, profile: FreelancerProfile): string {
-  if (job.budget.toLowerCase().includes("hourly") && profile.hourlyRate > 0) {
-    return `$${profile.hourlyRate}/hr`;
+  if (isHourlyBudget(job.budget) && profile.hourlyRate > 0) {
+    const budgetNumbers = parseBudgetNumbers(job.budget);
+    if (budgetNumbers.length > 0) {
+      const low = Math.min(...budgetNumbers);
+      const high = Math.max(...budgetNumbers);
+      const minimumAcceptableRate = 10;
+      const plannedRate = profile.hourlyRate > high
+        ? Math.min(profile.hourlyRate, Math.max(minimumAcceptableRate, high + 5))
+        : profile.hourlyRate < low
+          ? Math.max(minimumAcceptableRate, low)
+          : Math.max(minimumAcceptableRate, profile.hourlyRate);
+      return formatHourlyRate(plannedRate);
+    }
+    return formatHourlyRate(profile.hourlyRate);
   }
   return "Use the posted budget unless the scope is larger than described; do not race to the bottom.";
 }
@@ -367,7 +405,7 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   const clientRequestAnswers = extractClientRequestAnswers(job, profile, rateRetainerAnswer, portfolioItems, proofPoints);
   const clientAnswersSentence = clientRequestAnswers.length ? `To answer the application notes directly: ${clientRequestAnswers.join(" ")}` : "";
   const portfolioSentence = portfolioItems.length
-    ? `The most relevant proof to include would be: ${portfolioItems.map((item) => item.name).join(", ")}.`
+    ? `The most relevant proof to include would be: ${portfolioItems.map((item) => displayPortfolioExample(item)).join(", ")}.`
     : "I would keep attachments light unless you want a specific example.";
   const portfolioKnowledgeSentence = portfolioKnowledge.length
     ? `Additional relevant example: ${portfolioKnowledge.map((artifact) => artifact.summary).join(" ")}`

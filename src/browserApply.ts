@@ -7,7 +7,7 @@ import { proofAssetExists } from "./proofAssets";
 import { buildProofAvailabilityReport, formatProofAvailabilityLines } from "./proofAvailability";
 import { applyProofPlanOverridesToSelection, parseProofPlanOverrides } from "./proofPlanOverrides";
 import { buildProposalContextPack } from "./skills/profileContextSkill";
-import { selectPortfolioAssetsForJob } from "./skills/portfolioSelectionSkill";
+import { selectPortfolioAssetsForJob, UPWORK_PORTFOLIO_ITEMS } from "./skills/portfolioSelectionSkill";
 import {
   ApplicationDraft,
   BrowserApplyAttachmentInstruction,
@@ -160,6 +160,39 @@ function isSpecifiedRate(rate: string): boolean {
   return Boolean(normalized && normalized !== "not specified" && normalized !== "n/a");
 }
 
+function parseBudgetNumbers(value: string): number[] {
+  return (value.match(/\d+(?:,\d{3})*(?:\.\d+)?/g) ?? [])
+    .map((item) => Number(item.replace(/,/g, "")))
+    .filter((item) => Number.isFinite(item) && item > 0);
+}
+
+function isHourlyBudget(value: string): boolean {
+  return /\/\s*hr|hourly|per\s+hour/i.test(value);
+}
+
+function rateNumber(rate: string): number | null {
+  const match = rate.match(/\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const value = Number(match[0]);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function clientBudgetAwareRate(rate: string, scoredJob: ScoredJob | null): string {
+  const current = rateNumber(rate);
+  if (!scoredJob || !isHourlyBudget(scoredJob.budget) || current === null) return rate;
+  const budgetNumbers = parseBudgetNumbers(scoredJob.budget);
+  if (budgetNumbers.length === 0) return rate;
+  const low = Math.min(...budgetNumbers);
+  const high = Math.max(...budgetNumbers);
+  const minimumAcceptableRate = 10;
+  const planned = current > high
+    ? Math.min(current, Math.max(minimumAcceptableRate, high + 5))
+    : current < low
+      ? Math.max(minimumAcceptableRate, low)
+      : Math.max(minimumAcceptableRate, current);
+  return `$${planned}/hr`;
+}
+
 function buildAttachmentInstructions(items: PortfolioItem[]): {
   attachments: BrowserApplyAttachmentInstruction[];
   skipped: BrowserApplySkippedAttachment[];
@@ -187,6 +220,32 @@ function buildAttachmentInstructions(items: PortfolioItem[]): {
   return { attachments, skipped };
 }
 
+function displayNameForAttachmentPath(filePath: string): string {
+  const basename = path.basename(filePath).replace(/\.(pdf|png|jpe?g)$/i, "");
+  return basename
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function upworkPortfolioLabelsFromDraftItems(items: PortfolioItem[]): string[] {
+  const text = items
+    .flatMap((item) => [item.id, item.name, item.filePath, item.description, item.result])
+    .join(" ")
+    .toLowerCase();
+  return UPWORK_PORTFOLIO_ITEMS
+    .filter((item) => item.aliases.some((alias) => text.includes(alias.toLowerCase())))
+    .map((item) => item.name);
+}
+
+function sanitizeCoverLetterForApply(text: string): string {
+  return text.replace(
+    /\b(?:(?:profile\/attachments|slack-intake\/[^\s)]+)\/)?([A-Za-z0-9][A-Za-z0-9_-]{2,})\.(pdf|png|jpe?g)\b/gi,
+    (_match, name: string) => displayNameForAttachmentPath(name),
+  );
+}
+
 function buildAutoAttachmentInstructions(paths: string[]): {
   attachments: BrowserApplyAttachmentInstruction[];
   skipped: BrowserApplySkippedAttachment[];
@@ -195,7 +254,7 @@ function buildAutoAttachmentInstructions(paths: string[]): {
   const skipped: BrowserApplySkippedAttachment[] = [];
 
   for (const filePath of paths) {
-    const name = path.basename(filePath);
+    const name = displayNameForAttachmentPath(filePath);
     attachments.push({ id: filePath, name, filePath, sensitivity: "approved_external" });
   }
 
@@ -233,10 +292,10 @@ function attachmentsWithApplicationAssets(
   return replaced;
 }
 
-function parseRate(draft: ApplicationDraft): string {
+function parseRate(draft: ApplicationDraft, scoredJob: ScoredJob | null): string {
   const structuredRate = safeTrim(draft.structuredProposal?.browserFillNotes.rate);
-  if (structuredRate) return structuredRate;
-  return draft.suggestedBid || "Not specified";
+  const planned = structuredRate || draft.suggestedBid || "Not specified";
+  return clientBudgetAwareRate(planned, scoredJob);
 }
 
 function parseProfile(draft: ApplicationDraft): string {
@@ -247,12 +306,17 @@ function parseProfile(draft: ApplicationDraft): string {
 function buildConnectsPlan(draft: ApplicationDraft, rules: ConnectsRules, issues: BrowserApplyValidationIssue[]): BrowserApplyConnectsPlan {
   const sourceBacked = draft.connectsStrategy?.sourceBackedConnects;
   const required = sourceBacked?.requiredConnects ?? null;
-  const requestedBoost = required === null ? 0 : Math.max(0, draft.suggestedBoostConnects || 0);
-  let boost: number | null = required === null ? null : Math.min(requestedBoost, rules.maxBoost);
+  const suggestedBoost = required === null ? 0 : Math.max(0, draft.suggestedBoostConnects || 0);
+  const requestedBoost = 0;
+  let boost: number | null = required === null ? null : requestedBoost;
   const notes = [...draft.connectsWarnings];
 
   if (draft.suggestedConnects < 0 || draft.suggestedBoostConnects < 0) {
     issues.push(issue("error", "invalid_connects", "Connects values must be non-negative."));
+  }
+  if (suggestedBoost > 0) {
+    notes.push(`Suggested boost ${suggestedBoost} left unset because optional boost requires explicit approval.`);
+    issues.push(issue("warning", "boost_requires_explicit_approval", "Optional boost was left unset; explicit approval is required before setting boost Connects."));
   }
   if (required === null) {
     notes.push("Required Connects are unknown from visible Upwork source text.");
@@ -260,16 +324,6 @@ function buildConnectsPlan(draft: ApplicationDraft, rules: ConnectsRules, issues
   } else if (required > rules.maxRequiredPerJob) {
     issues.push(issue("error", "required_connects_cap", `Required Connects ${required} exceeds cap ${rules.maxRequiredPerJob}.`));
   }
-  if (requestedBoost > rules.maxBoost) {
-    notes.push(`Requested boost ${requestedBoost} was clamped to maxBoost ${rules.maxBoost}.`);
-    issues.push(issue("warning", "boost_clamped", `Boost Connects clamped from ${requestedBoost} to ${boost}.`));
-  }
-  if (boost !== null && rules.neverBidMax && boost >= rules.maxBoost && boost > 0) {
-    boost = Math.max(0, rules.maxBoost - 1);
-    notes.push(`Boost reduced below maxBoost because neverBidMax is enabled.`);
-    issues.push(issue("warning", "never_bid_max", "Boost was reduced to avoid automatically bidding the maximum."));
-  }
-
   const total = required === null || boost === null ? null : required + boost;
   const approvalRequired = total === null || total > rules.requireApprovalAbove || boost === null || boost > rules.idealBoostMax;
   if (approvalRequired) {
@@ -387,9 +441,9 @@ function buildPreparationDiagnostics(input: {
     attachmentDiagnostics: input.attachmentDiagnostics,
     missingFiles: input.missingLocalAssets,
     skippedAttachments: input.skippedAttachments,
-    proofHighlights: uniqueStrings([...input.proofHighlights, ...input.mentionOnlyProof, ...input.proofAvailability]),
+    proofHighlights: uniqueStrings([...input.proofHighlights, ...input.mentionOnlyProof]),
     portfolioHighlights: uniqueStrings([
-      ...input.attachments.map((attachment) => `${attachment.name}: ${attachment.filePath}`),
+      ...input.attachments.map((attachment) => `${attachment.name}: selected for upload`),
       ...input.manualReviewAssets,
       ...input.figmaRecommendations,
       ...input.videoRecommendations,
@@ -424,7 +478,12 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
   if (!draft.proposalText.trim()) {
     issues.push(issue("error", "missing_proposal", "Application draft has no proposal text to fill."));
   }
-  const rate = parseRate(draft);
+  const coverLetter = sanitizeCoverLetterForApply(draft.proposalText);
+  if (coverLetter !== draft.proposalText) {
+    issues.push(issue("warning", "cover_letter_filename_sanitized", "Cover letter proof filenames/paths were replaced with client-safe proof labels before browser fill."));
+  }
+  const scoredJob = getScoredJobForSlackPreview(jobId);
+  const rate = parseRate(draft, scoredJob);
   if (!isSpecifiedRate(rate)) {
     issues.push(issue("error", "missing_rate", "Application draft has no rate/bid value to fill safely."));
   }
@@ -434,7 +493,6 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
     issues.push(issue("error", "invalid_upwork_link", "A direct Upwork job/apply URL is required before browser preparation."));
   }
 
-  const scoredJob = getScoredJobForSlackPreview(jobId);
   const profileContext = scoredJob ? buildProposalContextPack(scoredJob) : null;
   const basePortfolioSelection = scoredJob ? selectPortfolioAssetsForJob(scoredJob) : null;
   const proofOverrides = parseProofPlanOverrides(getApplicationProofPlanOverrides(jobId) ?? {});
@@ -461,13 +519,16 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
   const manualReviewAssets = portfolioSelection?.recommendOnlyAssets.map((asset) => `${asset.name} — ${asset.path}`) ?? [];
   const mentionOnlyProof = portfolioSelection?.mentionOnlyProof.map((proof) => `${proof.name}: ${proof.headline}`) ?? [];
   const proofAvailability = portfolioSelection
-    ? formatProofAvailabilityLines(buildProofAvailabilityReport(portfolioSelection), { includePath: true, limit: 8 })
+    ? formatProofAvailabilityLines(buildProofAvailabilityReport(portfolioSelection), { includePath: false, limit: 8 })
     : [];
   const figmaRecommendations = profileContext?.selectedFigmaLinks.map((link) => `${link.name}: ${link.url}`) ?? [];
   const videoRecommendations = profileContext?.selectedVideoLinks.map((link) => `${link.name}: ${link.url}`) ?? [];
   const manualReviewWarnings = profileContext?.manualReviewWarnings ?? [];
   const profileHighlights = profileContext?.selectedPositioning ?? draft.structuredProposal?.browserFillNotes.profileNotes ?? [];
-  const upworkPortfolioHighlights = portfolioSelection?.selectedUpworkPortfolioItems.map((item) => item.name) ?? [];
+  const upworkPortfolioHighlights = uniqueStrings([
+    ...(portfolioSelection?.selectedUpworkPortfolioItems.map((item) => item.name) ?? []),
+    ...upworkPortfolioLabelsFromDraftItems(draft.selectedPortfolioItems),
+  ]);
   const proofHighlights = [
     ...(portfolioSelection?.selectedProof.flatMap((proof) => [
       `${proof.name}: ${proof.headline}`,
@@ -477,11 +538,10 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
   const screeningAnswers = draft.structuredProposal?.clientRequestAnswers ?? [];
   const highlights = uniqueStrings([
     ...upworkPortfolioHighlights,
-    ...(draft.structuredProposal?.browserFillNotes.highlights ?? []),
   ]);
 
   const connects = buildConnectsPlan(draft, loadConnectsRules(options.connectsRulesPath), issues);
-  const connectsStrategy = draft.connectsStrategy ?? (scoredJob
+  const baseConnectsStrategy = draft.connectsStrategy ?? (scoredJob
     ? evaluateConnectsStrategy({
         job: scoredJob,
         score: scoredJob.score,
@@ -506,6 +566,20 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
         reasons: [],
         risks: connects.notes,
       });
+  const connectsStrategy: ConnectsStrategySnapshot = {
+    ...baseConnectsStrategy,
+    suggestedBoostConnects: connects.boost ?? 0,
+    totalConnects: connects.total,
+    sourceBackedConnects: baseConnectsStrategy.sourceBackedConnects
+      ? {
+          ...baseConnectsStrategy.sourceBackedConnects,
+          boostConnects: null,
+          totalConnects: connects.total,
+        }
+      : undefined,
+    reasons: [...baseConnectsStrategy.reasons],
+    risks: [...baseConnectsStrategy.risks],
+  };
   const sourceRequired = connectsStrategy.sourceBackedConnects?.requiredConnects ?? connects.required;
   const applyPageVerificationOnly = sourceRequired === null && connectsStrategy.decision === "manual_review";
   if (connectsStrategy.decision !== "safe_apply" && !applyPageVerificationOnly) {
@@ -516,7 +590,7 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
   const connectsEvidence = buildConnectsEvidence(draft, connects, connectsStrategy, scoredJob);
   const attachmentDiagnostics = buildAttachmentDiagnostics(attachments);
   const manualFields = buildManualFields({
-    coverLetter: draft.proposalText,
+    coverLetter,
     rate,
     connects,
     connectsStrategy,
@@ -528,7 +602,7 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
     issues,
   });
   const finalPreparationDiagnostics = buildPreparationDiagnostics({
-    coverLetter: draft.proposalText,
+    coverLetter,
     screeningAnswers,
     rate,
     connects,
@@ -560,7 +634,7 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
         status: draft.status,
         profile: parseProfile(draft),
         rate,
-        coverLetter: draft.proposalText,
+        coverLetter,
         screeningAnswers,
         attachments,
         skippedAttachments: skipped,
@@ -585,7 +659,7 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
         proofHighlights,
         portfolioHighlights: uniqueStrings([
           ...upworkPortfolioHighlights.map((label) => `Upwork portfolio: ${label}`),
-          ...attachments.map((attachment) => `${attachment.name}: ${attachment.filePath}`),
+          ...attachments.map((attachment) => `${attachment.name}: selected for upload`),
           ...manualReviewAssets,
           ...figmaRecommendations,
           ...videoRecommendations,

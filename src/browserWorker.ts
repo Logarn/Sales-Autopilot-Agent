@@ -1552,6 +1552,11 @@ async function tryFillFirst(page: PlaywrightPageLike, selectors: string[], value
   return false;
 }
 
+function hourlyRateInputValue(value: string): string | null {
+  const match = value.match(/\d+(?:\.\d+)?/);
+  return match?.[0] ?? null;
+}
+
 async function tryFillScreeningAnswers(page: PlaywrightPageLike, answers: string[]): Promise<{ filled: number; skipped: number }> {
   const cleanAnswers = answers.map((answer) => answer.trim()).filter(Boolean);
   if (cleanAnswers.length === 0) return { filled: 0, skipped: 0 };
@@ -1767,12 +1772,18 @@ function verifyApplyPageConnects(plan: BrowserApplyFillPlan, bodyText: string): 
     opportunityScore: plan.connectsStrategy.decision === "safe_apply" ? 60 : 0,
     currentBids: visibleBoostBids,
   });
-  const plannedBoost = Math.min(Math.max(0, visibleBoostDecision.boostConnects), 50);
+  const plannedBoost = 0;
   if (requestedBoost > 50) {
     issues.push({
       severity: "warning",
       code: "boost_hard_cap_applied",
       message: `Requested boost ${requestedBoost} exceeds the hard cap 50; boost was capped before any browser fill attempt.`,
+    });
+  } else if (requestedBoost > 0 || visibleBoostDecision.boostConnects > 0) {
+    issues.push({
+      severity: "warning",
+      code: "boost_requires_explicit_approval",
+      message: "Optional boost was left unset; explicit approval is required before setting boost Connects.",
     });
   }
   const required = extracted.requiredConnects;
@@ -1784,9 +1795,10 @@ function verifyApplyPageConnects(plan: BrowserApplyFillPlan, bodyText: string): 
   plan.connects.approvalRequired = requiresManualReview;
   plan.connects.notes = [
     `Required Connects verified on the apply page (${required}).`,
-    visibleBoostDecision.reason,
+    "No boost set; optional boost requires explicit approval.",
     visibleBoostDecision.skippedReason ? `Boost skipped: ${visibleBoostDecision.skippedReason}` : null,
-    requestedBoost > 0 && plannedBoost !== requestedBoost ? `Initial boost request ${requestedBoost} was replaced by visible-table strategy.` : null,
+    visibleBoostDecision.boostConnects > 0 ? `Visible boost option ${visibleBoostDecision.boostConnects} was not selected automatically.` : null,
+    requestedBoost > 0 ? `Initial boost request ${requestedBoost} was left unset pending explicit approval.` : null,
   ].filter((line): line is string => Boolean(line));
   plan.connectsStrategy.requiredConnects = required;
   plan.connectsStrategy.suggestedBoostConnects = plannedBoost;
@@ -1795,8 +1807,8 @@ function verifyApplyPageConnects(plan: BrowserApplyFillPlan, bodyText: string): 
   (plan.connectsStrategy as typeof plan.connectsStrategy & { visibleBoostBids?: VisibleBoostBid[]; chosenBoostRank?: number | null }).chosenBoostRank = visibleBoostDecision.targetRank;
   plan.connectsStrategy.sourceBackedConnects = {
     ...extracted,
-    boostConnects: extracted.boostConnects,
-    totalConnects: extracted.totalConnects ?? total,
+    boostConnects: null,
+    totalConnects: total,
   };
   plan.connectsStrategy.risks = removeUnknownConnectsRisks(plan.connectsStrategy.risks);
   if (requiresManualReview) {
@@ -2064,8 +2076,13 @@ export function persistApplicationSnapshot(input: {
 }
 
 function rateNeedle(value: string): string | null {
-  const match = value.match(/\d+(?:\.\d+)?/);
-  return match?.[0] ?? null;
+  return hourlyRateInputValue(value);
+}
+
+function rateFieldValueMatches(actual: string, expected: string): boolean {
+  const actualNumber = Number.parseFloat(actual.replace(/,/g, "").match(/-?\d+(?:\.\d+)?/)?.[0] ?? "");
+  const expectedNumber = Number.parseFloat(expected.replace(/,/g, ""));
+  return Number.isFinite(actualNumber) && Number.isFinite(expectedNumber) && Math.abs(actualNumber - expectedNumber) < 0.005;
 }
 
 function verification(
@@ -2204,7 +2221,7 @@ export async function verifyApplyPreparationOnPage(input: {
   const rateValue = rateNeedle(plan.rate);
   if (!rateValue) {
     results.push(verification("rate", "skipped_by_strategy", "No safe rate value was available in the plan."));
-  } else if (textCollectionContains(snapshot.inputValues, rateValue)) {
+  } else if (snapshot.inputValues.some((value) => rateFieldValueMatches(value, rateValue))) {
     results.push(verification("rate", "verified", `Rate field contains ${rateValue}.`, { expected: rateValue }));
   } else if (fields.skippedFields.includes("rate")) {
     results.push(verification("rate", "blocked_by_upwork_ui", "Rate field was not fillable.", { expected: rateValue }));
@@ -2310,18 +2327,21 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
     }
   }
 
-  if (await tryFillFirst(page, ["input[name*='rate']", "input[aria-label*='rate' i]", "input[placeholder*='$']"], plan.rate)) {
+  const rateInputValue = hourlyRateInputValue(plan.rate);
+  if (rateInputValue && await tryFillFirst(page, [
+    "[data-test='hourly-rate'] input[data-test='currency-input']",
+    "[data-test='up-fe-rate-widget'] [data-test='hourly-rate'] input",
+    "input[name*='rate']",
+    "input[aria-label*='rate' i]",
+  ], rateInputValue)) {
     attemptedFields.push("rate");
   } else {
     skippedFields.push("rate");
   }
 
   if (plan.connects.boost !== null && plan.connects.boost > 0) {
-    if (await tryFillFirst(page, ["input[name*='boost']", "input[aria-label*='boost' i]", "input[name*='connect']"], String(plan.connects.boost))) {
-      attemptedFields.push("connectsBoost");
-    } else {
-      skippedFields.push("connectsBoost");
-    }
+    skippedFields.push("connectsBoost");
+    manualFields.push("connects");
   }
 
   const attachmentFiles = plan.attachments.map((attachment) => resolveProofAssetPath(attachment.filePath));

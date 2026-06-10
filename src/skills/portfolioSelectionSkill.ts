@@ -150,6 +150,11 @@ function getJobText(job: Pick<JobPosting, "title" | "description" | "skills" | "
   return [job.title, job.description, job.skills.join(" "), job.category, job.budget, job.clientCountry].join(" ").toLowerCase();
 }
 
+function primaryJobText(text: string): string {
+  const bonusIndex = text.search(/\b(?:bonus|nice to have|nice-to-have)\b\s*[:\-]/i);
+  return bonusIndex === -1 ? text : text.slice(0, bonusIndex);
+}
+
 function includesAny(text: string, terms: string[]): boolean {
   return terms.some((term) => text.includes(normalizeText(term)));
 }
@@ -259,6 +264,7 @@ function rankAutoAttachAssets(text: string, assets: PortfolioAsset[]): Portfolio
 
 export function selectPortfolioAssetsForJob(job: JobPosting | ScoredJob): PortfolioSelectionResult {
   const text = getJobText(job);
+  const primaryText = primaryJobText(text);
   const proofBank = loadProofBank();
   const assets = loadPortfolioAssets();
   const figmaLinks = loadFigmaLinks();
@@ -295,11 +301,11 @@ export function selectPortfolioAssetsForJob(job: JobPosting | ScoredJob): Portfo
     addUpworkPortfolioForProof(result, "truly-beauty");
   }
 
-  if (/(health|wellness|supplement|men'?s health)/.test(text)) {
+  if (/(health|wellness|supplement|men'?s health)/.test(primaryText)) {
     addTheme("health_supplements");
     addProofAndAssets(result, findProofById(proofBank, "dr-rachael-institute"), assets, "auto_attach");
     addProofAndAssets(result, findProofById(proofBank, "dr-rachael-klaviyo-screenshot"), assets, "auto_attach");
-    if (/(subscription|foundation|setup|recharge)/.test(text)) {
+    if (/(subscription|foundation|setup|recharge)/.test(primaryText)) {
       addProofAndAssets(result, findProofById(proofBank, "endurance-wellness"), assets, "auto_attach");
     }
   }
@@ -323,7 +329,7 @@ export function selectPortfolioAssetsForJob(job: JobPosting | ScoredJob): Portfo
     result.selectedFigmaLinks.push(...pickFigmaLinks(text, figmaLinks));
   }
 
-  if (/(pet|dog|cat|chicken|farm|hobby)/.test(text) && /(dtc|shopify|klaviyo|retention|email|sms|recharge)/.test(text)) {
+  if (/\b(pet|dog|cat|chicken|farm|hobby)\b/.test(text) && /(dtc|shopify|klaviyo|retention|email|sms|recharge)/.test(text)) {
     addTheme("pet_dtc");
     addProofAndAssets(result, findProofById(proofBank, "whisker-seeker"), assets, "auto_attach");
     addProofAndAssets(result, findProofById(proofBank, "my-pet-chicken"), assets, "auto_attach");
@@ -346,6 +352,13 @@ export function selectPortfolioAssetsForJob(job: JobPosting | ScoredJob): Portfo
     }
   }
 
+  if (/(dtc|d2c|ecommerce|shopify|klaviyo|email marketing|retention|lifecycle)/.test(text) && /(portfolio|proof|case stud|sample|examples?|track record|results)/.test(text)) {
+    addTheme("generic_klaviyo_proof");
+    addUpworkPortfolioForProof(result, "fly-boutique");
+    addUpworkPortfolioForProof(result, "lifely");
+    addUpworkPortfolioForProof(result, "truly-beauty");
+  }
+
   result.selectedVideoLinks.push(...pickVideoLinks(text, videoLinks));
 
   result.matchedThemes = uniqueStrings(result.matchedThemes);
@@ -358,7 +371,7 @@ export function selectPortfolioAssetsForJob(job: JobPosting | ScoredJob): Portfo
     .slice(0, 3);
   result.mentionOnlyProof = uniqueById(result.mentionOnlyProof).slice(0, 2);
   result.doNotUseAssets = uniqueById(result.doNotUseAssets);
-  result.selectedUpworkPortfolioItems = uniqueById(result.selectedUpworkPortfolioItems).slice(0, 2);
+  result.selectedUpworkPortfolioItems = uniqueById(result.selectedUpworkPortfolioItems).slice(0, 3);
   result.selectedFigmaLinks = uniqueById(result.selectedFigmaLinks).slice(0, 2);
   result.selectedVideoLinks = uniqueById(result.selectedVideoLinks).slice(0, 1);
 

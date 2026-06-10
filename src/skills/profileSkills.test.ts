@@ -57,6 +57,19 @@ function runTests(): void {
   assert(includes(healthSelection.autoAttachAssets, "dr-rachael-report"), "Approved Dr. Rachael report should be auto-attach-capable when relevant");
   assert(healthSelection.autoAttachAssets.length <= 3, "Health jobs should cap proof files at the strongest three");
 
+  const genericKlaviyoJobWithHealthBonus = createJob({
+    title: "Email Marketing Specialist (Klaviyo)",
+    description: "Fast-growing ecommerce brand needs Klaviyo flows, campaign calendar, segmentation, A/B testing, reporting, and examples with results. Bonus: mental wellness, health, or digital-product category experience.",
+    budget: "$5.00 - $10.00 Hourly range",
+    skills: ["Klaviyo", "Email Marketing", "Shopify", "Lifecycle Marketing"],
+  });
+  const genericSelection = selectPortfolioAssetsForJob(genericKlaviyoJobWithHealthBonus);
+  assert(!includes(genericSelection.selectedProof, "dr-rachael-institute"), "Bonus-only health text should not select Dr. Rachael proof");
+  assert(!includes(genericSelection.autoAttachAssets, "endurance-wellness-strategy"), "Bonus-only health text should not auto-attach Endurance Wellness");
+  assert(includes(genericSelection.selectedUpworkPortfolioItems, "fly-boutique-upwork"), "Generic Klaviyo proof requests should include Fly Boutique Upwork portfolio highlight");
+  assert(includes(genericSelection.selectedUpworkPortfolioItems, "lifely-upwork"), "Generic Klaviyo proof requests should include Lifely Upwork portfolio highlight");
+  assert(includes(genericSelection.selectedUpworkPortfolioItems, "truly-beauty-upwork"), "Generic Klaviyo proof requests should include Truly Beauty Upwork portfolio highlight");
+
   const homeJob = createJob({
     title: "Retention lead for premium furniture ecommerce brand",
     description: "Need lifecycle strategy for high-AOV furniture/home goods brand.",

@@ -217,6 +217,29 @@ async function runTests(): Promise<void> {
       "Approach: I would audit the account, prioritize the largest lifecycle leaks, then rebuild the flows/campaign process around repeat purchase.",
       "Availability: I can start with a short diagnostic pass, then move into prioritized execution.",
     ];
+    beautyJob.applicationDraft.suggestedBoostConnects = 18;
+    beautyJob.applicationDraft.connectsStrategy = {
+      ...(beautyJob.applicationDraft.connectsStrategy ?? {
+        decision: "safe_apply",
+        requiredConnects: 4,
+        suggestedBoostConnects: 0,
+        totalConnects: 4,
+        expectedValueScore: 80,
+        reasons: [],
+        risks: [],
+      }),
+      suggestedBoostConnects: 18,
+      totalConnects: (beautyJob.applicationDraft.connectsStrategy?.requiredConnects ?? 4) + 18,
+      sourceBackedConnects: {
+        requiredConnects: 4,
+        boostConnects: 18,
+        totalConnects: 22,
+        confidence: "high",
+        sourceText: "Required for proposal: 4 Connects",
+        sourceLocation: "job detail",
+        extractionMethod: "deterministic_visible_text",
+      },
+    };
     beautyJob.applicationDraft.connectsWarnings.push("Connects evidence: captured required Connects from Upwork job detail.");
     beautyJob.applicationDraft.jobIntelligence = klaviyoIntel();
     markJobSeen(beautyJob, false);
@@ -867,12 +890,20 @@ async function runTests(): Promise<void> {
     assert(!beautyPlanResult.valid, "Beauty job plan should block final prep while a selected required attachment is missing locally");
     assert(beautyPlanResult.plan.stopBeforeSubmit === true, "Apply plan must enforce stopBeforeSubmit=true");
     assert(beautyPlanResult.plan.finalPreparationDiagnostics.stopBeforeSubmit === true, "Final-prep diagnostics must also enforce stopBeforeSubmit=true");
-    assert(beautyPlanResult.plan.coverLetter === beautyJob.applicationDraft.proposalText, "Apply plan should expose the exact approved cover letter");
+    assert(beautyPlanResult.plan.coverLetter.length > 0, "Apply plan should expose a browser-fill cover letter");
+    assert(!/profile\/attachments|\.pdf\b|\.png\b|\.jpe?g\b/i.test(beautyPlanResult.plan.coverLetter), "Cover letter should not leak proof filenames or local attachment paths");
     assert(beautyPlanResult.plan.finalPreparationDiagnostics.coverLetter.present, "Final-prep diagnostics should report cover letter readiness");
     assert(beautyPlanResult.plan.screeningAnswers.length > 0, "Apply plan should expose screening answers when the draft contains them");
     assert(beautyPlanResult.plan.finalPreparationDiagnostics.screeningAnswers.count === beautyPlanResult.plan.screeningAnswers.length, "Final-prep diagnostics should count screening answers");
-    assert(beautyPlanResult.plan.rate === beautyJob.applicationDraft.structuredProposal.browserFillNotes.rate, "Apply plan should expose the rate/bid value");
+    assert(beautyPlanResult.plan.rate === "$50/hr", "Apply plan should anchor hourly rate inside the client's visible budget range");
     assert(beautyPlanResult.plan.connects.required === 4, "Apply plan should expose required Connects");
+    assert(beautyPlanResult.plan.connects.boost === 0, "Apply plan must leave optional boost unset without explicit approval");
+    assert(beautyPlanResult.plan.connectsStrategy.suggestedBoostConnects === 0, "Connects strategy snapshot should also leave boost unset");
+    assert(beautyPlanResult.plan.connectsStrategy.sourceBackedConnects?.boostConnects === null, "Source-backed Connects should not imply an auto-set boost");
+    assert(
+      beautyPlanResult.issues.some((issue) => issue.code === "boost_requires_explicit_approval" && issue.severity === "warning"),
+      "Suggested boost should be downgraded to an explicit-approval warning",
+    );
     assert(beautyPlanResult.plan.finalPreparationDiagnostics.connects.total === beautyPlanResult.plan.connects.total, "Final-prep diagnostics should expose Connects totals");
     assert(
       beautyPlanResult.plan.connectsEvidence.some((line: string) => line.includes("captured required Connects")),
@@ -899,7 +930,9 @@ async function runTests(): Promise<void> {
       "Browser draft prep should include proof availability status lines",
     );
     assert(beautyPlanResult.plan.proofHighlights.length > 0, "Apply plan should expose proof highlights");
-    assert(beautyPlanResult.plan.portfolioHighlights.some((line: string) => line.includes("truly-beauty")), "Apply plan should expose portfolio highlights");
+    assert(beautyPlanResult.plan.portfolioHighlights.some((line: string) => line.includes("Truly Beauty")), "Apply plan should expose portfolio highlights");
+    assert(!beautyPlanResult.plan.portfolioHighlights.some((line: string) => /profile\/attachments|\.pdf\b|\.png\b|\.jpe?g\b/i.test(line)), "Portfolio highlights should use display labels, not proof filenames");
+    assert(!beautyPlanResult.plan.finalPreparationDiagnostics.proofHighlights.some((line: string) => /profile\/attachments|\.pdf\b|\.png\b|\.jpe?g\b/i.test(line)), "Final-prep proof highlights should not leak proof filenames");
     assert(beautyPlanResult.plan.profileHighlights.length > 0, "Apply plan should expose profile highlights");
     assert(beautyPlanResult.plan.manualFields.includes("attachments"), "Missing selected attachment should add attachments to manual fields");
     assert(beautyPlanResult.plan.manualFields.includes("finalSubmit"), "Final submit should remain a manual field");
@@ -916,6 +949,49 @@ async function runTests(): Promise<void> {
       "Unsafe Dr. Rachael assets must not auto-attach for beauty job",
     );
     assert(beautyPlanResult.plan.manualReviewAssets.every((item: string) => !item.includes("figma.com")), "Figma links must not appear in auto/manual asset list");
+    assert(beautyPlanResult.plan.highlights.every((item: string) => !/generated|revenue|sales|repeat purchase|click rate/i.test(item)), "Highlight selection should contain actionable Upwork portfolio labels, not proof result copy");
+
+    const lowBudgetKlaviyoJob = scoreJob({
+      id: "low-budget-klaviyo-job-1",
+      title: "Email Marketing Specialist (Klaviyo)",
+      url: "https://www.upwork.com/jobs/~lowbudgetklaviyo123456",
+      description: "Fast-growing ecommerce brand needs Klaviyo flows, campaign calendar, segmentation, A/B testing, reporting, and examples of campaigns or flows with results. To apply, include examples, your first 30 day approach, availability, and hourly rate. Bonus: mental wellness, health, or digital-product category experience.",
+      postedAt: new Date().toISOString(),
+      budget: "$5.00 - $10.00 Hourly range",
+      clientCountry: "United States",
+      clientRating: 4.8,
+      clientSpend: 50000,
+      clientHireRate: 75,
+      clientTotalHires: 20,
+      clientFeedbackCount: 12,
+      category: "Email Marketing",
+      experienceLevel: "Intermediate",
+      connectsCost: 17,
+      skills: ["Klaviyo", "Email Marketing", "Shopify", "Lifecycle Marketing"],
+      sourceQuery: "manual",
+    });
+    lowBudgetKlaviyoJob.applicationDraft = buildApplicationDraft(lowBudgetKlaviyoJob);
+    lowBudgetKlaviyoJob.applicationDraft.status = "approved";
+    lowBudgetKlaviyoJob.applicationDraft.jobIntelligence = klaviyoIntel({
+      ecommerceVertical: "generic ecommerce",
+      taskType: "Klaviyo flows and campaigns",
+      clientGoal: "Own lifecycle marketing and reporting",
+    });
+    markJobSeen(lowBudgetKlaviyoJob, false);
+    const lowBudgetPlanResult = buildBrowserApplyPlan(lowBudgetKlaviyoJob.id);
+    assert(lowBudgetKlaviyoJob.applicationDraft.suggestedBid === "$15/hr", "Low-budget hourly jobs should anchor near the client cap instead of using $35/hr");
+    assert(lowBudgetPlanResult.plan.rate === "$15/hr", "Apply plan should expose the budget-anchored hourly rate");
+    assert(!/Portfolio\.pdf|Lifely\.pdf|Case Study\.pdf/i.test(lowBudgetKlaviyoJob.applicationDraft.proposalText), "Generated proposal should not leak raw proof filenames");
+    assert(
+      !lowBudgetPlanResult.plan.attachments.some((item: { filePath: string }) => /dr-rachael|endurance-wellness/i.test(item.filePath)),
+      "Bonus-only health/wellness text must not select health-specific attachments",
+    );
+    assert(
+      lowBudgetPlanResult.plan.highlights.some((label: string) => label.includes("The Fly Boutique")) &&
+      lowBudgetPlanResult.plan.highlights.some((label: string) => label.includes("How Lifely")) &&
+      lowBudgetPlanResult.plan.highlights.some((label: string) => label.includes("$250k")),
+      "Generic Klaviyo proof requests should plan real Upwork portfolio highlights",
+    );
 
     const ingestedRelativePath = "slack-intake/beauty-job-1/truly-beauty-case-study.pdf";
     const ingestedAbsolutePath = resolve(proofRoot, ingestedRelativePath);
@@ -993,6 +1069,14 @@ async function runTests(): Promise<void> {
       visibleTableOnlyBoostVerification.find((item) => item.field === "boostConnects")?.status === "attempted_unverified",
       "Visible boost table text must not be treated as proof that the boost field was set.",
     );
+
+    const unsetBoostVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({ visibleText: "Required for proposal: 8 Connects\n#4 bid 12 Connects", inputValues: [verificationPlan.coverLetter] }),
+      plan: { ...verificationPlan, connects: { ...verificationPlan.connects, boost: 0, total: 8 } },
+      fields: { attemptedFields: ["coverLetter"], skippedFields: ["connectsBoost"], manualFields: ["connects", "finalSubmit"] },
+      bodyText: "Required for proposal: 8 Connects\n#4 bid 12 Connects",
+    });
+    assert(unsetBoostVerification.find((item) => item.field === "boostConnects")?.status === "skipped_by_strategy", "Visible boost table should stay unset unless explicitly approved.");
 
     writeFileSync(resolve(proofRoot, "package.json"), "{}");
     const verifiedApplyVerification = await verifyApplyPreparationOnPage({
