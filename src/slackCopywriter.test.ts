@@ -61,6 +61,28 @@ async function run(): Promise<void> {
   assert(kimi.requests[0]?.messages.some((message) => message.content.includes("Say \"I.\"")), "Kimi copywriter prompt should include first-person teammate guidance.");
   assert(kimi.requests[0]?.messages.some((message) => message.content.includes("sharp senior SDR/operator teammate")), "Kimi copywriter prompt should force teammate-style Slack copy.");
 
+  const vagueFileCapability = fakeProvider("Yes — send the files here and I can help safely.");
+  const fileCapabilityFallback = await rewriteSlackCopyWithKimi({
+    path: "conversation_reply",
+    deterministicText: "Yes. For reusable proof, I can use files already in my proof-assets folder. For one-off files, attach them in this Slack thread and I can ingest them when Slack files access is enabled. Next, I can attach the available proof in remote Chrome and stop before submit.",
+    userMessage: "Can you upload the files from here? If you had access?",
+    intent: "answer_file_capability_question",
+  }, vagueFileCapability.provider);
+  assert.equal(fileCapabilityFallback.usedLlm, false, "File capability copy should reject rewrites that drop reusable-proof and Slack-intake facts.");
+  assert(fileCapabilityFallback.text.includes("reusable proof"), "File capability fallback should keep reusable proof wording.");
+  assert(fileCapabilityFallback.text.includes("Slack thread"), "File capability fallback should keep Slack intake wording.");
+  assert(fileCapabilityFallback.text.includes("stop before submit"), "File capability fallback should keep submit boundary wording.");
+
+  const missingSlackSurface = fakeProvider("Yes — I can use reusable proof assets, ingest files when enabled, and stop before submit.");
+  const missingSlackSurfaceFallback = await rewriteSlackCopyWithKimi({
+    path: "conversation_reply",
+    deterministicText: "Yes. For reusable proof, I can use files already in my proof-assets folder. For one-off files, attach them in this Slack thread and I can ingest them when Slack files access is enabled. Next, I can attach the available proof in remote Chrome and stop before submit.",
+    userMessage: "Can you upload the files from here? If you had access?",
+    intent: "answer_file_capability_question",
+  }, missingSlackSurface.provider);
+  assert.equal(missingSlackSurfaceFallback.usedLlm, false, "File capability copy should reject rewrites that mention ingesting but drop the Slack thread/upload surface.");
+  assert(missingSlackSurfaceFallback.text.includes("Slack thread"), "Slack-surface fallback should keep the thread upload instruction.");
+
   const leadPacket = fakeProvider("🚀 This one is worth a real shot. Review it in VNC when ready; I’ll stop before submit.\nhttps://www.upwork.com/jobs/~1234567890");
   const leadPacketCopy = await rewriteSlackCopyWithKimi({
     path: "lead_packet",
