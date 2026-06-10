@@ -70,8 +70,9 @@ Screening Questions:
 `);
   assert(parsedQuestions.length === 2, `expected two parsed questions, got ${JSON.stringify(parsedQuestions)}`);
 
-  const noisy = stripCaptureNoise(`window.TOP_NAV_USER_CONFIG = {\"serviceName\":\"upwork\",\"visitorGqlTokenUrl\":\"/token\"};\nSkip to main content\nMailchimp E-commerce Automation Expert for Premium Skincare Webshop\nNeed help with lifecycle flows and revenue attribution.`);
+  const noisy = stripCaptureNoise(`window.TOP_NAV_USER_CONFIG = {\"serviceName\":\"upwork\",\"visitorGqlTokenUrl\":\"/token\"};\nSkip to main content\nThe client will not be notified. Your feedback helps us improve job search.\nMailchimp E-commerce Automation Expert for Premium Skincare Webshop\nNeed help with lifecycle flows and revenue attribution.`);
   assert(!noisy.cleaned.includes("window.TOP_NAV_USER_CONFIG"), "config noise should be stripped from capture text");
+  assert(!/feedback helps us improve job search|client will not be notified/i.test(noisy.cleaned), "Upwork feedback UI noise should be stripped from capture text");
   assert(noisy.rawConfigNoiseDetected === true, "config noise detection should be flagged");
 
   const mockPage = {

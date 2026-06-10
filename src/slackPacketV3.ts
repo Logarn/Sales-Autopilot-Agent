@@ -74,6 +74,18 @@ export function getSlackLeadPostingDecision(job: ScoredJob, context: SlackPacket
     };
   }
 
+  if (leadDecision.decision === "skip") {
+    return {
+      shouldPost: false,
+      classification: "skip",
+      reason: leadDecision.reason,
+      internalSkipReason: leadDecision.internalSkipReason,
+      platformEligibility: eligibility.platformEligibility,
+      skippedBecausePlatform: eligibility.skippedBecausePlatform,
+      source: "lead_decision",
+    };
+  }
+
   const connectsStrategy = job.applicationDraft?.connectsStrategy ?? job.scoreBreakdown?.connectsStrategy;
   const qualifiesForConnectsManualReview =
     connectsStrategy?.decision === "manual_review" &&
@@ -437,6 +449,9 @@ function concisePlatform(job: ScoredJob, context: SlackPacketV3Context): string 
 
 function humanizeSlackText(value: string, fallback = "it needs a closer look"): string {
   const cleaned = value
+    .replace(/\bthe client will not be notified\.?\s*/gi, "")
+    .replace(/\byour feedback helps us improve job search\.?\s*/gi, "")
+    .replace(/\bfeedback helps us improve job search\.?\s*/gi, "")
     .replace(/\bmanual review\b/gi, "a closer look")
     .replace(/\blead decision\b/gi, "call")
     .replace(/\bplatformEligibility\b/gi, "platform fit")
@@ -446,6 +461,7 @@ function humanizeSlackText(value: string, fallback = "it needs a closer look"): 
     .replace(/\baction\s*#?\d+\b/gi, "browser step")
     .replace(/\bnot auto-preparing\b/gi, "I’m not prepping it yet")
     .replace(/\bauto-prepar(?:e|ing)\b/gi, "prep")
+    .replace(/\b[\w .'’()-]+\.(?:pdf|png|jpe?g|webp)\b/gi, "verified portfolio proof")
     .replace(/\bdeterministic parser found\b/gi, "")
     .replace(/\bdeterministic parser needs\b/gi, "it needs")
     .replace(/\s+/g, " ")
@@ -456,8 +472,8 @@ function humanizeSlackText(value: string, fallback = "it needs a closer look"): 
 
 function conciseClientType(job: ScoredJob, context: SlackPacketV3Context): string {
   const intelligence = context.jobIntelligence ?? job.applicationDraft?.jobIntelligence;
-  const vertical = intelligence?.ecommerceVertical ?? context.ecommerceVertical;
-  const business = intelligence?.businessType ?? context.businessType;
+  const vertical = humanizeSlackText(intelligence?.ecommerceVertical ?? context.ecommerceVertical ?? "", "");
+  const business = humanizeSlackText(intelligence?.businessType ?? context.businessType ?? "", "");
   if (vertical && vertical !== "unknown") return `${sentenceCase(vertical)} brand`;
   if (business && business !== "unknown") return sentenceCase(business);
   return job.clientCountry ? `${job.clientCountry} client` : "client";
@@ -583,7 +599,9 @@ function connectsBoostNote(job: ScoredJob, context: SlackPacketV3Context, connec
 
 function proofAngle(job: ScoredJob, context: SlackPacketV3Context): string {
   const intelligence = context.jobIntelligence ?? job.applicationDraft?.jobIntelligence;
-  const proof = firstUsefulLine(
+  const selection = selectPortfolioAssetsForJob(job);
+  const selectedPortfolioProof = selection.selectedUpworkPortfolioItems[0]?.name ?? selection.selectedProof[0]?.headline;
+  const rawProof = firstUsefulLine(
     [
       intelligence?.proofRecommendations?.[0],
       context.proofRecommendations?.[0],
@@ -592,10 +610,15 @@ function proofAngle(job: ScoredJob, context: SlackPacketV3Context): string {
     "proof not selected yet",
     120,
   );
-  if (/proof not selected yet/i.test(proof)) {
+  if (/proof not selected yet/i.test(rawProof)) {
     return "Proof not selected yet; use only verified portfolio evidence during prep.";
   }
-  return `Lead with ${humanizeSlackText(proof, "the closest verified portfolio proof")}.`;
+  const rawLooksLikeFileLabel = /\b[\w .'’()-]+\.(?:pdf|png|jpe?g|webp)\b/i.test(rawProof);
+  const cleanedProof = humanizeSlackText(rawProof, selectedPortfolioProof ?? "the closest verified portfolio proof")
+    .replace(/^(?:lead with|use)\s+/i, "")
+    .trim();
+  const proof = rawLooksLikeFileLabel && selectedPortfolioProof ? selectedPortfolioProof : cleanedProof;
+  return `Lead with ${proof || "the closest verified portfolio proof"}.`;
 }
 
 function leadRecommendation(

@@ -2578,25 +2578,25 @@ export async function handleSlackSocketTextEvent(rawEvent: SlackSocketTextEvent,
   }
 
   const channelId = rawEvent.channel;
+  const text = rawEvent.text?.trim() ?? "";
+  const botMentioned = hasSlackMention(text);
   const allowedChannel = isAllowedChannel(channelId);
-  if (!allowedChannel && !isSlackDmEvent(rawEvent) && !isAmbientAgentChannel(channelId)) {
-    logSlackEventRouteTrace({ event: rawEvent, route: "ignored", reason: "channel_not_allowed", allowedChannel });
-    return;
-  }
   const allowedUser = isAllowedUser(rawEvent.user);
   if (!allowedUser) {
-    logSlackEventRouteTrace({ event: rawEvent, route: "ignored", reason: "user_not_allowed", allowedChannel, allowedUser });
+    logSlackEventRouteTrace({ event: rawEvent, route: "ignored", reason: "user_not_allowed", allowedChannel, allowedUser, botMentioned });
+    return;
+  }
+  if (!allowedChannel && !isSlackDmEvent(rawEvent) && !isAmbientAgentChannel(channelId) && !botMentioned) {
+    logSlackEventRouteTrace({ event: rawEvent, route: "ignored", reason: "channel_not_allowed", allowedChannel, allowedUser, botMentioned });
     return;
   }
 
-  const text = rawEvent.text?.trim() ?? "";
   if (shouldSkipDuplicateSlackEvent(rawEvent, text)) {
-    logSlackEventRouteTrace({ event: rawEvent, route: "ignored", reason: "duplicate_event", allowedChannel, allowedUser });
+    logSlackEventRouteTrace({ event: rawEvent, route: "ignored", reason: "duplicate_event", allowedChannel, allowedUser, botMentioned });
     return;
   }
   const threadTs = rawEvent.thread_ts ?? rawEvent.ts;
   const mappedThread = getSlackThreadStateByThreadTs(channelId, threadTs);
-  const botMentioned = hasSlackMention(text);
   const upworkUrl = parseUpworkJobUrlFromText(text);
   const admission = shouldTreatAsPrompt({
     event: rawEvent,

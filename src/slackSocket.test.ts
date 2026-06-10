@@ -579,6 +579,18 @@ async function runTests(): Promise<void> {
       });
       assert(unrelatedPublicReplies.length === 0, "Unrelated public channels without mention should be ignored when the allowlist is narrowed.");
 
+      const mentionedUnrelatedReplies: string[] = [];
+      await handleSlackSocketTextEvent({
+        channel: "C_UNRELATED",
+        ts: "narrow.002b",
+        user: "U_ALLOWED",
+        text: "<@UAGENT> are you running?",
+      }, {
+        chat: { postMessage: async (payload: { text: string }) => mentionedUnrelatedReplies.push(payload.text) },
+      });
+      assert(mentionedUnrelatedReplies.length === 1, "Direct bot mentions from allowed users should be answered even outside the narrowed public allowlist.");
+      assert(getSlackConversationOwnership("C_UNRELATED", "narrow.002b")?.mode === "claimed_thread", "Mentioned off-allowlist thread should be claimed for follow-up replies.");
+
       const narrowedDmReplies: string[] = [];
       await handleSlackSocketTextEvent({
         channel: "D_NARROW_DM",

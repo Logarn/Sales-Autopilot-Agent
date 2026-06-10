@@ -347,6 +347,22 @@ async function runTests(): Promise<void> {
     assertNotIncludes(unknownText, noisy, `borderline lead should hide ${noisy}`);
   }
 
+  const fileProofText = buildV3CapturePacket(job, {
+    upworkUrl: job.url,
+    captureStatus: "packet_sent",
+    jobIntelligence: {
+      ...intelligence,
+      proofRecommendations: ["Portfolio.pdf: General proof of retention strategy, lifecycle marketing, and DTC email/SMS credibility."],
+      proposalAngle: "Portfolio.pdf",
+    },
+  }).text;
+  assertNotIncludes(fileProofText, "Portfolio.pdf", "proof angle should not expose raw proof filenames");
+  assert(!/\b[\w .'’()-]+\.(?:pdf|png|jpe?g|webp)\b/i.test(fileProofText), `proof angle should not expose file labels:\n${fileProofText}`);
+  assert(
+    /The Fly Boutique|Lifely|Truly Beauty|verified portfolio proof/i.test(fileProofText),
+    `proof angle should name a verified portfolio proof instead of a generic file: ${fileProofText}`,
+  );
+
   const badLead = createScoredJob({
     title: "Cheap generic email cleanup",
     budget: "$75 fixed",
@@ -371,6 +387,36 @@ async function runTests(): Promise<void> {
     shouldPostLeadPacket(badLead, { upworkUrl: badLead.url, captureStatus: "packet_sent", jobIntelligence: intelligence }),
     false,
     "bad lead should stay silent",
+  );
+
+  const lowBudgetManualReviewLead = createScoredJob({
+    title: "Klaviyo Expert for CRM Automation",
+    budget: "$5-$10/hr",
+    score: 70,
+    matchLevel: "low",
+    scoreBreakdown: {
+      ...job.scoreBreakdown!,
+      finalScore: 70,
+      reasons: ["Klaviyo automation match"],
+      risks: ["Budget is far below target rate"],
+    },
+  });
+  lowBudgetManualReviewLead.applicationDraft = {
+    ...lowBudgetManualReviewLead.applicationDraft!,
+    connectsStrategy: {
+      decision: "manual_review",
+      requiredConnects: null,
+      suggestedBoostConnects: 0,
+      totalConnects: null,
+      expectedValueScore: 45,
+      reasons: ["Connects are unknown."],
+      risks: ["Required Connects are unknown from visible source text."],
+    },
+  };
+  assertEqual(
+    shouldPostLeadPacket(lowBudgetManualReviewLead, { upworkUrl: lowBudgetManualReviewLead.url, captureStatus: "packet_sent", jobIntelligence: intelligence }),
+    false,
+    "low-budget skip decisions should not leak to Slack as manual-review spam",
   );
 
   const ineligibleText = buildV3CapturePacket(createScoredJob({

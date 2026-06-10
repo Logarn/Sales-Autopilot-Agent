@@ -364,6 +364,9 @@ const NOISE_PATTERNS = [
   /__APOLLO_STATE__/gi,
   /__NEXT_DATA__/gi,
   /checking if the site connection is secure/gi,
+  /the client will not be notified/gi,
+  /your feedback helps us improve job search/gi,
+  /feedback helps us improve job search/gi,
   /skip to main content/gi,
   /search jobs/gi,
   /browse jobs/gi,
@@ -380,6 +383,9 @@ export function stripCaptureNoise(value: string, maxLength = 6000): { cleaned: s
   let cleaned = value
     .replace(/window\.TOP_NAV_USER_CONFIG[\s\S]{0,5000}?;?/gi, " ")
     .replace(/\{\s*"(?:serviceName|visitorGqlTokenUrl|apollo|graphql|navigation)"[\s\S]{0,5000}?\}/gi, " ")
+    .replace(/\bthe client will not be notified\.?\s*/gi, " ")
+    .replace(/\byour feedback helps us improve job search\.?\s*/gi, " ")
+    .replace(/\bfeedback helps us improve job search\.?\s*/gi, " ")
     .replace(/(?:Skip to main content|Search jobs|Browse jobs|Find talent|Why Upwork|Enterprise|Log in|Sign up)\s*/gi, " ")
     .replace(/[\[{][^\n]{120,}[\]}]/g, " ");
   const removedNoiseMarkers = countNoiseMarkers(value) - countNoiseMarkers(cleaned);
