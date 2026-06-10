@@ -175,15 +175,24 @@ const STOP_WORDS = new Set([
   "with",
 ]);
 
+const SECURITY_BYPASS_VERBS = "(?:bypass|override|ignore|disable|solve|circumvent|evade|get\\s+around|work\\s+around|skip|avoid|pass\\s+through|defeat|clear\\s+automatically)";
+const SECURITY_BYPASS_TARGETS = "(?:captcha|cloudflare|security|2fa|two[-\\s]*factor|passkey|login|screen|challenge)";
+
 const SAFETY_BANNED_PATTERNS = [
   /\b(final\s*submit|submit\s+proposal|send\s+proposal|send\s+for\s+\d+\s+connects)\b/i,
   /\b(click|press|tap)\b.{0,40}\b(submit|send)\b/i,
   /\bsubmit\b.{0,40}\bautomatically\b/i,
   /\bsend\b.{0,40}\b(automatically|after\b.{0,20}\bfields?|button)\b/i,
-  /\b(bypass|solve|clear)\s+(captcha|security|login|2fa|passkey|cloudflare)\b/i,
+  new RegExp(`\\b${SECURITY_BYPASS_VERBS}\\b.{0,80}\\b${SECURITY_BYPASS_TARGETS}\\b`, "i"),
+  new RegExp(`\\b${SECURITY_BYPASS_TARGETS}\\b.{0,80}\\b${SECURITY_BYPASS_VERBS}\\b`, "i"),
   /\bclaim\s+.*\b(verified|attached|selected|filled)\b.*\bwithout\b/i,
   /\b(arbitrary|run)\s+shell\b/i,
 ];
+
+function isSafeCopywritingSecurityMention(text: string): boolean {
+  return /\b(?:avoid|skip|remove|omit)\b.{0,40}\b(?:mentioning|saying|referencing|talking about)\b.{0,80}\b(?:captcha|cloudflare|security|2fa|two[-\s]*factor|passkey|login)\b.{0,80}\b(?:proposal|draft|copy|cover letter)\b/i.test(text)
+    || /\b(?:proposal|draft|copy|cover letter)\b.{0,80}\b(?:avoid|skip|remove|omit)\b.{0,40}\b(?:mentioning|saying|referencing|talking about)\b.{0,80}\b(?:captcha|cloudflare|security|2fa|two[-\s]*factor|passkey|login)\b/i.test(text);
+}
 
 function clean(value: string | null | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim();
@@ -1004,7 +1013,7 @@ export function upsertMemoryRelationsFromMemory(memory: AgentMemory): MemoryRela
 }
 
 export function isHardSafetyMemoryAllowed(text: string): boolean {
-  return !SAFETY_BANNED_PATTERNS.some((pattern) => pattern.test(text));
+  return !SAFETY_BANNED_PATTERNS.some((pattern) => pattern.test(text) && !isSafeCopywritingSecurityMention(text));
 }
 
 export async function answerMemoryEvalQuestion(question: string): Promise<{
