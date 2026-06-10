@@ -884,6 +884,14 @@ function buildThreadStatusDetails(state: NonNullable<ReturnType<typeof getSlackT
     .filter((action) => action.jobId === state.jobId)
     .slice(-3)
     .map((action) => `#${action.id} ${action.actionType} ${action.status}${action.lastError ? ` (${action.lastError})` : ""}`);
+  const blockedActions = listBrowserActions(null, 1000)
+    .filter((action) =>
+      action.jobId === state.jobId &&
+      (action.status === "paused" || action.status === "failed") &&
+      actionHasPausedChallengeQuarantine(action)
+    )
+    .slice(-5)
+    .map((action) => `#${action.id} ${action.actionType} ${action.status}${action.lastError ? ` (${action.lastError})` : ""}`);
   const strategy = draft?.connectsStrategy ?? job?.scoreBreakdown.connectsStrategy;
   return [
     job ? `Fit: ${job.score}/100 (${job.matchLevel})` : null,
@@ -895,6 +903,7 @@ function buildThreadStatusDetails(state: NonNullable<ReturnType<typeof getSlackT
     profileContext?.selectedAttachments.length ? `Proof selected: ${profileContext.selectedAttachments.join(", ")}` : null,
     profileContext?.selectedProofPoints.length ? `Proof points: ${profileContext.selectedProofPoints.slice(0, 5).join("; ")}` : null,
     draft?.selectedPortfolioItems.length ? `Selected portfolio: ${draft.selectedPortfolioItems.map((item) => item.name).join(", ")}` : "Selected portfolio: none",
+    blockedActions.length ? `Blocked browser actions: ${blockedActions.join(" | ")}` : null,
     latestActions.length ? `Browser actions: ${latestActions.join(" | ")}` : "Browser actions: none",
   ].filter((line): line is string => Boolean(line));
 }
