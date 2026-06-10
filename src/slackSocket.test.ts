@@ -78,7 +78,7 @@ async function runTests(): Promise<void> {
     queuePrepareDraftFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string; actionId?: number };
     resetSlackSocketEventDedupeForTests: () => void;
   };
-  const { closeDb, getApplicationDraft, getApplicationProofPlanOverrides, getApplicationStatus, getBrowserActionById, getSlackConversationOwnership, getSlackThreadStateByThreadTs, listActiveSlackBehaviorMemories, listApplicationAssets, listProposalVersions, listRecentSlackFailureReflections, markJobSeen, mergeBrowserActionPayload, recordProposalVersion, upsertSlackThreadState, listBrowserActions, updateApplicationStatus, updateBrowserActionStatus } = require("./db") as {
+  const { closeDb, getApplicationDraft, getApplicationProofPlanOverrides, getApplicationStatus, getBrowserActionById, getSlackConversationOwnership, getSlackThreadStateByThreadTs, listActiveSlackBehaviorMemories, listApplicationAssets, listProposalVersions, listRecentSlackFailureReflections, markJobSeen, mergeBrowserActionPayload, recordProposalVersion, upsertSalesLearningMemory, upsertSlackThreadState, listBrowserActions, updateApplicationStatus, updateBrowserActionStatus } = require("./db") as {
     closeDb: () => void;
     getApplicationDraft: (jobId: string) => { proposalText: string } | null;
     getApplicationProofPlanOverrides: (jobId: string) => any;
@@ -93,6 +93,7 @@ async function runTests(): Promise<void> {
     markJobSeen: (job: any, notified: boolean) => void;
     mergeBrowserActionPayload: (id: number, patch: Record<string, unknown>) => unknown;
     recordProposalVersion: (input: { jobId: string; source: string; proposalText: string; screeningAnswers?: string[]; note?: string | null }) => unknown;
+    upsertSalesLearningMemory: (input: any) => unknown;
     upsertSlackThreadState: (input: any) => unknown;
     listBrowserActions: (status?: string | null, limit?: number) => Array<{ id: number; actionType: string; jobId: string; status: string }>;
     updateApplicationStatus: (jobId: string, status: string, note?: string) => boolean;
@@ -261,6 +262,9 @@ async function runTests(): Promise<void> {
       { name: "ignored outcome", input: "ignored", expectType: "record_outcome", outcomeStatus: "lost" },
       { name: "client ghosted outcome", input: "client ghosted", expectType: "record_outcome", outcomeStatus: "lost" },
       { name: "bad lead outcome", input: "bad lead", expectType: "record_outcome", outcomeStatus: "lost" },
+      { name: "friday operator handoff", input: "Friday operator handoff", expectType: "operator_report" },
+      { name: "monthly operator review", input: "monthly operator review", expectType: "operator_report" },
+      { name: "source strategy question", input: "which sources are working?", expectType: "source_strategy" },
       { name: "memory query", input: "what did you learn?", expectType: "memory_query" },
       { name: "proof memory query", input: "what proof is working?", expectType: "memory_query" },
       { name: "connects waste memory query", input: "how many Connects are we wasting?", expectType: "memory_query" },
@@ -1136,6 +1140,70 @@ async function runTests(): Promise<void> {
       client: { chat: { postMessage: async (payload: { text: string }) => sourceDebugReplies.push(payload.text) } },
     });
     assert(/sourceId=|url=https:\/\/www\.upwork\.com\/nx\/search\/jobs\//i.test(sourceDebugReplies.join("\n")), "Debug blocked-search Slack copy may expose technical source details.");
+
+    upsertSalesLearningMemory({
+      type: "source_quality",
+      scope: "source:best_matches",
+      subject: "Best Matches source quality",
+      hypothesis: "Best Matches is producing high-fit replies with fewer browser challenges than saved searches.",
+      rationale: "DB-backed source memory fixture for Slack source strategy wiring.",
+      confidence: "high",
+      evidenceCount: 5,
+      status: "active",
+      source: "slack_socket_test",
+      metadata: {
+        sourceLabel: "Best Matches",
+        sourceType: "best_matches",
+        scans: 5,
+        goodLeadCount: 4,
+        challengeCount: 0,
+        redFlagLeadCount: 0,
+        submittedCount: 2,
+        positiveOutcomeCount: 1,
+        budgetQualityScore: 85,
+        clientQualityScore: 88,
+        averageLeadScore: 90,
+      },
+    });
+
+    const sourceStrategyReplies: string[] = [];
+    const actionsBeforeSourceStrategy = listBrowserActions(null, 1000).length;
+    await handleThreadCommand({
+      channelId: "C0AQW8W6RFU",
+      threadTs: "source.strategy.001",
+      text: "which sources are working?",
+      conversationProvider: unavailableProvider,
+      intentProvider: unavailableProvider,
+      client: { chat: { postMessage: async (payload: { text: string }) => sourceStrategyReplies.push(payload.text) } },
+    });
+    assert(sourceStrategyReplies.some((reply) => reply.includes("lead sources") || reply.includes("Best Matches")), "Source strategy Slack question should answer from source metrics.");
+    assert(sourceStrategyReplies.some((reply) => /Evidence level|tentative|strong|not enough data/i.test(reply)), "Source strategy Slack answer should expose evidence level.");
+    assert(listBrowserActions(null, 1000).length === actionsBeforeSourceStrategy, "Source strategy Slack Q&A must not queue browser actions.");
+
+    const fridayReportReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C0AQW8W6RFU",
+      threadTs: "operator.report.001",
+      text: "Friday operator handoff",
+      conversationProvider: unavailableProvider,
+      intentProvider: unavailableProvider,
+      client: { chat: { postMessage: async (payload: { text: string }) => fridayReportReplies.push(payload.text) } },
+    });
+    assert(fridayReportReplies.some((reply) => reply.includes("Friday Operator Handoff")), "Friday report should be reachable from Slack.");
+    assert(fridayReportReplies.some((reply) => reply.includes("Leads found:")), "Friday report should include DB-backed metrics.");
+    assert(fridayReportReplies.some((reply) => reply.includes("Final submit remains manual")), "Friday report should preserve final-submit safety.");
+
+    const monthlyReportReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "C0AQW8W6RFU",
+      threadTs: "operator.report.002",
+      text: "monthly operator review",
+      conversationProvider: unavailableProvider,
+      intentProvider: unavailableProvider,
+      client: { chat: { postMessage: async (payload: { text: string }) => monthlyReportReplies.push(payload.text) } },
+    });
+    assert(monthlyReportReplies.some((reply) => reply.includes("Monthly Operator Review")), "Monthly report should be reachable from Slack.");
+    assert(monthlyReportReplies.some((reply) => reply.includes("Outcome summary")), "Monthly report should include the monthly report body.");
 
     const clearChromeReplies: string[] = [];
     await handleThreadCommand({

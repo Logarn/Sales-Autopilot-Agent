@@ -20,6 +20,7 @@ import {
   getSlackConversationOwnership,
   getSlackThreadStateByJobId,
   getSlackThreadStateByThreadTs,
+  getOperatorReportDbSnapshot,
   listActiveSlackBehaviorMemories,
   listBatchApplyCandidateThreads,
   listBatchApplyWorkspaceItems,
@@ -107,6 +108,12 @@ import {
   parseSlackOperatorIntent,
   type SlackOperatorControlDeps,
 } from "./slackOperatorControlPlane";
+import {
+  answerMonthlyOperatorQuestion,
+  buildFridayOperatorHandoff,
+  buildMonthlyOperatorReview,
+} from "./operatorReports";
+import { buildSourceStrategyAnswer } from "./sourceStrategy";
 import type { ApplicationStatus, ProposalVersionSource } from "./types";
 
 const THREAD_MENTIONS = "<@U0A2X5BCNKC> <@U0AHJFYV42K>";
@@ -197,6 +204,8 @@ export type SlackSocketParsedCommandType =
   | "mark_submitted"
   | "mark_batch_submitted"
   | "record_outcome"
+  | "operator_report"
+  | "source_strategy"
   | "memory_query"
   | "memory_remember"
   | "memory_forget"
@@ -219,6 +228,7 @@ export interface ParsedSlackSocketCommand {
   source?: "llm" | "fallback";
   outcomeStatus?: ApplicationStatus;
   outcomeLabel?: string;
+  operatorReportKind?: "friday" | "monthly" | "question";
 }
 
 export interface ParsedUpworkUrl {
@@ -377,6 +387,25 @@ function outcomeLabelForStatus(status?: ApplicationStatus | null): string | unde
   }
 }
 
+function matchesSourceStrategyQuestion(text: string): boolean {
+  return /\b(?:which|what)\s+(?:sources?|search(?:es)?|lead\s+sources?)\b.*\b(?:working|best|performing|wasting|worth|back\s*off|avoid|use|winning)\b/i.test(text) ||
+    /\b(?:source|search)\s+strategy\b/i.test(text) ||
+    /\bwhich\s+(?:sources?|search(?:es)?)\s+should\s+(?:we|you)\s+(?:use|keep|avoid|back\s*off)\b/i.test(text);
+}
+
+function matchesOperatorReportRequest(text: string): ParsedSlackSocketCommand["operatorReportKind"] | null {
+  if (/\b(?:friday\s+(?:operator\s+)?(?:handoff|report)|weekly\s+(?:operator\s+)?(?:handoff|report)|operator\s+handoff)\b/i.test(text)) {
+    return "friday";
+  }
+  if (/\b(?:monthly\s+(?:operator\s+)?(?:review|report)|month(?:ly)?\s+review)\b/i.test(text)) {
+    return "monthly";
+  }
+  if (/\boperator\s+report\b/i.test(text)) {
+    return "question";
+  }
+  return null;
+}
+
 export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand {
   const mentioned = hasSlackMention(text);
   const normalized = normalizeSlackTextInput(text).trim();
@@ -396,6 +425,24 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
       type: "memory_forget",
       rawText: normalized,
       instruction: forgetMatch[1]?.trim() || "latest relevant memory",
+      source: "fallback",
+    };
+  }
+  const operatorReportKind = matchesOperatorReportRequest(commandText);
+  if (operatorReportKind) {
+    return {
+      type: "operator_report",
+      rawText: normalized,
+      instruction: commandText,
+      operatorReportKind,
+      source: "fallback",
+    };
+  }
+  if (matchesSourceStrategyQuestion(commandText)) {
+    return {
+      type: "source_strategy",
+      rawText: normalized,
+      instruction: commandText,
       source: "fallback",
     };
   }
@@ -1792,6 +1839,91 @@ function isBatchWorkspaceCommand(command: ParsedSlackSocketCommand): boolean {
   return ["batch_prep", "qa_queue", "focus_qa_tab", "skip_batch_item", "mark_batch_submitted"].includes(command.type);
 }
 
+function isProductInsightCommand(command: ParsedSlackSocketCommand): boolean {
+  return command.type === "operator_report" || command.type === "source_strategy";
+}
+
+function hasDeterministicProductInsightIntent(text: string): boolean {
+  return isProductInsightCommand(parseSlackThreadCommand(text));
+}
+
+const OPERATOR_REPORT_DAY_MS = 24 * 60 * 60 * 1000;
+
+function isoDay(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function buildWeeklyOperatorReportPeriod(now = new Date()) {
+  const end = now;
+  const start = new Date(end.getTime() - 7 * OPERATOR_REPORT_DAY_MS);
+  return {
+    label: `Last 7 days ending ${isoDay(end)}`,
+    start,
+    end,
+    now,
+  };
+}
+
+function buildMonthlyOperatorReportPeriod(now = new Date()) {
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  return {
+    label: `Month to date ${now.toISOString().slice(0, 7)}`,
+    start,
+    end: now,
+    now,
+  };
+}
+
+function buildOperatorReportSlackText(command: ParsedSlackSocketCommand): string {
+  if (command.operatorReportKind === "friday") {
+    const snapshot = getOperatorReportDbSnapshot(buildWeeklyOperatorReportPeriod());
+    return buildFridayOperatorHandoff(snapshot);
+  }
+  const snapshot = getOperatorReportDbSnapshot(buildMonthlyOperatorReportPeriod());
+  if (command.operatorReportKind === "monthly") {
+    return buildMonthlyOperatorReview(snapshot);
+  }
+  return answerMonthlyOperatorQuestion(snapshot, command.instruction ?? command.rawText).text;
+}
+
+async function handleProductInsightCommand(params: SlackReasoningGatewayParams, command: ParsedSlackSocketCommand): Promise<boolean> {
+  if (command.type === "source_strategy") {
+    const answer = buildSourceStrategyAnswer({ question: command.instruction ?? params.text });
+    const text = await userFacingSlackCopy({
+      deterministicText: answer.text,
+      userMessage: params.text,
+      intent: "source_strategy",
+      context: { metricCount: answer.metrics.length, schemaVersion: answer.schema.schemaVersion },
+      preservePhrases: [
+        answer.text.includes("Evidence level") ? "Evidence level" : null,
+        answer.text.includes("not certainty") ? "not certainty" : null,
+      ].filter((phrase): phrase is string => Boolean(phrase)),
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return true;
+  }
+
+  if (command.type === "operator_report") {
+    const report = buildOperatorReportSlackText(command);
+    const text = await userFacingSlackCopy({
+      deterministicText: report,
+      userMessage: params.text,
+      intent: `operator_report_${command.operatorReportKind ?? "question"}`,
+      context: { reportKind: command.operatorReportKind ?? "question" },
+      preservePhrases: [
+        report.includes("Final submit remains manual") ? "Final submit remains manual" : null,
+        report.includes("This report is read-only") ? "This report is read-only" : null,
+      ].filter((phrase): phrase is string => Boolean(phrase)),
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return true;
+  }
+
+  return false;
+}
+
 async function handleBatchWorkspaceCommand(params: {
   command: ParsedSlackSocketCommand;
   state: ReturnType<typeof getSlackThreadStateByThreadTs>;
@@ -3129,16 +3261,17 @@ export interface SlackReasoningGatewayParams {
 function shouldFallbackWithoutLlm(params: SlackReasoningGatewayParams, state: ReturnType<typeof getSlackThreadStateByThreadTs>): boolean {
   if (params.ownedConversation || params.promptSurface) return true;
   if (state || params.botMentioned || params.files?.length || params.upworkUrl || parseSlackOperatorIntent(params.text)) return true;
+  if (hasDeterministicProductInsightIntent(params.text)) return true;
   return hasExplicitAgentSlackContext(params.text);
 }
 
 function hasExplicitAgentSlackContext(text: string): boolean {
   const withoutUrls = text.replace(/https?:\/\/\S+/gi, " ");
-  return /\b(?:application|proposal|drafts?|prep|listing|cover letter|qa|queue|chrome|browser|blocked|blocker|attention|wrong|paused|stopping|waiting on me|deal here|proof|portfolio|connects|boost|hunting|running|health|retry|submitted|interview|hired|lost|upwork\s+(?:agent|bot|application|listing|proposal)|upload\s+files?|attach\s+files?)\b/i.test(withoutUrls);
+  return /\b(?:application|proposal|drafts?|prep|listing|cover letter|qa|queue|chrome|browser|blocked|blocker|attention|wrong|paused|stopping|waiting on me|deal here|proof|portfolio|connects|boost|hunting|running|health|retry|submitted|interview|hired|lost|sources?|search(?:es)?|operator\s+reports?|friday\s+handoff|monthly\s+review|upwork\s+(?:agent|bot|application|listing|proposal)|upload\s+files?|attach\s+files?)\b/i.test(withoutUrls);
 }
 
 function shouldAllowSlackLearningAndActions(params: SlackReasoningGatewayParams, state: ReturnType<typeof getSlackThreadStateByThreadTs>): boolean {
-  return Boolean(params.ownedConversation || params.promptSurface || state || params.botMentioned || parseSlackOperatorIntent(params.text) || hasExplicitAgentSlackContext(params.text));
+  return Boolean(params.ownedConversation || params.promptSurface || state || params.botMentioned || parseSlackOperatorIntent(params.text) || hasDeterministicProductInsightIntent(params.text) || hasExplicitAgentSlackContext(params.text));
 }
 
 async function postGatewayProgressReply(params: SlackReasoningGatewayParams, decision: SlackConversationBrainDecision): Promise<void> {
@@ -3374,6 +3507,10 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
   }
 
   const deterministicBatchCommand = parseSlackThreadCommand(params.text);
+  if (canExecuteConversationBrainAction && isProductInsightCommand(deterministicBatchCommand)) {
+    const handled = await handleProductInsightCommand(params, deterministicBatchCommand);
+    if (handled) return;
+  }
   if (canExecuteConversationBrainAction && isBatchWorkspaceCommand(deterministicBatchCommand)) {
     const handled = await handleBatchWorkspaceCommand({
       command: deterministicBatchCommand,
@@ -3533,6 +3670,11 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, 
 
   if (command.type === "ignore") {
     return;
+  }
+
+  if (isProductInsightCommand(command)) {
+    const handled = await handleProductInsightCommand(params, command);
+    if (handled) return;
   }
 
   if (isBatchWorkspaceCommand(command)) {

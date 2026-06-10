@@ -93,7 +93,7 @@ export function buildFridayOperatorHandoff(snapshot: OperatorReportSnapshot): st
     "Lessons",
     itemList(snapshot.lessons, "Unavailable: no sales learning memories updated in this period."),
     "",
-    "Steve action items",
+    "My action items",
     itemList(snapshot.steveActionItems, "None found in DB. Final submit remains manual."),
     "",
     "Safety",
@@ -173,7 +173,7 @@ export function answerMonthlyOperatorQuestion(snapshot: OperatorReportSnapshot, 
       topic: "blocked",
       text: items.length
         ? `Manual attention items:\n${items.map(itemLine).join("\n")}`
-        : "No blocked or Steve action items were found in DB for this period. Final submit remains manual.",
+        : "No blocked or manual action items were found in DB for this period. Final submit remains manual.",
     };
   }
 
