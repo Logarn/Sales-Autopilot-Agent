@@ -124,6 +124,19 @@ function violatesConnectsWording(text: string, deterministicText: string): boole
   return false;
 }
 
+function violatesFileCapabilityWording(text: string, request: SlackCopyRequest): boolean {
+  if (request.intent !== "answer_file_capability_question") return false;
+  const deterministic = request.deterministicText;
+  const expectsReusableProof = /reusable proof|proof-assets|proof assets/i.test(deterministic);
+  const expectsSlackIntake = /Slack thread|Slack upload|files? you add here|attach them in this Slack thread|ingest/i.test(deterministic);
+  const expectsSubmitBoundary = /stop before submit|final submit.*manual|submit remains manual|submit untouched/i.test(deterministic);
+
+  if (expectsReusableProof && !/reusable proof|proof-assets|proof assets/i.test(text)) return true;
+  if (expectsSlackIntake && !/(Slack\s+(?:thread|upload)|files? you add here|attach (?:them|files?) here|attach (?:them|files?) in this Slack thread)/i.test(text)) return true;
+  if (expectsSubmitBoundary && !/stop before submit|final submit.*manual|submit remains manual|submit untouched/i.test(text)) return true;
+  return false;
+}
+
 function preservedPhrasesMissing(text: string, phrases: string[] = []): boolean {
   return phrases.some((phrase) => phrase.trim() && !text.includes(phrase));
 }
@@ -194,6 +207,7 @@ function validateSlackCopy(text: string, request: SlackCopyRequest): string | nu
   if (violatesSubmitBoundary(trimmed)) return "submit boundary violation";
   if (violatesProofWording(trimmed, request.deterministicText)) return "proof wording drift";
   if (violatesConnectsWording(trimmed, request.deterministicText)) return "connects verification drift";
+  if (violatesFileCapabilityWording(trimmed, request)) return "file capability facts missing";
   if (preservedPhrasesMissing(trimmed, request.preservePhrases)) return "required verbatim text missing";
   if (repeatsRecentOpening(trimmed, request)) return "repeated recent opening";
   if (request.path === "lead_packet") {
