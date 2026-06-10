@@ -177,6 +177,11 @@ const STOP_WORDS = new Set([
 
 const SECURITY_BYPASS_VERBS = "(?:bypass|override|ignore|disable|solve|circumvent|evade|get\\s+around|work\\s+around|skip|avoid|pass\\s+through|defeat|clear\\s+automatically)";
 const SECURITY_BYPASS_TARGETS = "(?:captcha|cloudflare|security|2fa|two[-\\s]*factor|passkey|login|screen|challenge)";
+const VERIFICATION_CLAIM_VERBS = "(?:mark|treat|claim|set|record|label)";
+const VERIFICATION_CLAIM_TARGETS = "(?:proof|asset|attachment|portfolio|file|field|fields|screening\\s+answer|cover\\s+letter)";
+const UNVERIFIED_CLAIM_QUALIFIERS = "(?:unverified|unchecked|unreviewed|unread|unconfirmed|not\\s+verified|not\\s+checked|not\\s+visible)";
+const VERIFIED_CLAIM_STATES = "(?:verified|attached|selected|filled|complete|ready|approved)";
+const VERIFICATION_REQUIRED_ACTIONS = "(?:verification|verified|checking|checked|readback|review|confirming|confirmed|visible|inspection)";
 
 const SAFETY_BANNED_PATTERNS = [
   /\b(final\s*submit|submit\s+proposal|send\s+proposal|send\s+for\s+\d+\s+connects)\b/i,
@@ -185,6 +190,9 @@ const SAFETY_BANNED_PATTERNS = [
   /\bsend\b.{0,40}\b(automatically|after\b.{0,20}\bfields?|button)\b/i,
   new RegExp(`\\b${SECURITY_BYPASS_VERBS}\\b.{0,80}\\b${SECURITY_BYPASS_TARGETS}\\b`, "i"),
   new RegExp(`\\b${SECURITY_BYPASS_TARGETS}\\b.{0,80}\\b${SECURITY_BYPASS_VERBS}\\b`, "i"),
+  new RegExp(`\\b${VERIFICATION_CLAIM_VERBS}\\b.{0,60}\\b${UNVERIFIED_CLAIM_QUALIFIERS}\\b.{0,60}\\b${VERIFICATION_CLAIM_TARGETS}\\b.{0,60}\\b${VERIFIED_CLAIM_STATES}\\b`, "i"),
+  new RegExp(`\\b${VERIFICATION_CLAIM_VERBS}\\b.{0,60}\\b${VERIFICATION_CLAIM_TARGETS}\\b.{0,60}\\b${VERIFIED_CLAIM_STATES}\\b.{0,60}\\b(?:without|before)\\b.{0,60}\\b${VERIFICATION_REQUIRED_ACTIONS}\\b`, "i"),
+  new RegExp(`\\b${VERIFIED_CLAIM_STATES}\\b.{0,60}\\b${VERIFICATION_CLAIM_TARGETS}\\b.{0,60}\\b(?:without|before)\\b.{0,60}\\b${VERIFICATION_REQUIRED_ACTIONS}\\b`, "i"),
   /\bclaim\s+.*\b(verified|attached|selected|filled)\b.*\bwithout\b/i,
   /\b(arbitrary|run)\s+shell\b/i,
 ];
