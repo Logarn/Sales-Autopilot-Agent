@@ -138,6 +138,14 @@ async function run(): Promise<void> {
     assert.equal(repeated.manualAttentionIncidents?.find((item) => item.status === "active")?.repeatCount, 2);
 
     await recordBrowserManualAttention({
+      url: "https://www.upwork.com/nx/search/jobs/?q=Klaviyo&sort=recency&__cf_chl_rt_tk=test-token",
+      title: "Just a moment...",
+      reason: "captcha_or_security_challenge",
+      now: new Date("2026-06-10T00:01:30.000Z"),
+    });
+    assert.equal(getQueuedSlackMessages().length, 1, "generic session browser-check URL should collapse into the active incident");
+
+    await recordBrowserManualAttention({
       title: "Just a moment...",
       reason: "captcha_or_security_challenge",
       now: new Date("2026-06-10T00:02:00.000Z"),

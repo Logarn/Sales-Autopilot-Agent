@@ -173,7 +173,10 @@ function manualAttentionIncidentGroup(reason: string): string {
   return "manual_attention";
 }
 
-function manualAttentionIncidentTarget(event: Pick<BrowserManualAttentionEvent, "actionId" | "jobId" | "applicationId" | "url">): string {
+function manualAttentionIncidentTarget(event: Pick<BrowserManualAttentionEvent, "actionId" | "jobId" | "applicationId" | "url" | "reason">): string {
+  if (manualAttentionIncidentGroup(event.reason) === "browser_check" && !event.actionId && !event.jobId && !event.applicationId) {
+    return "session";
+  }
   const jobToken = jobTokenFromUrl(event.url) ?? jobTokenFromJobId(event.applicationId ?? undefined) ?? jobTokenFromJobId(event.jobId);
   if (jobToken) return `job:${jobToken}`;
   if (event.url?.trim()) return `url:${event.url.trim().replace(/[?#].*$/, "")}`;
