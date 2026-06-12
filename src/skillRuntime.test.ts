@@ -17,8 +17,9 @@ const { buildApplicationDraft } = require("./agent") as {
 const { buildApplicationDraftWithResearch } = require("./agent") as {
   buildApplicationDraftWithResearch: (job: any, options?: any) => Promise<any>;
 };
-const { createMockBrandResearchProvider } = require("./brandResearchProvider") as {
+const { createMockBrandResearchProvider, isSafeBrandResearchUrl } = require("./brandResearchProvider") as {
   createMockBrandResearchProvider: (results: any[]) => any;
+  isSafeBrandResearchUrl: (value: string) => boolean;
 };
 const {
   listRuntimeSkills,
@@ -101,6 +102,17 @@ assert(inventoryNames.has("brand-research"), "Brand-research skill should exist.
 assert(inventoryNames.has("proposal-copywriting"), "Proposal-copywriting skill should exist.");
 assert(inventoryNames.has("portfolio-selection-runtime"), "Runtime inventory should include portfolio selection module.");
 assert(inventoryNames.has("profile-context-runtime"), "Runtime inventory should include profile context module.");
+
+assert.equal(isSafeBrandResearchUrl("https://example.com/about"), true, "HTTPS public brand URLs should be allowed.");
+assert.equal(isSafeBrandResearchUrl("http://example.com/about"), false, "Plain HTTP brand research URLs should be rejected.");
+const credentialBearingUrl = ["https://user", "pass@example.com/about"].join(":");
+assert.equal(isSafeBrandResearchUrl(credentialBearingUrl), false, "Credential-bearing URLs should be rejected.");
+assert.equal(isSafeBrandResearchUrl("https://upwork.com/jobs/example"), false, "Upwork URLs should not be used as brand research sources.");
+assert.equal(isSafeBrandResearchUrl("https://slack.com/files/example"), false, "Slack URLs should not be used as brand research sources.");
+assert.equal(isSafeBrandResearchUrl("https://localhost/about"), false, "localhost URLs should be rejected.");
+assert.equal(isSafeBrandResearchUrl("https://127.0.0.1/about"), false, "loopback URLs should be rejected.");
+assert.equal(isSafeBrandResearchUrl("https://10.0.0.4/about"), false, "private network URLs should be rejected.");
+assert.equal(isSafeBrandResearchUrl("https://169.254.10.20/about"), false, "link-local URLs should be rejected.");
 
 const brandJob = job();
 const selectedForBrand = selectApplicationPrepSkills(brandJob);
@@ -205,6 +217,12 @@ async function runAsyncAssertions(): Promise<void> {
       assert(input.query.includes("glowroutine.com") || input.query.includes("GlowRoutine"), "Search query should use the visible brand/site clue.");
       return [
         {
+          title: "Unsafe local source",
+          url: "https://127.0.0.1/private",
+          snippet: "This local source must not be retained.",
+          provider: "mock-search",
+        },
+        {
           title: "GlowRoutine skincare routines",
           url: "https://glowroutine.com/pages/about",
           snippet: "GlowRoutine sells skincare routines and education for customers comparing products, building trust, and replenishing at the right moment.",
@@ -220,6 +238,7 @@ async function runAsyncAssertions(): Promise<void> {
   assert.equal(researchedDraft.skillUseTrace.brandResearchProvider, "mock-search", "Skill trace should record the research provider.");
   assert.equal(researchedDraft.skillUseTrace.brandResearchSourceCount, 1, "Skill trace should record source count.");
   assert(researchedDraft.brandFactPack.sourceDetails.some((source: any) => source.url === "https://glowroutine.com/pages/about"), "Fact pack should retain safe source details.");
+  assert(!researchedDraft.brandFactPack.sourceDetails.some((source: any) => /127\.0\.0\.1|localhost/i.test(source.url)), "Fact pack should filter unsafe local source details.");
   assert(researchedDraft.brandFactPack.sources.includes("https://glowroutine.com/pages/about"), "Fact pack should retain source URL.");
   assert(researchedDraft.brandFactPack.proofAngle.toLowerCase().includes("trust"), "Beauty fact pack should carry a proof angle from customer logic.");
 

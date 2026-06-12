@@ -1,5 +1,5 @@
 import { loadRuntimeSkill, hasUsefulBrandOrCategoryClue, LoadedRuntimeSkill } from "../skillRuntime";
-import { BrandResearchRun } from "../brandResearchProvider";
+import { BrandResearchRun, isSafeBrandResearchUrl } from "../brandResearchProvider";
 import { BrandFactPack, BrandResearchSourceDetail, JobPosting } from "../types";
 
 export type BrandResearchSkillRuntime = LoadedRuntimeSkill & {
@@ -193,6 +193,7 @@ function safeWebSourceDetails(results: BrandResearchSourceDetail[]): BrandResear
   const output: BrandResearchSourceDetail[] = [];
   for (const result of results) {
     const key = result.url.toLowerCase();
+    if (!isSafeBrandResearchUrl(result.url)) continue;
     if (seen.has(key)) continue;
     seen.add(key);
     output.push({

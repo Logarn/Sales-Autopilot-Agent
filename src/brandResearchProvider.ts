@@ -63,12 +63,13 @@ function truncate(value: string, maxLength: number): string {
 }
 
 function isPrivateHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase();
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (host === "localhost" || host.endsWith(".local")) return true;
-  if (/^(?:127|10)\./.test(host)) return true;
+  if (/^(?:0|127|10)\./.test(host)) return true;
   if (/^192\.168\./.test(host)) return true;
   if (/^172\.(?:1[6-9]|2\d|3[0-1])\./.test(host)) return true;
-  if (host === "::1" || host.startsWith("fc") || host.startsWith("fd")) return true;
+  if (/^169\.254\./.test(host)) return true;
+  if (host === "::1" || host.startsWith("::ffff:127.") || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80:")) return true;
   return false;
 }
 
