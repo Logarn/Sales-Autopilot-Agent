@@ -563,7 +563,7 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
     return { type: "draft_preview", rawText: normalized, source: "fallback" };
   }
   const statusMatch = /^(status)$/i.test(normalized) ||
-    /\b(details|show details|show proof|show draft|why\b|why did you pick|why pick|what are the red flags|red flags|risks|what'?s the deal here|what is the deal here|what still needs manual review|what needs manual review|what is missing|what still needs|manual review)\b/i.test(normalized);
+    /\b(details|show details|show proof|show draft|which skills|skills did you use|skill trace|skill-use trace|why\b|why did you pick|why pick|what are the red flags|red flags|risks|what'?s the deal here|what is the deal here|what still needs manual review|what needs manual review|what is missing|what still needs|manual review)\b/i.test(normalized);
   if (statusMatch) return { type: "status", rawText: normalized };
 
   if (/^(approve)$/i.test(commandText)) return { type: "approve", rawText: normalized };
@@ -893,12 +893,19 @@ function buildThreadStatusDetails(state: NonNullable<ReturnType<typeof getSlackT
     .slice(-5)
     .map((action) => `#${action.id} ${action.actionType} ${action.status}${action.lastError ? ` (${action.lastError})` : ""}`);
   const strategy = draft?.connectsStrategy ?? job?.scoreBreakdown.connectsStrategy;
+  const skillTrace = draft?.skillUseTrace;
+  const skillsUsed = skillTrace?.selectedSkills.map((skill) => `${skill.stage}:${skill.name}`).join("; ");
   return [
     job ? `Fit: ${job.score}/100 (${job.matchLevel})` : null,
     job?.scoreBreakdown.reasons.length ? `Why picked: ${job.scoreBreakdown.reasons.slice(0, 5).join("; ")}` : null,
     job?.scoreBreakdown.risks.length ? `Red flags/risks: ${job.scoreBreakdown.risks.slice(0, 5).join("; ")}` : "Red flags/risks: none recorded",
     strategy ? `Connects: ${formatConnectsStrategy(strategy)}` : "Connects: not calculated",
     draft ? `Draft: ${draft.status}, v${(draft as { proposalVersion?: number }).proposalVersion ?? "stored"}, ${draft.proposalText.length} chars` : "Draft: missing",
+    skillTrace ? `Skills used: ${skillsUsed}` : "Skills used: missing trace",
+    skillTrace ? `Skill gate: browserFillAllowed=${skillTrace.browserFillAllowed}; qualityGateReady=${skillTrace.qualityGateReady}; captureConfidence=${skillTrace.captureConfidence}` : null,
+    draft?.brandFactPack ? `Brand fact pack: ${draft.brandFactPack.researchSummary}` : null,
+    draft?.copyStrategy ? `Copy strategy: ${draft.copyStrategy.one_sentence_sales_argument}` : null,
+    draft?.proofStrategy ? `Proof strategy: ${draft.proofStrategy.summary}` : null,
     draft?.proposalText ? `Draft preview: ${draft.proposalText.replace(/\s+/g, " ").trim().slice(0, 900)}` : null,
     profileContext?.selectedAttachments.length ? `Proof selected: ${profileContext.selectedAttachments.join(", ")}` : null,
     profileContext?.selectedProofPoints.length ? `Proof points: ${profileContext.selectedProofPoints.slice(0, 5).join("; ")}` : null,
@@ -913,7 +920,7 @@ function latestBrowserActionForJob(jobId: string) {
 }
 
 function isDebugStatusRequest(value: string): boolean {
-  return /\b(debug|details|technical details|raw status|full details|dump)\b/i.test(value);
+  return /\b(debug|details|technical details|raw status|full details|dump|which skills|skills did you use|skill trace|skill-use trace)\b/i.test(value);
 }
 
 function isDiscoveryHuntingCommand(type: SlackSocketParsedCommandType): boolean {

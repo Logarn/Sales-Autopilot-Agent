@@ -1,0 +1,192 @@
+import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "upwork-skill-runtime-"));
+process.env.DB_PATH = path.join(tempDir, "test.sqlite");
+process.env.PROOF_ASSET_ROOT = path.join(tempDir, "proof-assets");
+fs.mkdirSync(process.env.PROOF_ASSET_ROOT, { recursive: true });
+
+const { scoreJob } = require("./filter") as {
+  scoreJob: (job: any) => any;
+};
+const { buildApplicationDraft } = require("./agent") as {
+  buildApplicationDraft: (job: any) => any;
+};
+const {
+  listRuntimeSkills,
+  selectApplicationPrepSkills,
+  hasUsefulBrandOrCategoryClue,
+} = require("./skillRuntime") as {
+  listRuntimeSkills: () => Array<{ name: string; path: string; kind: string }>;
+  selectApplicationPrepSkills: (job: any) => Array<{ name: string; stage: string }>;
+  hasUsefulBrandOrCategoryClue: (job: any) => boolean;
+};
+const {
+  buildCopywritingDraft,
+  evaluateDraftQualityGate,
+  loadProposalCopywritingSkill,
+} = require("./skills/proposalCopywritingSkill") as {
+  buildCopywritingDraft: (input: any) => any;
+  evaluateDraftQualityGate: (input: any) => { ready: boolean; issues: Array<{ code: string }> };
+  loadProposalCopywritingSkill: () => any;
+};
+const { buildBrandFactPack, loadBrandResearchSkill } = require("./skills/brandResearchSkill") as {
+  buildBrandFactPack: (input: any) => any;
+  loadBrandResearchSkill: () => any;
+};
+const { markJobSeen } = require("./db") as {
+  markJobSeen: (job: any, notified: boolean) => void;
+};
+const { buildBrowserApplyPlan } = require("./browserApply") as {
+  buildBrowserApplyPlan: (jobId: string) => { plan: any; valid: boolean; issues: Array<{ code: string; severity: string }> };
+};
+
+function job(partial: Record<string, unknown> = {}) {
+  return {
+    id: `skill-runtime-${Math.random().toString(16).slice(2)}`,
+    title: "Klaviyo lifecycle strategist for Shopify beauty brand",
+    url: "https://www.upwork.com/jobs/~123456789012345678",
+    description: [
+      "Store GlowRoutine / glowroutine.com needs help rebuilding Klaviyo lifecycle flows for a Shopify skincare brand.",
+      "We need welcome, replenishment, and post-purchase education that improves trust, routine-building, repeat purchase, and conversion.",
+      "Please mention relevant proof and keep the application concise.",
+    ].join(" "),
+    postedAt: new Date("2026-06-12T08:00:00Z").toISOString(),
+    budget: "$60-$90/hr",
+    clientCountry: "United States",
+    clientRating: 4.9,
+    clientSpend: 25000,
+    clientHireRate: 80,
+    clientTotalHires: 14,
+    clientFeedbackCount: 9,
+    category: "Email Marketing",
+    experienceLevel: "Expert",
+    connectsCost: 8,
+    skills: ["Klaviyo", "Shopify", "Email Marketing", "Lifecycle Marketing"],
+    sourceQuery: "skill-runtime-test",
+    proposalCount: 8,
+    competitionLevel: "medium",
+    ...partial,
+  };
+}
+
+function scored(partial: Record<string, unknown> = {}) {
+  return scoreJob(job(partial));
+}
+
+function indexOfRequired(text: string, needle: RegExp, label: string): number {
+  const match = text.toLowerCase().match(needle);
+  assert(match?.index !== undefined, `${label} should exist in proposal: ${text}`);
+  return match.index;
+}
+
+const inventory = listRuntimeSkills();
+const inventoryNames = new Set(inventory.map((skill) => skill.name));
+const markdownSkillNames = fs.readdirSync(path.resolve(process.cwd(), "skills"), { withFileTypes: true })
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name)
+  .filter((name) => fs.existsSync(path.resolve(process.cwd(), "skills", name, "SKILL.md")));
+for (const name of markdownSkillNames) {
+  assert(inventoryNames.has(name), `Skill inventory should include ${name}`);
+}
+assert(inventoryNames.has("brand-research"), "Brand-research skill should exist.");
+assert(inventoryNames.has("proposal-copywriting"), "Proposal-copywriting skill should exist.");
+assert(inventoryNames.has("portfolio-selection-runtime"), "Runtime inventory should include portfolio selection module.");
+assert(inventoryNames.has("profile-context-runtime"), "Runtime inventory should include profile context module.");
+
+const brandJob = job();
+const selectedForBrand = selectApplicationPrepSkills(brandJob);
+assert(selectedForBrand.some((skill) => skill.name === "brand-research"), "Brand-research should be selected when brand/site/category clues exist.");
+const genericNoClueJob = job({
+  title: "Need help writing short emails",
+  description: "Need a few account emails rewritten. No brand, website, product, platform, or category details are available yet.",
+  category: "",
+  skills: ["Email Writing"],
+});
+assert.equal(hasUsefulBrandOrCategoryClue(genericNoClueJob), false, "No-clue job should not trigger brand/category research.");
+assert(!selectApplicationPrepSkills(genericNoClueJob).some((skill) => skill.name === "brand-research"), "Brand-research should not be selected without useful clues.");
+assert(selectedForBrand.some((skill) => skill.name === "proposal-copywriting" && skill.stage === "cover_letter_drafting"), "Proposal-copywriting should be selected for cover letters.");
+assert(selectedForBrand.some((skill) => skill.name === "proposal-copywriting" && skill.stage === "screening_answer_drafting"), "Proposal-copywriting should be selected for screening answers.");
+assert(selectedForBrand.some((skill) => skill.name === "proof-selector" && skill.stage === "proof_selection"), "Proof-selector should be selected before proof selection.");
+assert(selectedForBrand.some((skill) => skill.name === "profile-context-runtime" && skill.stage === "portfolio_profile_selection"), "Profile/portfolio runtime skill should be selected.");
+
+const beauty = scored();
+const beautyDraft = buildApplicationDraft(beauty);
+assert.equal(beautyDraft.jobUnderstanding.fullJobDescription, beauty.description, "Full job description should be preserved before copywriting.");
+assert(beautyDraft.skillUseTrace.invocationOrder.findIndex((item: string) => item.includes("brand_research:brand-research")) <
+  beautyDraft.skillUseTrace.invocationOrder.findIndex((item: string) => item.includes("cover_letter_drafting:proposal-copywriting")),
+  "Brand fact pack should be built before proposal-copywriting.");
+assert(beautyDraft.brandFactPack.researchNeeded, "Brand fact pack should mark research needed for brand/site clues.");
+assert(beautyDraft.copyStrategy, "copy_strategy should exist.");
+assert(beautyDraft.proofStrategy, "proof_strategy should exist.");
+
+assert.throws(
+  () => buildApplicationDraft(scored({ description: "" })),
+  /Full job description is required/,
+  "Drafting should fail if no job description is available."
+);
+
+assert.throws(
+  () => buildCopywritingDraft({
+    job: beauty,
+    profile: { hourlyRate: 100 },
+    intelligence: beautyDraft.jobIntelligence,
+    brandFactPack: buildBrandFactPack({ job: beauty, skill: loadBrandResearchSkill() }),
+    proofPoints: [],
+    portfolioItems: [],
+    skill: { ...loadProposalCopywritingSkill(), markdown: "" },
+  }),
+  /proposal-copywriting skill must be loaded/,
+  "Drafting should fail if proposal-copywriting skill is missing."
+);
+
+const gardening = scored({
+  title: "Gardening ecommerce CRM lifecycle help",
+  description: "A gardening store needs CRM lifecycle help for seeds, plants, seasonal care education, replenishment, and Klaviyo flows.",
+  category: "Gardening",
+  skills: ["Klaviyo", "CRM", "Email Marketing"],
+});
+const gardeningProposal = buildApplicationDraft(gardening).proposalText.toLowerCase();
+assert(indexOfRequired(gardeningProposal, /season/, "Gardening season/customer logic") < indexOfRequired(gardeningProposal, /flow|klaviyo/, "flow/tool reference"), "Gardening proposal should use season/customer logic before flow names.");
+
+const beautyProposal = beautyDraft.proposalText.toLowerCase();
+const beautyLogicIndex = indexOfRequired(beautyProposal, /trust|routine|replenishment/, "Beauty trust/routine/replenishment logic");
+const beautyProofIndex = indexOfRequired(beautyProposal, /share relevant|relevant work|proof/, "Beauty proof mention");
+assert(beautyLogicIndex < beautyProofIndex, "Beauty proposal should use trust/routine/replenishment logic before proof.");
+
+const design = scored({
+  title: "Email design system for Shopify campaigns",
+  description: "We need email design help for Shopify campaigns and Klaviyo templates. The work should improve hierarchy, offer clarity, mobile reading, CTA placement, and conversion.",
+  category: "Email Design",
+  skills: ["Figma", "Klaviyo", "Email Design"],
+});
+const designProposal = buildApplicationDraft(design).proposalText.toLowerCase();
+const hierarchyIndex = indexOfRequired(designProposal, /hierarchy|conversion/, "Email design hierarchy/conversion logic");
+const designToolIndex = designProposal.indexOf("figma") >= 0 ? designProposal.indexOf("figma") : designProposal.indexOf("klaviyo");
+assert(designToolIndex === -1 || hierarchyIndex < designToolIndex, "Email design proposal should use hierarchy/conversion logic before design-tool claims.");
+
+const gateBase = {
+  job: beauty,
+  copyStrategy: beautyDraft.copyStrategy,
+  brandFactPack: beautyDraft.brandFactPack,
+  skillLoaded: true,
+  fullJobDescriptionRead: true,
+  copyStrategyCreated: true,
+  finalSubmitManual: true,
+  proofVerificationState: "planned",
+};
+assert(evaluateDraftQualityGate({ ...gateBase, proposalText: "I am a Klaviyo expert with years of experience. Send me the store URL." }).issues.some((issue) => issue.code === "generic_expert_opener"), "Generic opener should fail quality gate.");
+assert(evaluateDraftQualityGate({ ...gateBase, proposalText: `${beautyDraft.proposalText}\n\njust adding noise.` }).issues.some((issue) => issue.code === "banned_noise_phrase"), "Banned noise phrase should fail quality gate.");
+assert(evaluateDraftQualityGate({ ...gateBase, proposalText: `${beautyDraft.proposalText}\n\nThis ends...` }).issues.some((issue) => issue.code === "truncated_or_incomplete"), "Truncated ellipsis should fail quality gate.");
+assert(evaluateDraftQualityGate({ ...gateBase, proposalText: `${beautyDraft.proposalText}\n\nI attached the proof file for review.` }).issues.some((issue) => issue.code === "unverified_proof_claim"), "Unverified proof claim should fail quality gate.");
+
+beauty.applicationDraft = beautyDraft;
+markJobSeen(beauty, true);
+const planResult = buildBrowserApplyPlan(beauty.id);
+assert(planResult.plan?.stopBeforeSubmit === true, "Browser apply plan should keep final submit manual.");
+assert(planResult.plan?.finalPreparationDiagnostics.stopBeforeSubmit === true, "Final-prep diagnostics should keep final submit manual.");
+assert(beautyDraft.draftQualityGate.finalSubmitManual, "Draft quality gate should preserve manual final submit.");
+
+console.log("skill runtime tests passed");

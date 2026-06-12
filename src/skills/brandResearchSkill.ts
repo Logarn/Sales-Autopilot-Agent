@@ -1,0 +1,208 @@
+import { loadRuntimeSkill, hasUsefulBrandOrCategoryClue, LoadedRuntimeSkill } from "../skillRuntime";
+import { BrandFactPack, JobPosting } from "../types";
+
+export type BrandResearchSkillRuntime = LoadedRuntimeSkill & {
+  name: "brand-research";
+};
+
+export function loadBrandResearchSkill(now = new Date()): BrandResearchSkillRuntime {
+  const skill = loadRuntimeSkill("brand-research", now);
+  return { ...skill, name: "brand-research" };
+}
+
+function sourceText(job: Pick<JobPosting, "title" | "description" | "skills" | "category" | "budget" | "clientCountry">): string {
+  return [job.title, job.description, job.skills.join(" "), job.category, job.budget, job.clientCountry].join("\n");
+}
+
+function unique(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const value of values) {
+    const cleaned = value?.replace(/\s+/g, " ").trim();
+    if (!cleaned) continue;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(cleaned);
+  }
+  return output;
+}
+
+function firstMatch(text: string, patterns: RegExp[]): string {
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]?.trim()) return match[1].trim();
+  }
+  return "";
+}
+
+function visibleBrandName(job: Pick<JobPosting, "title" | "description">): string {
+  const text = `${job.title}\n${job.description}`;
+  return firstMatch(text, [
+    /\b(?:brand|store|company|site)\s+([A-Z][A-Za-z0-9&' -]{2,60}?)(?=\s*(?:\/|,|\.|\band\b|\bneeds\b|\bis\b|\n|$))/,
+    /\bfor\s+([A-Z][A-Za-z0-9&' -]{2,50}?)(?=\s+(?:brand|store|shop|site|company)\b)/,
+  ]);
+}
+
+function visibleUrls(job: Pick<JobPosting, "title" | "description">): string[] {
+  const text = `${job.title}\n${job.description}`;
+  return unique([...text.matchAll(/\b(?:https?:\/\/)?(?:www\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?:\/[^\s),.;]*)?/gi)]
+    .map((match) => match[0])
+    .filter((url) => !/upwork\.com/i.test(url))
+    .map((url) => url.startsWith("http") ? url : `https://${url}`));
+}
+
+function categoryFor(job: Pick<JobPosting, "title" | "description" | "skills" | "category" | "budget" | "clientCountry">): string {
+  const text = sourceText(job).toLowerCase();
+  if (/garden|plant|lawn|seed|nursery|horticulture/.test(text)) return "gardening";
+  if (/beauty|skincare|cosmetic|skin care|makeup/.test(text)) return "beauty/skincare";
+  if (/fashion|apparel|clothing|boutique|jewelry/.test(text)) return "fashion/apparel";
+  if (/email design|template|figma|design|creative|visual/.test(text)) return "email design";
+  if (/pet|dog|cat|farm|hobby/.test(text)) return "pet and hobby DTC";
+  if (/supplement|wellness|health/.test(text)) return "health/wellness";
+  if (/saas|b2b|software|crm implementation|sales pipeline/.test(text)) return "B2B/SaaS";
+  if (/shopify|ecommerce|e-commerce|dtc|d2c/.test(text)) return "DTC ecommerce";
+  return job.category || "unknown";
+}
+
+function categoryLogic(category: string): Omit<BrandFactPack, "brandName" | "websiteUrls" | "sources" | "confidence" | "researchNeeded" | "researchAttempted" | "researchSummary" | "whatNotToClaim"> {
+  if (category === "gardening") {
+    return {
+      whatTheBrandSells: "gardening products, plants, seeds, tools, or care-related products",
+      productCategory: "gardening",
+      targetCustomerIcp: "gardeners who need confidence around season, plant type, climate, and care steps",
+      customerBuyingMoment: "seasonal planting, care problem, replenishment, or the next plant/product decision",
+      repeatPurchaseMoment: "season change, product care stage, replenishment, harvest/planting cycle, or follow-on supplies",
+      emotionalPainOrDesire: "avoid wasting time, money, or plants; feel capable and proud of the result",
+      likelyLifecycleLeak: "repeat purchase can leak when season, plant type, skill level, geography, and care stage are not mapped clearly",
+      likelyConversionLeak: "product pages/emails may not answer what to buy now, why now, and how to succeed with it",
+      customerEducationGaps: ["seasonal timing", "care instructions", "plant/product fit", "replenishment timing"],
+      objectionsOrTrustGaps: ["will this work in my climate", "am I buying the right thing", "will I mess this up"],
+      languageOrHooks: ["right plant, right season, right care step", "help customers feel confident before they buy"],
+    };
+  }
+  if (category === "beauty/skincare") {
+    return {
+      whatTheBrandSells: "beauty, skincare, cosmetic, or personal-care products",
+      productCategory: "beauty/skincare",
+      targetCustomerIcp: "buyers who need trust, routine fit, product education, and confidence before repeat purchase",
+      customerBuyingMoment: "first-use concern, routine upgrade, replenishment, product pairing, or trust-building before trial",
+      repeatPurchaseMoment: "first result, routine formation, replenishment window, and next-best product education",
+      emotionalPainOrDesire: "feel confident the product will work for their skin, routine, identity, or desired result",
+      likelyLifecycleLeak: "repeat purchase can leak when trust, product education, routine-building, and replenishment timing are not handled clearly",
+      likelyConversionLeak: "copy may skip proof, routine context, objections, and product education before asking for action",
+      customerEducationGaps: ["how to use it", "who it is for", "when to expect value", "what pairs with it"],
+      objectionsOrTrustGaps: ["will this work for me", "is it safe", "is the result believable", "do I need this now"],
+      languageOrHooks: ["trust, routine, result, replenishment", "turn product curiosity into a habit"],
+    };
+  }
+  if (category === "email design") {
+    return {
+      whatTheBrandSells: "products or offers that need clearer email communication",
+      productCategory: "email design",
+      targetCustomerIcp: "busy email readers deciding in seconds whether the offer is worth attention",
+      customerBuyingMoment: "skim-to-click moment where hierarchy, offer clarity, and CTA visibility decide action",
+      repeatPurchaseMoment: "campaign or flow moments where a prior buyer needs a clear next reason to click",
+      emotionalPainOrDesire: "avoid confusion and quickly see the product, reason, proof, and next step",
+      likelyLifecycleLeak: "conversion can leak when visual hierarchy does not make the offer, product path, proof, and CTA obvious fast enough",
+      likelyConversionLeak: "weak hierarchy, unclear offer, buried CTA, or design-tool focus before customer clarity",
+      customerEducationGaps: ["offer hierarchy", "product value", "proof placement", "single-action CTA"],
+      objectionsOrTrustGaps: ["what is this", "why should I care", "what happens if I click"],
+      languageOrHooks: ["hierarchy before decoration", "make the offer obvious fast"],
+    };
+  }
+  if (category === "fashion/apparel") {
+    return {
+      whatTheBrandSells: "fashion, apparel, accessories, or style-driven products",
+      productCategory: "fashion/apparel",
+      targetCustomerIcp: "shoppers buying identity, occasion, fit confidence, and discovery",
+      customerBuyingMoment: "drop timing, occasion, abandoned product interest, styling confidence, or seasonal need",
+      repeatPurchaseMoment: "new arrivals, replenishment, outfit pairing, VIP/drop access, or abandoned intent",
+      emotionalPainOrDesire: "feel seen, styled, timely, and confident about fit or occasion",
+      likelyLifecycleLeak: "lifecycle revenue can leak when browsing, fit, style, occasion, and drop timing are not connected",
+      likelyConversionLeak: "copy may show products without enough fit, identity, occasion, or urgency logic",
+      customerEducationGaps: ["fit", "styling", "occasion", "drop timing"],
+      objectionsOrTrustGaps: ["will this fit", "will this suit me", "is this worth buying now"],
+      languageOrHooks: ["fit, identity, occasion, timing", "make the next outfit decision easier"],
+    };
+  }
+  if (category === "B2B/SaaS") {
+    return {
+      whatTheBrandSells: "software, implementation, services, or workflow improvement",
+      productCategory: "B2B/SaaS",
+      targetCustomerIcp: "buyers trying to reduce risk, wasted time, workflow pain, and decision uncertainty",
+      customerBuyingMoment: "workflow pain, implementation friction, risk reduction, or decision confidence",
+      repeatPurchaseMoment: "adoption, renewal, expansion, onboarding, and proof of operational value",
+      emotionalPainOrDesire: "avoid choosing the wrong system or wasting team time on a messy implementation",
+      likelyLifecycleLeak: "pipeline or lifecycle movement can leak when buyer stage, role, risk, and implementation concern are not matched",
+      likelyConversionLeak: "messaging may describe features before explaining the business risk removed",
+      customerEducationGaps: ["implementation risk", "workflow value", "adoption path", "decision criteria"],
+      objectionsOrTrustGaps: ["will this work for my team", "how risky is switching", "what if implementation drags"],
+      languageOrHooks: ["less risk, less wasted time, clearer next step", "turn workflow pain into adoption"],
+    };
+  }
+  return {
+    whatTheBrandSells: "unknown from visible job text",
+    productCategory: category || "unknown",
+    targetCustomerIcp: "customers who need a clear reason to trust, buy, return, or take the next step",
+    customerBuyingMoment: "the moment the customer needs timing, clarity, belief, and a reason to act",
+    repeatPurchaseMoment: "post-purchase education, next-best action, segmentation, and a clear reason to come back",
+    emotionalPainOrDesire: "feel confident the brand understands what they need and why now matters",
+    likelyLifecycleLeak: "customer moments may not be mapped clearly enough for timing, segmentation, and message fit",
+    likelyConversionLeak: "the offer, proof, and next step may not be clear enough before asking for action",
+    customerEducationGaps: ["customer moment", "offer clarity", "proof", "next step"],
+    objectionsOrTrustGaps: ["why now", "why this", "why trust it"],
+    languageOrHooks: ["timing, trust, clarity, next step"],
+  };
+}
+
+export function buildBrandFactPack(input: {
+  job: Pick<JobPosting, "id" | "title" | "description" | "skills" | "category" | "budget" | "clientCountry">;
+  skill: BrandResearchSkillRuntime;
+}): BrandFactPack {
+  const job = input.job;
+  const researchNeeded = hasUsefulBrandOrCategoryClue(job);
+  const brandName = visibleBrandName(job);
+  const urls = visibleUrls(job);
+  const category = categoryFor(job);
+  const logic = categoryLogic(category);
+  const sources = unique([
+    "Upwork job title",
+    job.description.trim() ? "Upwork job description" : null,
+    ...urls,
+    category !== "unknown" ? `category clue: ${category}` : null,
+  ]);
+  const researchAttempted = researchNeeded;
+  const confidence = !researchNeeded
+    ? "unavailable"
+    : brandName || urls.length > 0
+      ? "medium"
+      : category !== "unknown"
+        ? "low"
+        : "unavailable";
+  const whatNotToClaim = unique([
+    "live website research beyond the visible job text",
+    brandName ? null : "brand name",
+    urls.length > 0 ? null : "brand website content",
+    "private metrics",
+    "verified customer reviews",
+    "attached proof or selected portfolio unless browser verification confirms it",
+  ]);
+  const researchSummary = !researchNeeded
+    ? "No useful brand/category clue was present, so brand research was not selected."
+    : urls.length > 0
+      ? `Used visible job text and website URL clues only; no production Upwork/VNC browser research was used.`
+      : `Used visible job text and category-level customer logic for ${category}; no fake brand-specific claims.`;
+
+  return {
+    brandName: brandName || "unknown",
+    websiteUrls: urls,
+    whatNotToClaim,
+    confidence,
+    sources,
+    researchNeeded,
+    researchAttempted,
+    researchSummary,
+    ...logic,
+  };
+}
