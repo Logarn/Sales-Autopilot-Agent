@@ -1,20 +1,33 @@
 import { critiqueProposal } from "./critic";
+import {
+  BrandResearchRun,
+  BrandResearchToolProvider,
+  researchBrandForJob,
+} from "./brandResearchProvider";
 import { evaluateConnectsStrategy, formatConnectsStrategy } from "./connectsStrategy";
 import { buildDeterministicJobIntelligence } from "./jobIntelligenceParser";
 import { loadConnectsRules, loadFreelancerProfile, loadPortfolioLibrary } from "./profile";
 import { loadProfileKnowledge } from "./profileKnowledge";
 import { buildSalesLearningPromptContext } from "./salesLearningMemory";
+import {
+  buildInitialSkillUseTrace,
+  finalizeSkillUseTrace,
+  selectApplicationPrepSkills,
+} from "./skillRuntime";
 import { buildSoulRuntimeGuidance } from "./soul";
+import { buildBrandFactPack, loadBrandResearchSkill } from "./skills/brandResearchSkill";
+import { buildCopywritingDraft, evaluateDraftQualityGate, loadProposalCopywritingSkill } from "./skills/proposalCopywritingSkill";
+import { selectPortfolioAssetsForJob } from "./skills/portfolioSelectionSkill";
 import {
   ApplicationDraft,
   FreelancerProfile,
   JobPosting,
   KnowledgeArtifact,
   PortfolioItem,
+  ProofStrategy,
   ScoredJob,
   StructuredProposalDraft,
 } from "./types";
-import { truncateText } from "./utils";
 
 const RED_FLAG_TERMS = [
   "full-time",
@@ -43,6 +56,14 @@ const AI_SLUDGE_PATTERNS = [
   /with over \d+ years of experience/gi,
 ];
 
+export interface BuildApplicationDraftOptions {
+  brandResearchRun?: BrandResearchRun | null;
+}
+
+export interface BuildApplicationDraftWithResearchOptions {
+  brandResearchProvider?: BrandResearchToolProvider;
+}
+
 function jobText(job: JobPosting): string {
   return [job.title, job.description, job.skills.join(" "), job.category].join(" ").toLowerCase();
 }
@@ -54,6 +75,33 @@ function containsAny(text: string, terms: string[]): string[] {
 function isBeautyDtcKlaviyoJob(job: JobPosting): boolean {
   const text = jobText(job);
   return /beauty|skincare|cosmetic|dtc|d2c|shopify|ecommerce|klaviyo/.test(text);
+}
+
+function isKnownDifferentPlatformClaim(text: string, primaryPlatform: string): boolean {
+  const normalizedPrimary = primaryPlatform.toLowerCase();
+  if (!normalizedPrimary || normalizedPrimary === "unknown") return false;
+  const platformTerms = [
+    "klaviyo",
+    "brevo",
+    "hubspot",
+    "customer.io",
+    "omnisend",
+    "mailerlite",
+    "mailchimp",
+    "attentive",
+    "postscript",
+    "sendgrid",
+    "activecampaign",
+    "braze",
+    "iterable",
+    "salesforce marketing cloud",
+  ];
+  const lower = text.toLowerCase();
+  return platformTerms.some((platform) => platform !== normalizedPrimary && lower.includes(platform));
+}
+
+function platformLabel(intelligence: { primaryPlatform: string }): string | null {
+  return intelligence.primaryPlatform && intelligence.primaryPlatform !== "unknown" ? intelligence.primaryPlatform : null;
 }
 
 function inferPainLine(job: JobPosting): string {
@@ -90,6 +138,13 @@ function selectRelevantKnowledge(artifacts: KnowledgeArtifact[], job: JobPosting
     .sort((a, b) => b.score - a.score || a.artifact.sourcePath.localeCompare(b.artifact.sourcePath))
     .slice(0, limit)
     .map(({ artifact }) => artifact);
+}
+
+function platformSafeKnowledge(artifacts: KnowledgeArtifact[], primaryPlatform: string): KnowledgeArtifact[] {
+  return artifacts.filter((artifact) => {
+    const text = [artifact.title, artifact.tags.join(" "), artifact.summary].join(" ");
+    return !isKnownDifferentPlatformClaim(text, primaryPlatform);
+  });
 }
 
 function selectProofPoints(profile: FreelancerProfile, job: JobPosting, knowledgeProof: KnowledgeArtifact[] = []): string[] {
@@ -259,6 +314,51 @@ export function selectPortfolioItems(job: JobPosting): PortfolioItem[] {
   return scored;
 }
 
+function buildProofStrategy(input: {
+  proofSelection: ReturnType<typeof selectPortfolioAssetsForJob>;
+  portfolioItems: PortfolioItem[];
+  proofPoints: string[];
+}): ProofStrategy {
+  const selectedProofNames = input.proofSelection.selectedProof.map((proof) => proof.name);
+  const selectedAttachmentPaths = input.proofSelection.autoAttachAssets.map((asset) => asset.path);
+  const selectedPortfolioHighlights = input.proofSelection.selectedUpworkPortfolioItems.map((item) => item.name);
+  const proofVerificationState = selectedProofNames.length || selectedAttachmentPaths.length || selectedPortfolioHighlights.length || input.proofPoints.length
+    ? "planned"
+    : "unavailable";
+  const summary = proofVerificationState === "unavailable"
+    ? "No verified/relevant proof selected; proposal must avoid proof claims."
+    : [
+        selectedProofNames.length ? `proof: ${selectedProofNames.slice(0, 3).join(", ")}` : null,
+        selectedPortfolioHighlights.length ? `portfolio highlights: ${selectedPortfolioHighlights.slice(0, 4).join(", ")}` : null,
+        selectedAttachmentPaths.length ? `candidate files: ${selectedAttachmentPaths.slice(0, 3).join(", ")}` : null,
+        input.proofPoints.length ? `profile proof context: ${input.proofPoints.slice(0, 2).join("; ")}` : null,
+      ].filter(Boolean).join("; ");
+  return {
+    selectedProofNames,
+    selectedAttachmentPaths,
+    selectedPortfolioHighlights,
+    proofVerificationState,
+    summary,
+    warnings: input.proofSelection.warnings,
+  };
+}
+
+function shortenProposalSafely(text: string, maxLength: number): string {
+  const cleaned = text.trim();
+  if (cleaned.length <= maxLength) return cleaned;
+  const paragraphs = cleaned.split(/\n{2,}/);
+  const kept: string[] = [];
+  for (const paragraph of paragraphs) {
+    const candidate = [...kept, paragraph].join("\n\n");
+    if (candidate.length > maxLength) break;
+    kept.push(paragraph);
+  }
+  const fallback = kept.join("\n\n").trim() || cleaned.slice(0, maxLength).replace(/\s+\S*$/, "").trim();
+  if (/[.!?]$/.test(fallback)) return fallback;
+  const sentenceEnd = Math.max(fallback.lastIndexOf("."), fallback.lastIndexOf("!"), fallback.lastIndexOf("?"));
+  return sentenceEnd > 80 ? fallback.slice(0, sentenceEnd + 1).trim() : `${fallback}.`;
+}
+
 function cleanProposal(text: string, bannedPhrases: string[]): string {
   let cleaned = text.trim();
   for (const pattern of AI_SLUDGE_PATTERNS) {
@@ -366,16 +466,25 @@ function evaluateConnects(job: ScoredJob): {
   };
 }
 
-export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
+export function buildApplicationDraft(job: ScoredJob, options: BuildApplicationDraftOptions = {}): ApplicationDraft {
+  if (!job.description.trim()) {
+    throw new Error("Full job description is required before application draft generation.");
+  }
   const profile = loadFreelancerProfile();
   const text = jobText(job);
   const redFlags = [...new Set([...job.scoreBreakdown.risks, ...job.negativeKeywords, ...containsAny(text, RED_FLAG_TERMS)])];
+  const preliminaryJobIntelligence = buildDeterministicJobIntelligence(job);
+  const primaryPlatform = platformLabel(preliminaryJobIntelligence) ?? "unknown";
   const knowledge = loadProfileKnowledge();
   const voiceKnowledge = selectVoiceKnowledge(knowledge.byType.voice);
-  const proofKnowledge = selectRelevantKnowledge(knowledge.byType.proof, job, 2);
-  const portfolioKnowledge = selectRelevantKnowledge(knowledge.byType.portfolio, job, 2);
+  const proofKnowledge = platformSafeKnowledge(selectRelevantKnowledge(knowledge.byType.proof, job, 2), primaryPlatform);
   const bidRuleKnowledge = selectRelevantKnowledge(knowledge.byType.bid_rules, job, 2);
   const soulGuidance = buildSoulRuntimeGuidance("proposal_draft_generation");
+  const selectedSkills = selectApplicationPrepSkills(job);
+  const initialSkillTrace = buildInitialSkillUseTrace(job, selectedSkills);
+  const brandResearchSkill = loadBrandResearchSkill();
+  const brandFactPack = buildBrandFactPack({ job, skill: brandResearchSkill, webResearch: options.brandResearchRun ?? null });
+  const proposalCopywritingSkill = loadProposalCopywritingSkill();
   const salesLearning = buildSalesLearningPromptContext({
     job,
     text: [job.title, job.description].join("\n"),
@@ -387,6 +496,8 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
     .slice(0, 6);
   const proofPoints = selectProofPoints(profile, job, proofKnowledge);
   const portfolioItems = selectPortfolioItems(job);
+  const proofSelection = selectPortfolioAssetsForJob(job);
+  const proofStrategy = buildProofStrategy({ proofSelection, portfolioItems, proofPoints });
   const fitReasons = [
     ...job.scoreBreakdown.reasons.slice(0, 6),
     ...job.matchedKeywords.slice(0, 4).map((keyword) => `Matches ${keyword}`),
@@ -394,40 +505,34 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
     ...(job.clientHireRate > 0 ? [`Client hire rate is ${job.clientHireRate}%`] : []),
   ].slice(0, 8);
 
-  const opening = inferPainLine(job);
-  const diagnosis = soulGuidance.length > 0
-    ? "First thing I would look at: where first-time buyers are dropping off, which lifecycle moments are leaking money, and whether the current messaging is driving repeat purchase or just adding noise."
-    : "What I would look at first: where first-time buyers are dropping off, which flows are missing or stale, whether segmentation is doing any real work, and whether campaigns are driving repeat purchase or just adding noise.";
-  const proofSentence = proofPoints.length
-    ? `Relevant background: ${proofPoints.slice(0, job.matchLevel === "high" ? 3 : 2).join("; ")}.`
-    : `My background is closest to ${profile.niche || "retention and lifecycle marketing"}.`;
   const rateRetainerAnswer = suggestBid(job, profile);
-  const clientRequestAnswers = extractClientRequestAnswers(job, profile, rateRetainerAnswer, portfolioItems, proofPoints);
-  const clientAnswersSentence = clientRequestAnswers.length ? `To answer the application notes directly: ${clientRequestAnswers.join(" ")}` : "";
-  const portfolioSentence = portfolioItems.length
-    ? `The most relevant proof to include would be: ${portfolioItems.map((item) => displayPortfolioExample(item)).join(", ")}.`
-    : "I would keep attachments light unless you want a specific example.";
-  const portfolioKnowledgeSentence = portfolioKnowledge.length
-    ? `Additional relevant example: ${portfolioKnowledge.map((artifact) => artifact.summary).join(" ")}`
-    : "";
-  const workPlan = soulGuidance.length > 0
-    ? "For this kind of project, I would keep the work practical and commercially pointed: find the leaks, fix the highest-impact lifecycle moments first, tighten the messaging, and tie the work back to repeat purchase."
-    : "For this kind of project, I would keep the work practical: find the leaks, rebuild the highest-impact lifecycle moments, tighten the messaging, and make retention a growth lever instead of another channel on the checklist.";
-  const closingLine = voiceClosingLine(voiceKnowledge) ?? "If useful, send me the store URL and a quick sense of what is working/not working in Klaviyo now. I can tell you where I would start.";
-
+  const copywritingDraft = buildCopywritingDraft({
+    job,
+    profile,
+    intelligence: preliminaryJobIntelligence,
+    brandFactPack,
+    proofPoints,
+    portfolioItems,
+    skill: proposalCopywritingSkill,
+  });
   const proposal = cleanProposal(
-    [
-      opening,
-      `${diagnosis} ${proofSentence}`,
-      [clientAnswersSentence, workPlan, portfolioSentence, portfolioKnowledgeSentence].filter(Boolean).join(" "),
-      closingLine,
-    ].filter(Boolean).join("\n\n"),
+    copywritingDraft.proposalText,
     [...(profile.voice?.bannedPhrases ?? []), ...voiceBannedPhrases(voiceKnowledge)]
   );
-
-  const truncatedProposal = truncateText(proposal, 1800);
-  const proposalQuality = critiqueProposal(truncatedProposal, job, profile);
-  const jobIntelligence = buildDeterministicJobIntelligence(job, truncatedProposal);
+  const finalProposal = shortenProposalSafely(proposal, 1800);
+  const draftQualityGate = evaluateDraftQualityGate({
+    proposalText: finalProposal,
+    job,
+    copyStrategy: copywritingDraft.copyStrategy,
+    brandFactPack,
+    skillLoaded: Boolean(proposalCopywritingSkill.markdown.includes("# Proposal Copywriting Skill")),
+    fullJobDescriptionRead: job.description.trim().length > 0 && copywritingDraft.jobUnderstanding.fullJobDescription === job.description,
+    copyStrategyCreated: Boolean(copywritingDraft.copyStrategy.one_sentence_sales_argument),
+    finalSubmitManual: true,
+    proofVerificationState: copywritingDraft.copyStrategy.proof_verification_state,
+  });
+  const proposalQuality = critiqueProposal(finalProposal, job, profile);
+  const jobIntelligence = buildDeterministicJobIntelligence(job, finalProposal);
   const connects = evaluateConnects(job);
   if (bidRuleKnowledge.length) {
     connects.warnings.push(...bidRuleKnowledge.map((artifact) => `Profile bid rule: ${artifact.summary}`));
@@ -435,6 +540,16 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   if (salesLearningGuidance.length) {
     connects.warnings.push(...salesLearningGuidance.filter((line) => /boost|connects|source|timing/i.test(line)));
   }
+  const skillUseTrace = finalizeSkillUseTrace({
+    trace: initialSkillTrace,
+    brandFactPack,
+    copyStrategy: copywritingDraft.copyStrategy,
+    proofStrategy,
+    qualityGateReady: draftQualityGate.ready,
+  });
+  const proposalStyleMemoryIds = salesLearning.relevantMemories
+    .map((memory) => `${memory.type}:${memory.scope}:${memory.subject}`)
+    .slice(0, 8);
 
   return {
     jobId: job.id,
@@ -449,23 +564,45 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
     connectsStrategy: connects.strategy,
     selectedPortfolioItems: portfolioItems,
     proposalQuality,
-    proposalText: truncatedProposal,
+    proposalText: finalProposal,
     jobIntelligence,
     structuredProposal: buildStructuredProposalDraft({
       job,
       profile,
-      opening,
-      diagnosis,
-      proof: proofSentence,
-      clientRequestAnswers,
+      opening: copywritingDraft.copyStrategy.opening_angle,
+      diagnosis: copywritingDraft.copyStrategy.one_sentence_sales_argument,
+      proof: proofStrategy.summary,
+      clientRequestAnswers: copywritingDraft.screeningAnswers,
       rateRetainerAnswer,
-      cta: closingLine,
+      cta: copywritingDraft.copyStrategy.cta,
       portfolioItems,
-      proposalText: truncatedProposal,
+      proposalText: finalProposal,
       suggestedConnects: job.connects?.requiredConnects ?? job.connectsCost,
       suggestedBoostConnects: connects.suggestedBoostConnects,
       soulGuidance: [...soulGuidance, ...salesLearningGuidance],
     }),
+    jobUnderstanding: copywritingDraft.jobUnderstanding,
+    brandFactPack,
+    copyStrategy: copywritingDraft.copyStrategy,
+    proofStrategy,
+    draftQualityGate,
+    skillUseTrace,
+    proposalStyleMemoryIds,
+    brandResearchStatus: copywritingDraft.brandResearchStatus,
     generatedAt: new Date().toISOString(),
   };
+}
+
+export async function buildApplicationDraftWithResearch(
+  job: ScoredJob,
+  options: BuildApplicationDraftWithResearchOptions = {},
+): Promise<ApplicationDraft> {
+  if (!job.description.trim()) {
+    throw new Error("Full job description is required before application draft generation.");
+  }
+  const brandResearchRun = await researchBrandForJob({
+    job,
+    provider: options.brandResearchProvider,
+  });
+  return buildApplicationDraft(job, { brandResearchRun });
 }

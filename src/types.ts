@@ -292,6 +292,166 @@ export interface ProposalQualityResult {
   wordCount: number;
 }
 
+export type ProofVerificationState = "verified" | "planned" | "unavailable" | "do_not_claim";
+export type CopyTone = "casual" | "direct" | "sharp" | "warm" | "witty";
+
+export interface JobUnderstanding {
+  jobTitle: string;
+  fullJobDescription: string;
+  actualJobRequest: string;
+  clientBusiness: string;
+  customerType: string;
+  commercialPain: string;
+  emotionalPain: string;
+  likelyLifecycleOrConversionLeak: string;
+  desiredOutcome: string;
+  requestedTools: string[];
+  requestedDeliverables: string[];
+  unknowns: string[];
+}
+
+export interface BrandResearchStatus {
+  attempted: boolean;
+  status: "not_applicable" | "category_only" | "unavailable";
+  evidence: string[];
+  claims: string[];
+  unknowns: string[];
+}
+
+export type BrandResearchConfidence = "high" | "medium" | "low" | "unavailable";
+
+export type BrandResearchWebStatus = "not_applicable" | "not_configured" | "skipped" | "succeeded" | "failed";
+
+export interface BrandResearchSourceDetail {
+  title: string;
+  url: string;
+  snippet: string;
+  provider: string;
+}
+
+export interface BrandFactPack {
+  brandName: string;
+  websiteUrls: string[];
+  whatTheBrandSells: string;
+  productCategory: string;
+  targetCustomerIcp: string;
+  customerBuyingMoment: string;
+  repeatPurchaseMoment: string;
+  emotionalPainOrDesire: string;
+  likelyLifecycleLeak: string;
+  likelyConversionLeak: string;
+  customerEducationGaps: string[];
+  objectionsOrTrustGaps: string[];
+  languageOrHooks: string[];
+  proofAngle: string;
+  assumptions: string[];
+  whatNotToClaim: string[];
+  confidence: BrandResearchConfidence;
+  sources: string[];
+  sourceDetails: BrandResearchSourceDetail[];
+  researchNeeded: boolean;
+  researchAttempted: boolean;
+  webResearchProvider: string;
+  webResearchStatus: BrandResearchWebStatus;
+  webResearchQuery: string;
+  researchSummary: string;
+}
+
+export interface CopyStrategy {
+  job_title: string;
+  client_business: string;
+  brand_name: string;
+  brand_url: string;
+  category: string;
+  target_customer: string;
+  customer_state_of_mind: string;
+  customer_pain_or_desire: string;
+  client_commercial_pain: string;
+  cost_of_inaction: string;
+  money_leak: string;
+  buying_moment: string;
+  repeat_purchase_or_conversion_moment: string;
+  likely_lifecycle_gap: string;
+  offer_or_project_mechanism: string;
+  proof_angle: string;
+  proof_verification_state: ProofVerificationState;
+  tone: CopyTone;
+  opening_angle: string;
+  one_sentence_sales_argument: string;
+  cta: string;
+  unknowns: string[];
+  do_not_claim: string[];
+}
+
+export interface ProofStrategy {
+  selectedProofNames: string[];
+  selectedAttachmentPaths: string[];
+  selectedPortfolioHighlights: string[];
+  proofVerificationState: ProofVerificationState;
+  summary: string;
+  warnings: string[];
+}
+
+export type SkillWorkflowStage =
+  | "lead_discovery"
+  | "job_capture"
+  | "job_scoring"
+  | "job_understanding"
+  | "brand_research"
+  | "proof_selection"
+  | "portfolio_profile_selection"
+  | "cover_letter_drafting"
+  | "screening_answer_drafting"
+  | "slack_draft_preview"
+  | "browser_application_prep"
+  | "qa_handoff"
+  | "outcome_learning";
+
+export interface SelectedSkillTrace {
+  name: string;
+  path: string;
+  title: string;
+  stage: SkillWorkflowStage;
+  reason: string;
+  mandatory: boolean;
+  loaded: boolean;
+  loadedAt: string;
+  contentLength: number;
+}
+
+export interface SkillUseTrace {
+  jobId: string;
+  selectedSkills: SelectedSkillTrace[];
+  missingRequiredSkills: string[];
+  jobDescriptionLength: number;
+  captureConfidence: "high" | "medium" | "low";
+  invocationOrder: string[];
+  brandFactPackSummary: string;
+  copyStrategySummary: string;
+  proofStrategySummary: string;
+  brandResearchProvider: string;
+  brandResearchSourceCount: number;
+  qualityGateReady: boolean;
+  browserFillAllowed: boolean;
+  createdAt: string;
+}
+
+export interface DraftQualityGateIssue {
+  code: string;
+  severity: ProposalQualitySeverity;
+  message: string;
+  evidence?: string;
+}
+
+export interface DraftQualityGateResult {
+  ready: boolean;
+  skillLoaded: boolean;
+  fullJobDescriptionRead: boolean;
+  copyStrategyCreated: boolean;
+  finalSubmitManual: boolean;
+  issues: DraftQualityGateIssue[];
+}
+
 export interface ProposalBrowserFillNotes {
   approvedText: string;
   profileNotes: string[];
@@ -409,6 +569,14 @@ export interface ApplicationDraft {
   jobIntelligence?: JobIntelligence;
   proposalVersion?: number;
   revisionRequests?: string[];
+  jobUnderstanding?: JobUnderstanding;
+  brandFactPack?: BrandFactPack;
+  copyStrategy?: CopyStrategy;
+  proofStrategy?: ProofStrategy;
+  draftQualityGate?: DraftQualityGateResult;
+  skillUseTrace?: SkillUseTrace;
+  proposalStyleMemoryIds?: string[];
+  brandResearchStatus?: BrandResearchStatus;
 }
 
 export interface ProofPlanOverrideState {

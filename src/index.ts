@@ -16,7 +16,7 @@ import {
   isJobSeen,
   markJobSeen,
 } from "./db";
-import { buildApplicationDraft } from "./agent";
+import { buildApplicationDraftWithResearch } from "./agent";
 import { fetchAllFeeds } from "./fetcher";
 import { scoreJob, shouldNotify } from "./filter";
 import { logger } from "./logger";
@@ -105,7 +105,7 @@ export async function runPipeline(reason: string): Promise<RunStats> {
 
     const notify = shouldNotify(job);
     if (notify) {
-      job.applicationDraft = buildApplicationDraft(job);
+      job.applicationDraft = await buildApplicationDraftWithResearch(job);
       notifyCandidates.push(job);
     }
   }

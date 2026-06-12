@@ -179,7 +179,7 @@ function coverLetterReply(input: SlackConversationPlannerInput): string {
 
 export function planSlackConversation(input: SlackConversationPlannerInput): SlackConversationPlan {
   const text = normalize(input.latestMessage);
-  const debugRequested = /\b(debug|technical details|raw status|full details|dump)\b/.test(text);
+  const debugRequested = /\b(debug|technical details|raw status|full details|dump|which skills|skills did you use|skill trace|skill-use trace)\b/.test(text);
 
   if (debugRequested) {
     return {

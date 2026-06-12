@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import { normalizeOpportunity, normalizedPacketToJobPosting } from "./normalization";
 import { scoreJob } from "./filter";
-import { buildApplicationDraft } from "./agent";
+import { buildApplicationDraftWithResearch } from "./agent";
 
 function argValue(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -35,7 +35,7 @@ async function main(): Promise<void> {
       negativeKeywords: scoredJob.negativeKeywords,
       breakdown: scoredJob.scoreBreakdown,
     },
-    applicationDraft: includeDraft ? buildApplicationDraft(scoredJob) : undefined,
+    applicationDraft: includeDraft ? await buildApplicationDraftWithResearch(scoredJob) : undefined,
   }, null, 2));
 }
 

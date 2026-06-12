@@ -6,6 +6,7 @@ import { getApplicationDraft, getApplicationJobLink, getApplicationProofPlanOver
 import { proofAssetExists } from "./proofAssets";
 import { buildProofAvailabilityReport, formatProofAvailabilityLines } from "./proofAvailability";
 import { applyProofPlanOverridesToSelection, parseProofPlanOverrides } from "./proofPlanOverrides";
+import { loadRuntimeSkill } from "./skillRuntime";
 import { buildProposalContextPack } from "./skills/profileContextSkill";
 import { selectPortfolioAssetsForJob, UPWORK_PORTFOLIO_ITEMS } from "./skills/portfolioSelectionSkill";
 import {
@@ -463,6 +464,11 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
   const issues: BrowserApplyValidationIssue[] = [];
   const draft = getApplicationDraft(jobId);
   const link = getApplicationJobLink(jobId);
+  try {
+    loadRuntimeSkill("browser-apply");
+  } catch (error) {
+    issues.push(issue("error", "browser_apply_skill_missing", error instanceof Error ? error.message : String(error)));
+  }
 
   if (!draft) {
     return {
@@ -493,6 +499,50 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
     issues.push(issue("error", "invalid_upwork_link", "A direct Upwork job/apply URL is required before browser preparation."));
   }
 
+  if (scoredJob && !scoredJob.description.trim()) {
+    issues.push(issue("error", "missing_job_description", "No job description was captured; browser preparation is blocked."));
+  }
+  if (scoredJob && /\b(?:cookie|feedback helps us improve search|browser extension|job details? close|html|css selector|undefined|null|lorem ipsum)\b/i.test(scoredJob.description)) {
+    issues.push(issue("error", "low_confidence_or_noisy_job_description", "Captured job description appears noisy or low-confidence."));
+  }
+  const skillTrace = draft.skillUseTrace;
+  if (!skillTrace) {
+    issues.push(issue("error", "missing_skill_use_trace", "Application draft has no skill-use trace; regenerate the draft before browser preparation."));
+  } else {
+    if (skillTrace.captureConfidence === "low") {
+      issues.push(issue("error", "low_capture_confidence", "Skill trace marks the captured job description as low-confidence."));
+    }
+    if (skillTrace.missingRequiredSkills.length > 0) {
+      issues.push(issue("error", "required_skill_missing", `Missing required skills: ${skillTrace.missingRequiredSkills.join(", ")}.`));
+    }
+    if (!skillTrace.selectedSkills.some((skill) => skill.name === "proposal-copywriting" && skill.loaded)) {
+      issues.push(issue("error", "copywriting_skill_not_used", "proposal-copywriting skill was not loaded for this draft."));
+    }
+    if (!skillTrace.browserFillAllowed) {
+      issues.push(issue("error", "skill_gate_browser_fill_blocked", "Skill-use trace did not allow browser fill."));
+    }
+  }
+  if (!draft.copyStrategy) {
+    issues.push(issue("error", "copy_strategy_missing", "Application draft has no copy_strategy; regenerate before browser preparation."));
+  }
+  if (draft.brandFactPack?.researchNeeded && !draft.brandFactPack.researchAttempted && !draft.brandFactPack.researchSummary.trim()) {
+    issues.push(issue("error", "brand_research_skipped_without_explanation", "Brand/category research was needed but skipped without explanation."));
+  }
+  if (!draft.draftQualityGate) {
+    issues.push(issue("error", "draft_quality_gate_missing", "Application draft has no quality gate result; regenerate before browser preparation."));
+  } else if (!draft.draftQualityGate.ready) {
+    const critical = draft.draftQualityGate.issues
+      .filter((gateIssue) => gateIssue.severity === "critical")
+      .map((gateIssue) => gateIssue.code)
+      .join(", ");
+    issues.push(issue("error", "draft_quality_gate_failed", `Draft quality gate failed${critical ? `: ${critical}` : ""}.`));
+  }
+  if (draft.draftQualityGate?.finalSubmitManual === false) {
+    issues.push(issue("error", "final_submit_boundary_missing", "Draft quality gate does not preserve manual final submit."));
+  }
+  if (draft.proofStrategy?.warnings.some((warning) => /\b(?:private|sensitive|not allowed|do not use|manual review)\b/i.test(warning))) {
+    issues.push(issue("error", "proof_strategy_requires_manual_review", "Proof/portfolio strategy has manual-review or safety warnings."));
+  }
   const profileContext = scoredJob ? buildProposalContextPack(scoredJob) : null;
   const basePortfolioSelection = scoredJob ? selectPortfolioAssetsForJob(scoredJob) : null;
   const proofOverrides = parseProofPlanOverrides(getApplicationProofPlanOverrides(jobId) ?? {});

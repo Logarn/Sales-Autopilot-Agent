@@ -14,12 +14,18 @@ import {
   BrowserActionPayload,
   BrowserActionStatus,
   BrowserActionType,
+  BrandFactPack,
+  BrandResearchStatus,
   ConnectsStrategySnapshot,
+  CopyStrategy,
   DailySummary,
+  DraftQualityGateResult,
   JobIntelligence,
+  JobUnderstanding,
   JobPosting,
   MatchLevel,
   PortfolioItem,
+  ProofStrategy,
   ProofPlanOverrideState,
   ProposalVersionConfidence,
   ProposalVersionSnapshot,
@@ -27,6 +33,7 @@ import {
   ScoredJob,
   ScreeningCoverageItem,
   ScreeningCoverageStatus,
+  SkillUseTrace,
   StructuredProposalDraft,
 } from "./types";
 import type { OperatorReportSnapshot } from "./operatorReports";
@@ -110,6 +117,14 @@ interface SlackPreviewJobRow {
   generated_at: string | null;
   job_intelligence: string | null;
   connects_strategy: string | null;
+  job_understanding: string | null;
+  brand_fact_pack: string | null;
+  copy_strategy: string | null;
+  proof_strategy: string | null;
+  draft_quality_gate: string | null;
+  skill_use_trace: string | null;
+  proposal_style_memory_ids: string | null;
+  brand_research_status: string | null;
 }
 
 export interface ApplicationJobLink {
@@ -1308,6 +1323,14 @@ interface ApplicationDraftRow {
   revision_requests: string | null;
   job_intelligence: string | null;
   connects_strategy: string | null;
+  job_understanding: string | null;
+  brand_fact_pack: string | null;
+  copy_strategy: string | null;
+  proof_strategy: string | null;
+  draft_quality_gate: string | null;
+  skill_use_trace: string | null;
+  proposal_style_memory_ids: string | null;
+  brand_research_status: string | null;
 }
 
 interface ApplicationProposalVersionRow {
@@ -1752,6 +1775,14 @@ CREATE TABLE IF NOT EXISTS applications (
   revision_requests TEXT NOT NULL DEFAULT '[]',
   job_intelligence TEXT,
   connects_strategy TEXT,
+  job_understanding TEXT,
+  brand_fact_pack TEXT,
+  copy_strategy TEXT,
+  proof_strategy TEXT,
+  draft_quality_gate TEXT,
+  skill_use_trace TEXT,
+  proposal_style_memory_ids TEXT NOT NULL DEFAULT '[]',
+  brand_research_status TEXT,
   reviewed_at TEXT,
   submitted_at TEXT,
   created_at TEXT DEFAULT (datetime('now')),
@@ -1954,6 +1985,14 @@ ensureApplicationsColumn("revision_requests", "TEXT NOT NULL DEFAULT '[]'");
 ensureApplicationsColumn("job_intelligence", "TEXT");
 ensureApplicationsColumn("connects_strategy", "TEXT");
 ensureApplicationsColumn("structured_proposal", "TEXT");
+ensureApplicationsColumn("job_understanding", "TEXT");
+ensureApplicationsColumn("brand_fact_pack", "TEXT");
+ensureApplicationsColumn("copy_strategy", "TEXT");
+ensureApplicationsColumn("proof_strategy", "TEXT");
+ensureApplicationsColumn("draft_quality_gate", "TEXT");
+ensureApplicationsColumn("skill_use_trace", "TEXT");
+ensureApplicationsColumn("proposal_style_memory_ids", "TEXT NOT NULL DEFAULT '[]'");
+ensureApplicationsColumn("brand_research_status", "TEXT");
 ensureApplicationsColumn("proof_plan_overrides", "TEXT NOT NULL DEFAULT '{}'");
 ensureTableColumn("application_proposal_versions", "confidence", "TEXT NOT NULL DEFAULT 'medium'");
 ensureTableColumn("application_proposal_versions", "is_fallback", "INTEGER NOT NULL DEFAULT 0");
@@ -3294,8 +3333,16 @@ const upsertApplicationStmt = db.prepare(
     generated_at,
     job_intelligence,
     connects_strategy,
+    job_understanding,
+    brand_fact_pack,
+    copy_strategy,
+    proof_strategy,
+    draft_quality_gate,
+    skill_use_trace,
+    proposal_style_memory_ids,
+    brand_research_status,
     updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
   ON CONFLICT(job_id) DO UPDATE SET
     status = excluded.status,
     fit_score = excluded.fit_score,
@@ -3311,6 +3358,14 @@ const upsertApplicationStmt = db.prepare(
     generated_at = excluded.generated_at,
     job_intelligence = excluded.job_intelligence,
     connects_strategy = excluded.connects_strategy,
+    job_understanding = excluded.job_understanding,
+    brand_fact_pack = excluded.brand_fact_pack,
+    copy_strategy = excluded.copy_strategy,
+    proof_strategy = excluded.proof_strategy,
+    draft_quality_gate = excluded.draft_quality_gate,
+    skill_use_trace = excluded.skill_use_trace,
+    proposal_style_memory_ids = excluded.proposal_style_memory_ids,
+    brand_research_status = excluded.brand_research_status,
     updated_at = datetime('now')`
 );
 const getApplicationStatusStmt = db.prepare<[string], { status: ApplicationStatus }>(
@@ -3326,7 +3381,9 @@ const getApplicationJobLinkStmt = db.prepare<[string], ApplicationJobLink>(
 const getApplicationDraftStmt = db.prepare<[string], ApplicationDraftRow>(
   `SELECT job_id, status, fit_score, fit_reasons, red_flags, suggested_bid, suggested_connects,
           suggested_boost_connects, connects_warnings, selected_portfolio_items, proposal_text,
-          structured_proposal, generated_at, proposal_version, revision_requests, job_intelligence, connects_strategy
+          structured_proposal, generated_at, proposal_version, revision_requests, job_intelligence, connects_strategy,
+          job_understanding, brand_fact_pack, copy_strategy, proof_strategy, draft_quality_gate, skill_use_trace,
+          proposal_style_memory_ids, brand_research_status
    FROM applications
    WHERE job_id = ?
    LIMIT 1`
@@ -3501,7 +3558,9 @@ const slackPreviewJobStmt = db.prepare<[string], SlackPreviewJobRow>(
           s.client_rating, s.client_spend, s.client_hire_rate, s.skills, s.experience_level,
           s.connects_cost, s.proposal_count, s.competition_level, s.posted_at, a.status, a.fit_score, a.fit_reasons, a.red_flags,
           a.suggested_bid, a.suggested_connects, a.suggested_boost_connects, a.connects_warnings,
-          a.selected_portfolio_items, a.proposal_text, a.structured_proposal, a.generated_at, a.job_intelligence, a.connects_strategy
+          a.selected_portfolio_items, a.proposal_text, a.structured_proposal, a.generated_at, a.job_intelligence, a.connects_strategy,
+          a.job_understanding, a.brand_fact_pack, a.copy_strategy, a.proof_strategy, a.draft_quality_gate, a.skill_use_trace,
+          a.proposal_style_memory_ids, a.brand_research_status
    FROM seen_jobs s
    LEFT JOIN applications a ON a.job_id = s.id
    WHERE s.id = ?
@@ -3632,7 +3691,15 @@ export function saveApplicationDraft(draft: ApplicationDraft): void {
     draft.structuredProposal ? JSON.stringify(draft.structuredProposal) : null,
     draft.generatedAt,
     draft.jobIntelligence ? JSON.stringify(draft.jobIntelligence) : null,
-    draft.connectsStrategy ? JSON.stringify(draft.connectsStrategy) : null
+    draft.connectsStrategy ? JSON.stringify(draft.connectsStrategy) : null,
+    draft.jobUnderstanding ? JSON.stringify(draft.jobUnderstanding) : null,
+    draft.brandFactPack ? JSON.stringify(draft.brandFactPack) : null,
+    draft.copyStrategy ? JSON.stringify(draft.copyStrategy) : null,
+    draft.proofStrategy ? JSON.stringify(draft.proofStrategy) : null,
+    draft.draftQualityGate ? JSON.stringify(draft.draftQualityGate) : null,
+    draft.skillUseTrace ? JSON.stringify(draft.skillUseTrace) : null,
+    JSON.stringify(draft.proposalStyleMemoryIds ?? []),
+    draft.brandResearchStatus ? JSON.stringify(draft.brandResearchStatus) : null
   );
   if (!previousStatus) {
     insertApplicationEventStmt.run(draft.jobId, "created", null, draft.status, "Application draft created.");
@@ -3673,6 +3740,14 @@ function rowToApplicationDraft(row: ApplicationDraftRow): ApplicationDraft {
     proposalVersion: row.proposal_version ?? 1,
     revisionRequests: parseJsonStringArray(row.revision_requests),
     connectsStrategy: parseJsonObject<ConnectsStrategySnapshot>(row.connects_strategy),
+    jobUnderstanding: parseJsonObject<JobUnderstanding>(row.job_understanding),
+    brandFactPack: parseJsonObject<BrandFactPack>(row.brand_fact_pack),
+    copyStrategy: parseJsonObject<CopyStrategy>(row.copy_strategy),
+    proofStrategy: parseJsonObject<ProofStrategy>(row.proof_strategy),
+    draftQualityGate: parseJsonObject<DraftQualityGateResult>(row.draft_quality_gate),
+    skillUseTrace: parseJsonObject<SkillUseTrace>(row.skill_use_trace),
+    proposalStyleMemoryIds: parseJsonStringArray(row.proposal_style_memory_ids),
+    brandResearchStatus: parseJsonObject<BrandResearchStatus>(row.brand_research_status),
   };
 }
 
@@ -4177,6 +4252,14 @@ export function getScoredJobForSlackPreview(jobId: string): ScoredJob | null {
         generatedAt: row.generated_at ?? new Date().toISOString(),
         jobIntelligence: parseJsonObject<JobIntelligence>(row.job_intelligence),
         connectsStrategy: parseJsonObject<ConnectsStrategySnapshot>(row.connects_strategy),
+        jobUnderstanding: parseJsonObject<JobUnderstanding>(row.job_understanding),
+        brandFactPack: parseJsonObject<BrandFactPack>(row.brand_fact_pack),
+        copyStrategy: parseJsonObject<CopyStrategy>(row.copy_strategy),
+        proofStrategy: parseJsonObject<ProofStrategy>(row.proof_strategy),
+        draftQualityGate: parseJsonObject<DraftQualityGateResult>(row.draft_quality_gate),
+        skillUseTrace: parseJsonObject<SkillUseTrace>(row.skill_use_trace),
+        proposalStyleMemoryIds: parseJsonStringArray(row.proposal_style_memory_ids),
+        brandResearchStatus: parseJsonObject<BrandResearchStatus>(row.brand_research_status),
       }
     : undefined;
 
