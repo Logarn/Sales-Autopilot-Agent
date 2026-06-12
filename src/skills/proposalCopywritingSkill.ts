@@ -387,16 +387,36 @@ function repeatMomentFor(category: string): string {
   }
 }
 
+function proofDisplayLabel(value: string): string {
+  const cleaned = value
+    .replace(/\\/g, "/")
+    .split("/")
+    .pop()
+    ?.replace(/\.(pdf|png|jpe?g|webp)$/i, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\s*[-–]\s*case study$/i, " case study")
+    .replace(/\bcase study case study\b/i, "case study")
+    .trim() ?? "";
+  if (!cleaned) return "";
+  if (/^portfolio$/i.test(cleaned)) return "general retention portfolio";
+  return cleaned;
+}
+
+function firstProofLabel(proofPoints: string[], portfolioItems: PortfolioItem[]): string {
+  const portfolio = proofDisplayLabel(portfolioItems[0]?.name ?? "");
+  if (portfolio) return portfolio;
+  return proofDisplayLabel(proofPoints[0] ?? "");
+}
+
 function proofSentence(strategy: CopyStrategy, proofPoints: string[], portfolioItems: PortfolioItem[]): string {
   if (strategy.proof_verification_state === "unavailable") {
     return "I would keep proof light until the exact examples are relevant to the job instead of forcing a random case study into the proposal.";
   }
-  const portfolio = portfolioItems[0]?.name;
+  const portfolio = firstProofLabel(proofPoints, portfolioItems);
   if (portfolio) {
     return `I can share relevant work like ${portfolio} if you want to see how I think about the revenue and customer side together.`;
   }
-  const proof = proofPoints[0];
-  return proof ? `Relevant background: ${proof}.` : "Relevant proof can be selected once the exact scope is clear.";
+  return "Relevant proof can be selected once the exact scope is clear.";
 }
 
 export function draftCoverLetterFromCopyStrategy(input: {
@@ -434,7 +454,7 @@ export function draftScreeningAnswersFromCopyStrategy(input: {
     answers.push(`Rate: ${input.suggestedBid.replace(/[.!?]+$/g, "")}. I would keep the first scope tied to the clearest customer moments and revenue leaks before expanding.`);
   }
   if (/portfolio|example|case stud|sample|previous work|proof/i.test(source)) {
-    const proof = input.portfolioItems[0]?.name || input.proofPoints[0] || "";
+    const proof = firstProofLabel(input.proofPoints, input.portfolioItems);
     answers.push(proof
       ? `Yes. I can use ${proof} as the relevant proof angle, but I would only attach or claim it once it is actually selected/verified for this application.`
       : "I can keep proof honest and only include examples that match this exact job instead of forcing a generic case study.");

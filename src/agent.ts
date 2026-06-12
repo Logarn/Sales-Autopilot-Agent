@@ -77,6 +77,33 @@ function isBeautyDtcKlaviyoJob(job: JobPosting): boolean {
   return /beauty|skincare|cosmetic|dtc|d2c|shopify|ecommerce|klaviyo/.test(text);
 }
 
+function isKnownDifferentPlatformClaim(text: string, primaryPlatform: string): boolean {
+  const normalizedPrimary = primaryPlatform.toLowerCase();
+  if (!normalizedPrimary || normalizedPrimary === "unknown") return false;
+  const platformTerms = [
+    "klaviyo",
+    "brevo",
+    "hubspot",
+    "customer.io",
+    "omnisend",
+    "mailerlite",
+    "mailchimp",
+    "attentive",
+    "postscript",
+    "sendgrid",
+    "activecampaign",
+    "braze",
+    "iterable",
+    "salesforce marketing cloud",
+  ];
+  const lower = text.toLowerCase();
+  return platformTerms.some((platform) => platform !== normalizedPrimary && lower.includes(platform));
+}
+
+function platformLabel(intelligence: { primaryPlatform: string }): string | null {
+  return intelligence.primaryPlatform && intelligence.primaryPlatform !== "unknown" ? intelligence.primaryPlatform : null;
+}
+
 function inferPainLine(job: JobPosting): string {
   const text = jobText(job);
   if (text.includes("audit")) {
@@ -111,6 +138,13 @@ function selectRelevantKnowledge(artifacts: KnowledgeArtifact[], job: JobPosting
     .sort((a, b) => b.score - a.score || a.artifact.sourcePath.localeCompare(b.artifact.sourcePath))
     .slice(0, limit)
     .map(({ artifact }) => artifact);
+}
+
+function platformSafeKnowledge(artifacts: KnowledgeArtifact[], primaryPlatform: string): KnowledgeArtifact[] {
+  return artifacts.filter((artifact) => {
+    const text = [artifact.title, artifact.tags.join(" "), artifact.summary].join(" ");
+    return !isKnownDifferentPlatformClaim(text, primaryPlatform);
+  });
 }
 
 function selectProofPoints(profile: FreelancerProfile, job: JobPosting, knowledgeProof: KnowledgeArtifact[] = []): string[] {
