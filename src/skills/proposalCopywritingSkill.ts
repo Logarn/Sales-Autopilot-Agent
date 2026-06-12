@@ -344,13 +344,15 @@ export function buildCopyStrategy(input: {
     repeat_purchase_or_conversion_moment: input.brandFactPack.repeatPurchaseMoment || repeatMomentFor(category),
     likely_lifecycle_gap: input.brandFactPack.likelyLifecycleLeak || input.understanding.likelyLifecycleOrConversionLeak,
     offer_or_project_mechanism: mechanism,
-    proof_angle: proofState === "unavailable" ? "proof unavailable; do not claim specific proof" : "use proof after the customer and commercial logic is clear",
+    proof_angle: proofState === "unavailable"
+      ? "proof unavailable; do not claim specific proof"
+      : input.brandFactPack.proofAngle || "use proof after the customer and commercial logic is clear",
     proof_verification_state: proofState,
     tone: category === "beauty" ? "warm" : category === "email_design" ? "direct" : "sharp",
     opening_angle: `The opportunity${ctaTarget !== "the business" ? ` for ${ctaTarget}` : ""} here is ${input.brandFactPack.likelyLifecycleLeak || input.understanding.commercialPain}.`,
     one_sentence_sales_argument: `${customerInsight} That is why I would ${mechanism}.`,
     cta: `If it makes sense, we can start with ${ctaTarget} and the first few customer moments you want the work to improve.`,
-    unknowns: unique([...input.understanding.unknowns, ...input.brandResearchStatus.unknowns, ...input.brandFactPack.whatNotToClaim]),
+    unknowns: unique([...input.understanding.unknowns, ...input.brandResearchStatus.unknowns, ...input.brandFactPack.assumptions, ...input.brandFactPack.whatNotToClaim]),
     do_not_claim: unique(["attached proof", "selected portfolio proof", "verified browser state", "brand research beyond job/category evidence", ...input.brandResearchStatus.unknowns.map((item) => `unverified ${item}`), ...input.brandFactPack.whatNotToClaim]),
   };
 }
@@ -530,7 +532,12 @@ export function evaluateDraftQualityGate(input: {
   if (!input.copyStrategyCreated) {
     addIssue(issues, { code: "copy_strategy_missing", severity: "critical", message: "copy_strategy was not created before drafting." });
   }
-  if (input.brandFactPack?.researchNeeded && !input.brandFactPack.researchAttempted && !input.brandFactPack.researchSummary.trim()) {
+  if (
+    input.brandFactPack?.researchNeeded &&
+    input.brandFactPack.webResearchStatus !== "succeeded" &&
+    !input.brandFactPack.researchSummary.trim() &&
+    input.brandFactPack.assumptions.length === 0
+  ) {
     addIssue(issues, { code: "brand_research_skipped_without_explanation", severity: "critical", message: "Brand/category research was needed but skipped without an internal explanation." });
   }
   if (input.finalSubmitManual === false) {

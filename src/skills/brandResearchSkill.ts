@@ -1,5 +1,6 @@
 import { loadRuntimeSkill, hasUsefulBrandOrCategoryClue, LoadedRuntimeSkill } from "../skillRuntime";
-import { BrandFactPack, JobPosting } from "../types";
+import { BrandResearchRun } from "../brandResearchProvider";
+import { BrandFactPack, BrandResearchSourceDetail, JobPosting } from "../types";
 
 export type BrandResearchSkillRuntime = LoadedRuntimeSkill & {
   name: "brand-research";
@@ -58,14 +59,33 @@ function categoryFor(job: Pick<JobPosting, "title" | "description" | "skills" | 
   if (/beauty|skincare|cosmetic|skin care|makeup/.test(text)) return "beauty/skincare";
   if (/fashion|apparel|clothing|boutique|jewelry/.test(text)) return "fashion/apparel";
   if (/email design|template|figma|design|creative|visual/.test(text)) return "email design";
-  if (/pet|dog|cat|farm|hobby/.test(text)) return "pet and hobby DTC";
+  if (/\b(?:pet|dog|cat|farm|hobby)\b/.test(text)) return "pet and hobby DTC";
   if (/supplement|wellness|health/.test(text)) return "health/wellness";
   if (/saas|b2b|software|crm implementation|sales pipeline/.test(text)) return "B2B/SaaS";
   if (/shopify|ecommerce|e-commerce|dtc|d2c/.test(text)) return "DTC ecommerce";
   return job.category || "unknown";
 }
 
-function categoryLogic(category: string): Omit<BrandFactPack, "brandName" | "websiteUrls" | "sources" | "confidence" | "researchNeeded" | "researchAttempted" | "researchSummary" | "whatNotToClaim"> {
+function proofAngleFor(category: string): string {
+  if (category === "gardening") {
+    return "Use lifecycle proof around seasonal timing, customer education, replenishment, and confidence-building; do not claim brand-specific results unless verified.";
+  }
+  if (category === "beauty/skincare") {
+    return "Use DTC skincare/beauty proof around trust, routine-building, education, replenishment, and repeat purchase; do not claim attached proof until browser verification confirms it.";
+  }
+  if (category === "email design") {
+    return "Use proof around hierarchy, mobile readability, offer clarity, CTA visibility, and conversion logic before design-tool fluency.";
+  }
+  if (category === "fashion/apparel") {
+    return "Use proof around browse intent, fit/occasion confidence, drop timing, and repeat purchase moments; keep any brand-specific style claims source-backed.";
+  }
+  if (category === "B2B/SaaS") {
+    return "Use proof around implementation clarity, workflow adoption, risk reduction, and buyer-stage messaging.";
+  }
+  return "Use proof that matches the visible job/category logic only; avoid claims about attachments, portfolio selection, or brand research that have not been verified.";
+}
+
+function categoryLogic(category: string): Omit<BrandFactPack, "brandName" | "websiteUrls" | "sources" | "sourceDetails" | "confidence" | "researchNeeded" | "researchAttempted" | "webResearchProvider" | "webResearchStatus" | "webResearchQuery" | "researchSummary" | "whatNotToClaim" | "proofAngle" | "assumptions"> {
   if (category === "gardening") {
     return {
       whatTheBrandSells: "gardening products, plants, seeds, tools, or care-related products",
@@ -156,9 +176,56 @@ function categoryLogic(category: string): Omit<BrandFactPack, "brandName" | "web
   };
 }
 
+function sourceHost(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function normalizeSnippet(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function safeWebSourceDetails(results: BrandResearchSourceDetail[]): BrandResearchSourceDetail[] {
+  const seen = new Set<string>();
+  const output: BrandResearchSourceDetail[] = [];
+  for (const result of results) {
+    const key = result.url.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push({
+      title: normalizeSnippet(result.title),
+      url: result.url,
+      snippet: normalizeSnippet(result.snippet),
+      provider: result.provider,
+    });
+  }
+  return output.slice(0, 5);
+}
+
+function searchLanguageHooks(sourceDetails: BrandResearchSourceDetail[]): string[] {
+  return unique(sourceDetails.flatMap((source) => [
+    source.title,
+    source.snippet.split(/[.!?]/).find((sentence) => /\b(?:customers?|product|routine|trust|season|design|conversion|reviews?|shop|buy|skin|plant|software)\b/i.test(sentence)),
+  ])).slice(0, 4);
+}
+
+function webEvidenceSummary(sourceDetails: BrandResearchSourceDetail[]): string {
+  if (sourceDetails.length === 0) return "";
+  return sourceDetails
+    .map((source) => {
+      const host = sourceHost(source.url) || source.url;
+      return `${host}: ${source.title}`;
+    })
+    .join("; ");
+}
+
 export function buildBrandFactPack(input: {
   job: Pick<JobPosting, "id" | "title" | "description" | "skills" | "category" | "budget" | "clientCountry">;
   skill: BrandResearchSkillRuntime;
+  webResearch?: BrandResearchRun | null;
 }): BrandFactPack {
   const job = input.job;
   const researchNeeded = hasUsefulBrandOrCategoryClue(job);
@@ -166,43 +233,72 @@ export function buildBrandFactPack(input: {
   const urls = visibleUrls(job);
   const category = categoryFor(job);
   const logic = categoryLogic(category);
+  const sourceDetails = safeWebSourceDetails(input.webResearch?.results ?? []);
+  const webSourceUrls = sourceDetails.map((source) => source.url);
+  const webHooks = searchLanguageHooks(sourceDetails);
   const sources = unique([
     "Upwork job title",
     job.description.trim() ? "Upwork job description" : null,
     ...urls,
+    ...webSourceUrls,
     category !== "unknown" ? `category clue: ${category}` : null,
   ]);
   const researchAttempted = researchNeeded;
+  const hasWebEvidence = sourceDetails.length > 0;
   const confidence = !researchNeeded
     ? "unavailable"
-    : brandName || urls.length > 0
+    : hasWebEvidence && (brandName || urls.length > 0)
+      ? "high"
+      : hasWebEvidence
+        ? "medium"
+        : brandName || urls.length > 0
       ? "medium"
       : category !== "unknown"
         ? "low"
         : "unavailable";
+  const webResearchStatus = input.webResearch?.status ?? (researchNeeded ? "not_configured" : "not_applicable");
+  const webResearchProvider = input.webResearch?.provider ?? "disabled";
+  const webResearchQuery = input.webResearch?.query ?? "";
+  const assumptions = unique([
+    hasWebEvidence ? null : "No source-backed web facts were available for this draft.",
+    sourceDetails.length > 0 ? null : "Customer psychology and lifecycle leaks are inferred from the job post and category logic.",
+    brandName || urls.length > 0 ? null : "Brand name and official website are unknown.",
+    input.webResearch?.skippedReason ? `Web research skipped: ${input.webResearch.skippedReason}` : null,
+    input.webResearch?.error ? `Web research failed: ${input.webResearch.error}` : null,
+  ]);
   const whatNotToClaim = unique([
-    "live website research beyond the visible job text",
+    hasWebEvidence ? null : "live website research beyond the visible job text",
+    hasWebEvidence ? null : "source-backed brand facts",
     brandName ? null : "brand name",
-    urls.length > 0 ? null : "brand website content",
+    urls.length > 0 || hasWebEvidence ? null : "brand website content",
     "private metrics",
     "verified customer reviews",
     "attached proof or selected portfolio unless browser verification confirms it",
   ]);
   const researchSummary = !researchNeeded
     ? "No useful brand/category clue was present, so brand research was not selected."
-    : urls.length > 0
-      ? `Used visible job text and website URL clues only; no production Upwork/VNC browser research was used.`
-      : `Used visible job text and category-level customer logic for ${category}; no fake brand-specific claims.`;
+    : hasWebEvidence
+      ? `Used ${webResearchProvider} web research outside the production Upwork browser; sources: ${webEvidenceSummary(sourceDetails)}.`
+      : urls.length > 0
+        ? `Used visible job text and website URL clues only; web research status=${webResearchStatus}; no production Upwork/VNC browser research was used.`
+        : `Used visible job text and category-level customer logic for ${category}; web research status=${webResearchStatus}; no fake brand-specific claims.`;
 
   return {
     brandName: brandName || "unknown",
     websiteUrls: urls,
+    ...logic,
+    languageOrHooks: unique([...logic.languageOrHooks, ...webHooks]).slice(0, 6),
     whatNotToClaim,
     confidence,
     sources,
+    sourceDetails,
     researchNeeded,
     researchAttempted,
+    webResearchProvider,
+    webResearchStatus,
+    webResearchQuery,
     researchSummary,
-    ...logic,
+    proofAngle: proofAngleFor(category),
+    assumptions,
   };
 }

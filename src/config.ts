@@ -151,6 +151,19 @@ export const JOB_INTELLIGENCE_MODEL = process.env.JOB_INTELLIGENCE_MODEL ?? (JOB
 export const JOB_INTELLIGENCE_TEMPERATURE = Number.isFinite(Number.parseFloat(process.env.JOB_INTELLIGENCE_TEMPERATURE ?? ""))
   ? Number.parseFloat(process.env.JOB_INTELLIGENCE_TEMPERATURE ?? "")
   : 0;
+export const BRAND_RESEARCH_PROVIDER = (process.env.BRAND_RESEARCH_PROVIDER ?? "disabled").toLowerCase();
+export const BRAND_RESEARCH_API_KEY = process.env.BRAND_RESEARCH_API_KEY ?? "";
+export const TAVILY_API_KEY = process.env.TAVILY_API_KEY ?? BRAND_RESEARCH_API_KEY;
+export const SERPAPI_API_KEY = process.env.SERPAPI_API_KEY ?? BRAND_RESEARCH_API_KEY;
+export const BRAVE_SEARCH_API_KEY = process.env.BRAVE_SEARCH_API_KEY ?? BRAND_RESEARCH_API_KEY;
+export const BRAND_RESEARCH_MAX_RESULTS = Math.min(
+  10,
+  Math.max(1, parseInteger(process.env.BRAND_RESEARCH_MAX_RESULTS, 5))
+);
+export const BRAND_RESEARCH_TIMEOUT_MS = Math.min(
+  30_000,
+  Math.max(1_000, parseInteger(process.env.BRAND_RESEARCH_TIMEOUT_MS, 8_000))
+);
 export const SLACK_COPY_LLM_ENABLED = parseBoolean(process.env.SLACK_COPY_LLM_ENABLED, true);
 export const SLACK_COPY_PROVIDER = process.env.SLACK_COPY_PROVIDER ?? "kimi";
 export const SLACK_COPY_MODEL = process.env.SLACK_COPY_MODEL ?? (SLACK_COPY_PROVIDER.toLowerCase() === "kimi" || SLACK_COPY_PROVIDER.toLowerCase() === "moonshot" ? MOONSHOT_MODEL : LLM_MODEL);

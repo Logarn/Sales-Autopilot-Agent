@@ -43,7 +43,7 @@ import {
   updateSlackThreadStateStatus,
   upsertSlackThreadState,
 } from "./db";
-import { buildApplicationDraft } from "./agent";
+import { buildApplicationDraftWithResearch } from "./agent";
 import { buildDeterministicOpportunityPacket, normalizedPacketToJobPosting } from "./normalization";
 import { scoreJob } from "./filter";
 import { detectPlatformMismatchWarnings, parseJobIntelligence } from "./jobIntelligenceParser";
@@ -3023,7 +3023,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       });
       const job = normalizedPacketToJobPosting(capture);
       const scored = scoreJob(job);
-      scored.applicationDraft = buildApplicationDraft(scored);
+      scored.applicationDraft = await buildApplicationDraftWithResearch(scored);
 
       const questions = normalizeCaptureQuestions(`Upwork URL capture (dry-run): ${url}`);
       const answers = buildQuestionAnswers(questions, {
@@ -3381,7 +3381,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         logger.warn(`Job intelligence failed safely for browser action #${action.id}: ${message}`);
       }
       const scored = scoreJob(job, jobIntelligence);
-      scored.applicationDraft = buildApplicationDraft(scored);
+      scored.applicationDraft = await buildApplicationDraftWithResearch(scored);
       if (jobIntelligence) {
         const platformMismatchWarnings = detectPlatformMismatchWarnings(jobIntelligence.primaryPlatform, jobIntelligence.platformsMentioned, scored.applicationDraft.proposalText);
         if (platformMismatchWarnings.length > 0) {

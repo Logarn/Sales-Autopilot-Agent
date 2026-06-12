@@ -33,14 +33,29 @@ Create `brand_fact_pack`:
   "customer_education_gaps": [],
   "objections_or_trust_gaps": [],
   "language_or_hooks": [],
+  "proof_angle": "",
+  "assumptions": [],
   "what_not_to_claim": [],
   "confidence": "high | medium | low | unavailable",
-  "sources": []
+  "sources": [],
+  "source_details": [
+    {
+      "title": "",
+      "url": "",
+      "snippet": "",
+      "provider": ""
+    }
+  ],
+  "web_research_provider": "",
+  "web_research_status": "not_applicable | not_configured | skipped | succeeded | failed",
+  "web_research_query": ""
 }
 ```
 
 ## Research rules
 - Use web/category research only when the job gives a brand, website, product, category, or useful clue.
+- Use a tool/search-provider path, not the production Upwork application browser session.
+- Read returned source snippets/URLs and keep citations internally in `source_details`.
 - Keep research separate from the production Upwork application browser session.
 - Do not open arbitrary URLs through Slack remote Chrome.
 - Do not use the production Upwork/VNC Chrome session for general web browsing.
@@ -53,6 +68,8 @@ Create `brand_fact_pack`:
 
 ## Safe fallback
 If only category clues are available, build a category-level fact pack and mark confidence as `low` or `medium`. Use phrases such as "category-level customer logic" internally, not fake brand-specific claims.
+
+If a web provider is not configured or returns no safe sources, set `web_research_status` to `not_configured` or `failed`, add the reason to `assumptions`, and keep the proposal grounded in the job post and category logic.
 
 ## Handoff
 Pass `brand_fact_pack` to `proposal-copywriting` before `copy_strategy` is created.

@@ -1,4 +1,9 @@
 import { critiqueProposal } from "./critic";
+import {
+  BrandResearchRun,
+  BrandResearchToolProvider,
+  researchBrandForJob,
+} from "./brandResearchProvider";
 import { evaluateConnectsStrategy, formatConnectsStrategy } from "./connectsStrategy";
 import { buildDeterministicJobIntelligence } from "./jobIntelligenceParser";
 import { loadConnectsRules, loadFreelancerProfile, loadPortfolioLibrary } from "./profile";
@@ -50,6 +55,14 @@ const AI_SLUDGE_PATTERNS = [
   /passionate about/gi,
   /with over \d+ years of experience/gi,
 ];
+
+export interface BuildApplicationDraftOptions {
+  brandResearchRun?: BrandResearchRun | null;
+}
+
+export interface BuildApplicationDraftWithResearchOptions {
+  brandResearchProvider?: BrandResearchToolProvider;
+}
 
 function jobText(job: JobPosting): string {
   return [job.title, job.description, job.skills.join(" "), job.category].join(" ").toLowerCase();
@@ -419,7 +432,7 @@ function evaluateConnects(job: ScoredJob): {
   };
 }
 
-export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
+export function buildApplicationDraft(job: ScoredJob, options: BuildApplicationDraftOptions = {}): ApplicationDraft {
   if (!job.description.trim()) {
     throw new Error("Full job description is required before application draft generation.");
   }
@@ -436,7 +449,7 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
   const selectedSkills = selectApplicationPrepSkills(job);
   const initialSkillTrace = buildInitialSkillUseTrace(job, selectedSkills);
   const brandResearchSkill = loadBrandResearchSkill();
-  const brandFactPack = buildBrandFactPack({ job, skill: brandResearchSkill });
+  const brandFactPack = buildBrandFactPack({ job, skill: brandResearchSkill, webResearch: options.brandResearchRun ?? null });
   const proposalCopywritingSkill = loadProposalCopywritingSkill();
   const salesLearning = buildSalesLearningPromptContext({
     job,
@@ -544,4 +557,18 @@ export function buildApplicationDraft(job: ScoredJob): ApplicationDraft {
     brandResearchStatus: copywritingDraft.brandResearchStatus,
     generatedAt: new Date().toISOString(),
   };
+}
+
+export async function buildApplicationDraftWithResearch(
+  job: ScoredJob,
+  options: BuildApplicationDraftWithResearchOptions = {},
+): Promise<ApplicationDraft> {
+  if (!job.description.trim()) {
+    throw new Error("Full job description is required before application draft generation.");
+  }
+  const brandResearchRun = await researchBrandForJob({
+    job,
+    provider: options.brandResearchProvider,
+  });
+  return buildApplicationDraft(job, { brandResearchRun });
 }

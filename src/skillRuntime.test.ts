@@ -14,6 +14,12 @@ const { scoreJob } = require("./filter") as {
 const { buildApplicationDraft } = require("./agent") as {
   buildApplicationDraft: (job: any) => any;
 };
+const { buildApplicationDraftWithResearch } = require("./agent") as {
+  buildApplicationDraftWithResearch: (job: any, options?: any) => Promise<any>;
+};
+const { createMockBrandResearchProvider } = require("./brandResearchProvider") as {
+  createMockBrandResearchProvider: (results: any[]) => any;
+};
 const {
   listRuntimeSkills,
   selectApplicationPrepSkills,
@@ -189,4 +195,68 @@ assert(planResult.plan?.stopBeforeSubmit === true, "Browser apply plan should ke
 assert(planResult.plan?.finalPreparationDiagnostics.stopBeforeSubmit === true, "Final-prep diagnostics should keep final submit manual.");
 assert(beautyDraft.draftQualityGate.finalSubmitManual, "Draft quality gate should preserve manual final submit.");
 
-console.log("skill runtime tests passed");
+async function runAsyncAssertions(): Promise<void> {
+  let searchCalls = 0;
+  const webResearchProvider = {
+    name: "mock-search",
+    isAvailable: () => true,
+    search: async (input: any) => {
+      searchCalls += 1;
+      assert(input.query.includes("glowroutine.com") || input.query.includes("GlowRoutine"), "Search query should use the visible brand/site clue.");
+      return [
+        {
+          title: "GlowRoutine skincare routines",
+          url: "https://glowroutine.com/pages/about",
+          snippet: "GlowRoutine sells skincare routines and education for customers comparing products, building trust, and replenishing at the right moment.",
+          provider: "mock-search",
+        },
+      ];
+    },
+  };
+  const researchedDraft = await buildApplicationDraftWithResearch(beauty, { brandResearchProvider: webResearchProvider });
+  assert.equal(searchCalls, 1, "Brand/category job should call the configured web research provider once.");
+  assert.equal(researchedDraft.brandFactPack.webResearchStatus, "succeeded", "Brand fact pack should record successful web research.");
+  assert.equal(researchedDraft.brandFactPack.webResearchProvider, "mock-search", "Brand fact pack should record the provider.");
+  assert.equal(researchedDraft.skillUseTrace.brandResearchProvider, "mock-search", "Skill trace should record the research provider.");
+  assert.equal(researchedDraft.skillUseTrace.brandResearchSourceCount, 1, "Skill trace should record source count.");
+  assert(researchedDraft.brandFactPack.sourceDetails.some((source: any) => source.url === "https://glowroutine.com/pages/about"), "Fact pack should retain safe source details.");
+  assert(researchedDraft.brandFactPack.sources.includes("https://glowroutine.com/pages/about"), "Fact pack should retain source URL.");
+  assert(researchedDraft.brandFactPack.proofAngle.toLowerCase().includes("trust"), "Beauty fact pack should carry a proof angle from customer logic.");
+
+  const noClueScored = scored({
+    title: "Need help writing short emails",
+    description: "Need a few account emails rewritten. No brand, website, product, platform, or category details are available yet.",
+    category: "",
+    skills: ["Email Writing"],
+  });
+  const callsBeforeNoClue = searchCalls;
+  const noClueDraft = await buildApplicationDraftWithResearch(noClueScored, { brandResearchProvider: webResearchProvider });
+  assert.equal(searchCalls, callsBeforeNoClue, "No-clue job should not call the web research provider.");
+  assert.equal(noClueDraft.brandFactPack.webResearchStatus, "not_applicable", "No-clue job should mark web research not applicable.");
+
+  const unavailableDraft = await buildApplicationDraftWithResearch(beauty, {
+    brandResearchProvider: createMockBrandResearchProvider([]),
+  });
+  assert.equal(unavailableDraft.brandFactPack.webResearchStatus, "failed", "Empty provider results should be recorded as failed.");
+  assert(unavailableDraft.brandFactPack.assumptions.some((item: string) => /Web research skipped|source-backed web facts/i.test(item)), "Failed research should record internal assumptions.");
+  assert.equal(unavailableDraft.draftQualityGate.ready, true, "Explained research fallback should not block an otherwise safe draft.");
+
+  const disabledDraft = await buildApplicationDraftWithResearch(beauty, {
+    brandResearchProvider: {
+      name: "mock-disabled",
+      isAvailable: () => false,
+      search: async () => {
+        throw new Error("should not be called");
+      },
+    },
+  });
+  assert.equal(disabledDraft.brandFactPack.webResearchStatus, "not_configured", "Disabled provider should be recorded as not configured.");
+  assert(disabledDraft.brandFactPack.assumptions.some((item: string) => /not configured/i.test(item)), "Disabled provider should record an internal assumption.");
+
+  console.log("skill runtime tests passed");
+}
+
+runAsyncAssertions().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

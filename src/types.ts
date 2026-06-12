@@ -320,6 +320,15 @@ export interface BrandResearchStatus {
 
 export type BrandResearchConfidence = "high" | "medium" | "low" | "unavailable";
 
+export type BrandResearchWebStatus = "not_applicable" | "not_configured" | "skipped" | "succeeded" | "failed";
+
+export interface BrandResearchSourceDetail {
+  title: string;
+  url: string;
+  snippet: string;
+  provider: string;
+}
+
 export interface BrandFactPack {
   brandName: string;
   websiteUrls: string[];
@@ -334,11 +343,17 @@ export interface BrandFactPack {
   customerEducationGaps: string[];
   objectionsOrTrustGaps: string[];
   languageOrHooks: string[];
+  proofAngle: string;
+  assumptions: string[];
   whatNotToClaim: string[];
   confidence: BrandResearchConfidence;
   sources: string[];
+  sourceDetails: BrandResearchSourceDetail[];
   researchNeeded: boolean;
   researchAttempted: boolean;
+  webResearchProvider: string;
+  webResearchStatus: BrandResearchWebStatus;
+  webResearchQuery: string;
   researchSummary: string;
 }
 
@@ -414,6 +429,8 @@ export interface SkillUseTrace {
   brandFactPackSummary: string;
   copyStrategySummary: string;
   proofStrategySummary: string;
+  brandResearchProvider: string;
+  brandResearchSourceCount: number;
   qualityGateReady: boolean;
   browserFillAllowed: boolean;
   createdAt: string;

@@ -902,7 +902,7 @@ function buildThreadStatusDetails(state: NonNullable<ReturnType<typeof getSlackT
     strategy ? `Connects: ${formatConnectsStrategy(strategy)}` : "Connects: not calculated",
     draft ? `Draft: ${draft.status}, v${(draft as { proposalVersion?: number }).proposalVersion ?? "stored"}, ${draft.proposalText.length} chars` : "Draft: missing",
     skillTrace ? `Skills used: ${skillsUsed}` : "Skills used: missing trace",
-    skillTrace ? `Skill gate: browserFillAllowed=${skillTrace.browserFillAllowed}; qualityGateReady=${skillTrace.qualityGateReady}; captureConfidence=${skillTrace.captureConfidence}` : null,
+    skillTrace ? `Skill gate: browserFillAllowed=${skillTrace.browserFillAllowed}; qualityGateReady=${skillTrace.qualityGateReady}; captureConfidence=${skillTrace.captureConfidence}; brandResearch=${skillTrace.brandResearchProvider}; sources=${skillTrace.brandResearchSourceCount}` : null,
     draft?.brandFactPack ? `Brand fact pack: ${draft.brandFactPack.researchSummary}` : null,
     draft?.copyStrategy ? `Copy strategy: ${draft.copyStrategy.one_sentence_sales_argument}` : null,
     draft?.proofStrategy ? `Proof strategy: ${draft.proofStrategy.summary}` : null,

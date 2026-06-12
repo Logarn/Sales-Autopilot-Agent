@@ -71,7 +71,7 @@ const RUNTIME_SKILL_FILES: Array<Omit<RuntimeSkillInfo, "kind">> = [
     name: "brand-research-runtime",
     path: "src/skills/brandResearchSkill.ts",
     title: "Brand Research Runtime",
-    purpose: "Build conservative brand/category fact packs from visible job, brand, website, product, and category clues.",
+    purpose: "Build conservative brand/category fact packs from visible job clues and optional safe web-search source results.",
     triggers: ["brand research", "category research", "brand fact pack"],
     stages: ["brand_research"],
   },
@@ -300,6 +300,8 @@ export function buildInitialSkillUseTrace(
     brandFactPackSummary: "not built yet",
     copyStrategySummary: "not built yet",
     proofStrategySummary: "not built yet",
+    brandResearchProvider: "not run",
+    brandResearchSourceCount: 0,
     qualityGateReady: false,
     browserFillAllowed: false,
     createdAt: now.toISOString(),
@@ -308,7 +310,7 @@ export function buildInitialSkillUseTrace(
 
 export function summarizeBrandFactPack(pack?: BrandFactPack | null): string {
   if (!pack) return "brand_fact_pack missing";
-  return `${pack.confidence} confidence; ${pack.productCategory || "unknown category"}; ${pack.targetCustomerIcp || "unknown customer"}; ${pack.researchSummary}`;
+  return `${pack.confidence} confidence; ${pack.productCategory || "unknown category"}; ${pack.targetCustomerIcp || "unknown customer"}; web=${pack.webResearchStatus}/${pack.webResearchProvider}; ${pack.researchSummary}`;
 }
 
 export function summarizeCopyStrategy(strategy?: CopyStrategy | null): string {
@@ -333,6 +335,8 @@ export function finalizeSkillUseTrace(input: {
     brandFactPackSummary: summarizeBrandFactPack(input.brandFactPack),
     copyStrategySummary: summarizeCopyStrategy(input.copyStrategy),
     proofStrategySummary: summarizeProofStrategy(input.proofStrategy),
+    brandResearchProvider: input.brandFactPack?.webResearchProvider ?? "not run",
+    brandResearchSourceCount: input.brandFactPack?.sourceDetails.length ?? 0,
     qualityGateReady: input.qualityGateReady,
     browserFillAllowed: input.qualityGateReady && input.trace.captureConfidence !== "low" && input.trace.missingRequiredSkills.length === 0,
   };
