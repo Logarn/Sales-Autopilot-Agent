@@ -1,5 +1,6 @@
 import {
   buildMemoriShadowPayload,
+  evaluateMemoriRemoteWritePolicy,
   recallMemoriAttributions,
   redactMemoriPayload,
   shadowWriteMemoriMemory,
@@ -56,7 +57,7 @@ async function runTests(): Promise<void> {
   const shadowed = await shadowWriteMemoriMemory({
     memory: localMemory,
     attribution: { jobId: "job-123", source: "test" },
-    metadata: { note: "safe shadow write" },
+    metadata: { source: "proposal_revision", note: "safe shadow write" },
     config: { shadowEnabled: true, apiKey: "memori-test-key" },
     client: {
       shadowWrite: async (payload) => {
@@ -71,6 +72,61 @@ async function runTests(): Promise<void> {
   const captured = capturedPayload as MemoriShadowPayload | null;
   assert(captured?.shadowOnly === true && captured.activeRecallEligible === false, "shadow payload must stay shadow-only");
 
+  const explicitPolicy = evaluateMemoriRemoteWritePolicy({
+    memory: { ...localMemory, memoryType: "operator_preference", title: "remembered operator preference" },
+    metadata: { source: "slack_remember_command" },
+  });
+  assert(explicitPolicy.allowed && explicitPolicy.category === "explicit", "explicit remember-this memories should be remote-eligible");
+
+  const lowSignalPolicy = evaluateMemoriRemoteWritePolicy({
+    memory: { ...localMemory, memoryType: "failure_pattern", title: "browser challenge state" },
+    metadata: { source: "browser_apply_prep", eventType: "browser_challenge_alert" },
+  });
+  assert(!lowSignalPolicy.allowed && lowSignalPolicy.category === "blocked", "browser/challenge noise should stay local-only");
+
+  const lowSignalWrite = await shadowWriteMemoriMemory({
+    memory: { ...localMemory, memoryType: "failure_pattern", title: "browser apply prep paused", summary: "Transient QA state for a browser action." },
+    metadata: { source: "browser_apply_prep", eventType: "qa_handoff" },
+    config: { shadowEnabled: true, apiKey: "memori-test-key" },
+    client,
+  });
+  assert(lowSignalWrite.ok && !lowSignalWrite.shadowed && lowSignalWrite.skippedReason === "remote_policy_blocked", "low-signal memory should not call Memori even when shadow is enabled");
+  assert(shadowCalls === 1, "low-signal remote policy block must not call the shadow client");
+
+  const spoofedHighSignalWrite = await shadowWriteMemoriMemory({
+    memory: {
+      ...localMemory,
+      memoryType: "failure_pattern",
+      title: "browser apply failure after final submitted proposal",
+      summary: "Browser apply prep failed on a transient page state, but caller metadata tried to label it as a submitted proposal outcome.",
+    },
+    metadata: {
+      source: "application_outcome",
+      eventType: "final_submitted",
+      outcome: "submitted",
+      signalKind: "proposal_diff",
+    },
+    config: { shadowEnabled: true, apiKey: "memori-test-key" },
+    client,
+  });
+  assert(
+    spoofedHighSignalWrite.ok && !spoofedHighSignalWrite.shadowed && spoofedHighSignalWrite.skippedReason === "remote_policy_blocked",
+    "low-signal browser/apply failures must not force remote writes with high-signal-looking metadata",
+  );
+  assert(shadowCalls === 1, "spoofed high-signal metadata block must not call the shadow client");
+
+  const outcomeWrite = await shadowWriteMemoriMemory({
+    memory: { ...localMemory, memoryType: "proposal_style", title: "submitted proposal opener", summary: "Final submitted proposal opened with a commercial diagnosis." },
+    metadata: { source: "application_outcome", outcome: "submitted" },
+    config: { shadowEnabled: true, apiKey: "memori-test-key" },
+    client: {
+      shadowWrite: async () => {
+        shadowCalls += 1;
+      },
+    },
+  });
+  assert(outcomeWrite.ok && outcomeWrite.shadowed, "final/submitted proposal style memory should be remote-eligible");
+
   const originalFetch = globalThis.fetch;
   const fetchCalls: Array<{ url: string; headers: Record<string, string>; body: Record<string, any> }> = [];
   globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -84,6 +140,7 @@ async function runTests(): Promise<void> {
   try {
     const sdkPathWrite = await shadowWriteMemoriMemory({
       memory: localMemory,
+      metadata: { source: "proposal_revision" },
       config: {
         shadowEnabled: true,
         apiKey: "memori-test-key",

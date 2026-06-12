@@ -15,6 +15,7 @@ export type MemoriSkipReason =
   | "disabled"
   | "missing_api_key"
   | "missing_local_memory"
+  | "remote_policy_blocked"
   | "unsafe_final_submit_override"
   | "unsafe_security_bypass"
   | "unverified_proof_claim"
@@ -108,8 +109,16 @@ export interface MemoriShadowWriteResult {
   shadowed: boolean;
   sourceOfTruth: MemoriSourceOfTruth;
   skippedReason?: MemoriSkipReason;
+  policy?: MemoriRemoteWritePolicyDecision;
   payload?: MemoriShadowPayload;
   diagnostics?: MemoriClientDiagnostics;
+}
+
+export interface MemoriRemoteWritePolicyDecision {
+  allowed: boolean;
+  reason: string;
+  category: "explicit" | "proposal" | "outcome" | "proof" | "source" | "screening" | "blocked" | "default_local";
+  quiet: true;
 }
 
 export interface MemoriRecallInput {
@@ -202,6 +211,112 @@ const RESERVED_ATTRIBUTION_KEYS = new Set([
   "shadowOnly",
   "sourceOfTruth",
 ]);
+
+const LOW_SIGNAL_MEMORY_TYPES = new Set([
+  "browser_action",
+  "browser_challenge",
+  "browser_retry",
+  "code_improvement_proposal",
+  "code_improvement_task",
+  "draft_attempt",
+  "failure_pattern",
+  "failure_reflection",
+  "health_check",
+  "lead_discovery",
+  "pivot_state",
+  "qa_handoff",
+  "slack_status",
+  "skill_trace",
+  "tavily_research",
+]);
+
+const LOW_SIGNAL_SOURCE_PATTERNS = [
+  /\bhealth(?:_check)?\b/i,
+  /\bbrowser(?:_|-|\s)*(?:action|apply|prep|retry|challenge|capture|worker|session)\b/i,
+  /\b(?:captcha|cloudflare|login|passkey|2fa|security)(?:_|-|\s)*(?:challenge|alert|block|state)?\b/i,
+  /\bslack(?:_|-|\s)*(?:status|heartbeat|ack|startup|socket|trace|noise)\b/i,
+  /\blead(?:_|-|\s)*(?:discovery|scan|feed|hunt|engine)\b/i,
+  /\b(?:draft|proposal)(?:_|-|\s)*(?:attempt|preview|generation|trace)\b/i,
+  /\b(?:qa|handoff|transient)(?:_|-|\s)*(?:state|status|trace)?\b/i,
+  /\bskill(?:_|-|\s)*(?:trace|use|runtime)\b/i,
+  /\btavily(?:_|-|\s)*(?:raw|research|source|trace)\b/i,
+];
+
+function metadataText(metadata: Record<string, unknown>): string {
+  return JSON.stringify(metadata ?? {});
+}
+
+function sourceHint(input: MemoriShadowWriteInput, memory: MemoriLocalMemory | AgentMemory): string {
+  const metadata = input.metadata ?? {};
+  return [
+    input.kind,
+    input.attribution?.source,
+    input.attribution?.eventType,
+    metadata.source,
+    metadata.eventType,
+    metadata.signalKind,
+    metadata.origin,
+    memory.memoryType,
+    memory.scope,
+    memory.title,
+    memory.summary,
+    memory.keywords?.join(" "),
+  ].filter((item): item is string => typeof item === "string" && item.trim().length > 0).join(" ");
+}
+
+function hasPositiveOutcomeMetadata(metadata: Record<string, unknown>): boolean {
+  const outcome = String(metadata.outcome ?? metadata.status ?? "").toLowerCase();
+  return /\b(reply|replied|interview|hired|won|positive|submitted)\b/.test(outcome);
+}
+
+function hasOutcomeMetadata(metadata: Record<string, unknown>): boolean {
+  const outcome = String(metadata.outcome ?? metadata.status ?? "").toLowerCase();
+  return /\b(reply|replied|interview|hired|won|lost|rejected|submitted|applied|positive|negative)\b/.test(outcome);
+}
+
+export function evaluateMemoriRemoteWritePolicy(input: MemoriShadowWriteInput): MemoriRemoteWritePolicyDecision {
+  const memory = input.memory;
+  if (!memory) {
+    return { allowed: false, reason: "No local memory was provided.", category: "blocked", quiet: true };
+  }
+  const metadata = input.metadata ?? {};
+  const source = sourceHint(input, memory);
+  const memoryType = memory.memoryType.toLowerCase();
+  const evidenceCount = Math.max(0, Number(memory.evidenceCount) || 0);
+  const text = `${source} ${metadataText(metadata)}`;
+
+  if (LOW_SIGNAL_MEMORY_TYPES.has(memoryType) || LOW_SIGNAL_SOURCE_PATTERNS.some((pattern) => pattern.test(text))) {
+    return { allowed: false, reason: "Low-signal operational memory stays local-only.", category: "blocked", quiet: true };
+  }
+
+  if (/slack_remember_command|explicit_remember|remember\s+this/i.test(text) || memoryType === "operator_preference") {
+    return { allowed: true, reason: "Explicit operator memory is high-signal.", category: "explicit", quiet: true };
+  }
+
+  if (memoryType === "proposal_style" && /human_edit|human[-_\s]*proposal|proposal_revision|operator_edit|final_submitted|application_outcome/i.test(text)) {
+    return { allowed: true, reason: "Human/final proposal style learning is high-signal.", category: "proposal", quiet: true };
+  }
+
+  if (hasOutcomeMetadata(metadata) || /application_outcome|outcome_recorded|final_submitted|submitted_proposal/i.test(text)) {
+    if (["proposal_style", "proof_preference", "source_quality", "boost_strategy", "timing_hypothesis", "screening_answer"].includes(memoryType)) {
+      return { allowed: true, reason: "Outcome-linked sales learning is high-signal.", category: "outcome", quiet: true };
+    }
+  }
+
+  if (memoryType === "screening_answer" && (evidenceCount >= 2 || /screening_answer_diff|repeated_screening/i.test(text))) {
+    return { allowed: true, reason: "Repeated screening answer pattern is high-signal.", category: "screening", quiet: true };
+  }
+
+  if (memoryType === "proof_preference" && /proof_correction|verified_proof|operator|application_outcome/i.test(text)) {
+    return { allowed: true, reason: "Durable proof strategy is high-signal.", category: "proof", quiet: true };
+  }
+
+  if (memoryType === "source_quality" && (hasPositiveOutcomeMetadata(metadata) || evidenceCount >= 2)) {
+    return { allowed: true, reason: "Durable source strategy has outcome/repeated evidence.", category: "source", quiet: true };
+  }
+
+  return { allowed: false, reason: "Memory is local-first until it has explicit, human, outcome, or repeated evidence.", category: "default_local", quiet: true };
+}
 
 function defaultConfig(): MemoriAdapterConfig {
   return {
@@ -596,6 +711,10 @@ export async function shadowWriteMemoriMemory(input: MemoriShadowWriteInput & {
   }
   if (!config.apiKey) {
     return { ok: true, shadowed: false, sourceOfTruth: "local", skippedReason: "missing_api_key" };
+  }
+  const policy = evaluateMemoriRemoteWritePolicy(input);
+  if (!policy.allowed) {
+    return { ok: true, shadowed: false, sourceOfTruth: "local", skippedReason: "remote_policy_blocked", policy };
   }
   const client = input.client ?? defaultMemoriClient;
   const built = buildMemoriShadowPayload(input);
