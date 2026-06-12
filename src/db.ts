@@ -1033,6 +1033,7 @@ export interface UpsertAgentMemoryInput {
   sourceEventIds?: number[];
   keywords?: string[];
   embeddingId?: number | null;
+  remotePolicyMetadata?: Record<string, unknown>;
 }
 
 export interface UpsertMemoryLinkInput {
@@ -5126,6 +5127,7 @@ export function upsertAgentMemory(input: UpsertAgentMemoryInput): AgentMemory {
     attribution: {
       source: "local_agent_memory_persistence",
     },
+    metadata: input.remotePolicyMetadata,
   }).catch(() => undefined);
   return memory;
 }
@@ -5650,6 +5652,15 @@ export function upsertSalesLearningMemory(input: UpsertSalesLearningMemoryInput)
       : [],
     keywords: salesMemoryKeywords({ type: input.type, scope, subject, hypothesis, examples, metadata: input.metadata ?? {} }),
     embeddingId: null,
+    remotePolicyMetadata: {
+      source: input.source ?? "system",
+      salesLearningType: input.type,
+      jobId: input.jobId ?? null,
+      channelId: input.channelId ?? null,
+      threadTs: input.threadTs ?? null,
+      examples,
+      ...(input.metadata ?? {}),
+    },
   });
   return rowToSalesLearningMemory(row);
 }
