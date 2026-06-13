@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { execFileSync } from "node:child_process";
 import { App } from "@slack/bolt";
 import {
   BROWSER_CDP_URL,
@@ -6,6 +7,7 @@ import {
   BROWSER_HEADLESS,
   BROWSER_START_URL,
   BROWSER_USER_DATA_DIR,
+  HEARTBEAT_STALE_AFTER_MS,
 } from "./config";
 import { getBrowserSessionStatus, listUnresolvedBrowserChallengeQuarantines } from "./browserSession";
 import { isSupportedUpworkJobUrl } from "./browserCapture";
@@ -37,16 +39,26 @@ export interface RemoteChromeOpenResult {
   text: string;
 }
 
+export interface LeadEngineRuntimeStatus {
+  serviceActive: boolean;
+  processActive: boolean;
+  heartbeatFresh: boolean;
+  heartbeatStatus: string | null;
+  lastHeartbeatAt: string | null;
+}
+
 export interface SlackOperatorControlDeps {
   buildHealthReport?: typeof buildHealthReport;
   checkCdpEndpoint?: typeof checkCdpEndpoint;
   getBrowserSessionStatus?: typeof getBrowserSessionStatus;
   readHeartbeats?: typeof readHeartbeats;
   readLeadEngineState?: typeof readLatestState;
+  readLeadEngineRuntimeStatus?: () => LeadEngineRuntimeStatus;
   runLeadEngineCycle?: typeof runLeadEngineCycle;
   setHuntingPaused?: typeof setHuntingPaused;
   startBrowserSession?: typeof startPersistentChromeSession;
   openRemoteChromeUrl?: (url: string) => Promise<RemoteChromeOpenResult>;
+  now?: () => Date;
 }
 
 function normalizeOperatorText(value: string): string {
@@ -88,7 +100,7 @@ export function parseSlackOperatorIntent(text: string): SlackOperatorIntent | nu
   ) {
     return { type: "open_remote_chrome", url };
   }
-  if (/^(?:are you running|are you healthy|is chrome okay|is chrome ok|is slack listening|is the lead engine running|lead engine running|check production health|production health|service status|control status|health check)$/i.test(commandText)) {
+  if (/^(?:are you running|are you active|you active|are you alive|you alive|you there|talk to me|are you healthy|is chrome okay|is chrome ok|is slack listening|is the lead engine running|lead engine running|check production health|production health|service status|control status|health check|what are you up to|what(?:'|’)?s happening|where are we|are we good|how(?:'|’)?s it going|how is your day going|can you help me|can you help me with something)$/i.test(commandText)) {
     return { type: "service_status" };
   }
   if (/^(?:pause hunting|stop hunting|hold hunting|pause lead engine|pause discovery)$/i.test(commandText)) {
@@ -112,17 +124,65 @@ function humanizeReason(value: string | null | undefined): string {
     .toLowerCase();
 }
 
-function leadEngineLine(state: LeadEngineCycleSummary | null): string {
+function commandSucceeds(command: string, args: string[]): boolean {
+  try {
+    execFileSync(command, args, { stdio: "ignore", timeout: 1_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function leadEngineProcessActive(): boolean {
+  try {
+    const output = execFileSync("pgrep", [
+      "-f",
+      "npm run agent:run$|tsx .*src/leadEngine\\.ts --run( |$)|node .*src/leadEngine\\.ts --run( |$)",
+    ], { encoding: "utf8", timeout: 1_000 });
+    return output.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function readLeadEngineRuntimeStatus(deps: SlackOperatorControlDeps = {}): LeadEngineRuntimeStatus {
+  const now = (deps.now ?? (() => new Date()))();
+  const heartbeats = (deps.readHeartbeats ?? readHeartbeats)();
+  const heartbeat = heartbeats.find((record) => record.worker === "lead-engine") ?? null;
+  const lastHeartbeatMs = heartbeat?.updatedAt ? Date.parse(heartbeat.updatedAt) : NaN;
+  const heartbeatFresh = Number.isFinite(lastHeartbeatMs) && now.getTime() - lastHeartbeatMs <= HEARTBEAT_STALE_AFTER_MS;
+  return {
+    serviceActive: commandSucceeds("systemctl", ["is-active", "--quiet", "upwork-agent-lead-engine.service"]),
+    processActive: leadEngineProcessActive(),
+    heartbeatFresh,
+    heartbeatStatus: heartbeat?.status ?? null,
+    lastHeartbeatAt: heartbeat?.updatedAt ?? null,
+  };
+}
+
+function leadEngineIsLive(runtime: LeadEngineRuntimeStatus): boolean {
+  return (runtime.serviceActive || runtime.processActive) && runtime.heartbeatFresh;
+}
+
+function leadEngineLine(state: LeadEngineCycleSummary | null, runtime: LeadEngineRuntimeStatus): string {
   const control = readHuntingControlState();
   if (control.huntingPaused) {
     return `Lead engine: paused because you asked me to pause hunting.`;
   }
-  if (!state) return "Lead engine: I do not have a recent run recorded yet.";
+  if (!state) {
+    return leadEngineIsLive(runtime)
+      ? "Lead engine: service is active, but I do not have a recent run recorded yet."
+      : "Lead engine is stopped. I do not have a recent controlled run recorded yet.";
+  }
   if (isRecoveredBacklogDrain(state)) {
     return "Lead engine: I cleared an old capture backlog; browser is clean now.";
   }
   if (state.status === "ok") {
-    return `Lead engine: running normally. I found ${state.jobsFound} lead${state.jobsFound === 1 ? "" : "s"} and queued ${state.jobsQueued}.`;
+    if (leadEngineIsLive(runtime)) {
+      return `Lead engine: running normally. I found ${state.jobsFound} lead${state.jobsFound === 1 ? "" : "s"} and queued ${state.jobsQueued}.`;
+    }
+    const runLabel = state.mode === "run_once" ? "Last controlled run" : "Last lead-engine cycle";
+    return `Lead engine is stopped. ${runLabel} found ${state.jobsFound} lead${state.jobsFound === 1 ? "" : "s"} and queued ${state.jobsQueued}.`;
   }
   if (state.status === "paused") {
     return `Lead engine: paused safely because ${humanizeReason(state.stoppedReason)}.`;
@@ -136,6 +196,7 @@ async function buildOperatorStatusReply(deps: SlackOperatorControlDeps = {}): Pr
   const quarantined = listUnresolvedBrowserChallengeQuarantines();
   const cdp = await (deps.checkCdpEndpoint ?? checkCdpEndpoint)(BROWSER_CDP_URL);
   const leadState = (deps.readLeadEngineState ?? readLatestState)();
+  const leadRuntime = (deps.readLeadEngineRuntimeStatus ?? (() => readLeadEngineRuntimeStatus(deps)))();
   const protectedCount = getProtectedQaQueueItems(1000).length;
   const qaLine = protectedCount > 0
     ? `${protectedCount} QA application${protectedCount === 1 ? " is" : "s are"} waiting.`
@@ -158,12 +219,13 @@ async function buildOperatorStatusReply(deps: SlackOperatorControlDeps = {}): Pr
   }
 
   return [
-    `Yeah — I’m running. Slack is live and Chrome is connected.`,
+    `I’m here. Slack is live and Chrome is connected.`,
     health.findings.length > 0
       ? `A few things need attention, but there is no active Chrome block right now.`
       : `Nothing is blocking me right now.`,
-    leadEngineLine(leadState),
+    leadEngineLine(leadState, leadRuntime),
     qaLine,
+    "I can help with one controlled application, show the QA queue, or check what’s blocked.",
     "Final submit stays manual.",
   ].join("\n");
 }

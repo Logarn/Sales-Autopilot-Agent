@@ -111,6 +111,19 @@ const ctaSoundsGood = planSlackConversation({
 });
 assert.equal(ctaSoundsGood.intent, "prepare_application");
 
+const ctaProceedApplications = planSlackConversation({
+  ...baseInput,
+  latestMessage: "please proceed with applications",
+  activeCta: {
+    action: "prep_application",
+    source: "latest_bot_cta",
+    text: "Reply prep it if you want me to handle the draft and proof.",
+  },
+});
+assert.equal(ctaProceedApplications.intent, "prepare_application");
+assert.deepEqual(ctaProceedApplications.actions, ["queue_prepare_application"]);
+assert.match(ctaProceedApplications.reply, /stop before submit/i);
+
 const noTargetAffirmative = planSlackConversation({ ...baseInput, job: null, draft: null, activeCta: null, latestMessage: "go for it" });
 assert.equal(noTargetAffirmative.intent, "unknown_clarify");
 assert.equal(noTargetAffirmative.clarificationNeeded, true);

@@ -252,11 +252,14 @@ function hasSlackMention(value: string): boolean {
 function matchesApprovePrepareIntent(value: string, mentioned: boolean): boolean {
   const text = value.toLowerCase();
   return (
-    /\b(?:yeah|yes|yep|yup|sure|ok|okay|looks good)\b.*\b(?:prep|prepare|draft|drafts|apply|write|proceed|move forward)\b/.test(text) ||
+    /\b(?:yeah|yes|yep|yup|sure|ok|okay|looks good)\b.*\b(?:prep|prepare|draft|drafts|apply|applications?|write|proceed|move forward)\b/.test(text) ||
     /\b(?:use this|put it in upwork|put this in upwork|fill it in upwork|fill this in upwork)\b/.test(text) ||
-    /\b(?:prep|prepare)\s+(?:it|this|draft|drafts|the\s+(?:draft|application|proposal))\b/.test(text) ||
-    /\b(?:please\s+)?proceed(?:\s+with)?(?:\s+the)?\s+(?:draft|application|proposal|prep)\b/.test(text) ||
-    /\b(?:go ahead|move forward|do it)\b(?:\s+and\s+\b(?:prep|prepare|draft|apply|write)\b.*)?$/.test(text) ||
+    /\b(?:prep|prepare)\s+(?:it|this|draft|drafts|the\s+(?:draft|application|applications|proposal)|one\s+(?:application|app)|next\s+(?:application|app))\b/.test(text) ||
+    /\b(?:please\s+)?proceed(?:\s+with)?(?:\s+the)?\s+(?:drafts?|applications?|apps?|proposal|prep)\b/.test(text) ||
+    /\b(?:start|prep|prepare)\s+(?:with\s+)?one\s+(?:application|app)\b/.test(text) ||
+    /\b(?:do|handle)\s+the\s+next\s+(?:application|app)\b/.test(text) ||
+    /\b(?:can you|could you)\s+handle\s+(?:an|one)\s+(?:application|app)\s+now\b/.test(text) ||
+    /\b(?:go ahead|move forward|do it)\b(?:\s+and\s+\b(?:prep|prepare|draft|apply|applications?|write)\b.*)?$/.test(text) ||
     /\b(?:write\s+(?:it|the\s+draft)|apply)\b$/.test(text) ||
     (mentioned && /\b(?:prep|prepare|draft|drafts|apply|write|listing|link)\b/.test(text))
   );
@@ -804,7 +807,7 @@ function shouldTreatAsPrompt(input: {
       reason: "dm_with_bot",
     };
   }
-  if (isAmbientAgentChannel(event.channel) && !event.thread_ts) {
+  if (isAmbientAgentChannel(event.channel)) {
     return {
       prompt: true,
       mode: "ambient_agent_channel",
@@ -1143,13 +1146,41 @@ function buildCompositeBlockedAttentionStatusText(): string {
 
 function matchesNaturalStatusIntent(text: string): boolean {
   const normalized = normalizeSlackTextInput(text).replace(/[.!?]+$/g, "").trim().toLowerCase();
-  return /^(?:what the fuck are you up to|wtf are you up to|what are you up to|are we live|are you live|you running|are you running|what(?:'|’)?s waiting on me|what is waiting on me|what needs me now)$/.test(normalized);
+  return /^(?:what the fuck are you up to|wtf are you up to|what are you up to|are we live|are you live|you running|are you running|are you active|you active|are you alive|you alive|you there|talk to me|what(?:'|’)?s happening|where are we|are we good|how(?:'|’)?s it going|how is your day going|can you help me|can you help me with something|i need a reply please|need a reply please|what(?:'|’)?s waiting on me|what is waiting on me|what needs me now)$/.test(normalized);
 }
 
 function activeCtaApprovesPrep(text: string, activeCta: SlackActiveCta | null): boolean {
   if (matchesDraftPreviewIntent(text)) return false;
   return activeCta?.action === "prep_application" &&
-    (matchesVagueAffirmative(text) || matchesPrepCorrectionIntent(text));
+    (matchesVagueAffirmative(text) || matchesPrepCorrectionIntent(text) || matchesApprovePrepareIntent(text, hasSlackMention(text)));
+}
+
+function matchesApplicationProceedIntent(text: string): boolean {
+  const normalized = normalizeSlackTextInput(text).replace(/[.!?]+$/g, "").trim().toLowerCase();
+  return matchesApprovePrepareIntent(normalized, hasSlackMention(text)) ||
+    /^(?:please\s+)?(?:proceed|move forward|go ahead|prep one|start with one application|do the next one|handle an app now|handle one app|handle one application)(?:\s+(?:with|on))?(?:\s+(?:the|one|next|applications?|apps?|application prep|prep))?$/.test(normalized);
+}
+
+function buildApplicationProceedClarificationText(): string {
+  const qaItems = getProtectedQaQueueItems(1000);
+  if (qaItems.length > 0) {
+    const ready = qaItems.filter((item) => item.state === "ready").length;
+    const blocked = qaItems.filter((item) => item.state === "blocked").length;
+    return [
+      `I can help. I see ${qaItems.length} QA application${qaItems.length === 1 ? "" : "s"} waiting (${ready} ready, ${blocked} blocked).`,
+      "Do you want me to open/focus the waiting QA item, or prep one controlled application from the strongest queued lead?",
+      "Final submit stays manual.",
+    ].join("\n");
+  }
+  return "I can’t find the job tied to this thread. Do you want me to prep one controlled application from the strongest queued lead, or do you want to send a job URL?";
+}
+
+function buildUnknownHumanPromptReply(): string {
+  return [
+    "I’m here, but I’m not sure what you mean yet.",
+    "I can check status, show what’s waiting, prep one controlled application from a job URL, or open a QA item.",
+    "Final submit stays manual.",
+  ].join("\n");
 }
 
 function buildConversationPlanForThread(input: {
@@ -2956,7 +2987,7 @@ async function executeConversationBrainDecision(params: {
       executionPath: "slackReasoningGateway:conversation_brain_ignore",
       suppressionReason: "brain_decision_ignore",
     });
-    return true;
+    return false;
   }
   if (decision.confidence === "low" && decision.intent !== "clarify") {
     return false;
@@ -3207,6 +3238,25 @@ async function executeConversationBrainDecision(params: {
     return true;
   }
 
+  if (params.state && (decision.intent === "full_safe_prep" || decision.actions.includes("queue_prepare_application"))) {
+    const ackText = decision.reply?.trim() || "Got it — I’ll prep this lead safely and come back when it’s ready for QA.";
+    const result = queuePrepareDraftFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs, ackText });
+    if (!result.ok) updateSlackThreadStateStatus(params.state.channelId, params.state.threadTs, "error");
+    const text = await userFacingSlackCopy({
+      deterministicText: result.text,
+      userMessage: params.text,
+      intent: "llm_safe_prepare_application",
+      context: { jobId: params.state.jobId, threadStatus: params.state.status, queued: result.ok },
+      preservePhrases: [
+        ...(params.state.upworkUrl ? [params.state.upworkUrl] : []),
+        ...(result.text.toLowerCase().includes("stop before submit") ? ["stop before submit"] : []),
+      ],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return true;
+  }
+
   if (!params.state) {
     return false;
   }
@@ -3286,7 +3336,7 @@ function shouldFallbackWithoutLlm(params: SlackReasoningGatewayParams, state: Re
 
 function hasExplicitAgentSlackContext(text: string): boolean {
   const withoutUrls = text.replace(/https?:\/\/\S+/gi, " ");
-  return /\b(?:application|proposal|drafts?|prep|listing|cover letter|qa|queue|chrome|browser|blocked|blocker|attention|wrong|paused|stopping|waiting on me|deal here|proof|portfolio|connects|boost|hunting|running|health|retry|submitted|interview|hired|lost|sources?|search(?:es)?|operator\s+reports?|friday\s+handoff|monthly\s+review|upwork\s+(?:agent|bot|application|listing|proposal)|upload\s+files?|attach\s+files?)\b/i.test(withoutUrls);
+  return /\b(?:application|proposal|drafts?|prep|listing|cover letter|qa|queue|chrome|browser|blocked|blocker|attention|wrong|paused|stopping|waiting on me|deal here|proof|portfolio|connects|boost|hunting|running|active|alive|reply please|help me|health|retry|submitted|interview|hired|lost|sources?|search(?:es)?|operator\s+reports?|friday\s+handoff|monthly\s+review|upwork\s+(?:agent|bot|application|listing|proposal)|upload\s+files?|attach\s+files?)\b/i.test(withoutUrls);
 }
 
 function shouldAllowSlackLearningAndActions(params: SlackReasoningGatewayParams, state: ReturnType<typeof getSlackThreadStateByThreadTs>): boolean {
@@ -3330,6 +3380,7 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
     canExecuteConversationBrainAction &&
     deterministicFirstOperatorIntent &&
     (
+      deterministicFirstOperatorIntent.type === "service_status" ||
       deterministicFirstOperatorIntent.type === "restart_browser_session" ||
       deterministicFirstOperatorIntent.type === "open_remote_chrome"
     )
@@ -3513,6 +3564,19 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
     return;
   }
 
+  if (canExecuteConversationBrainAction && !state && !activeCta && matchesApplicationProceedIntent(params.text)) {
+    const deterministicText = buildApplicationProceedClarificationText();
+    const text = await userFacingSlackCopy({
+      deterministicText,
+      userMessage: params.text,
+      intent: "clarify_application_proceed_target",
+      preservePhrases: deterministicText.includes("Final submit stays manual") ? ["Final submit stays manual"] : [],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return;
+  }
+
   if (canExecuteConversationBrainAction && !state && !activeCta && matchesVagueAffirmative(params.text)) {
     const text = await userFacingSlackCopy({
       deterministicText: "I can do that, but I need the lead, QA item, or Upwork link you mean before I touch the browser.",
@@ -3688,6 +3752,14 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, 
   });
 
   if (command.type === "ignore") {
+    const text = await userFacingSlackCopy({
+      deterministicText: buildUnknownHumanPromptReply(),
+      userMessage: params.text,
+      intent: "unknown_human_prompt",
+      preservePhrases: ["Final submit stays manual"],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
@@ -3838,7 +3910,16 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, 
     if (state) {
       const plan = buildConversationPlanForThread({ state, text: params.text });
       await executeConversationPlan({ plan, state, channelId: params.channelId, threadTs: params.threadTs, client: params.client, userMessage: params.text, copyProvider: params.copyProvider });
+      return;
     }
+    const text = await userFacingSlackCopy({
+      deterministicText: buildUnknownHumanPromptReply(),
+      userMessage: params.text,
+      intent: "clarify_without_thread_state",
+      preservePhrases: ["Final submit stays manual"],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 
@@ -3846,7 +3927,16 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, 
     if (state && shouldAskClarifyingThreadQuestion(params.text)) {
       const plan = buildConversationPlanForThread({ state, text: params.text });
       await executeConversationPlan({ plan, state, channelId: params.channelId, threadTs: params.threadTs, client: params.client, userMessage: params.text, copyProvider: params.copyProvider });
+      return;
     }
+    const text = await userFacingSlackCopy({
+      deterministicText: buildUnknownHumanPromptReply(),
+      userMessage: params.text,
+      intent: "unknown_human_prompt",
+      preservePhrases: ["Final submit stays manual"],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
 

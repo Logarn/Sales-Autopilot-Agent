@@ -230,6 +230,7 @@ async function runTests(): Promise<void> {
       { name: "draft preview first", input: "go ahead and prepare this - show me the draft here first", expectType: "draft_preview" },
       { name: "draft cv preview first", input: "show me the draft CV here first", expectType: "draft_preview" },
       { name: "natural proceed", input: "Please proceed with the draft", expectType: "approve_prepare" },
+      { name: "natural proceed applications", input: "Please proceed with applications", expectType: "approve_prepare" },
       { name: "natural go ahead", input: "go ahead", expectType: "approve_prepare" },
       { name: "natural prep it", input: "prep it", expectType: "approve_prepare" },
       { name: "natural looks good proceed", input: "looks good, proceed", expectType: "approve_prepare" },
@@ -501,6 +502,24 @@ async function runTests(): Promise<void> {
     assert(untaggedApproveReplies.some((reply) => /stop before submit/i.test(reply)), "Untagged CTA approval should preserve final-submit safety.");
     assert(getSlackConversationOwnership("COWN", "own.001")?.mode === "bot_owned_thread", "Bot-created lead thread should register owned conversation context.");
 
+    const proceedApplicationsJob = makeOwnedLeadThread("proceed-applications-job", "COWN", "own.010");
+    const proceedApplicationsReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "COWN",
+      ts: "own.011",
+      thread_ts: "own.010",
+      user: "U_ALLOWED",
+      text: "please proceed with applications",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => proceedApplicationsReplies.push(payload.text) },
+    });
+    assert(
+      listBrowserActions(null, 1000).some((action) => action.jobId === proceedApplicationsJob.id && action.actionType === "prepare_application_review"),
+      "Bot-owned lead thread should treat plural proceed-with-applications as safe prep approval.",
+    );
+    assert(proceedApplicationsReplies.some((reply) => /stop before submit/i.test(reply)), "Proceed-with-applications reply should preserve final-submit safety.");
+    cancelPendingPrepareReservations();
+
     const untaggedSkipJob = makeOwnedLeadThread("untagged-skip-job", "CSKIP", "skip.001");
     const untaggedSkipReplies: string[] = [];
     await handleSlackSocketTextEvent({
@@ -549,6 +568,73 @@ async function runTests(): Promise<void> {
       chat: { postMessage: async (payload: { text: string }) => naturalStatusReplies.push(payload.text) },
     });
     assert(naturalStatusReplies.length === 1, "Natural/frustrated status language should be classified as a status check.");
+
+    const humanConversationReplies: string[] = [];
+    const actionsBeforeHumanConversation = listBrowserActions(null, 1000).length;
+    for (const [index, text] of [
+      "are you active?",
+      "how is your day going?",
+      "can you help me with something?",
+      "I need a reply please",
+    ].entries()) {
+      await handleSlackSocketTextEvent({
+        channel: "C0AQW8W6RFU",
+        ts: `human.${index + 1}`,
+        user: "U_ALLOWED",
+        text,
+      }, {
+        chat: { postMessage: async (payload: { text: string }) => humanConversationReplies.push(payload.text) },
+      });
+    }
+    assert(humanConversationReplies.length === 4, "Human Slack prompts in #sales_leads should each get a reply.");
+    assert(listBrowserActions(null, 1000).length === actionsBeforeHumanConversation, "Human small talk/status prompts should not queue browser actions.");
+    assert(humanConversationReplies.some((reply) => /Slack is live|Chrome is connected|Final submit/i.test(reply)), "Human status/help replies should sound like operator status, not silence.");
+
+    const proceedClarificationReplies: string[] = [];
+    const actionsBeforeProceedClarification = listBrowserActions(null, 1000).length;
+    await handleSlackSocketTextEvent({
+      channel: "C0AQW8W6RFU",
+      ts: "human.proceed.001",
+      user: "U_ALLOWED",
+      text: "please proceed with applications",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => proceedClarificationReplies.push(payload.text) },
+    });
+    assert(proceedClarificationReplies.some((reply) => /prep one controlled application|send a job URL/i.test(reply)), "Ambiguous proceed-with-applications should ask for a target, not go silent.");
+    assert(listBrowserActions(null, 1000).length === actionsBeforeProceedClarification, "Ambiguous proceed-with-applications should not queue browser work without a target.");
+
+    const statusThreadReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "C0AQW8W6RFU",
+      ts: "human.thread.001",
+      user: "U_ALLOWED",
+      text: "are you running?",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => statusThreadReplies.push(payload.text) },
+    });
+    await handleSlackSocketTextEvent({
+      channel: "C0AQW8W6RFU",
+      ts: "human.thread.002",
+      thread_ts: "human.thread.001",
+      user: "U_ALLOWED",
+      text: "proceed with applications",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => statusThreadReplies.push(payload.text) },
+    });
+    assert(statusThreadReplies.length === 2, "Thread reply after bot status should be admitted and answered.");
+    assert(Boolean(statusThreadReplies[1] && /prep one controlled application|send a job URL/i.test(statusThreadReplies[1])), "Thread reply after status should ask a target clarification, not fall silent.");
+
+    const mentionedProceedReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "C0AQW8W6RFU",
+      ts: "human.thread.003",
+      thread_ts: "human.thread.001",
+      user: "U_ALLOWED",
+      text: "<@UAGENT> please proceed with applications",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => mentionedProceedReplies.push(payload.text) },
+    });
+    assert(mentionedProceedReplies.some((reply) => /prep one controlled application|send a job URL/i.test(reply)), "Mentioned thread reply with proceed intent should also ask a target clarification.");
 
     const dmAttentionReplies: string[] = [];
     await handleSlackSocketTextEvent({
@@ -853,7 +939,7 @@ async function runTests(): Promise<void> {
       }),
       client: { chat: { postMessage: async (payload: { text: string }) => brainEverythingReplies.push(payload.text) } },
     });
-    assert(brainEverythingReplies.some((reply) => reply.includes("all safe prep steps") && reply.includes("stop before submit")), "Conversation brain full-safe-prep should use the safe prep wording.");
+    assert(brainEverythingReplies.some((reply) => /safe prep|ready for QA/i.test(reply) && /stop before submit/i.test(reply)), "Conversation brain full-safe-prep should use safe prep wording.");
     assert(listBrowserActions(null, 1000).some((action) => action.jobId === brainEverythingJob.id && action.actionType === "prepare_application_review"), "Conversation brain full-safe-prep should queue prepare_application_review.");
     assert(listActiveSlackBehaviorMemories(50).some((memory) => memory.rule.includes("LLM brain: everything means full safe prep")), "Conversation brain full-safe-prep memory update should be persisted.");
 
@@ -1074,7 +1160,7 @@ async function runTests(): Promise<void> {
     assert(getBrowserActionById(prepareResult.actionId!)?.status === "pending", "Prep issue report should requeue a paused apply-page action for remote Chrome re-check.");
     assert(qaIssueRecheckReplies.some((reply) => reply.includes("re-check the apply page")), "Prep issue report should acknowledge the remote apply-page re-check.");
 
-    const queuedActions = listBrowserActions(null, 10).filter((action) => action.actionType === "prepare_application_review" && action.jobId === prepareJob.id);
+    const queuedActions = listBrowserActions(null, 1000).filter((action) => action.actionType === "prepare_application_review" && action.jobId === prepareJob.id);
     assert(queuedActions.length === 1, `Expected exactly one queued prepare_application_review action, got ${queuedActions.length}`);
 
     const multiApprovalReplies: string[] = [];
@@ -1320,6 +1406,19 @@ async function runTests(): Promise<void> {
         status: "prepared_for_qa",
       },
     });
+
+    const qaProceedReplies: string[] = [];
+    const actionsBeforeQaProceed = listBrowserActions(null, 1000).length;
+    await handleSlackSocketTextEvent({
+      channel: "C0AQW8W6RFU",
+      ts: "qa.proceed.001",
+      user: "U_ALLOWED",
+      text: "please proceed with applications",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => qaProceedReplies.push(payload.text) },
+    });
+    assert(qaProceedReplies.some((reply) => /QA application|open\/focus|strongest queued lead/i.test(reply)), "Proceed-with-applications with a waiting QA item should offer the next safe QA/prep choice.");
+    assert(listBrowserActions(null, 1000).length === actionsBeforeQaProceed, "Proceed-with-applications with a QA item should not queue new work without an explicit target choice.");
 
     const focusReplies: string[] = [];
     const focusCalls: Array<{ jobId?: string | null; index?: number; query?: string | null }> = [];
