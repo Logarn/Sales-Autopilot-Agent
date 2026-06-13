@@ -37,6 +37,7 @@ import {
   recordPlannedScreeningCoverage,
   recordLatestVerifiedProposalFallback,
   recordProposalVersion,
+  markSlackWorkflowPromiseStatus,
   updateApplicationStatus,
   updateBrowserActionStatus,
   upsertScreeningCoverageItem,
@@ -1021,6 +1022,22 @@ export async function postV3CapturePacketToThread(
   });
   if (posted && job.applicationDraft) {
     updateApplicationStatus(job.id, "sent_to_slack", "Lead packet posted to Slack for review.");
+    markSlackWorkflowPromiseStatus({
+      channelId: thread.channelId,
+      threadTs: thread.threadTs,
+      status: "fulfilled",
+      workflowState: job.applicationDraft.proofStrategy ? "proof_plan_ready" : "draft_ready",
+      lastAgentReply: "Capture completed and draft/proof plan posted to Slack.",
+    });
+  } else if (!posted) {
+    markSlackWorkflowPromiseStatus({
+      channelId: thread.channelId,
+      threadTs: thread.threadTs,
+      status: "blocked",
+      workflowState: "capture_failed",
+      blocker: "Capture completed, but the Slack draft/proof plan post failed.",
+      lastAgentReply: "Capture completed, but the Slack draft/proof plan post failed.",
+    });
   }
   return posted ? "posted" : "failed";
 }

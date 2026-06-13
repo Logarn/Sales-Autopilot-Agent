@@ -78,7 +78,7 @@ async function runTests(): Promise<void> {
     queuePrepareDraftFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string; actionId?: number };
     resetSlackSocketEventDedupeForTests: () => void;
   };
-  const { closeDb, getApplicationDraft, getApplicationProofPlanOverrides, getApplicationStatus, getBrowserActionById, getSlackConversationOwnership, getSlackThreadStateByThreadTs, listActiveSlackBehaviorMemories, listApplicationAssets, listProposalVersions, listRecentSlackFailureReflections, markJobSeen, mergeBrowserActionPayload, recordProposalVersion, upsertSalesLearningMemory, upsertSlackThreadState, listBrowserActions, updateApplicationStatus, updateBrowserActionStatus } = require("./db") as {
+  const { closeDb, getApplicationDraft, getApplicationProofPlanOverrides, getApplicationStatus, getBrowserActionById, getSlackConversationOwnership, getSlackThreadStateByThreadTs, getSlackWorkflowState, listActiveSlackBehaviorMemories, listApplicationAssets, listProposalVersions, listRecentSlackFailureReflections, markJobSeen, mergeBrowserActionPayload, recordProposalVersion, upsertSalesLearningMemory, upsertSlackThreadState, listBrowserActions, updateApplicationStatus, updateBrowserActionStatus } = require("./db") as {
     closeDb: () => void;
     getApplicationDraft: (jobId: string) => { proposalText: string } | null;
     getApplicationProofPlanOverrides: (jobId: string) => any;
@@ -86,6 +86,7 @@ async function runTests(): Promise<void> {
     getBrowserActionById: (id: number) => { payload: Record<string, unknown>; status: string } | null;
     getSlackConversationOwnership: (channelId: string, rootTs: string) => { mode: string; ownerUserId: string | null; disabled: boolean; closed: boolean } | null;
     getSlackThreadStateByThreadTs: (channelId: string, threadTs: string) => { status: string } | null;
+    getSlackWorkflowState: (channelId: string, threadTs: string) => { workflowState: string; draftRequested: boolean; prepRequested: boolean; latestAgentPromise: { type: string; status: string; text: string; blocker?: string | null } | null } | null;
     listActiveSlackBehaviorMemories: (limit?: number) => Array<{ type: string; rule: string; source: string }>;
     listApplicationAssets: (jobId: string) => Array<{ originalName: string; relativePath: string | null; source: string; attachPolicy: string }>;
     listProposalVersions: (jobId: string) => Array<{ versionNumber: number; source: string; proposalText: string }>;
@@ -312,6 +313,9 @@ async function runTests(): Promise<void> {
     assert(queuedCaptureAction?.payload.originalUrl === "https://www.upwork.com/nx/find-work/best-matches/details/~022053866890130225260?pageTitle=Job%20Details", "Slack intake should keep original URL in action payload");
     assert(queuedCaptureAction?.payload.canonicalJobUrl === "https://www.upwork.com/jobs/~022053866890130225260", "Slack intake should keep canonical URL in action payload");
     assert(queuedCaptureAction?.payload.url === "https://www.upwork.com/jobs/~022053866890130225260", "Browser capture action should use canonical URL");
+    const queuedWorkflow = getSlackWorkflowState("C456", "333.444");
+    assert(queuedWorkflow?.workflowState === "capture_queued", "Slack URL capture should create workflow state capture_queued.");
+    assert(queuedWorkflow?.draftRequested === true, "Slack URL capture should mark draft generation as requested.");
 
     const unmentionedUrlReplies: string[] = [];
     const actionCountBeforeUnmentionedUrl = listBrowserActions(null, 1000).length;
@@ -352,6 +356,9 @@ async function runTests(): Promise<void> {
     assert(/once the browser worker processes it/i.test(mentionedUrlReplyText), "Initial URL reply should say draft generation depends on the browser worker.");
     assert(!/come back here with the draft\/proof plan/i.test(mentionedUrlReplyText), "Initial URL reply should not overpromise an immediate draft/proof plan.");
     assert(listBrowserActions(null, 1000).some((action) => action.jobId.includes("033053866890130225260") && action.actionType === "capture_job_from_url"), "Mentioned URL should queue capture.");
+    const mentionedWorkflow = getSlackWorkflowState("C456", "333.666");
+    assert(mentionedWorkflow?.latestAgentPromise?.type === "capture_draft_proof_plan", "URL acknowledgment should store a capture/draft/proof-plan promise.");
+    assert(mentionedWorkflow?.latestAgentPromise?.status === "pending", "URL acknowledgment promise should start pending.");
 
     const duplicateEventReplies: string[] = [];
     const duplicateEvent = {
@@ -418,6 +425,46 @@ async function runTests(): Promise<void> {
     });
     assert(trackedThreadUrlReplies.some((reply) => reply.includes("Got the Upwork link")), "URL inside an existing tracked thread should be captured without a fresh mention.");
     assert(listBrowserActions(null, 1000).some((action) => action.jobId.includes("044053866890130225260") && action.actionType === "capture_job_from_url"), "Tracked-thread URL should queue capture.");
+
+    const transcriptDraftReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "C456",
+      ts: "333.7771",
+      thread_ts: "333.444",
+      user: "U_ALLOWED",
+      text: "Send me the draft here too once ready.",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => transcriptDraftReplies.push(payload.text) },
+    });
+    await handleSlackSocketTextEvent({
+      channel: "C456",
+      ts: "333.7772",
+      thread_ts: "333.444",
+      user: "U_ALLOWED",
+      text: "Send it once ready.",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => transcriptDraftReplies.push(payload.text) },
+    });
+    assert(transcriptDraftReplies.length === 2, "Draft-ready transcript requests should each get a reply.");
+    assert(transcriptDraftReplies.every((reply) => /draft|generated|capture/i.test(reply)), "Draft-ready transcript requests should stay in the draft workflow.");
+    assert(!/what part do you want changed|which part you want changed/i.test(transcriptDraftReplies.join("\n")), "Draft-ready transcript requests must not fall into revision fallback.");
+    assert(!/will not click the final Upwork submit button/i.test(transcriptDraftReplies.join("\n")), "Send-it-once-ready should not be treated as a final-submit command.");
+    const draftRequestWorkflow = getSlackWorkflowState("C456", "333.444");
+    assert(draftRequestWorkflow?.draftRequested === true, "Draft-ready transcript request should persist draftRequested.");
+    assert(draftRequestWorkflow?.latestAgentPromise?.type === "draft_preview", "Draft-ready transcript request should store a draft-preview promise.");
+
+    const threadStatusReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "C456",
+      ts: "333.7773",
+      thread_ts: "333.444",
+      user: "U_ALLOWED",
+      text: "Where are we with it?",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => threadStatusReplies.push(payload.text) },
+    });
+    assert(threadStatusReplies.some((reply) => /Capture:|Draft:|Proof plan:|Prep:|QA:/i.test(reply)), "Thread status should report workflow state, not a generic menu.");
+    assert(threadStatusReplies.some((reply) => /Next safe action:/i.test(reply)), "Thread status should include the next safe action.");
 
     const pendingCapturePrepReplies: string[] = [];
     const prepareCountBeforePendingCapturePrep = listBrowserActions(null, 1000).filter((action) => action.actionType === "prepare_application_review").length;
@@ -1053,6 +1100,7 @@ async function runTests(): Promise<void> {
     assert(directDraftPreview.ok, "Draft preview helper should return the stored proposal without queuing browser work.");
     assert(directDraftPreview.text.includes("I have not filled the Upwork form yet."), "Draft preview must state the Upwork form has not been filled.");
     assert(directDraftPreview.text.includes("Final submit remains manual."), "Draft preview must keep final submit manual.");
+    assert(/draft_ready|proof_plan_ready/.test(getSlackWorkflowState("C123", "111.222")?.workflowState ?? ""), "Showing a stored draft should advance workflow state to draft/proof ready.");
 
     const previewReplies: string[] = [];
     const actionCountBeforePreview = listBrowserActions(null, 1000).length;
