@@ -266,6 +266,12 @@ function matchesApprovePrepareIntent(value: string, mentioned: boolean): boolean
   );
 }
 
+function matchesNegatedPrepareIntent(value: string): boolean {
+  const text = value.toLowerCase();
+  return /\b(?:don['’]?t|do not|dont|never|not|stop)\b.*\b(?:prep|prepare|put (?:it|this) in upwork|fill (?:it|this) in upwork|apply|browser|chrome)\b/.test(text) ||
+    /\b(?:no|nope)\b.*\b(?:prep|prepare|upwork|browser|chrome)\b/.test(text);
+}
+
 function matchesDraftPreviewIntent(value: string): boolean {
   const text = value.toLowerCase();
   return (
@@ -583,6 +589,9 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
   }
 
   if (matchesApprovePrepareIntent(commandText, mentioned) || matchesApprovePrepareIntent(normalized, mentioned)) {
+    if (matchesNegatedPrepareIntent(commandText) || matchesNegatedPrepareIntent(normalized)) {
+      return { type: "clarify", rawText: normalized, source: "fallback" };
+    }
     if (/\b(?:use this|put it in upwork|put this in upwork|fill it in upwork|fill this in upwork)\b/i.test(commandText)) {
       return { type: "approve_prepare", rawText: normalized, source: "fallback" };
     }
@@ -605,6 +614,9 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
   }
 
   if (matchesApprovePrepareIntent(commandText, mentioned) || matchesApprovePrepareIntent(normalized, mentioned)) {
+    if (matchesNegatedPrepareIntent(commandText) || matchesNegatedPrepareIntent(normalized)) {
+      return { type: "clarify", rawText: normalized, source: "fallback" };
+    }
     return { type: "approve_prepare", rawText: normalized, source: "fallback" };
   }
 
@@ -1201,6 +1213,7 @@ function buildConversationPlanForThread(input: {
   const applyPlan = input.state.jobId ? buildBrowserApplyPlan(input.state.jobId).plan : null;
   const latestAction = latestBrowserActionForThreadState(input.state);
   return planSlackConversation({
+    threadTs: input.state.threadTs,
     latestMessage: input.text,
     threadHistory: [],
     activeCta: deriveSlackActiveCta(input.state),
@@ -4197,6 +4210,21 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, 
   }
 
   if (command.type === "approve_prepare" || command.type === "prepare_draft") {
+    const statefulPlan = command.type === "approve_prepare"
+      ? buildConversationPlanForThread({ state, text: params.text })
+      : null;
+    if (statefulPlan && !statefulPlan.actions.includes("queue_prepare_application")) {
+      await executeConversationPlan({
+        plan: statefulPlan,
+        state,
+        channelId: params.channelId,
+        threadTs: params.threadTs,
+        client: params.client,
+        userMessage: params.text,
+        copyProvider: params.copyProvider,
+      });
+      return;
+    }
     const ackText = command.replyText
       ? await userFacingSlackCopy({
         deterministicText: command.replyText,
@@ -4205,7 +4233,14 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, 
         context: { jobId: state.jobId, threadStatus: state.status },
         copyProvider: params.copyProvider,
       })
-      : undefined;
+      : statefulPlan ? await userFacingSlackCopy({
+        deterministicText: statefulPlan.reply,
+        userMessage: params.text,
+        intent: statefulPlan.intent,
+        context: { jobId: state.jobId, threadStatus: state.status },
+        preservePhrases: statefulPlan.reply.toLowerCase().includes("stop before submit") ? ["stop before submit"] : [],
+        copyProvider: params.copyProvider,
+      }) : undefined;
     const result = queuePrepareDraftFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs, ackText });
     if (!result.ok) {
       updateSlackThreadStateStatus(state.channelId, state.threadTs, result.threadStatus ?? "error");

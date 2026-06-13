@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { IntentParser } from "./conversation/intentParser";
+import { ConversationStateManager } from "./conversation/stateMachine";
 import { planSlackConversation } from "./slackConversationPlanner";
 
 const baseInput = {
@@ -166,6 +168,35 @@ assert.deepEqual(noDraftEverything.actions, ["none"]);
 const retryCapture = planSlackConversation({ ...baseInput, draft: null, latestMessage: "retry capture" });
 assert.equal(retryCapture.intent, "retry_capture");
 assert.deepEqual(retryCapture.actions, ["retry_capture"]);
+
+ConversationStateManager.resetAll();
+const negatedPrep = planSlackConversation({
+  ...baseInput,
+  threadTs: "thread-negated-prep",
+  latestMessage: "don't prep it",
+});
+assert.equal(negatedPrep.intent, "banter_no_action");
+assert.deepEqual(negatedPrep.actions, ["none"]);
+assert.match(negatedPrep.reply, /won't prep/i);
+const negatedState = ConversationStateManager.getOrCreate("thread-negated-prep");
+assert.equal(negatedState.lastIntent, "banter_no_action");
+assert.equal(negatedState.messageCount, 1);
+
+const sequentialState = ConversationStateManager.getOrCreate("thread-sequential-prep");
+const parsedSequential = IntentParser.parse("prep it then show me the draft", sequentialState, baseInput.job as any);
+assert.equal(parsedSequential.primary, "prep");
+assert.equal(parsedSequential.modifiers.then?.[0]?.primary, "show");
+assert.equal(parsedSequential.modifiers.then?.[0]?.modifiers.scope, "draft");
+const sequentialPrep = planSlackConversation({
+  ...baseInput,
+  threadTs: "thread-sequential-prep",
+  latestMessage: "prep it then show me the draft",
+});
+assert.equal(sequentialPrep.intent, "prepare_application");
+assert.deepEqual(sequentialPrep.actions, ["queue_prepare_application"]);
+const sequentialAfterState = ConversationStateManager.getOrCreate("thread-sequential-prep");
+assert.equal(sequentialAfterState.activeTask, "in_browser");
+assert(sequentialAfterState.pendingDecisions.some((decision) => decision.id === "manual-submit"));
 
 const noTargetAffirmative = planSlackConversation({ ...baseInput, job: null, draft: null, activeCta: null, latestMessage: "go for it" });
 assert.equal(noTargetAffirmative.intent, "unknown_clarify");

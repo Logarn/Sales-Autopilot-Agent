@@ -233,6 +233,7 @@ async function runTests(): Promise<void> {
       { name: "natural proceed applications", input: "Please proceed with applications", expectType: "approve_prepare" },
       { name: "natural go ahead", input: "go ahead", expectType: "approve_prepare" },
       { name: "natural prep it", input: "prep it", expectType: "approve_prepare" },
+      { name: "negated prep it", input: "don't prep it", expectType: "clarify" },
       { name: "natural looks good proceed", input: "looks good, proceed", expectType: "approve_prepare" },
       { name: "natural use this", input: "use this", expectType: "approve_prepare" },
       { name: "natural put it in Upwork", input: "put it in Upwork", expectType: "approve_prepare" },
