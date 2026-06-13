@@ -349,6 +349,8 @@ async function runTests(): Promise<void> {
       /(?:Upwork link|capture|queued|Listing|https:\/\/www\.upwork\.com\/jobs\/~033053866890130225260)/i.test(mentionedUrlReplyText),
       `Mentioned URL should be captured and acknowledged. Replies: ${mentionedUrlReplyText}`,
     );
+    assert(/once the browser worker processes it/i.test(mentionedUrlReplyText), "Initial URL reply should say draft generation depends on the browser worker.");
+    assert(!/come back here with the draft\/proof plan/i.test(mentionedUrlReplyText), "Initial URL reply should not overpromise an immediate draft/proof plan.");
     assert(listBrowserActions(null, 1000).some((action) => action.jobId.includes("033053866890130225260") && action.actionType === "capture_job_from_url"), "Mentioned URL should queue capture.");
 
     const duplicateEventReplies: string[] = [];
@@ -416,6 +418,71 @@ async function runTests(): Promise<void> {
     });
     assert(trackedThreadUrlReplies.some((reply) => reply.includes("Got the Upwork link")), "URL inside an existing tracked thread should be captured without a fresh mention.");
     assert(listBrowserActions(null, 1000).some((action) => action.jobId.includes("044053866890130225260") && action.actionType === "capture_job_from_url"), "Tracked-thread URL should queue capture.");
+
+    const pendingCapturePrepReplies: string[] = [];
+    const prepareCountBeforePendingCapturePrep = listBrowserActions(null, 1000).filter((action) => action.actionType === "prepare_application_review").length;
+    await handleSlackSocketTextEvent({
+      channel: "C456",
+      ts: "333.778",
+      thread_ts: "333.444",
+      user: "U_ALLOWED",
+      text: "prep it",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => pendingCapturePrepReplies.push(payload.text) },
+    });
+    assert(pendingCapturePrepReplies.some((reply) => /capture is still running|can't prep Upwork until the draft is generated/i.test(reply)), "Prep request with pending capture and no draft should give capture-pending status.");
+    assert(
+      listBrowserActions(null, 1000).filter((action) => action.actionType === "prepare_application_review").length === prepareCountBeforePendingCapturePrep,
+      "Prep request with pending capture and no draft must not queue prepare_application_review.",
+    );
+
+    const failedCapture = queueCaptureFromSlackUrl({
+      channelId: "C456",
+      messageTs: "333.779",
+      threadTs: "333.779",
+      text: "https://www.upwork.com/jobs/~077053866890130225260",
+    });
+    if (!failedCapture) {
+      throw new Error("Failed-capture setup should queue a capture action.");
+    }
+    updateBrowserActionStatus(failedCapture.action.id, "failed", "test capture failure");
+
+    const failedCapturePrepReplies: string[] = [];
+    const prepareCountBeforeFailedCapturePrep = listBrowserActions(null, 1000).filter((action) => action.actionType === "prepare_application_review").length;
+    await handleSlackSocketTextEvent({
+      channel: "C456",
+      ts: "333.780",
+      thread_ts: "333.779",
+      user: "U_ALLOWED",
+      text: "prep it",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => failedCapturePrepReplies.push(payload.text) },
+    });
+    assert(failedCapturePrepReplies.some((reply) => /retry capture|send the listing link/i.test(reply)), "Prep request with failed/missing capture and no draft should ask for retry or link.");
+    assert(
+      listBrowserActions(null, 1000).filter((action) => action.actionType === "prepare_application_review").length === prepareCountBeforeFailedCapturePrep,
+      "Prep request with failed capture and no draft must not queue prepare_application_review.",
+    );
+
+    const retryCaptureReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "C456",
+      ts: "333.781",
+      thread_ts: "333.779",
+      user: "U_ALLOWED",
+      text: "retry capture",
+    }, {
+      chat: { postMessage: async (payload: { text: string }) => retryCaptureReplies.push(payload.text) },
+    });
+    assert(retryCaptureReplies.some((reply) => /Capture re-queued|once the browser worker processes it/i.test(reply)), "Retry capture should acknowledge browser-worker-dependent capture.");
+    const retriedCapture = listBrowserActions(null, 1000)
+      .filter((action) => action.actionType === "capture_job_from_url" && action.jobId.includes("077053866890130225260"))
+      .slice(-1)[0];
+    assert(retriedCapture && retriedCapture.id !== failedCapture.action.id, "Retry capture after a failed capture should queue a new capture action.");
+    assert(getSlackThreadStateByThreadTs("C456", "333.779")?.status === "capture_pending", "Retry capture should update the thread back to capture_pending.");
+    const retriedCaptureRecord = getBrowserActionById(retriedCapture.id);
+    assert(retriedCaptureRecord?.payload.url === "https://www.upwork.com/jobs/~077053866890130225260", "Retry capture should preserve the canonical Upwork URL.");
+    assert(retriedCaptureRecord?.payload.sourceQuery === "slack_retry_capture", "Retry capture should mark the capture source as slack_retry_capture.");
 
     const unauthorizedReplies: string[] = [];
     const actionCountBeforeUnauthorized = listBrowserActions(null, 1000).length;
@@ -1081,7 +1148,7 @@ async function runTests(): Promise<void> {
     assert(llmPrepareReplies.some((reply) => reply.includes("Got it") && reply.includes("ready for QA")), "LLM approve_prepare should immediately acknowledge in-thread.");
     assert(llmPrepareReplies.some((reply) => reply.includes(llmPrepareJob.url)), "Prepare acknowledgement should include the listing link.");
     assert(!llmPrepareReplies.join("\n").toLowerCase().includes("final submit"), "Prepare acknowledgement must not imply final submit.");
-    const llmQueuedActions = listBrowserActions(null, 10).filter((action) => action.actionType === "prepare_application_review" && action.jobId === llmPrepareJob.id);
+    const llmQueuedActions = listBrowserActions(null, 1000).filter((action) => action.actionType === "prepare_application_review" && action.jobId === llmPrepareJob.id);
     assert(llmQueuedActions.length === 1, `LLM approve_prepare should queue exactly one prepare_application_review action, got ${llmQueuedActions.length}`);
 
     const unmappedReplies: string[] = [];

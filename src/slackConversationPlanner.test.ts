@@ -124,6 +124,49 @@ assert.equal(ctaProceedApplications.intent, "prepare_application");
 assert.deepEqual(ctaProceedApplications.actions, ["queue_prepare_application"]);
 assert.match(ctaProceedApplications.reply, /stop before submit/i);
 
+const noDraftPrepCapturePending = planSlackConversation({
+  ...baseInput,
+  latestMessage: "prep it",
+  draft: null,
+  currentBrowserAction: {
+    actionType: "capture_job_from_url",
+    status: "pending",
+  } as any,
+});
+assert.equal(noDraftPrepCapturePending.intent, "status_summary");
+assert.deepEqual(noDraftPrepCapturePending.actions, ["none"]);
+assert.match(noDraftPrepCapturePending.reply, /capture is still running/i);
+assert.doesNotMatch(noDraftPrepCapturePending.reply, /stop before submit/i);
+
+const noDraftPrepCaptureFailed = planSlackConversation({
+  ...baseInput,
+  latestMessage: "prep it",
+  draft: null,
+  currentBrowserAction: {
+    actionType: "capture_job_from_url",
+    status: "failed",
+  } as any,
+});
+assert.equal(noDraftPrepCaptureFailed.intent, "status_summary");
+assert.deepEqual(noDraftPrepCaptureFailed.actions, ["none"]);
+assert.match(noDraftPrepCaptureFailed.reply, /retry capture|send the listing link/i);
+
+const noDraftEverything = planSlackConversation({
+  ...baseInput,
+  latestMessage: "Everything that needs to be done.",
+  draft: null,
+  currentBrowserAction: {
+    actionType: "capture_job_from_url",
+    status: "pending",
+  } as any,
+});
+assert.equal(noDraftEverything.intent, "status_summary");
+assert.deepEqual(noDraftEverything.actions, ["none"]);
+
+const retryCapture = planSlackConversation({ ...baseInput, draft: null, latestMessage: "retry capture" });
+assert.equal(retryCapture.intent, "retry_capture");
+assert.deepEqual(retryCapture.actions, ["retry_capture"]);
+
 const noTargetAffirmative = planSlackConversation({ ...baseInput, job: null, draft: null, activeCta: null, latestMessage: "go for it" });
 assert.equal(noTargetAffirmative.intent, "unknown_clarify");
 assert.equal(noTargetAffirmative.clarificationNeeded, true);

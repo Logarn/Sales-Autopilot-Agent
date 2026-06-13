@@ -16,6 +16,7 @@ export type SlackConversationBrainIntent =
   | "full_safe_prep"
   | "draft_preview_first"
   | "retry_action"
+  | "retry_capture"
   | "focus_qa_tab"
   | "open_application_page"
   | "qa_queue"
@@ -59,7 +60,8 @@ export type SlackConversationBrainAction =
   | "mark_skip"
   | "record_outcome"
   | "mark_submitted"
-  | "none";
+  | "none"
+  | "retry_capture";
 
 export type SlackConversationBrainConfidence = "high" | "medium" | "low";
 export type SlackConversationBrainFixType = "memory" | "prompt" | "config" | "code_pr";
@@ -274,6 +276,7 @@ const INTENTS = new Set<SlackConversationBrainIntent>([
   "full_safe_prep",
   "draft_preview_first",
   "retry_action",
+  "retry_capture",
   "focus_qa_tab",
   "open_application_page",
   "qa_queue",
@@ -382,6 +385,7 @@ export const SLACK_CONVERSATION_ALLOWED_ACTIONS: SlackConversationBrainAction[] 
   "mark_skip",
   "record_outcome",
   "none",
+  "retry_capture",
 ];
 
 export const SLACK_CONVERSATION_HARD_SAFETY_RULES = [
@@ -452,7 +456,7 @@ function normalizeIntentCategory(value: unknown, intent: SlackConversationBrainI
   if (intent === "debug_details") return "debug_request";
   if (intent === "reject") return "rejection_skip";
   if (intent === "answer_health" || intent === "check_browser" || intent === "check_services" || intent === "qa_queue") return "status_check";
-  if (intent === "full_safe_prep" || intent === "draft_preview_first" || intent === "retry_action" || intent === "focus_qa_tab" || intent === "open_application_page") return "command";
+  if (intent === "full_safe_prep" || intent === "draft_preview_first" || intent === "retry_action" || intent === "retry_capture" || intent === "focus_qa_tab" || intent === "open_application_page") return "command";
   if (intent === "clarify") return "unknown_ambiguous";
   return "question";
 }
@@ -633,7 +637,7 @@ export async function planSlackConversationWithLlm(
           "intentCategory must be one of: question, command, approval, rejection_skip, correction, status_check, debug_request, feedback_opinion, unknown_ambiguous.",
           "target must be one of: current_thread_lead, explicit_upwork_url, qa_item_number, current_batch_item, unknown.",
           "safetyDecision must be one of: safe_execute, clarify_before_execute, manual_submit_reminder, blocked_by_browser_security, debug_only, no_action.",
-          "Allowed intents: answer_file_capability_question, answer_health, explain_health_findings, show_cover_letter, full_safe_prep, draft_preview_first, retry_action, focus_qa_tab, open_application_page, qa_queue, capture_upwork_url, ingest_file, revise_proof_plan, revise_draft, status_summary, explain_risk, explain_proof, explain_boost, pause_hunting, start_hunting, check_browser, check_services, debug_details, reject, mark_submitted, record_outcome, clarify, ignore.",
+          "Allowed intents: answer_file_capability_question, answer_health, explain_health_findings, show_cover_letter, full_safe_prep, draft_preview_first, retry_action, retry_capture, focus_qa_tab, open_application_page, qa_queue, capture_upwork_url, ingest_file, revise_proof_plan, revise_draft, status_summary, explain_risk, explain_proof, explain_boost, pause_hunting, start_hunting, check_browser, check_services, debug_details, reject, mark_submitted, record_outcome, clarify, ignore.",
           "Allowed actions are provided in the user payload. Propose only those action names.",
           "Every normal inbound Slack message is coming through this gateway. Reason first from context, then select one or more allowed actions.",
           "For service/browser questions, use answer_health/check_services/check_browser and explain in human language.",

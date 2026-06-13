@@ -18,7 +18,8 @@ export type SlackConversationIntent =
   | "skip_job"
   | "debug_details"
   | "banter_no_action"
-  | "unknown_clarify";
+  | "unknown_clarify"
+  | "retry_capture";
 
 export type SlackConversationAction =
   | "queue_prepare_application"
@@ -27,7 +28,8 @@ export type SlackConversationAction =
   | "queue_proof_recheck"
   | "show_debug_details"
   | "mark_skip"
-  | "none";
+  | "none"
+  | "retry_capture";
 
 export interface SlackConversationPlannerInput {
   latestMessage: string;
@@ -189,6 +191,42 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
   const text = normalize(input.latestMessage);
   const debugRequested = /\b(debug|technical details|raw status|full details|dump|which skills|skills did you use|skill trace|skill-use trace)\b/.test(text);
 
+  // ===== LAYER 1 FIX: State-aware intent routing =====
+  // If user wants to prep but no draft exists, route to status/capture-retry instead
+  const hasDraft = Boolean(input.draft?.proposalText?.trim());
+  const wantsToPrep = /\b(use this|looks good|put it in upwork|fill it in upwork|prepare it|prep it|prepare applications?|prepare application)\b/.test(text) ||
+                       /\b(everything that needs to be done|do everything|all safe prep|handle everything)\b/.test(text) ||
+                       isProceedWithApplicationIntent(text) ||
+                       (input.activeCta?.action === "prep_application" && (isVagueAffirmative(text) || isPrepCorrection(text)));
+
+  if (wantsToPrep && !hasDraft) {
+    // Check if capture is still pending
+    const capturePending = input.currentBrowserAction?.actionType === "capture_job_from_url" &&
+                           ["pending", "in_progress", "queued"].includes(input.currentBrowserAction?.status ?? "");
+
+    if (capturePending) {
+      return {
+        intent: "status_summary",
+        confidence: "high",
+        reply: `Capture is still running for ${conciseJobLabel(input.job)}. I can't prep Upwork until the draft is generated. Check back in a moment or say "retry capture" if it's stuck.`,
+        actions: ["none"],
+        clarificationNeeded: false,
+        debugRequested: false,
+      };
+    }
+
+    // Capture failed or never completed
+    return {
+      intent: "status_summary",
+      confidence: "high",
+      reply: `I don't have a draft for ${conciseJobLabel(input.job)} yet. The capture may have failed or not started. Say "retry capture" or send the listing link again.`,
+      actions: ["none"],
+      clarificationNeeded: false,
+      debugRequested: false,
+    };
+  }
+  // ===== END LAYER 1 FIX =====
+
   if (debugRequested) {
     return {
       intent: "debug_details",
@@ -332,8 +370,19 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
     return {
       intent: "retry_after_files",
       confidence: "high",
-      reply: "I’ll retry application prep using the ingested files.",
+      reply: "I'll retry application prep using the ingested files.",
       actions: ["retry_prepare_after_files"],
+      clarificationNeeded: false,
+      debugRequested: false,
+    };
+  }
+
+  if (/\b(retry capture|recapture|re-capture|capture again|retry the capture|retry capture)\b/.test(text)) {
+    return {
+      intent: "retry_capture",
+      confidence: "high",
+      reply: "I'll re-queue the browser capture for this job.",
+      actions: ["retry_capture"],
       clarificationNeeded: false,
       debugRequested: false,
     };

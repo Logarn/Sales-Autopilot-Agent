@@ -195,6 +195,7 @@ export type SlackSocketParsedCommandType =
   | "skip_batch_item"
   | "prep_issue_report"
   | "retry_action"
+  | "retry_capture"
   | "discovery_keep_hunting"
   | "discovery_retry_sources"
   | "discovery_best_matches_only"
@@ -630,6 +631,9 @@ export function parseSlackThreadCommand(text: string): ParsedSlackSocketCommand 
       actionId: retryMatch[1] ? Number.parseInt(retryMatch[1], 10) : undefined,
     };
   }
+  if (/^(?:retry\s+capture|recapture|re-capture|capture\s+again|retry\s+the\s+capture)$/i.test(commandText)) {
+    return { type: "retry_capture", rawText: normalized, source: "fallback" };
+  }
 
   if (/^(?:mark\s+submitted|submitted|i\s+sent\s+it|sent\s+it|i\s+submitted\s+it|it'?s\s+submitted|it\s+is\s+submitted|submitted\s+after\s+editing)$/i.test(commandText)) {
     return {
@@ -918,8 +922,12 @@ function buildThreadStatusDetails(state: NonNullable<ReturnType<typeof getSlackT
   ].filter((line): line is string => Boolean(line));
 }
 
-function latestBrowserActionForJob(jobId: string) {
-  return listBrowserActions(null, 1000).filter((action) => action.jobId === jobId).slice(-1)[0] ?? null;
+function latestBrowserActionForThreadState(state: NonNullable<ReturnType<typeof getSlackThreadStateByThreadTs>>) {
+  const jobIds = new Set<string>();
+  if (state.jobId) jobIds.add(state.jobId);
+  const parsedUpworkJobId = extractUpworkJobIdFromUrl(state.upworkUrl);
+  if (state.upworkUrl) jobIds.add(deriveCaptureThreadJobId(state.upworkUrl, parsedUpworkJobId));
+  return listBrowserActions(null, 1000).filter((action) => jobIds.has(action.jobId)).slice(-1)[0] ?? null;
 }
 
 function isDebugStatusRequest(value: string): boolean {
@@ -1191,7 +1199,7 @@ function buildConversationPlanForThread(input: {
   const job = input.state.jobId ? getScoredJobForSlackPreview(input.state.jobId) : null;
   const draft = input.state.jobId ? getApplicationDraft(input.state.jobId) : null;
   const applyPlan = input.state.jobId ? buildBrowserApplyPlan(input.state.jobId).plan : null;
-  const latestAction = input.state.jobId ? latestBrowserActionForJob(input.state.jobId) : null;
+  const latestAction = latestBrowserActionForThreadState(input.state);
   return planSlackConversation({
     latestMessage: input.text,
     threadHistory: [],
@@ -1237,7 +1245,7 @@ function buildSlackConversationBrainInput(input: {
   const draft = state?.jobId ? getApplicationDraft(state.jobId) : null;
   const applicationStatus = state?.jobId ? getApplicationStatus(state.jobId) : null;
   const applyPlan = state?.jobId ? buildBrowserApplyPlan(state.jobId).plan : null;
-  const latestAction = state?.jobId ? latestBrowserActionForJob(state.jobId) : null;
+  const latestAction = state ? latestBrowserActionForThreadState(state) : null;
   const qaQueue = getProtectedQaQueueItems(1000).map((item) => ({
     index: item.index,
     title: item.title,
@@ -1582,7 +1590,23 @@ export function buildPrepareDraftQueueReply(input: {
   ].filter((line): line is string => Boolean(line)).join("\n");
 }
 
-export function queuePrepareDraftFromSlackThread(input: { channelId: string; threadTs: string; ackText?: string | null; forceRetryPaused?: boolean }): { ok: boolean; text: string; actionId?: number } {
+function buildNoDraftPrepareBlocker(state: NonNullable<ReturnType<typeof getSlackThreadStateByThreadTs>>): { text: string; threadStatus: "capture_pending" | "error" } {
+  const latestAction = latestBrowserActionForThreadState(state);
+  const capturePending = latestAction?.actionType === "capture_job_from_url" &&
+    ["pending", "in_progress", "queued"].includes(latestAction.status);
+  if (capturePending) {
+    return {
+      text: `Capture is still running for ${state.upworkUrl}. I can't prep Upwork until the draft is generated. Check back in a moment or say "retry capture" if it's stuck.`,
+      threadStatus: "capture_pending",
+    };
+  }
+  return {
+    text: `I don't have a generated draft for ${state.upworkUrl} yet. The capture may have failed or not started. Say "retry capture" or send the listing link again.`,
+    threadStatus: "error",
+  };
+}
+
+export function queuePrepareDraftFromSlackThread(input: { channelId: string; threadTs: string; ackText?: string | null; forceRetryPaused?: boolean }): { ok: boolean; text: string; actionId?: number; threadStatus?: "capture_pending" | "error" } {
   const state = getSlackThreadStateByThreadTs(input.channelId, input.threadTs);
   if (!state?.jobId) {
     return { ok: false, text: "I cannot queue a browser draft without a tracked job id for this thread." };
@@ -1591,7 +1615,7 @@ export function queuePrepareDraftFromSlackThread(input: { channelId: string; thr
   const draft = getApplicationDraft(state.jobId);
   const scoredJob = getScoredJobForSlackPreview(state.jobId);
   if (!draft || !scoredJob || !draft.proposalText.trim()) {
-    return { ok: false, text: "Quick blocker: I don’t have the generated draft for this lead yet, so I can’t prep the Upwork page. Send the listing link again or retry once capture finishes." };
+    return { ok: false, ...buildNoDraftPrepareBlocker(state) };
   }
   const qaCapacity = canQueueNewQaPreparation(state.jobId);
   if (!qaCapacity.ok) {
@@ -2405,10 +2429,10 @@ async function handleUrlMessage(params: {
   const { parsed: upworkUrl, action } = queued;
 
   const details = [
-    "Got the Upwork link. I’ll capture it, score it, and come back here with the draft/proof plan.",
+    "Got the Upwork link. Capture is queued — I'll score it and generate the draft once the browser worker processes it.",
     action.duplicate
       ? "Capture is already queued for this posting."
-      : "Capture is queued.",
+      : "Capture queued.",
     `Listing: ${upworkUrl.canonicalJobUrl}`,
   ].join("\n");
 
@@ -2502,7 +2526,7 @@ async function executeConversationPlan(params: {
       ackText,
       forceRetryPaused: params.plan.actions.includes("retry_prepare_after_files"),
     });
-    if (!result.ok) updateSlackThreadStateStatus(params.state.channelId, params.state.threadTs, "error");
+    if (!result.ok) updateSlackThreadStateStatus(params.state.channelId, params.state.threadTs, result.threadStatus ?? "error");
     const text = await userFacingSlackCopy({
       deterministicText: result.text,
       userMessage: params.userMessage,
@@ -2512,6 +2536,47 @@ async function executeConversationPlan(params: {
         ...(params.state.upworkUrl ? [params.state.upworkUrl] : []),
         ...(result.text.toLowerCase().includes("stop before submit") ? ["stop before submit"] : []),
       ],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return;
+  }
+  if (params.plan.actions.includes("retry_capture")) {
+    const state = params.state;
+    const parsedUpworkJobId = state.upworkUrl ? extractUpworkJobIdFromUrl(state.upworkUrl) : null;
+    if (!state.jobId || !state.upworkUrl || !parsedUpworkJobId) {
+      const text = await userFacingSlackCopy({
+        deterministicText: "I can't retry capture without a tracked Upwork listing for this thread. Send the listing link again and I'll queue capture from that URL.",
+        userMessage: params.userMessage,
+        intent: params.plan.intent,
+        context: { jobId: state.jobId ?? null, threadStatus: state.status },
+        copyProvider: params.copyProvider,
+      });
+      await postThreadReply(params.client, params.channelId, params.threadTs, text);
+      return;
+    }
+    const jobIdForAction = deriveCaptureThreadJobId(state.upworkUrl, parsedUpworkJobId);
+    const action = enqueueBrowserActionDeduped({
+      jobId: jobIdForAction,
+      actionType: "capture_job_from_url",
+      payload: {
+        ...buildCaptureActionPayload(
+          state.upworkUrl,
+          state.channelId,
+          state.messageTs,
+          state.threadTs,
+          { originalUrl: state.upworkUrl, canonicalJobUrl: state.upworkUrl },
+        ),
+        sourceQuery: "slack_retry_capture",
+        notes: "Slack socket: user requested capture retry.",
+      },
+    });
+    updateSlackThreadStateStatus(state.channelId, state.threadTs, "capture_pending");
+    const text = await userFacingSlackCopy({
+      deterministicText: `Capture re-queued for ${state.upworkUrl}. I'll score it and generate the draft once the browser worker processes it.`,
+      userMessage: params.userMessage,
+      intent: params.plan.intent,
+      context: { jobId: state.jobId, threadStatus: state.status, actionId: action.id },
       copyProvider: params.copyProvider,
     });
     await postThreadReply(params.client, params.channelId, params.threadTs, text);
@@ -3241,7 +3306,7 @@ async function executeConversationBrainDecision(params: {
   if (params.state && (decision.intent === "full_safe_prep" || decision.actions.includes("queue_prepare_application"))) {
     const ackText = decision.reply?.trim() || "Got it — I’ll prep this lead safely and come back when it’s ready for QA.";
     const result = queuePrepareDraftFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs, ackText });
-    if (!result.ok) updateSlackThreadStateStatus(params.state.channelId, params.state.threadTs, "error");
+    if (!result.ok) updateSlackThreadStateStatus(params.state.channelId, params.state.threadTs, result.threadStatus ?? "error");
     const text = await userFacingSlackCopy({
       deterministicText: result.text,
       userMessage: params.text,
@@ -3291,7 +3356,9 @@ async function executeConversationBrainDecision(params: {
     decision.intent === "explain_boost" ||
     decision.intent === "clarify" ||
     decision.actions.includes("queue_prepare_application") ||
-    decision.actions.includes("send_draft_preview")
+    decision.actions.includes("send_draft_preview") ||
+    decision.intent === "retry_capture" ||
+    decision.actions.includes("retry_capture")
   ) {
     const plan = buildConversationPlanForThread({ state: params.state, text: params.text });
     await executeConversationPlan({
@@ -3548,7 +3615,7 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
       copyProvider: params.copyProvider,
     });
     const result = queuePrepareDraftFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs, ackText });
-    if (!result.ok) updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
+    if (!result.ok) updateSlackThreadStateStatus(state.channelId, state.threadTs, result.threadStatus ?? "error");
     const text = await userFacingSlackCopy({
       deterministicText: result.text,
       userMessage: params.text,
@@ -4093,7 +4160,7 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, 
       ackText: revision.text,
       forceRetryPaused: true,
     });
-    if (!result.ok) updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
+    if (!result.ok) updateSlackThreadStateStatus(state.channelId, state.threadTs, result.threadStatus ?? "error");
     const text = await userFacingSlackCopy({
       deterministicText: result.text,
       userMessage: params.text,
@@ -4141,7 +4208,7 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, 
       : undefined;
     const result = queuePrepareDraftFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs, ackText });
     if (!result.ok) {
-      updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
+      updateSlackThreadStateStatus(state.channelId, state.threadTs, result.threadStatus ?? "error");
     }
     const text = await userFacingSlackCopy({
       deterministicText: result.text,
@@ -4166,7 +4233,7 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, 
       forceRetryPaused: true,
     });
     if (!result.ok) {
-      updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
+      updateSlackThreadStateStatus(state.channelId, state.threadTs, result.threadStatus ?? "error");
       const text = await userFacingSlackCopy({
         deterministicText: result.text,
         userMessage: params.text,
@@ -4241,6 +4308,20 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, 
       copyProvider: params.copyProvider,
     });
     await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return;
+  }
+
+  if (command.type === "retry_capture") {
+    const plan = buildConversationPlanForThread({ state, text: params.text });
+    await executeConversationPlan({
+      plan,
+      state,
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      client: params.client,
+      userMessage: params.text,
+      copyProvider: params.copyProvider,
+    });
     return;
   }
 
