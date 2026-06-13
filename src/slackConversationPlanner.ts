@@ -223,7 +223,7 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
     return {
       intent: "unknown_clarify",
       confidence: "high",
-      reply: "I can prep one controlled application, but I need the Upwork job URL or the current lead first. Final submit remains manual.",
+      reply: "I can prep one controlled application, but I need the Upwork job URL or the current lead first. I will stop before submit, and final submit remains manual.",
       actions: ["none"],
       clarificationNeeded: true,
       debugRequested: false,
