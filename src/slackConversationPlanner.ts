@@ -1,5 +1,11 @@
 import type { ApplicationDraft, BrowserAction, ScoredJob } from "./types";
 import { looksLikeProofPlanRevision } from "./proofPlanOverrides";
+import {
+  buildThreadWorkflowStatusReply,
+  isDraftPreviewStatusIntent,
+  isExplicitRevisionIntent,
+  type UnifiedSlackJobContext,
+} from "./slackWorkflowContext";
 
 export type SlackConversationIntent =
   | "answer_file_capability_question"
@@ -57,6 +63,7 @@ export interface SlackConversationPlannerInput {
     boostReason?: string | null;
   };
   hasSlackFiles: boolean;
+  workflowContext?: UnifiedSlackJobContext | null;
 }
 
 export interface SlackConversationPlan {
@@ -102,6 +109,10 @@ function isProceedWithApplicationIntent(text: string): boolean {
 function isDangerousSubmitAdjacent(text: string): boolean {
   if (/^(?:i|we)\s+(?:sent|submitted)\b/.test(text)) return false;
   if (/^submitted(?:\s+after\s+editing)?$/.test(text)) return false;
+  if (/\b(?:send|post)\s+it\s+(?:here\s+)?(?:too\s+)?(?:once|when)\s+(?:it\s+is\s+)?ready\b/.test(text)) return false;
+  if (/\b(?:send|show|post)\s+me\b.*\b(?:draft|proposal|cover\s*letter|cv)\b/.test(text)) return false;
+  if (/^(?:draft|draft\?|proposal|proposal\?|cover\s*letter|cover\s*letter\?)$/.test(text)) return false;
+  if (/\bwhat\s+did\s+you\s+write\b/.test(text)) return false;
   return /^(?:send it|submit it|fire it off|send this|submit this|send the proposal|submit the proposal|send application|submit application|send the application|submit the application)$/.test(text) ||
     /\b(?:please\s+)?(?:send|submit)\s+(?:it|this|the\s+(?:proposal|application))\b/.test(text) ||
     /\bfire\s+(?:it|this)\s+off\b/.test(text);
@@ -109,7 +120,7 @@ function isDangerousSubmitAdjacent(text: string): boolean {
 
 function isNaturalStatus(text: string): boolean {
   const clean = text.replace(/[.!?]+$/g, "").trim();
-  return /^(?:what the fuck are you up to|wtf are you up to|what are you up to|are we live|are you live|you running|are you running|are you active|you active|are you alive|you alive|you there|talk to me|what(?:'|’)?s happening|where are we|are we good|how(?:'|’)?s it going|how is your day going|can you help me|can you help me with something|i need a reply please|need a reply please|what(?:'|’)?s waiting on me|what is waiting on me|what needs me now)$/.test(clean);
+  return /^(?:what the fuck are you up to|wtf are you up to|what are you up to|are we live|are you live|you running|are you running|are you active|you active|are you alive|you alive|you there|talk to me|what(?:'|’)?s happening|where are we(?:\s+with\s+(?:it|this|that))?|are we good|how(?:'|’)?s it going|how is your day going|can you help me|can you help me with something|i need a reply please|need a reply please|what(?:'|’)?s waiting on me|what is waiting on me|what needs me now)$/.test(clean);
 }
 
 function fileCapabilityReply(input: SlackConversationPlannerInput): string {
@@ -128,6 +139,9 @@ function fileCapabilityReply(input: SlackConversationPlannerInput): string {
 }
 
 function statusReply(input: SlackConversationPlannerInput): string {
+  if (input.workflowContext) {
+    return buildThreadWorkflowStatusReply(input.workflowContext);
+  }
   const bits = [
     input.draft?.proposalText ? "draft ready" : "draft not ready",
     input.missingFiles.length > 0 ? `${input.missingFiles.length} file${input.missingFiles.length === 1 ? "" : "s"} missing` : "files ok or not needed",
@@ -166,7 +180,13 @@ function boostReply(input: SlackConversationPlannerInput): string {
 function coverLetterReply(input: SlackConversationPlannerInput): string {
   const draft = input.draft?.proposalText?.trim();
   if (!draft) {
-    return "I haven’t generated the cover letter/CV draft yet. I can draft it here first, then wait for your approval before filling Upwork.";
+    if (input.workflowContext?.draftState === "generating") {
+      return "The draft is still being generated for this thread. I’ll post it here when it is ready; final submit remains manual.";
+    }
+    if (input.workflowContext?.threadState?.upworkUrl || input.job) {
+      return "I do not have the generated draft for this thread yet. The next safe step is capture/draft generation first; final submit remains manual.";
+    }
+    return "I need the Upwork job URL before I can generate or show a draft.";
   }
   const frustrated = /\b(wtf|what the fuck|just need|need the cv|cv you used)\b/i.test(input.latestMessage);
   const intro = frustrated
@@ -198,6 +218,17 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
                        /\b(everything that needs to be done|do everything|all safe prep|handle everything)\b/.test(text) ||
                        isProceedWithApplicationIntent(text) ||
                        (input.activeCta?.action === "prep_application" && (isVagueAffirmative(text) || isPrepCorrection(text)));
+
+  if (wantsToPrep && !input.job && !input.workflowContext?.threadState?.upworkUrl) {
+    return {
+      intent: "unknown_clarify",
+      confidence: "high",
+      reply: "I can prep one controlled application, but I need the Upwork job URL or the current lead first. I will stop before submit, and final submit remains manual.",
+      actions: ["none"],
+      clarificationNeeded: true,
+      debugRequested: false,
+    };
+  }
 
   if (wantsToPrep && !hasDraft) {
     // Check if capture is still pending
@@ -309,6 +340,48 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
     };
   }
 
+  if (isDraftPreviewStatusIntent(input.latestMessage)) {
+    const hasTarget = Boolean(input.job || input.workflowContext?.threadState?.upworkUrl || input.workflowContext?.explicitUpworkUrl);
+    if (hasDraft) {
+      return {
+        intent: "draft_preview_first",
+        confidence: "high",
+        reply: "I’ll show the draft here first and won’t fill Upwork yet.",
+        actions: ["send_draft_preview"],
+        clarificationNeeded: false,
+        debugRequested: false,
+      };
+    }
+    if (!hasTarget) {
+      return {
+        intent: "unknown_clarify",
+        confidence: "high",
+        reply: "I can show the draft once I know which job this is for. Send the Upwork job URL.",
+        actions: ["none"],
+        clarificationNeeded: true,
+        debugRequested: false,
+      };
+    }
+    if (input.workflowContext?.draftState === "generating" || input.workflowContext?.captureState === "queued" || input.workflowContext?.captureState === "in_progress") {
+      return {
+        intent: "status_summary",
+        confidence: "high",
+        reply: `${conciseJobLabel(input.job)}: the draft is still being generated from the queued capture. I’ll post it here when it is ready. Final submit remains manual.`,
+        actions: ["none"],
+        clarificationNeeded: false,
+        debugRequested: false,
+      };
+    }
+    return {
+      intent: "retry_capture",
+      confidence: "high",
+      reply: "I do not have the generated draft yet. I’ll re-queue capture/draft generation first; final submit remains manual.",
+      actions: ["retry_capture"],
+      clarificationNeeded: false,
+      debugRequested: false,
+    };
+  }
+
   if (/\b(what[’']?s ready|show qa queue|qa queue|what is blocked|what[’']?s blocked)\b/.test(text)) {
     return {
       intent: "show_qa_queue",
@@ -326,6 +399,17 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
       confidence: "high",
       reply: "Got it - I’ll update the proof plan and recheck the remote Chrome draft.",
       actions: ["queue_proof_recheck"],
+      clarificationNeeded: false,
+      debugRequested: false,
+    };
+  }
+
+  if (isExplicitRevisionIntent(input.latestMessage)) {
+    return {
+      intent: "revise_draft",
+      confidence: "high",
+      reply: "Got it — I’ll treat that as a draft revision request for this application.",
+      actions: ["none"],
       clarificationNeeded: false,
       debugRequested: false,
     };
@@ -422,7 +506,7 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
     };
   }
 
-  if (/^(status|where are we|what now|what's next|next)$/i.test(input.latestMessage.trim()) || isNaturalStatus(text)) {
+  if (/^(status|where are we(?:\s+with\s+(?:it|this|that))?|what now|what's next|next)$/i.test(input.latestMessage.trim()) || isNaturalStatus(text)) {
     return {
       intent: "status_summary",
       confidence: "high",
@@ -458,7 +542,9 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
   return {
     intent: "unknown_clarify",
     confidence: "low",
-    reply: "I’m not sure which part you want changed. Tell me the specific draft, proof, file, boost, or QA update and I’ll apply it.",
+    reply: input.workflowContext
+      ? buildThreadWorkflowStatusReply(input.workflowContext)
+      : "I’m not sure what you mean yet. Send the Upwork job URL, ask for the draft, or tell me the next safe application step. Final submit remains manual.",
     actions: ["none"],
     clarificationNeeded: true,
     debugRequested: false,

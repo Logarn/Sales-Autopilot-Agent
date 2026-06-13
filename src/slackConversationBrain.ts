@@ -183,6 +183,22 @@ export interface SlackConversationBrainInput {
     retryable: boolean;
     lastError?: string | null;
   } | null;
+  workflow?: {
+    state: string;
+    captureState: string;
+    draftState: string;
+    proofPlanState: string;
+    prepState: string;
+    qaState: string;
+    blocker: string | null;
+    nextSafeAction: string;
+    latestAgentPromise?: {
+      type: string;
+      status: string;
+      text: string;
+      blocker?: string | null;
+    } | null;
+  } | null;
   browserSession?: {
     state?: string | null;
     blocked: boolean;
@@ -602,6 +618,7 @@ function buildPromptInput(input: SlackConversationBrainInput): Record<string, un
     proof: input.proof,
     connects: input.connects,
     browserAction: input.browserAction,
+    workflow: input.workflow ?? null,
     browserSession: input.browserSession ?? null,
     activeCta: input.activeCta ?? null,
     serviceState: input.serviceState ?? null,

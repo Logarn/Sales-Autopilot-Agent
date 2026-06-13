@@ -20,6 +20,7 @@ import {
   getSlackConversationOwnership,
   getSlackThreadStateByJobId,
   getSlackThreadStateByThreadTs,
+  getSlackWorkflowState,
   getOperatorReportDbSnapshot,
   listActiveSlackBehaviorMemories,
   listBatchApplyCandidateThreads,
@@ -30,13 +31,16 @@ import {
   recordLatestVerifiedProposalFallback,
   recordProposalVersion,
   recordSlackFailureReflection,
+  recordSlackWorkflowPromise,
   updateApplicationStatus,
   updateBatchApplyWorkspaceItemStatus,
   updateSlackThreadStateStatus,
   upsertBatchApplyWorkspaceItem,
+  upsertSlackWorkflowState,
   upsertSlackThreadState,
   upsertSlackBehaviorMemory,
   upsertSlackConversationOwnership,
+  markSlackWorkflowPromiseStatus,
   recordApplicationRevisionRequest,
   mergeBrowserActionPayload,
   updateBrowserActionStatus,
@@ -115,6 +119,12 @@ import {
 } from "./operatorReports";
 import { buildSourceStrategyAnswer } from "./sourceStrategy";
 import type { ApplicationStatus, ProposalVersionSource } from "./types";
+import {
+  buildThreadWorkflowStatusReply,
+  buildUnifiedSlackJobContext,
+  type SlackWorkflowProofPlanSnapshot,
+  type UnifiedSlackJobContext,
+} from "./slackWorkflowContext";
 
 const THREAD_MENTIONS = "<@U0A2X5BCNKC> <@U0AHJFYV42K>";
 const SLACK_EVENT_DEDUPE_TTL_MS = 10 * 60 * 1000;
@@ -269,6 +279,11 @@ function matchesApprovePrepareIntent(value: string, mentioned: boolean): boolean
 function matchesDraftPreviewIntent(value: string): boolean {
   const text = value.toLowerCase();
   return (
+    /^(?:draft|draft\?|proposal|proposal\?|cover\s*letter\?)$/.test(text.replace(/[.!?]+$/g, "").trim()) ||
+    /\bwhat\s+did\s+you\s+write\b/.test(text) ||
+    /\b(?:send|post)\s+it\s+(?:here\s+)?(?:too\s+)?(?:once|when)\s+(?:it\s+is\s+)?ready\b/.test(text) ||
+    /\b(?:can|could)\s+i\s+see\s+(?:the\s+)?(?:draft|proposal|cv)\b/.test(text) ||
+    /\b(?:show|send|post)\s+me\b.*\b(?:draft|proposal|cv)\b/.test(text) ||
     /\b(?:show|send|post)\s+me\b.*\bdraft\b.*\b(?:here|first|slack)\b/.test(text) ||
     /\b(?:show|send|post)\s+me\b.*\bdraft\s+cv\b/.test(text) ||
     /\bdraft\s+(?:cv|proposal)\b.*\b(?:here|first|slack)\b/.test(text) ||
@@ -922,12 +937,73 @@ function buildThreadStatusDetails(state: NonNullable<ReturnType<typeof getSlackT
   ].filter((line): line is string => Boolean(line));
 }
 
-function latestBrowserActionForThreadState(state: NonNullable<ReturnType<typeof getSlackThreadStateByThreadTs>>) {
+function browserActionsForThreadState(state: NonNullable<ReturnType<typeof getSlackThreadStateByThreadTs>>) {
   const jobIds = new Set<string>();
   if (state.jobId) jobIds.add(state.jobId);
   const parsedUpworkJobId = extractUpworkJobIdFromUrl(state.upworkUrl);
   if (state.upworkUrl) jobIds.add(deriveCaptureThreadJobId(state.upworkUrl, parsedUpworkJobId));
-  return listBrowserActions(null, 1000).filter((action) => jobIds.has(action.jobId)).slice(-1)[0] ?? null;
+  return listBrowserActions(null, 1000).filter((action) => jobIds.has(action.jobId));
+}
+
+function latestBrowserActionForThreadState(state: NonNullable<ReturnType<typeof getSlackThreadStateByThreadTs>>) {
+  return browserActionsForThreadState(state).slice(-1)[0] ?? null;
+}
+
+function latestBrowserActionForThreadStateByType(
+  state: NonNullable<ReturnType<typeof getSlackThreadStateByThreadTs>>,
+  actionType: "capture_job_from_url" | "prepare_application_review",
+) {
+  return browserActionsForThreadState(state).filter((action) => action.actionType === actionType).slice(-1)[0] ?? null;
+}
+
+function proofPlanFromApplyPlan(applyPlan: ReturnType<typeof buildBrowserApplyPlan>["plan"] | null): SlackWorkflowProofPlanSnapshot {
+  return {
+    files: applyPlan?.attachments.map((attachment) => attachment.filePath) ?? [],
+    portfolioHighlights: applyPlan?.profileHighlights ?? [],
+    certificates: [],
+    mentionOnly: applyPlan?.mentionOnlyProof ?? [],
+    unavailableOnPage: false,
+  };
+}
+
+function resolveUnifiedSlackJobContext(input: {
+  channelId: string;
+  threadTs: string;
+  text?: string | null;
+  explicitUpworkUrl?: ParsedUpworkUrl | null;
+}): UnifiedSlackJobContext | null {
+  const state = getSlackThreadStateByThreadTs(input.channelId, input.threadTs);
+  const workflowStateRecord = getSlackWorkflowState(input.channelId, input.threadTs);
+  const jobId = state?.jobId ?? input.explicitUpworkUrl?.jobId ?? null;
+  const job = jobId ? getScoredJobForSlackPreview(jobId) : null;
+  const draft = jobId ? getApplicationDraft(jobId) : null;
+  const applyPlan = jobId ? buildBrowserApplyPlan(jobId).plan : null;
+  const captureAction = state ? latestBrowserActionForThreadStateByType(state, "capture_job_from_url") : null;
+  const prepAction = state ? latestBrowserActionForThreadStateByType(state, "prepare_application_review") : null;
+  const latestAction = state ? latestBrowserActionForThreadState(state) : null;
+  const applicationStatus = jobId ? getApplicationStatus(jobId) : null;
+  if (!state && !input.explicitUpworkUrl && !job) return null;
+  return buildUnifiedSlackJobContext({
+    channelId: input.channelId,
+    threadTs: input.threadTs,
+    latestUserMessage: input.text ?? null,
+    threadState: state,
+    workflowStateRecord,
+    explicitUpworkUrl: input.explicitUpworkUrl?.canonicalJobUrl ?? null,
+    job,
+    draft,
+    proofPlan: proofPlanFromApplyPlan(applyPlan),
+    connects: {
+      required: applyPlan?.connects.required ?? draft?.connectsStrategy?.requiredConnects ?? null,
+      boost: applyPlan?.connects.boost ?? draft?.connectsStrategy?.suggestedBoostConnects ?? null,
+      total: applyPlan?.connects.total ?? draft?.connectsStrategy?.totalConnects ?? null,
+      boostReason: applyPlan?.connects.notes.find((note) => /boost/i.test(note)) ?? null,
+    },
+    captureAction,
+    prepAction,
+    latestBrowserAction: latestAction,
+    applicationStatus,
+  });
 }
 
 function isDebugStatusRequest(value: string): boolean {
@@ -1025,6 +1101,10 @@ async function handleDiscoveryHuntingCommand(params: {
 }
 
 function buildShortStatusReply(state: NonNullable<ReturnType<typeof getSlackThreadStateByThreadTs>>): string {
+  const context = resolveUnifiedSlackJobContext({ channelId: state.channelId, threadTs: state.threadTs });
+  if (context) {
+    return buildThreadWorkflowStatusReply(context);
+  }
   if (!state.jobId) {
     return "I have the listing URL, but I do not have a parsed job id yet. Send the Upwork listing link again and I’ll pick it up.";
   }
@@ -1125,6 +1205,10 @@ function matchesDangerousSubmitAdjacent(text: string): boolean {
     .trim();
   if (/^(?:i|we)\s+(?:sent|submitted)\b/.test(normalized)) return false;
   if (/^submitted(?:\s+after\s+editing)?$/.test(normalized)) return false;
+  if (/\b(?:send|post)\s+it\s+(?:here\s+)?(?:too\s+)?(?:once|when)\s+(?:it\s+is\s+)?ready\b/.test(normalized)) return false;
+  if (/\b(?:send|show|post)\s+me\b.*\b(?:draft|proposal|cover\s*letter|cv)\b/.test(normalized)) return false;
+  if (/^(?:draft|draft\?|proposal|proposal\?|cover\s*letter|cover\s*letter\?)$/.test(normalized)) return false;
+  if (/\bwhat\s+did\s+you\s+write\b/.test(normalized)) return false;
   return /^(?:send it|submit it|fire it off|send this|submit this|send the proposal|submit the proposal|send application|submit application|send the application|submit the application)$/.test(normalized) ||
     /\b(?:please\s+)?(?:send|submit)\s+(?:it|this|the\s+(?:proposal|application))\b/.test(normalized) ||
     /\bfire\s+(?:it|this)\s+off\b/.test(normalized) ||
@@ -1154,7 +1238,7 @@ function buildCompositeBlockedAttentionStatusText(): string {
 
 function matchesNaturalStatusIntent(text: string): boolean {
   const normalized = normalizeSlackTextInput(text).replace(/[.!?]+$/g, "").trim().toLowerCase();
-  return /^(?:what the fuck are you up to|wtf are you up to|what are you up to|are we live|are you live|you running|are you running|are you active|you active|are you alive|you alive|you there|talk to me|what(?:'|’)?s happening|where are we|are we good|how(?:'|’)?s it going|how is your day going|can you help me|can you help me with something|i need a reply please|need a reply please|what(?:'|’)?s waiting on me|what is waiting on me|what needs me now)$/.test(normalized);
+  return /^(?:what the fuck are you up to|wtf are you up to|what are you up to|are we live|are you live|you running|are you running|are you active|you active|are you alive|you alive|you there|talk to me|what(?:'|’)?s happening|where are we(?:\s+with\s+(?:it|this|that))?|are we good|how(?:'|’)?s it going|how is your day going|can you help me|can you help me with something|i need a reply please|need a reply please|what(?:'|’)?s waiting on me|what is waiting on me|what needs me now)$/.test(normalized);
 }
 
 function activeCtaApprovesPrep(text: string, activeCta: SlackActiveCta | null): boolean {
@@ -1196,10 +1280,15 @@ function buildConversationPlanForThread(input: {
   text: string;
   hasSlackFiles?: boolean;
 }): SlackConversationPlan {
-  const job = input.state.jobId ? getScoredJobForSlackPreview(input.state.jobId) : null;
-  const draft = input.state.jobId ? getApplicationDraft(input.state.jobId) : null;
+  const workflowContext = resolveUnifiedSlackJobContext({
+    channelId: input.state.channelId,
+    threadTs: input.state.threadTs,
+    text: input.text,
+  });
+  const job = workflowContext?.job ?? (input.state.jobId ? getScoredJobForSlackPreview(input.state.jobId) : null);
+  const draft = workflowContext?.draft ?? (input.state.jobId ? getApplicationDraft(input.state.jobId) : null);
   const applyPlan = input.state.jobId ? buildBrowserApplyPlan(input.state.jobId).plan : null;
-  const latestAction = latestBrowserActionForThreadState(input.state);
+  const latestAction = workflowContext?.latestBrowserAction ?? latestBrowserActionForThreadState(input.state);
   return planSlackConversation({
     latestMessage: input.text,
     threadHistory: [],
@@ -1208,20 +1297,15 @@ function buildConversationPlanForThread(input: {
     draft,
     currentBrowserAction: latestAction,
     missingFiles: applyPlan?.missingLocalAssets ?? [],
-    proofPlan: {
-      files: applyPlan?.attachments.map((attachment) => attachment.filePath) ?? [],
-      portfolioHighlights: applyPlan?.profileHighlights ?? [],
-      certificates: [],
-      mentionOnly: applyPlan?.mentionOnlyProof ?? [],
-      unavailableOnPage: false,
-    },
+    proofPlan: workflowContext?.proofPlan ?? proofPlanFromApplyPlan(applyPlan),
     connects: {
-      required: applyPlan?.connects.required ?? draft?.connectsStrategy?.requiredConnects ?? null,
-      boost: applyPlan?.connects.boost ?? draft?.connectsStrategy?.suggestedBoostConnects ?? null,
-      total: applyPlan?.connects.total ?? draft?.connectsStrategy?.totalConnects ?? null,
-      boostReason: applyPlan?.connects.notes.find((note) => /boost/i.test(note)) ?? null,
+      required: workflowContext?.connects.required ?? applyPlan?.connects.required ?? draft?.connectsStrategy?.requiredConnects ?? null,
+      boost: workflowContext?.connects.boost ?? applyPlan?.connects.boost ?? draft?.connectsStrategy?.suggestedBoostConnects ?? null,
+      total: workflowContext?.connects.total ?? applyPlan?.connects.total ?? draft?.connectsStrategy?.totalConnects ?? null,
+      boostReason: workflowContext?.connects.boostReason ?? applyPlan?.connects.notes.find((note) => /boost/i.test(note)) ?? null,
     },
     hasSlackFiles: Boolean(input.hasSlackFiles),
+    workflowContext,
   });
 }
 
@@ -1246,6 +1330,7 @@ function buildSlackConversationBrainInput(input: {
   const applicationStatus = state?.jobId ? getApplicationStatus(state.jobId) : null;
   const applyPlan = state?.jobId ? buildBrowserApplyPlan(state.jobId).plan : null;
   const latestAction = state ? latestBrowserActionForThreadState(state) : null;
+  const workflowContext = state ? resolveUnifiedSlackJobContext({ channelId: state.channelId, threadTs: state.threadTs, text: input.text, explicitUpworkUrl: input.upworkUrl ?? null }) : null;
   const qaQueue = getProtectedQaQueueItems(1000).map((item) => ({
     index: item.index,
     title: item.title,
@@ -1314,6 +1399,22 @@ function buildSlackConversationBrainInput(input: {
       status: latestAction.status,
       retryable: latestAction.status === "paused" || latestAction.status === "failed",
       lastError: latestAction.lastError,
+    } : null,
+    workflow: workflowContext ? {
+      state: workflowContext.workflowState,
+      captureState: workflowContext.captureState,
+      draftState: workflowContext.draftState,
+      proofPlanState: workflowContext.proofPlanState,
+      prepState: workflowContext.prepState,
+      qaState: workflowContext.qaState,
+      blocker: workflowContext.blocker,
+      nextSafeAction: workflowContext.nextSafeAction,
+      latestAgentPromise: workflowContext.latestAgentPromise ? {
+        type: workflowContext.latestAgentPromise.type,
+        status: workflowContext.latestAgentPromise.status,
+        text: workflowContext.latestAgentPromise.text,
+        blocker: workflowContext.latestAgentPromise.blocker ?? null,
+      } : null,
     } : null,
     browserSession: (() => {
       const session = getBrowserSessionStatus();
@@ -1615,7 +1716,24 @@ export function queuePrepareDraftFromSlackThread(input: { channelId: string; thr
   const draft = getApplicationDraft(state.jobId);
   const scoredJob = getScoredJobForSlackPreview(state.jobId);
   if (!draft || !scoredJob || !draft.proposalText.trim()) {
-    return { ok: false, ...buildNoDraftPrepareBlocker(state) };
+    const blocker = buildNoDraftPrepareBlocker(state);
+    upsertSlackWorkflowState({
+      channelId: state.channelId,
+      threadTs: state.threadTs,
+      workflowState: blocker.threadStatus === "capture_pending" ? "draft_generating" : "prep_blocked_missing_draft",
+      draftRequested: true,
+      prepRequested: true,
+      lastAgentReply: blocker.text,
+    });
+    markSlackWorkflowPromiseStatus({
+      channelId: state.channelId,
+      threadTs: state.threadTs,
+      status: "blocked",
+      workflowState: blocker.threadStatus === "capture_pending" ? "draft_generating" : "prep_blocked_missing_draft",
+      blocker: blocker.text,
+      lastAgentReply: blocker.text,
+    });
+    return { ok: false, ...blocker };
   }
   const qaCapacity = canQueueNewQaPreparation(state.jobId);
   if (!qaCapacity.ok) {
@@ -1647,6 +1765,14 @@ export function queuePrepareDraftFromSlackThread(input: { channelId: string; thr
     updateBrowserActionStatus(action.id, "pending", "Slack socket prep issue report requested remote Chrome re-check.");
   }
   updateSlackThreadStateStatus(state.channelId, state.threadTs, "prepare_draft_requested");
+  recordSlackWorkflowPromise({
+    channelId: state.channelId,
+    threadTs: state.threadTs,
+    type: "safe_prep",
+    text: input.ackText?.trim() || "I’ll prep the safe fields and come back here when it’s ready for QA.",
+    workflowState: action.duplicate ? "prep_queued" : "prep_queued",
+    prepRequested: true,
+  });
   return {
     ok: true,
     actionId: action.id,
@@ -1977,18 +2103,7 @@ async function handleProductInsightCommand(params: SlackReasoningGatewayParams, 
 
   if (command.type === "operator_report") {
     const report = buildOperatorReportSlackText(command);
-    const text = await userFacingSlackCopy({
-      deterministicText: report,
-      userMessage: params.text,
-      intent: `operator_report_${command.operatorReportKind ?? "question"}`,
-      context: { reportKind: command.operatorReportKind ?? "question" },
-      preservePhrases: [
-        report.includes("Final submit remains manual") ? "Final submit remains manual" : null,
-        report.includes("This report is read-only") ? "This report is read-only" : null,
-      ].filter((phrase): phrase is string => Boolean(phrase)),
-      copyProvider: params.copyProvider,
-    });
-    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    await postThreadReply(params.client, params.channelId, params.threadTs, report);
     return true;
   }
 
@@ -2105,7 +2220,19 @@ export function buildDraftPreviewFromSlackThread(input: {
   const latestVersion = requestedVersion ?? getLatestProposalVersion(state.jobId);
   const textToShow = requestedVersion?.proposalText ?? (!input.source ? draft?.proposalText.trim() : latestVersion?.proposalText) ?? "";
   if (!textToShow.trim()) {
-    return { ok: false, text: "Quick blocker: I do not have the generated draft for this lead yet, so I have not filled the Upwork form." };
+    const context = resolveUnifiedSlackJobContext({ channelId: input.channelId, threadTs: input.threadTs });
+    upsertSlackWorkflowState({
+      channelId: input.channelId,
+      threadTs: input.threadTs,
+      workflowState: context?.draftState === "generating" ? "draft_generating" : "draft_requested",
+      draftRequested: true,
+    });
+    return {
+      ok: false,
+      text: context?.draftState === "generating"
+        ? "The draft is still being generated for this lead. I’ll post it here when it is ready; final submit remains manual."
+        : "Quick blocker: I do not have the generated draft for this lead yet. I need capture/draft generation before I can show or prep the application.",
+    };
   }
   const previewVersion = input.source
     ? requestedVersion
@@ -2117,6 +2244,13 @@ export function buildDraftPreviewFromSlackThread(input: {
         note: "Slack draft/CV preview shown to Steve.",
   });
   updateSlackThreadStateStatus(state.channelId, state.threadTs, "draft_preview_sent");
+  markSlackWorkflowPromiseStatus({
+    channelId: state.channelId,
+    threadTs: state.threadTs,
+    status: "fulfilled",
+    workflowState: draft?.proofStrategy ? "proof_plan_ready" : "draft_ready",
+    lastAgentReply: `Draft preview shown for ${scoredJob?.title ?? state.jobId}.`,
+  });
   const shownVersion = requestedVersion ?? previewVersion ?? latestVersion;
   const label = shownVersion?.label ?? "current draft";
   const sourceLine = input.source && !requestedVersion
@@ -2409,6 +2543,13 @@ export function queueCaptureFromSlackUrl(input: {
       notes: "Slack socket URL posted; browser capture required before scoring and draft prep.",
     },
   });
+  upsertSlackWorkflowState({
+    channelId: state.channelId,
+    threadTs: state.threadTs,
+    workflowState: "capture_queued",
+    draftRequested: true,
+    lastUserMessage: input.text,
+  });
 
   return { parsed: upworkUrl, state, action };
 }
@@ -2435,6 +2576,15 @@ async function handleUrlMessage(params: {
       : "Capture queued.",
     `Listing: ${upworkUrl.canonicalJobUrl}`,
   ].join("\n");
+  recordSlackWorkflowPromise({
+    channelId: params.channelId,
+    threadTs: params.threadTs,
+    type: "capture_draft_proof_plan",
+    text: details,
+    workflowState: "capture_queued",
+    requestedByUserText: params.text,
+    draftRequested: true,
+  });
 
   const text = await userFacingSlackCopy({
     deterministicText: details,
@@ -2490,8 +2640,16 @@ async function executeConversationPlan(params: {
   copyProvider?: SlackCopyProvider;
 }): Promise<void> {
   if (params.plan.actions.includes("send_draft_preview")) {
+    recordSlackWorkflowPromise({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      type: "draft_preview",
+      text: "I’ll post the draft here once it is ready.",
+      workflowState: "draft_requested",
+      requestedByUserText: params.userMessage,
+      draftRequested: true,
+    });
     const result = buildDraftPreviewFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs });
-    if (!result.ok) updateSlackThreadStateStatus(params.state.channelId, params.state.threadTs, "error");
     const text = result.ok
       ? await userFacingSlackCopyWithExactBody({
         deterministicText: result.text,
@@ -3433,6 +3591,13 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
   let learnedFromGateway = false;
 
   if (allowLearningAndActions && params.text.trim()) {
+    if (state || upworkUrl) {
+      upsertSlackWorkflowState({
+        channelId: params.channelId,
+        threadTs: params.threadTs,
+        lastUserMessage: params.text,
+      });
+    }
     learnFromSlackMessage({
       channelId: params.channelId,
       threadTs: params.threadTs,
@@ -3573,6 +3738,42 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
       preservePhrases: deterministicText.includes("Final submit remains manual") ? ["Final submit remains manual"] : [],
       copyProvider: params.copyProvider,
     });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return;
+  }
+
+  if (
+    canExecuteConversationBrainAction &&
+    state &&
+    matchesDraftPreviewIntent(params.text) &&
+    !/\b(?:used|put in upwork|upwork draft|final submitted|what did you put)\b/i.test(params.text)
+  ) {
+    recordSlackWorkflowPromise({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      type: "draft_preview",
+      text: "I’ll post the draft here once it is ready.",
+      workflowState: "draft_requested",
+      requestedByUserText: params.text,
+      draftRequested: true,
+    });
+    const result = buildDraftPreviewFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs });
+    const text = result.ok
+      ? await userFacingSlackCopyWithExactBody({
+        deterministicText: result.text,
+        userMessage: params.text,
+        intent: "draft_preview",
+        context: { jobId: state.jobId, ok: result.ok, exactProposalBodyPreserved: true },
+        copyProvider: params.copyProvider,
+      })
+      : await userFacingSlackCopy({
+        deterministicText: result.text,
+        userMessage: params.text,
+        intent: "draft_preview",
+        context: { jobId: state.jobId, ok: result.ok },
+        preservePhrases: result.text.includes("Final submit remains manual") ? ["Final submit remains manual"] : [],
+        copyProvider: params.copyProvider,
+      });
     await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
@@ -4174,14 +4375,20 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, 
   }
 
   if (command.type === "draft_preview") {
+    recordSlackWorkflowPromise({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      type: "draft_preview",
+      text: "I’ll post the draft here once it is ready.",
+      workflowState: "draft_requested",
+      requestedByUserText: params.text,
+      draftRequested: true,
+    });
     const result = buildDraftPreviewFromSlackThread({
       channelId: params.channelId,
       threadTs: params.threadTs,
       source: command.proposalVersionSource,
     });
-    if (!result.ok) {
-      updateSlackThreadStateStatus(state.channelId, state.threadTs, "error");
-    }
     const text = result.ok
       ? result.text
       : await userFacingSlackCopy({

@@ -37,6 +37,7 @@ import {
   StructuredProposalDraft,
 } from "./types";
 import type { OperatorReportSnapshot } from "./operatorReports";
+import { workflowStateFromSlackThreadStatus, type SlackWorkflowPromiseSnapshot, type SlackWorkflowStateName } from "./slackWorkflowContext";
 
 interface SeenStats {
   total: number;
@@ -574,6 +575,45 @@ export interface UpsertSlackConversationOwnershipInput {
   activeTarget?: string | null;
   disabled?: boolean;
   closed?: boolean;
+}
+
+interface SlackWorkflowStateRow {
+  id: number;
+  channel_id: string;
+  thread_ts: string;
+  workflow_state: SlackWorkflowStateName;
+  draft_requested: number;
+  prep_requested: number;
+  latest_agent_promise: string | null;
+  last_user_message: string | null;
+  last_agent_reply: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SlackWorkflowState {
+  id: number;
+  channelId: string;
+  threadTs: string;
+  workflowState: SlackWorkflowStateName;
+  draftRequested: boolean;
+  prepRequested: boolean;
+  latestAgentPromise: SlackWorkflowPromiseSnapshot | null;
+  lastUserMessage: string | null;
+  lastAgentReply: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpsertSlackWorkflowStateInput {
+  channelId: string;
+  threadTs: string;
+  workflowState?: SlackWorkflowStateName;
+  draftRequested?: boolean;
+  prepRequested?: boolean;
+  latestAgentPromise?: SlackWorkflowPromiseSnapshot | null;
+  lastUserMessage?: string | null;
+  lastAgentReply?: string | null;
 }
 
 export type SlackBehaviorMemoryType =
@@ -1464,6 +1504,22 @@ CREATE TABLE IF NOT EXISTS slack_conversation_ownership (
 CREATE INDEX IF NOT EXISTS idx_slack_conversation_ownership_owner ON slack_conversation_ownership(owner_user_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_slack_conversation_ownership_active ON slack_conversation_ownership(channel_id, root_ts, disabled, closed);
 
+CREATE TABLE IF NOT EXISTS slack_workflow_state (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id TEXT NOT NULL,
+  thread_ts TEXT NOT NULL,
+  workflow_state TEXT NOT NULL,
+  draft_requested INTEGER NOT NULL DEFAULT 0,
+  prep_requested INTEGER NOT NULL DEFAULT 0,
+  latest_agent_promise TEXT,
+  last_user_message TEXT,
+  last_agent_reply TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(channel_id, thread_ts)
+);
+CREATE INDEX IF NOT EXISTS idx_slack_workflow_state_thread ON slack_workflow_state(channel_id, thread_ts);
+
 CREATE TABLE IF NOT EXISTS slack_behavior_memory (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   type TEXT NOT NULL,
@@ -2199,6 +2255,34 @@ const listSlackConversationOwnershipStmt = db.prepare<[string, number], SlackCon
    WHERE channel_id = ?
    ORDER BY updated_at DESC
    LIMIT ?`
+);
+const upsertSlackWorkflowStateStmt = db.prepare(
+  `INSERT INTO slack_workflow_state (
+    channel_id,
+    thread_ts,
+    workflow_state,
+    draft_requested,
+    prep_requested,
+    latest_agent_promise,
+    last_user_message,
+    last_agent_reply,
+    updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  ON CONFLICT(channel_id, thread_ts) DO UPDATE SET
+    workflow_state = excluded.workflow_state,
+    draft_requested = excluded.draft_requested,
+    prep_requested = excluded.prep_requested,
+    latest_agent_promise = excluded.latest_agent_promise,
+    last_user_message = excluded.last_user_message,
+    last_agent_reply = excluded.last_agent_reply,
+    updated_at = datetime('now')`
+);
+const getSlackWorkflowStateStmt = db.prepare<[string, string], SlackWorkflowStateRow>(
+  `SELECT id, channel_id, thread_ts, workflow_state, draft_requested, prep_requested,
+          latest_agent_promise, last_user_message, last_agent_reply, created_at, updated_at
+   FROM slack_workflow_state
+   WHERE channel_id = ? AND thread_ts = ?
+   LIMIT 1`
 );
 const upsertSlackBehaviorMemoryStmt = db.prepare(
   `INSERT INTO slack_behavior_memory (
@@ -3069,6 +3153,22 @@ function rowToSlackConversationOwnership(row: SlackConversationOwnershipRow): Sl
     lastInteractionAt: row.last_interaction_at,
     disabled: row.disabled === 1,
     closed: row.closed === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToSlackWorkflowState(row: SlackWorkflowStateRow): SlackWorkflowState {
+  return {
+    id: row.id,
+    channelId: row.channel_id,
+    threadTs: row.thread_ts,
+    workflowState: row.workflow_state,
+    draftRequested: row.draft_requested === 1,
+    prepRequested: row.prep_requested === 1,
+    latestAgentPromise: parseJsonObject<SlackWorkflowPromiseSnapshot>(row.latest_agent_promise) ?? null,
+    lastUserMessage: row.last_user_message,
+    lastAgentReply: row.last_agent_reply,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -4924,6 +5024,11 @@ export function upsertSlackThreadState(input: {
     disabled: false,
     closed: false,
   });
+  upsertSlackWorkflowState({
+    channelId: input.channelId,
+    threadTs: input.threadTs,
+    workflowState: workflowStateFromSlackThreadStatus(input.status),
+  });
   return rowToSlackThreadState(row);
 }
 
@@ -4951,6 +5056,16 @@ export function updateSlackThreadStateStatus(
     threadTs
   );
   const row = getSlackThreadStateByChannelThreadStmt.get(channelId, threadTs);
+  if (row) {
+    const existingWorkflow = getSlackWorkflowState(channelId, threadTs);
+    if (!(status === "error" && existingWorkflow?.workflowState === "prep_blocked_missing_draft")) {
+      upsertSlackWorkflowState({
+        channelId,
+        threadTs,
+        workflowState: workflowStateFromSlackThreadStatus(status),
+      });
+    }
+  }
   return row ? rowToSlackThreadState(row) : null;
 }
 
@@ -4986,6 +5101,103 @@ export function getSlackConversationOwnership(channelId: string, rootTs: string)
 
 export function listSlackConversationOwnership(channelId: string, limit = 100): SlackConversationOwnership[] {
   return listSlackConversationOwnershipStmt.all(channelId, Math.max(1, limit)).map(rowToSlackConversationOwnership);
+}
+
+export function getSlackWorkflowState(channelId: string, threadTs: string): SlackWorkflowState | null {
+  const row = getSlackWorkflowStateStmt.get(channelId, threadTs);
+  return row ? rowToSlackWorkflowState(row) : null;
+}
+
+export function upsertSlackWorkflowState(input: UpsertSlackWorkflowStateInput): SlackWorkflowState {
+  const existing = getSlackWorkflowState(input.channelId, input.threadTs);
+  const workflowState = input.workflowState ?? existing?.workflowState ?? "url_received";
+  const draftRequested = input.draftRequested ?? existing?.draftRequested ?? false;
+  const prepRequested = input.prepRequested ?? existing?.prepRequested ?? false;
+  const latestAgentPromise = input.latestAgentPromise !== undefined
+    ? input.latestAgentPromise
+    : existing?.latestAgentPromise ?? null;
+  const lastUserMessage = input.lastUserMessage !== undefined
+    ? input.lastUserMessage?.replace(/\s+/g, " ").trim() || null
+    : existing?.lastUserMessage ?? null;
+  const lastAgentReply = input.lastAgentReply !== undefined
+    ? input.lastAgentReply?.replace(/\s+/g, " ").trim() || null
+    : existing?.lastAgentReply ?? null;
+
+  upsertSlackWorkflowStateStmt.run(
+    input.channelId,
+    input.threadTs,
+    workflowState,
+    draftRequested ? 1 : 0,
+    prepRequested ? 1 : 0,
+    latestAgentPromise ? JSON.stringify(latestAgentPromise) : null,
+    lastUserMessage,
+    lastAgentReply
+  );
+  const row = getSlackWorkflowStateStmt.get(input.channelId, input.threadTs);
+  if (!row) {
+    throw new Error(`Failed to persist Slack workflow state for ${input.channelId}/${input.threadTs}`);
+  }
+  return rowToSlackWorkflowState(row);
+}
+
+export function recordSlackWorkflowPromise(input: {
+  channelId: string;
+  threadTs: string;
+  type: SlackWorkflowPromiseSnapshot["type"];
+  text: string;
+  workflowState?: SlackWorkflowStateName;
+  requestedByUserText?: string | null;
+  draftRequested?: boolean;
+  prepRequested?: boolean;
+}): SlackWorkflowState {
+  const now = new Date().toISOString();
+  const promise: SlackWorkflowPromiseSnapshot = {
+    type: input.type,
+    status: "pending",
+    text: input.text.replace(/\s+/g, " ").trim(),
+    createdAt: now,
+    fulfilledAt: null,
+    blockedAt: null,
+    blocker: null,
+    requestedByUserText: input.requestedByUserText?.replace(/\s+/g, " ").trim() || null,
+  };
+  return upsertSlackWorkflowState({
+    channelId: input.channelId,
+    threadTs: input.threadTs,
+    workflowState: input.workflowState,
+    draftRequested: input.draftRequested,
+    prepRequested: input.prepRequested,
+    latestAgentPromise: promise,
+    lastUserMessage: input.requestedByUserText ?? null,
+    lastAgentReply: input.text,
+  });
+}
+
+export function markSlackWorkflowPromiseStatus(input: {
+  channelId: string;
+  threadTs: string;
+  status: SlackWorkflowPromiseSnapshot["status"];
+  workflowState?: SlackWorkflowStateName;
+  blocker?: string | null;
+  lastAgentReply?: string | null;
+}): SlackWorkflowState {
+  const existing = getSlackWorkflowState(input.channelId, input.threadTs);
+  const promise = existing?.latestAgentPromise
+    ? {
+      ...existing.latestAgentPromise,
+      status: input.status,
+      fulfilledAt: input.status === "fulfilled" ? new Date().toISOString() : existing.latestAgentPromise.fulfilledAt ?? null,
+      blockedAt: input.status === "blocked" ? new Date().toISOString() : existing.latestAgentPromise.blockedAt ?? null,
+      blocker: input.status === "blocked" ? input.blocker ?? existing.latestAgentPromise.blocker ?? null : existing.latestAgentPromise.blocker ?? null,
+    }
+    : null;
+  return upsertSlackWorkflowState({
+    channelId: input.channelId,
+    threadTs: input.threadTs,
+    workflowState: input.workflowState,
+    latestAgentPromise: promise,
+    lastAgentReply: input.lastAgentReply,
+  });
 }
 
 export function upsertSlackBehaviorMemory(input: UpsertSlackBehaviorMemoryInput): SlackBehaviorMemory {
