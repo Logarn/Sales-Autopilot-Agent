@@ -80,6 +80,9 @@ async function runTests(): Promise<void> {
 
   try {
     assert(parseSlackOperatorIntent("are you running?")?.type === "service_status", "Running question should parse as service status.");
+    assert(parseSlackOperatorIntent("are you active?")?.type === "service_status", "Natural active question should parse as service status.");
+    assert(parseSlackOperatorIntent("how is your day going?")?.type === "service_status", "Small-talk availability question should parse as service status.");
+    assert(parseSlackOperatorIntent("can you help me with something?")?.type === "service_status", "Help question should parse as service status.");
     assert(parseSlackOperatorIntent("pause hunting")?.type === "pause_hunting", "Pause hunting should parse.");
     assert(parseSlackOperatorIntent("start hunting")?.type === "start_hunting", "Start hunting should parse.");
     const openIntent = parseSlackOperatorIntent("open https://www.upwork.com/jobs/~0123456789abcdef in Chrome");
@@ -115,11 +118,34 @@ async function runTests(): Promise<void> {
       }),
       readHeartbeats: () => [{ worker: "lead-engine", status: "running", updatedAt: new Date(0).toISOString() }],
       readLeadEngineState: () => leadEngineSummary(),
+      readLeadEngineRuntimeStatus: () => ({ serviceActive: true, processActive: true, heartbeatFresh: true, heartbeatStatus: "running", lastHeartbeatAt: new Date(0).toISOString() }),
     });
-    assert(statusReply.includes("Yeah") && statusReply.includes("Slack is live"), "Health command should return friendly teammate status.");
+    assert(statusReply.includes("I’m here") && statusReply.includes("Slack is live"), "Health command should return friendly teammate status.");
     assert(statusReply.includes("Chrome is connected"), "Health command should include friendly browser status.");
     assert(statusReply.includes("Final submit stays manual"), "Health command should preserve submit safety.");
     assert(!/Overall health|Workers|Heartbeats|systemd|journalctl|action #|job_id|raw/i.test(statusReply), "Normal health status should not include dashboard or raw operational dumps.");
+
+    const stoppedLeadEngineStatus = await buildSlackOperatorReply({ type: "service_status" }, {
+      buildHealthReport: () => ({
+        generatedAt: new Date(0).toISOString(),
+        status: "ok",
+        heartbeats: [],
+        staleHeartbeats: [],
+        findings: [],
+      }),
+      checkCdpEndpoint: async () => ({ reachable: true, browserVersion: "Chrome/Test" }),
+      getBrowserSessionStatus: () => ({
+        state: "healthy",
+        updatedAt: new Date(0).toISOString(),
+        challengeEvents: [],
+        blocked: false,
+        alertCooldownRemainingMs: 0,
+      }),
+      readLeadEngineState: () => leadEngineSummary({ mode: "run_once", jobsFound: 25, jobsQueued: 3 }),
+      readLeadEngineRuntimeStatus: () => ({ serviceActive: false, processActive: false, heartbeatFresh: false, heartbeatStatus: "success", lastHeartbeatAt: new Date(0).toISOString() }),
+    });
+    assert(!stoppedLeadEngineStatus.includes("Lead engine: running normally"), "Inactive lead engine must not be described as running normally.");
+    assert(stoppedLeadEngineStatus.includes("Lead engine is stopped. Last controlled run found 25 leads and queued 3."), "Inactive lead engine should distinguish the last controlled run from current service state.");
 
     const recoveredBacklogStatus = await buildSlackOperatorReply({ type: "service_status" }, {
       buildHealthReport: () => ({

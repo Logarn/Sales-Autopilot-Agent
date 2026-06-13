@@ -89,6 +89,14 @@ function isPrepCorrection(text: string): boolean {
   return /\b(?:no|nope|not that|i meant|meant|instead)\b.*\b(?:prep|prepare|put (?:it|this) in upwork|fill (?:it|this) in upwork|open the app|open the application)\b/.test(text);
 }
 
+function isProceedWithApplicationIntent(text: string): boolean {
+  return /\b(?:please\s+)?proceed(?:\s+with)?(?:\s+the)?\s+(?:drafts?|applications?|apps?|proposal|prep)\b/.test(text) ||
+    /\b(?:start|prep|prepare)\s+(?:with\s+)?one\s+(?:application|app)\b/.test(text) ||
+    /\b(?:do|handle)\s+the\s+next\s+(?:application|app)\b/.test(text) ||
+    /\b(?:can you|could you)\s+handle\s+(?:an|one)\s+(?:application|app)\s+now\b/.test(text) ||
+    /\b(?:let'?s\s+move\s+forward|move\s+forward|go\s+ahead)\b.*\b(?:applications?|apps?|prep|drafts?)\b/.test(text);
+}
+
 function isDangerousSubmitAdjacent(text: string): boolean {
   if (/^(?:i|we)\s+(?:sent|submitted)\b/.test(text)) return false;
   if (/^submitted(?:\s+after\s+editing)?$/.test(text)) return false;
@@ -99,7 +107,7 @@ function isDangerousSubmitAdjacent(text: string): boolean {
 
 function isNaturalStatus(text: string): boolean {
   const clean = text.replace(/[.!?]+$/g, "").trim();
-  return /^(?:what the fuck are you up to|wtf are you up to|what are you up to|are we live|are you live|you running|are you running|what(?:'|’)?s waiting on me|what is waiting on me|what needs me now)$/.test(clean);
+  return /^(?:what the fuck are you up to|wtf are you up to|what are you up to|are we live|are you live|you running|are you running|are you active|you active|are you alive|you alive|you there|talk to me|what(?:'|’)?s happening|where are we|are we good|how(?:'|’)?s it going|how is your day going|can you help me|can you help me with something|i need a reply please|need a reply please|what(?:'|’)?s waiting on me|what is waiting on me|what needs me now)$/.test(clean);
 }
 
 function fileCapabilityReply(input: SlackConversationPlannerInput): string {
@@ -214,7 +222,7 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
     };
   }
 
-  if (input.activeCta?.action === "prep_application" && (isVagueAffirmative(text) || isPrepCorrection(text))) {
+  if (input.activeCta?.action === "prep_application" && (isVagueAffirmative(text) || isPrepCorrection(text) || isProceedWithApplicationIntent(text))) {
     return {
       intent: "prepare_application",
       confidence: "high",
@@ -309,7 +317,7 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
     };
   }
 
-  if (/\b(use this|looks good|put it in upwork|fill it in upwork|prepare it|prep it|prepare application)\b/.test(text)) {
+  if (/\b(use this|looks good|put it in upwork|fill it in upwork|prepare it|prep it|prepare applications?|prepare application)\b/.test(text) || isProceedWithApplicationIntent(text)) {
     return {
       intent: "prepare_application",
       confidence: "high",
