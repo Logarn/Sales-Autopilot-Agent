@@ -125,6 +125,7 @@ import {
   type SlackWorkflowProofPlanSnapshot,
   type UnifiedSlackJobContext,
 } from "./slackWorkflowContext";
+import { buildSlackWorkflowDebugTrace } from "./slackPromiseNotifications";
 
 const THREAD_MENTIONS = "<@U0A2X5BCNKC> <@U0AHJFYV42K>";
 const SLACK_EVENT_DEDUPE_TTL_MS = 10 * 60 * 1000;
@@ -929,6 +930,7 @@ function buildThreadStatusDetails(state: NonNullable<ReturnType<typeof getSlackT
     draft?.copyStrategy ? `Copy strategy: ${draft.copyStrategy.one_sentence_sales_argument}` : null,
     draft?.proofStrategy ? `Proof strategy: ${draft.proofStrategy.summary}` : null,
     draft?.proposalText ? `Draft preview: ${draft.proposalText.replace(/\s+/g, " ").trim().slice(0, 900)}` : null,
+    buildSlackWorkflowDebugTrace(state.channelId, state.threadTs),
     profileContext?.selectedAttachments.length ? `Proof selected: ${profileContext.selectedAttachments.join(", ")}` : null,
     profileContext?.selectedProofPoints.length ? `Proof points: ${profileContext.selectedProofPoints.slice(0, 5).join("; ")}` : null,
     draft?.selectedPortfolioItems.length ? `Selected portfolio: ${draft.selectedPortfolioItems.map((item) => item.name).join(", ")}` : "Selected portfolio: none",
