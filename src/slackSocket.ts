@@ -132,6 +132,7 @@ import type { ApplicationStatus, BrowserAction, BrowserActionEnqueueResult, Prop
 import {
   buildThreadWorkflowStatusReply,
   buildUnifiedSlackJobContext,
+  hasPendingDraftRevisionRequest,
   isDraftRejectionFeedbackIntent,
   isWorkflowDraftRejected,
   type SlackWorkflowProofPlanSnapshot,
@@ -1777,7 +1778,8 @@ export function queuePrepareDraftFromSlackThread(input: { channelId: string; thr
     return { ok: false, text: "I cannot queue a browser draft without a tracked job id for this thread." };
   }
   const workflowState = getSlackWorkflowState(input.channelId, input.threadTs);
-  if (isWorkflowDraftRejected(workflowState)) {
+  const draft = getApplicationDraft(state.jobId);
+  if (isWorkflowDraftRejected(workflowState) || hasPendingDraftRevisionRequest(draft)) {
     const text = "I won’t prep this draft because it is not approved yet. Tell me what to change or ask me to rewrite it first. Final submit remains manual.";
     upsertSlackWorkflowState({
       channelId: input.channelId,
@@ -1790,7 +1792,6 @@ export function queuePrepareDraftFromSlackThread(input: { channelId: string; thr
     return { ok: false, text, threadStatus: "error" };
   }
 
-  const draft = getApplicationDraft(state.jobId);
   const scoredJob = getScoredJobForSlackPreview(state.jobId);
   if (!draft || !scoredJob || !draft.proposalText.trim()) {
     const blocker = buildNoDraftPrepareBlocker(state);
@@ -2311,6 +2312,24 @@ export function buildDraftPreviewFromSlackThread(input: {
         ? "The draft is still being generated for this lead. I’ll post it here when it is ready; final submit remains manual."
         : "Quick blocker: I do not have the generated draft for this lead yet. I need capture/draft generation before I can show or prep the application.",
     };
+  }
+  if (!input.source && hasPendingDraftRevisionRequest(draft)) {
+    const text = [
+      `The current draft for ${scoredJob?.title ?? state.jobId} is not approved yet.`,
+      "I will not prep it until it is revised and approved.",
+      "Tell me what to revise or say \"regenerate draft\" before browser prep.",
+      "Final submit remains manual.",
+    ].join("\n");
+    updateSlackThreadStateStatus(state.channelId, state.threadTs, "draft_preview_sent");
+    markSlackWorkflowPromiseStatus({
+      channelId: state.channelId,
+      threadTs: state.threadTs,
+      status: "blocked",
+      workflowState: draft?.proofStrategy ? "proof_plan_ready" : "draft_ready",
+      blocker: DRAFT_REJECTION_BLOCKER,
+      lastAgentReply: `Draft preview not approved for ${scoredJob?.title ?? state.jobId}.`,
+    });
+    return { ok: true, text };
   }
   if (
     latestSlackPreview &&
