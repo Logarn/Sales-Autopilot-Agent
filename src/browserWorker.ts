@@ -16,6 +16,7 @@ import {
   BROWSER_USER_DATA_DIR,
   BROWSER_WORKER_ENABLED,
   DISCOVERY_SLACK_CHANNEL_ID,
+  SLACK_ALLOWED_CHANNEL_IDS,
   SLACK_CHANNEL_WEBHOOK_URL,
 } from "./config";
 import { buildBrowserApplyPlan } from "./browserApply";
@@ -462,6 +463,10 @@ function getSlackThreadContextsForCaptureAction(action: BrowserAction): SlackThr
 
   const seen = new Set<string>();
   return contexts.filter((context) => {
+    if (SLACK_ALLOWED_CHANNEL_IDS.length > 0 && !SLACK_ALLOWED_CHANNEL_IDS.includes(context.channelId)) {
+      logger.warn(`Skipped capture fan-out to non-allowlisted Slack channel ${context.channelId} for action #${action.id}.`);
+      return false;
+    }
     const key = `${context.channelId}:${context.threadTs}`;
     if (seen.has(key)) return false;
     seen.add(key);

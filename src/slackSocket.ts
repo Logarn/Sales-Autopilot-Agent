@@ -2609,25 +2609,25 @@ function formatCaptureQueueDetails(result: SlackCaptureQueueResult): string {
   }
   if (result.ownershipStatus === "attached_pending") {
     return [
-      "Capture is already pending for this listing in another Slack thread. I attached this thread as a waiter, so completion or failure will be posted here too.",
+      "Capture is already pending for this listing in another Slack thread. I attached this thread as a waiter, so completion or failure will be posted here too once the browser worker processes it or a controlled capture run handles it.",
       listing,
     ].join("\n");
   }
   if (result.ownershipStatus === "duplicate_current_thread") {
     return [
-      "Capture is already queued for this listing in this thread. I will post the draft/proof plan here when the browser worker processes it.",
+      "Capture is already queued for this listing in this thread. I will post the draft/proof plan here once the browser worker processes it or a controlled capture run handles it.",
       listing,
     ].join("\n");
   }
   if (result.ownershipStatus === "replaced_stale") {
     return [
       "The old pending capture for this listing was stale, so I replaced it with a fresh capture tied to this thread.",
-      "I will score it and generate the draft once the browser worker processes it.",
+      "I will score it and generate the draft once the browser worker processes it or a controlled capture run handles it.",
       listing,
     ].join("\n");
   }
   return [
-    "Got the Upwork link. Capture is queued — I'll score it and generate the draft once the browser worker processes it.",
+    "Got the Upwork link. Capture is queued — I'll score it and generate the draft once the browser worker processes it or a controlled capture run handles it.",
     "Capture queued.",
     listing,
   ].join("\n");
