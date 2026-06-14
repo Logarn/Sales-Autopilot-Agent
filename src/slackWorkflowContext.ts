@@ -149,6 +149,12 @@ export function isDraftRejectionBlocker(value: string | null | undefined): boole
   return /\b(?:draft_rejected|draft rejected|not approved|needs revision|rejected draft)\b/i.test(value ?? "");
 }
 
+export function hasPendingDraftRevisionRequest(draft: Pick<ApplicationDraft, "revisionRequests"> | null | undefined): boolean {
+  const requests = draft?.revisionRequests ?? [];
+  const latest = requests.length > 0 ? requests[requests.length - 1]?.trim() ?? "" : "";
+  return /\bpending\s+v\d+\s*:/i.test(latest);
+}
+
 export function isWorkflowDraftRejected(record: SlackWorkflowStateSnapshot | null | undefined): boolean {
   return Boolean(
     record?.latestAgentPromise?.type === "draft_preview" &&
@@ -274,7 +280,7 @@ export function buildUnifiedSlackJobContext(input: BuildUnifiedSlackJobContextIn
   const captureState = deriveCaptureState(input);
   const draftState = deriveDraftState(input, captureState);
   const prepState = derivePrepState(input, draftState === "ready");
-  const draftRejected = isWorkflowDraftRejected(input.workflowStateRecord);
+  const draftRejected = isWorkflowDraftRejected(input.workflowStateRecord) || hasPendingDraftRevisionRequest(input.draft);
   const qaState: UnifiedSlackJobContext["qaState"] = input.applicationStatus === "prepared_for_qa" || prepState === "done"
     ? "waiting"
     : prepState === "blocked"

@@ -1168,13 +1168,15 @@ async function runTests(): Promise<void> {
 
     const rejectDraftJob = {
       ...prepareJob,
-      id: "reject-draft-job",
+      id: "055511122233344455566",
+      url: "https://www.upwork.com/jobs/~055511122233344455566",
       applicationDraft: {
         ...prepareJob.applicationDraft,
-        jobId: "reject-draft-job",
+        jobId: "055511122233344455566",
       },
     };
     markJobSeen(rejectDraftJob, false);
+    assert(Boolean(getApplicationDraft(rejectDraftJob.id)), `Rejected-draft fixture should persist a draft for ${rejectDraftJob.id}.`);
     upsertSlackThreadState({
       channelId: "CREJECT",
       messageTs: "555.111",
@@ -1183,6 +1185,18 @@ async function runTests(): Promise<void> {
       jobId: rejectDraftJob.id,
       status: "draft_preview_sent",
     });
+    const rejectCapture = queueCaptureFromSlackUrl({
+      channelId: "CREJECT",
+      messageTs: "555.111",
+      threadTs: "555.111",
+      text: rejectDraftJob.url,
+    });
+    if (!rejectCapture) {
+      throw new Error("Rejected-draft retry setup should queue initial capture.");
+    }
+    updateBrowserActionStatus(rejectCapture.action.id, "completed", "capture completed before draft rejection");
+    const rejectThreadState = getSlackThreadStateByThreadTs("CREJECT", "555.111") as any;
+    assert(rejectThreadState?.jobId === rejectDraftJob.id, `Rejected-draft thread should stay on ${rejectDraftJob.id}, got ${rejectThreadState?.jobId}.`);
     const rejectReplies: string[] = [];
     await handleThreadCommand({
       channelId: "CREJECT",
@@ -1194,6 +1208,29 @@ async function runTests(): Promise<void> {
     const rejectedWorkflow = getSlackWorkflowState("CREJECT", "555.111");
     assert(rejectedWorkflow?.latestAgentPromise?.status === "blocked", "Rejected draft should block the current draft promise.");
     assert(/draft_rejected/i.test(rejectedWorkflow?.latestAgentPromise?.blocker ?? ""), "Rejected draft should be recorded as a draft_rejected blocker.");
+    const rejectedDraftReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "CREJECT",
+      threadTs: "555.111",
+      text: "Draft",
+      client: { chat: { postMessage: async (payload: { text: string }) => rejectedDraftReplies.push(payload.text) } },
+    });
+    assert(
+      rejectedDraftReplies.some((reply) => /not approved|revise|regenerate/i.test(reply)),
+      `Draft readback after rejection should keep the revision blocker visible. Replies: ${rejectedDraftReplies.join(" | ")}`,
+    );
+    const rejectedRetryReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "CREJECT",
+      threadTs: "555.111",
+      text: "retry capture",
+      client: { chat: { postMessage: async (payload: { text: string }) => rejectedRetryReplies.push(payload.text) } },
+    });
+    assert(
+      rejectedRetryReplies.some((reply) => /already captured|Capture is already complete|draft|revise|regenerate/i.test(reply)),
+      `Retry capture after rejection should reply honestly without reposting the draft. Replies: ${rejectedRetryReplies.join(" | ")}`,
+    );
+    assert(!rejectedRetryReplies.join("\n").includes(rejectDraftJob.applicationDraft.proposalText), "Retry capture after rejection should not repost the draft body.");
     const prepareCountBeforeRejectedPrep = listBrowserActions(null, 1000).filter((action) => action.actionType === "prepare_application_review").length;
     const rejectedPrepReplies: string[] = [];
     await handleThreadCommand({
