@@ -20,6 +20,11 @@ import {
 } from "./config";
 import { buildBrowserApplyPlan } from "./browserApply";
 import {
+  analyzeApplyPageSnapshot,
+  type ApplyPageAnalyzerResult,
+  type ApplyPageSnapshot as ApplyVerificationSnapshot,
+} from "./browser/applyPageAnalyzer";
+import {
   closeDb,
   enqueueBrowserActionDeduped,
   getApplicationStatus,
@@ -275,25 +280,6 @@ export interface ApplyFieldVerification {
   detail: string;
 }
 
-export interface ApplyVerificationSnapshot {
-  url: string;
-  visibleText: string;
-  inputValues: string[];
-  fieldValues: Array<{
-    kind: "input" | "textarea";
-    inputType: string | null;
-    label: string;
-    id: string | null;
-    name: string | null;
-    ariaLabel: string | null;
-    placeholder: string | null;
-    dataTest: string | null;
-    value: string;
-  }>;
-  checkedLabels: string[];
-  fileNames: string[];
-}
-
 interface PlaywrightContextLike {
   pages?(): PlaywrightPageLike[];
   newPage(): Promise<PlaywrightPageLike>;
@@ -347,6 +333,7 @@ interface ApplyPreparationDiagnostics {
   missingFileFields: string[];
   blockedByUiFields: string[];
   skippedByStrategyFields: string[];
+  applyPageAnalysis?: ApplyPageAnalyzerResult;
 }
 
 function humanSlackPrepDetail(value: string): string {
@@ -382,6 +369,10 @@ function getUnverifiedRequiredApplyFields(results: ApplyFieldVerification[]): st
   const alwaysRequired = ["targetTab", "coverLetter", "rate", "requiredConnects"];
   const plannedRequired = ["screeningAnswers", "boostConnects", "attachments", "profileHighlights"];
   const failures = alwaysRequired.filter((field) => getVerification(results, field)?.status !== "verified");
+  for (const analyzerRequired of ["pageStructure", "finalSubmitButton"]) {
+    const verificationResult = getVerification(results, analyzerRequired);
+    if (verificationResult && verificationResult.status !== "verified") failures.push(analyzerRequired);
+  }
   for (const field of plannedRequired) {
     const verificationResult = getVerification(results, field);
     if (!verificationResult || verificationResult.status === "verified" || verificationResult.status === "skipped_by_strategy") continue;
@@ -657,6 +648,7 @@ function buildApplyDiagnostics(
     missingFileFields: fieldsWithStatus("missing_local_file"),
     blockedByUiFields: fieldsWithStatus("blocked_by_upwork_ui"),
     skippedByStrategyFields: fieldsWithStatus("skipped_by_strategy"),
+    applyPageAnalysis: (fields as { applyPageAnalysis?: ApplyPageAnalyzerResult }).applyPageAnalysis,
   };
 }
 
@@ -2161,6 +2153,7 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
       fieldValues: [],
       checkedLabels: [],
       fileNames: [],
+      actionLabels: [],
     };
   }
   try {
@@ -2182,6 +2175,7 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
         };
       }).document;
       const nodes = Array.from(documentLike?.querySelectorAll?.("textarea,input") ?? []);
+      const actionNodes = Array.from(documentLike?.querySelectorAll?.("button,a[role='button'],input[type='submit'],input[type='button']") ?? []);
       const isUserTextNode = (node: LooseElement) => {
         const tagName = String(node.tagName ?? "").toLowerCase();
         if (tagName === "textarea") return true;
@@ -2218,12 +2212,24 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
       const fileNames = nodes
         .flatMap((node) => Array.from(node.files ?? []).map((file) => file.name ?? ""))
         .filter((value) => value.trim().length > 0);
+      const actionLabels = actionNodes
+        .map((node) => {
+          const labelText = node.closest?.("label")?.textContent ?? "";
+          const aria = node.getAttribute?.("aria-label") ?? "";
+          const text = "textContent" in node && typeof (node as { textContent?: unknown }).textContent === "string"
+            ? String((node as { textContent?: string }).textContent)
+            : "";
+          const value = typeof node.value === "string" ? node.value : "";
+          return [text, labelText, aria, value].filter(Boolean).join(" ");
+        })
+        .filter((value) => value.trim().length > 0);
       return {
         visibleText: documentLike?.body?.innerText ?? "",
         inputValues,
         fieldValues,
         checkedLabels,
         fileNames,
+        actionLabels,
       };
     });
     return {
@@ -2233,6 +2239,7 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
       fieldValues: snapshot.fieldValues ?? [],
       checkedLabels: snapshot.checkedLabels ?? [],
       fileNames: snapshot.fileNames ?? [],
+      actionLabels: snapshot.actionLabels ?? [],
     };
   } catch {
     return {
@@ -2242,6 +2249,7 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
       fieldValues: [],
       checkedLabels: [],
       fileNames: [],
+      actionLabels: [],
     };
   }
 }
@@ -2254,8 +2262,17 @@ export async function verifyApplyPreparationOnPage(input: {
 }): Promise<ApplyFieldVerification[]> {
   const { plan, fields } = input;
   const snapshot = await readApplyVerificationSnapshot(input.page, input.bodyText);
+  const analysis = analyzeApplyPageSnapshot(snapshot, plan);
   const visibleAndValues = [snapshot.visibleText, ...snapshot.inputValues, ...snapshot.checkedLabels, ...snapshot.fileNames];
   const results: ApplyFieldVerification[] = [];
+
+  if (analysis.pageKind === "apply") {
+    results.push(verification("pageStructure", "verified", "Recognized Upwork apply page structure."));
+  } else if (analysis.pageKind === "security_challenge" || analysis.pageKind === "login_required" || analysis.pageKind === "two_factor_required") {
+    results.push(verification("pageStructure", "blocked_by_upwork_ui", `Apply page is blocked by ${analysis.pageKind}: ${analysis.challenge.matchedText ?? "restricted page"}.`));
+  } else {
+    results.push(verification("pageStructure", "attempted_unverified", "Unknown page structure; refusing to mark browser preparation ready."));
+  }
 
   results.push(urlsReferToSameUpworkJob(snapshot.url, plan.applyUrl)
     ? verification("targetTab", "verified", `Apply tab matches target job URL: ${snapshot.url}`)
@@ -2298,18 +2315,18 @@ export async function verifyApplyPreparationOnPage(input: {
     results.push(verification("rate", "attempted_unverified", "Rate fill was attempted, but the value was not verified.", { expected: rateValue, actual: rateFieldValues(snapshot).join(" | ").slice(0, 200) }));
   }
 
-  if (plan.connects.required === null) {
-    results.push(verification("requiredConnects", "attempted_unverified", "Required Connects are still unknown."));
+  if (!analysis.connects.visible || plan.connects.required === null) {
+    results.push(verification("requiredConnects", "attempted_unverified", analysis.connects.detail));
   } else {
-    results.push(verification("requiredConnects", "verified", `Required Connects verified as ${plan.connects.required}.`, { actual: String(plan.connects.required) }));
+    results.push(verification("requiredConnects", "verified", `Required Connects verified as ${analysis.connects.value}.`, { actual: String(analysis.connects.value) }));
   }
 
   const plannedBoost = plan.connects.boost ?? 0;
   if (plannedBoost <= 0) {
-    results.push(verification("boostConnects", "skipped_by_strategy", "No boost set."));
+    results.push(verification("boostConnects", "skipped_by_strategy", analysis.boost.visible ? `No boost set. ${analysis.boost.detail}` : "No boost set."));
   } else if (plannedBoost > 50) {
     results.push(verification("boostConnects", "blocked_by_upwork_ui", `Planned boost ${plannedBoost} exceeds the hard cap 50; boost must not be set.`));
-  } else if (textCollectionContains(snapshot.inputValues, String(plannedBoost))) {
+  } else if (analysis.boost.selectedValue === plannedBoost || textCollectionContains(snapshot.inputValues, String(plannedBoost))) {
     results.push(verification("boostConnects", "verified", `Boost Connects verified as ${plannedBoost}.`, { actual: String(plannedBoost) }));
   } else if (fields.skippedFields.includes("connectsBoost")) {
     results.push(verification("boostConnects", "blocked_by_upwork_ui", "Boost field was not fillable.", { expected: String(plannedBoost) }));
@@ -2351,11 +2368,14 @@ export async function verifyApplyPreparationOnPage(input: {
     }
   }
 
+  results.push(analysis.finalSubmit.visible
+    ? verification("finalSubmitButton", "verified", analysis.finalSubmit.detail, { actual: analysis.finalSubmit.label ?? undefined })
+    : verification("finalSubmitButton", "attempted_unverified", analysis.finalSubmit.detail));
   results.push(verification("finalSubmit", "skipped_by_strategy", "Final submit/send button was intentionally not clicked."));
   return results;
 }
 
-type ApplyFillResult = Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields" | "fieldVerification">;
+type ApplyFillResult = Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields" | "fieldVerification" | "applyPageAnalysis">;
 
 function getVerification(results: ApplyFieldVerification[], field: string): ApplyFieldVerification | null {
   return results.find((item) => item.field === field) ?? null;
@@ -2442,7 +2462,9 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
     fields: { attemptedFields, skippedFields, manualFields },
     bodyText,
   });
-  return { attemptedFields, skippedFields, manualFields, fieldVerification };
+  const postFillSnapshot = await readApplyVerificationSnapshot(page, bodyText);
+  const applyPageAnalysis = analyzeApplyPageSnapshot(postFillSnapshot, plan);
+  return { attemptedFields, skippedFields, manualFields, fieldVerification, applyPageAnalysis };
 }
 
 async function inspectWithBrowser(
@@ -2588,8 +2610,39 @@ async function inspectWithBrowser(
     }
     let fields: ApplyFillResult = { attemptedFields: [], skippedFields: [], manualFields: [], fieldVerification: [] };
     if (plan && state === "apply_page_loaded") {
-      verifyApplyPageConnects(plan, bodyText);
-      fields = await fillApplyFields(page!, plan, bodyText);
+      const preFillSnapshot = await readApplyVerificationSnapshot(page!, bodyText);
+      const preFillAnalysis = analyzeApplyPageSnapshot(preFillSnapshot, plan);
+      if (preFillAnalysis.pageKind === "security_challenge") {
+        state = "captcha_or_security_challenge";
+        fields = {
+          attemptedFields: [],
+          skippedFields: [],
+          manualFields: ["finalSubmit"],
+          fieldVerification: await verifyApplyPreparationOnPage({ page: page!, plan, fields: { attemptedFields: [], skippedFields: [], manualFields: ["finalSubmit"] }, bodyText }),
+          applyPageAnalysis: preFillAnalysis,
+        };
+      } else if (preFillAnalysis.pageKind === "login_required" || preFillAnalysis.pageKind === "two_factor_required") {
+        state = preFillAnalysis.pageKind;
+        fields = {
+          attemptedFields: [],
+          skippedFields: [],
+          manualFields: ["finalSubmit"],
+          fieldVerification: await verifyApplyPreparationOnPage({ page: page!, plan, fields: { attemptedFields: [], skippedFields: [], manualFields: ["finalSubmit"] }, bodyText }),
+          applyPageAnalysis: preFillAnalysis,
+        };
+      } else if (preFillAnalysis.pageKind === "unknown") {
+        state = "field_preparation_incomplete";
+        fields = {
+          attemptedFields: [],
+          skippedFields: ["coverLetter", "rate"],
+          manualFields: ["coverLetter", "rate", "screeningAnswers", "attachments", "highlights", "finalSubmit"],
+          fieldVerification: await verifyApplyPreparationOnPage({ page: page!, plan, fields: { attemptedFields: [], skippedFields: ["coverLetter", "rate"], manualFields: ["coverLetter", "rate", "screeningAnswers", "attachments", "highlights", "finalSubmit"] }, bodyText }),
+          applyPageAnalysis: preFillAnalysis,
+        };
+      } else {
+        verifyApplyPageConnects(plan, preFillSnapshot.visibleText || bodyText);
+        fields = await fillApplyFields(page!, plan, bodyText);
+      }
     }
     if (plan && state === "apply_page_loaded" && (getRequiredSkippedFields(fields).length > 0 || hasUnverifiedRequiredApplyFields(fields.fieldVerification ?? []))) {
       const skippedRequired = getRequiredSkippedFields(fields);

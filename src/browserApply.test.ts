@@ -1164,8 +1164,21 @@ async function runTests(): Promise<void> {
     assert(verifiedApplyVerification.find((item) => item.field === "rate")?.status === "verified", "Rate should verify only when the visible rate field contains the planned bid.");
     assert(verifiedApplyVerification.find((item) => item.field === "attachments")?.status === "verified", "Attachments should verify when uploaded file names are visible.");
     assert(verifiedApplyVerification.find((item) => item.field === "profileHighlights")?.status === "verified", "Profile highlights should verify only when checked labels are visible.");
+    assert(verifiedApplyVerification.find((item) => item.field === "pageStructure")?.status === "verified", "Known apply-page structure should verify before ready status.");
+    assert(verifiedApplyVerification.find((item) => item.field === "finalSubmitButton")?.status === "verified", "Final submit button should be detected but not clicked.");
     assert(Boolean(verifiedApplyVerification.find((item) => item.field === "attachments")?.detail.includes("package.json")), "Attachment verification should name verified files.");
     assert(Boolean(verifiedApplyVerification.find((item) => item.field === "profileHighlights")?.detail.includes("Klaviyo retention proof")), "Portfolio/profile verification should name verified labels.");
+
+    const missingSubmitVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({
+        visibleText: "Required for proposal: 8 Connects\nCover letter\nHourly rate",
+        inputValues: [verificationPlan.coverLetter, ...verificationPlan.screeningAnswers, "$50"],
+      }),
+      plan: verificationPlan,
+      fields: { attemptedFields: ["coverLetter", "screeningAnswers:2", "rate"], skippedFields: [], manualFields: ["finalSubmit"] },
+      bodyText: "Required for proposal: 8 Connects",
+    });
+    assert(missingSubmitVerification.find((item) => item.field === "finalSubmitButton")?.status === "attempted_unverified", "Missing final submit control must fail closed instead of reporting ready.");
 
     const missingFileVerification = await verifyApplyPreparationOnPage({
       page: fakeApplyPage({ visibleText: "Required for proposal: 8 Connects", inputValues: [verificationPlan.coverLetter], fileNames: [] }),
