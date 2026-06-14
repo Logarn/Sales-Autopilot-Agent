@@ -370,7 +370,7 @@ async function runTests(): Promise<void> {
 
     const failedThreadStatus = await postV3CapturePacketToThread(
       beautyJob,
-      { channelId: "C123", messageTs: "111.222", threadTs: "111.222" },
+      { channelId: "C123", messageTs: "111.333", threadTs: "111.333" },
       { upworkUrl: beautyJob.url, captureStatus: "packet_sent" },
       async () => false,
     );
@@ -1375,7 +1375,7 @@ async function runTests(): Promise<void> {
     let kimiQaHandoffText = "";
     const kimiQaPost = await postPrepareDraftStatus(
       {
-        thread: { channelId: "C123", messageTs: "999.222", threadTs: "999.222" },
+        thread: { channelId: "C123", messageTs: "999.444", threadTs: "999.444" },
         heading: "⚠️ Draft preparation paused for browser action #708.",
         diagnostics: blockedPrepDiagnostics,
       },
@@ -2155,7 +2155,7 @@ async function runTests(): Promise<void> {
 
 if (require.main === module) {
   runTests().catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.stack ?? error.message : String(error);
     console.error(`browser apply profile tests failed: ${message}`);
     process.exitCode = 1;
   });
