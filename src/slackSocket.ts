@@ -53,6 +53,16 @@ import {
   extractUpworkJobIdFromUrl,
   isSupportedUpworkJobUrl,
 } from "./browserCapture";
+import {
+  actionHasCaptureThread,
+  browserActionCanonicalCaptureJobId,
+  canonicalCaptureJobIdFromInputs,
+  captureThreadTargetsForAction,
+  findCaptureActionsForCanonicalJob,
+  isStalePendingCaptureAction,
+  withCaptureWaiter,
+  type CaptureThreadWaiter,
+} from "./captureActionOwnership";
 import { buildConfiguredDiscoverySources } from "./browserDiscoveryTool";
 import {
   clearPausedDiscoverySourceHealth,
@@ -118,13 +128,14 @@ import {
   buildMonthlyOperatorReview,
 } from "./operatorReports";
 import { buildSourceStrategyAnswer } from "./sourceStrategy";
-import type { ApplicationStatus, ProposalVersionSource } from "./types";
+import type { ApplicationStatus, BrowserAction, BrowserActionEnqueueResult, ProposalVersionSource } from "./types";
 import {
   buildThreadWorkflowStatusReply,
   buildUnifiedSlackJobContext,
   type SlackWorkflowProofPlanSnapshot,
   type UnifiedSlackJobContext,
 } from "./slackWorkflowContext";
+import { buildSlackWorkflowDebugTrace } from "./slackPromiseNotifications";
 
 const THREAD_MENTIONS = "<@U0A2X5BCNKC> <@U0AHJFYV42K>";
 const SLACK_EVENT_DEDUPE_TTL_MS = 10 * 60 * 1000;
@@ -929,6 +940,7 @@ function buildThreadStatusDetails(state: NonNullable<ReturnType<typeof getSlackT
     draft?.copyStrategy ? `Copy strategy: ${draft.copyStrategy.one_sentence_sales_argument}` : null,
     draft?.proofStrategy ? `Proof strategy: ${draft.proofStrategy.summary}` : null,
     draft?.proposalText ? `Draft preview: ${draft.proposalText.replace(/\s+/g, " ").trim().slice(0, 900)}` : null,
+    buildSlackWorkflowDebugTrace(state.channelId, state.threadTs),
     profileContext?.selectedAttachments.length ? `Proof selected: ${profileContext.selectedAttachments.join(", ")}` : null,
     profileContext?.selectedProofPoints.length ? `Proof points: ${profileContext.selectedProofPoints.slice(0, 5).join("; ")}` : null,
     draft?.selectedPortfolioItems.length ? `Selected portfolio: ${draft.selectedPortfolioItems.map((item) => item.name).join(", ")}` : "Selected portfolio: none",
@@ -2507,16 +2519,133 @@ async function userFacingSlackCopy(input: UserFacingSlackCopyInput): Promise<str
   return result.text;
 }
 
+export type SlackCaptureQueueOwnershipStatus =
+  | "created"
+  | "duplicate_current_thread"
+  | "attached_pending"
+  | "attached_completed"
+  | "replaced_stale";
+
+export interface SlackCaptureQueueResult {
+  parsed: ParsedUpworkUrl;
+  state: ReturnType<typeof upsertSlackThreadState>;
+  action: BrowserActionEnqueueResult;
+  actionRecord: BrowserAction | null;
+  ownershipStatus: SlackCaptureQueueOwnershipStatus;
+  workerWillProcess: boolean;
+}
+
+function browserActionUpdatedTime(action: BrowserAction): number {
+  const updated = Date.parse(action.updatedAt || action.createdAt);
+  return Number.isFinite(updated) ? updated : 0;
+}
+
+function newestFirst(actions: BrowserAction[]): BrowserAction[] {
+  return [...actions].sort((left, right) => browserActionUpdatedTime(right) - browserActionUpdatedTime(left));
+}
+
+function buildCaptureWaiter(input: {
+  state: ReturnType<typeof upsertSlackThreadState>;
+  upworkUrl: ParsedUpworkUrl;
+  source: CaptureThreadWaiter["source"];
+}): CaptureThreadWaiter {
+  const canonicalJobId = canonicalCaptureJobIdFromInputs(input.upworkUrl.canonicalJobUrl, input.upworkUrl.jobId) ??
+    deriveCaptureThreadJobId(input.upworkUrl.canonicalJobUrl, input.upworkUrl.jobId);
+  return {
+    channelId: input.state.channelId,
+    messageTs: input.state.messageTs,
+    threadTs: input.state.threadTs,
+    upworkUrl: input.upworkUrl.canonicalJobUrl,
+    canonicalJobId,
+    source: input.source,
+    draftRequested: true,
+    attachedAt: new Date().toISOString(),
+  };
+}
+
+function attachSlackThreadToCaptureAction(action: BrowserAction, waiter: CaptureThreadWaiter): BrowserAction {
+  const mergedPayload = withCaptureWaiter(action.payload, waiter);
+  return mergeBrowserActionPayload(action.id, mergedPayload) ?? action;
+}
+
+function workflowStateForCompletedCapture(action: BrowserAction): "draft_ready" | "proof_plan_ready" | "draft_requested" {
+  const draft = getApplicationDraft(action.jobId);
+  if (!draft) return "draft_requested";
+  return draft.proofStrategy ? "proof_plan_ready" : "draft_ready";
+}
+
+function findReusableCompletedCapture(canonicalJobId: string): BrowserAction | null {
+  return newestFirst(findCaptureActionsForCanonicalJob(listBrowserActions(null, 1000), canonicalJobId)
+    .filter((action) => action.status === "completed"))[0] ?? null;
+}
+
+function findActiveCaptureForCanonicalJob(canonicalJobId: string): BrowserAction | null {
+  return newestFirst(findCaptureActionsForCanonicalJob(listBrowserActions(null, 1000), canonicalJobId)
+    .filter((action) => action.status === "pending" || action.status === "in_progress"))[0] ?? null;
+}
+
+function cancelStalePendingCapturesForCanonicalJob(canonicalJobId: string, exceptActionId?: number): number[] {
+  const cancelled: number[] = [];
+  for (const action of findCaptureActionsForCanonicalJob(listBrowserActions(null, 1000), canonicalJobId)) {
+    if (exceptActionId && action.id === exceptActionId) continue;
+    if (!isStalePendingCaptureAction(action)) continue;
+    if (updateBrowserActionStatus(action.id, "cancelled", "Stale duplicate capture replaced by Slack thread ownership reconciliation.")) {
+      cancelled.push(action.id);
+    }
+  }
+  return cancelled;
+}
+
+function formatCaptureQueueDetails(result: SlackCaptureQueueResult): string {
+  const listing = `Listing: ${result.parsed.canonicalJobUrl}`;
+  if (result.ownershipStatus === "attached_completed") {
+    const draft = result.actionRecord ? getApplicationDraft(result.actionRecord.jobId) : null;
+    return [
+      draft
+        ? "I already captured this listing. I attached this Slack thread to the captured job and can show the draft/proof plan here."
+        : "I already captured this listing. I attached this Slack thread to the captured job, but I do not have a draft in this thread yet.",
+      listing,
+    ].join("\n");
+  }
+  if (result.ownershipStatus === "attached_pending") {
+    return [
+      "Capture is already pending for this listing in another Slack thread. I attached this thread as a waiter, so completion or failure will be posted here too once the browser worker processes it or a controlled capture run handles it.",
+      listing,
+    ].join("\n");
+  }
+  if (result.ownershipStatus === "duplicate_current_thread") {
+    return [
+      "Capture is already queued for this listing in this thread. I will post the draft/proof plan here once the browser worker processes it or a controlled capture run handles it.",
+      listing,
+    ].join("\n");
+  }
+  if (result.ownershipStatus === "replaced_stale") {
+    return [
+      "The old pending capture for this listing was stale, so I replaced it with a fresh capture tied to this thread.",
+      "I will score it and generate the draft once the browser worker processes it or a controlled capture run handles it.",
+      listing,
+    ].join("\n");
+  }
+  return [
+    "Got the Upwork link. Capture is queued — I'll score it and generate the draft once the browser worker processes it or a controlled capture run handles it.",
+    "Capture queued.",
+    listing,
+  ].join("\n");
+}
+
 export function queueCaptureFromSlackUrl(input: {
   channelId: string;
   messageTs: string;
   threadTs: string;
   text: string;
-}): { parsed: ParsedUpworkUrl; state: ReturnType<typeof upsertSlackThreadState>; action: ReturnType<typeof enqueueBrowserActionDeduped> } | null {
+  source?: CaptureThreadWaiter["source"];
+}): SlackCaptureQueueResult | null {
   const upworkUrl = parseUpworkJobUrlFromText(input.text);
   if (!upworkUrl) {
     return null;
   }
+  const canonicalJobId = canonicalCaptureJobIdFromInputs(upworkUrl.canonicalJobUrl, upworkUrl.jobId) ??
+    deriveCaptureThreadJobId(upworkUrl.canonicalJobUrl, upworkUrl.jobId);
 
   const state = upsertSlackThreadState({
     channelId: input.channelId,
@@ -2526,10 +2655,65 @@ export function queueCaptureFromSlackUrl(input: {
     jobId: upworkUrl.jobId,
     status: "capture_pending",
   });
+  const waiter = buildCaptureWaiter({ state, upworkUrl, source: input.source ?? "slack_url" });
 
-  const jobIdForAction = deriveCaptureThreadJobId(upworkUrl.canonicalJobUrl, upworkUrl.jobId);
+  const completed = findReusableCompletedCapture(canonicalJobId);
+  if (completed) {
+    cancelStalePendingCapturesForCanonicalJob(canonicalJobId, completed.id);
+    const attached = attachSlackThreadToCaptureAction(completed, waiter);
+    updateSlackThreadStateStatus(state.channelId, state.threadTs, "captured", {
+      jobId: attached.jobId,
+      upworkUrl: upworkUrl.canonicalJobUrl,
+    });
+    upsertSlackWorkflowState({
+      channelId: state.channelId,
+      threadTs: state.threadTs,
+      workflowState: workflowStateForCompletedCapture(attached),
+      draftRequested: true,
+      lastUserMessage: input.text,
+    });
+    return {
+      parsed: upworkUrl,
+      state,
+      action: { id: attached.id, duplicate: true, duplicateOf: attached.id },
+      actionRecord: attached,
+      ownershipStatus: "attached_completed",
+      workerWillProcess: false,
+    };
+  }
+
+  const active = findActiveCaptureForCanonicalJob(canonicalJobId);
+  if (active) {
+    if (isStalePendingCaptureAction(active)) {
+      updateBrowserActionStatus(active.id, "cancelled", "Stale duplicate capture replaced by current Slack thread retry.");
+    } else {
+      const attached = actionHasCaptureThread(active, waiter)
+        ? active
+        : attachSlackThreadToCaptureAction(active, waiter);
+      updateSlackThreadStateStatus(state.channelId, state.threadTs, "capture_pending", {
+        jobId: attached.jobId,
+        upworkUrl: upworkUrl.canonicalJobUrl,
+      });
+      upsertSlackWorkflowState({
+        channelId: state.channelId,
+        threadTs: state.threadTs,
+        workflowState: "capture_queued",
+        draftRequested: true,
+        lastUserMessage: input.text,
+      });
+      return {
+        parsed: upworkUrl,
+        state,
+        action: { id: attached.id, duplicate: true, duplicateOf: attached.id },
+        actionRecord: attached,
+        ownershipStatus: actionHasCaptureThread(active, waiter) ? "duplicate_current_thread" : "attached_pending",
+        workerWillProcess: true,
+      };
+    }
+  }
+
   const action = enqueueBrowserActionDeduped({
-    jobId: jobIdForAction,
+    jobId: canonicalJobId,
     actionType: "capture_job_from_url",
     payload: {
       ...buildCaptureActionPayload(
@@ -2539,10 +2723,13 @@ export function queueCaptureFromSlackUrl(input: {
         input.threadTs,
         { originalUrl: upworkUrl.originalUrl, canonicalJobUrl: upworkUrl.canonicalJobUrl },
       ),
-      sourceQuery: "slack_url",
-      notes: "Slack socket URL posted; browser capture required before scoring and draft prep.",
+      sourceQuery: input.source ?? "slack_url",
+      notes: input.source === "slack_retry_capture"
+        ? "Slack socket: user requested capture retry."
+        : "Slack socket URL posted; browser capture required before scoring and draft prep.",
     },
   });
+  const actionRecord = getBrowserActionById(action.id);
   upsertSlackWorkflowState({
     channelId: state.channelId,
     threadTs: state.threadTs,
@@ -2551,7 +2738,14 @@ export function queueCaptureFromSlackUrl(input: {
     lastUserMessage: input.text,
   });
 
-  return { parsed: upworkUrl, state, action };
+  return {
+    parsed: upworkUrl,
+    state,
+    action,
+    actionRecord,
+    ownershipStatus: active ? "replaced_stale" : action.duplicate ? "duplicate_current_thread" : "created",
+    workerWillProcess: true,
+  };
 }
 
 async function handleUrlMessage(params: {
@@ -2569,13 +2763,7 @@ async function handleUrlMessage(params: {
 
   const { parsed: upworkUrl, action } = queued;
 
-  const details = [
-    "Got the Upwork link. Capture is queued — I'll score it and generate the draft once the browser worker processes it.",
-    action.duplicate
-      ? "Capture is already queued for this posting."
-      : "Capture queued.",
-    `Listing: ${upworkUrl.canonicalJobUrl}`,
-  ].join("\n");
+  const details = formatCaptureQueueDetails(queued);
   recordSlackWorkflowPromise({
     channelId: params.channelId,
     threadTs: params.threadTs,
@@ -2593,11 +2781,25 @@ async function handleUrlMessage(params: {
     context: {
       upworkUrl: upworkUrl.canonicalJobUrl,
       duplicate: action.duplicate,
+      ownershipStatus: queued.ownershipStatus,
     },
     preservePhrases: [upworkUrl.canonicalJobUrl],
     copyProvider: params.copyProvider,
   });
   await postThreadReply(params.client, params.channelId, params.threadTs, text);
+  if (queued.ownershipStatus === "attached_completed" && queued.actionRecord && getApplicationDraft(queued.actionRecord.jobId)) {
+    const draftPreview = buildDraftPreviewFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs });
+    if (draftPreview.ok) {
+      const draftText = await userFacingSlackCopyWithExactBody({
+        deterministicText: draftPreview.text,
+        userMessage: params.text,
+        intent: "draft_preview",
+        context: { jobId: queued.actionRecord.jobId, ok: true, reusedCompletedCapture: true, exactProposalBodyPreserved: true },
+        copyProvider: params.copyProvider,
+      });
+      await postThreadReply(params.client, params.channelId, params.threadTs, draftText);
+    }
+  }
 }
 
 async function handleSlackFilesMessage(params: {
@@ -2713,31 +2915,46 @@ async function executeConversationPlan(params: {
       await postThreadReply(params.client, params.channelId, params.threadTs, text);
       return;
     }
-    const jobIdForAction = deriveCaptureThreadJobId(state.upworkUrl, parsedUpworkJobId);
-    const action = enqueueBrowserActionDeduped({
-      jobId: jobIdForAction,
-      actionType: "capture_job_from_url",
-      payload: {
-        ...buildCaptureActionPayload(
-          state.upworkUrl,
-          state.channelId,
-          state.messageTs,
-          state.threadTs,
-          { originalUrl: state.upworkUrl, canonicalJobUrl: state.upworkUrl },
-        ),
-        sourceQuery: "slack_retry_capture",
-        notes: "Slack socket: user requested capture retry.",
-      },
+    const queued = queueCaptureFromSlackUrl({
+      channelId: state.channelId,
+      messageTs: state.messageTs,
+      threadTs: state.threadTs,
+      text: state.upworkUrl,
+      source: "slack_retry_capture",
     });
-    updateSlackThreadStateStatus(state.channelId, state.threadTs, "capture_pending");
+    if (!queued) {
+      const text = await userFacingSlackCopy({
+        deterministicText: "I could not parse the tracked Upwork URL for this thread. Send the listing link again and I’ll queue capture from that URL.",
+        userMessage: params.userMessage,
+        intent: params.plan.intent,
+        context: { jobId: state.jobId, threadStatus: state.status },
+        copyProvider: params.copyProvider,
+      });
+      await postThreadReply(params.client, params.channelId, params.threadTs, text);
+      return;
+    }
     const text = await userFacingSlackCopy({
-      deterministicText: `Capture re-queued for ${state.upworkUrl}. I'll score it and generate the draft once the browser worker processes it.`,
+      deterministicText: formatCaptureQueueDetails(queued),
       userMessage: params.userMessage,
       intent: params.plan.intent,
-      context: { jobId: state.jobId, threadStatus: state.status, actionId: action.id },
+      context: { jobId: state.jobId, threadStatus: state.status, actionId: queued.action.id, ownershipStatus: queued.ownershipStatus },
+      preservePhrases: [state.upworkUrl],
       copyProvider: params.copyProvider,
     });
     await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    if (queued.ownershipStatus === "attached_completed" && queued.actionRecord && getApplicationDraft(queued.actionRecord.jobId)) {
+      const draftPreview = buildDraftPreviewFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs });
+      if (draftPreview.ok) {
+        const draftText = await userFacingSlackCopyWithExactBody({
+          deterministicText: draftPreview.text,
+          userMessage: params.userMessage,
+          intent: "draft_preview",
+          context: { jobId: queued.actionRecord.jobId, ok: true, reusedCompletedCapture: true, exactProposalBodyPreserved: true },
+          copyProvider: params.copyProvider,
+        });
+        await postThreadReply(params.client, params.channelId, params.threadTs, draftText);
+      }
+    }
     return;
   }
   if (params.plan.actions.includes("mark_skip")) {

@@ -616,6 +616,32 @@ export interface UpsertSlackWorkflowStateInput {
   lastAgentReply?: string | null;
 }
 
+export type SlackWorkflowNotificationStatus = "pending" | "posted" | "skipped" | "failed";
+
+interface SlackWorkflowNotificationRow {
+  id: number;
+  channel_id: string;
+  thread_ts: string;
+  notification_type: string;
+  state_key: string;
+  message_hash: string;
+  post_status: SlackWorkflowNotificationStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SlackWorkflowNotification {
+  id: number;
+  channelId: string;
+  threadTs: string;
+  notificationType: string;
+  stateKey: string;
+  messageHash: string;
+  postStatus: SlackWorkflowNotificationStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type SlackBehaviorMemoryType =
   | "operator_preference"
   | "failed_intent"
@@ -1520,6 +1546,20 @@ CREATE TABLE IF NOT EXISTS slack_workflow_state (
 );
 CREATE INDEX IF NOT EXISTS idx_slack_workflow_state_thread ON slack_workflow_state(channel_id, thread_ts);
 
+CREATE TABLE IF NOT EXISTS slack_workflow_notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id TEXT NOT NULL,
+  thread_ts TEXT NOT NULL,
+  notification_type TEXT NOT NULL,
+  state_key TEXT NOT NULL,
+  message_hash TEXT NOT NULL,
+  post_status TEXT NOT NULL DEFAULT 'pending',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(channel_id, thread_ts, notification_type, state_key)
+);
+CREATE INDEX IF NOT EXISTS idx_slack_workflow_notifications_thread ON slack_workflow_notifications(channel_id, thread_ts, updated_at);
+
 CREATE TABLE IF NOT EXISTS slack_behavior_memory (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   type TEXT NOT NULL,
@@ -2283,6 +2323,35 @@ const getSlackWorkflowStateStmt = db.prepare<[string, string], SlackWorkflowStat
    FROM slack_workflow_state
    WHERE channel_id = ? AND thread_ts = ?
    LIMIT 1`
+);
+const insertSlackWorkflowNotificationStmt = db.prepare(
+  `INSERT OR IGNORE INTO slack_workflow_notifications (
+    channel_id,
+    thread_ts,
+    notification_type,
+    state_key,
+    message_hash,
+    post_status,
+    updated_at
+  ) VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'))`
+);
+const updateSlackWorkflowNotificationStatusStmt = db.prepare(
+  `UPDATE slack_workflow_notifications
+   SET post_status = ?, updated_at = datetime('now')
+   WHERE channel_id = ? AND thread_ts = ? AND notification_type = ? AND state_key = ?`
+);
+const getSlackWorkflowNotificationStmt = db.prepare<[string, string, string, string], SlackWorkflowNotificationRow>(
+  `SELECT id, channel_id, thread_ts, notification_type, state_key, message_hash, post_status, created_at, updated_at
+   FROM slack_workflow_notifications
+   WHERE channel_id = ? AND thread_ts = ? AND notification_type = ? AND state_key = ?
+   LIMIT 1`
+);
+const listSlackWorkflowNotificationsStmt = db.prepare<[string, string, number], SlackWorkflowNotificationRow>(
+  `SELECT id, channel_id, thread_ts, notification_type, state_key, message_hash, post_status, created_at, updated_at
+   FROM slack_workflow_notifications
+   WHERE channel_id = ? AND thread_ts = ?
+   ORDER BY updated_at DESC
+   LIMIT ?`
 );
 const upsertSlackBehaviorMemoryStmt = db.prepare(
   `INSERT INTO slack_behavior_memory (
@@ -3169,6 +3238,20 @@ function rowToSlackWorkflowState(row: SlackWorkflowStateRow): SlackWorkflowState
     latestAgentPromise: parseJsonObject<SlackWorkflowPromiseSnapshot>(row.latest_agent_promise) ?? null,
     lastUserMessage: row.last_user_message,
     lastAgentReply: row.last_agent_reply,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToSlackWorkflowNotification(row: SlackWorkflowNotificationRow): SlackWorkflowNotification {
+  return {
+    id: row.id,
+    channelId: row.channel_id,
+    threadTs: row.thread_ts,
+    notificationType: row.notification_type,
+    stateKey: row.state_key,
+    messageHash: row.message_hash,
+    postStatus: row.post_status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -5198,6 +5281,57 @@ export function markSlackWorkflowPromiseStatus(input: {
     latestAgentPromise: promise,
     lastAgentReply: input.lastAgentReply,
   });
+}
+
+export function reserveSlackWorkflowNotification(input: {
+  channelId: string;
+  threadTs: string;
+  notificationType: string;
+  stateKey: string;
+  messageHash: string;
+}): { reserved: boolean; notification: SlackWorkflowNotification } {
+  const cleanType = input.notificationType.replace(/\s+/g, "_").trim();
+  const cleanStateKey = input.stateKey.replace(/\s+/g, " ").trim();
+  const cleanMessageHash = input.messageHash.trim();
+  if (!cleanType || !cleanStateKey || !cleanMessageHash) {
+    throw new Error("Slack workflow notification requires type, state key, and message hash.");
+  }
+  const result = insertSlackWorkflowNotificationStmt.run(
+    input.channelId,
+    input.threadTs,
+    cleanType,
+    cleanStateKey,
+    cleanMessageHash
+  );
+  const row = getSlackWorkflowNotificationStmt.get(input.channelId, input.threadTs, cleanType, cleanStateKey);
+  if (!row) {
+    throw new Error(`Failed to reserve Slack workflow notification for ${input.channelId}/${input.threadTs}`);
+  }
+  return { reserved: result.changes > 0, notification: rowToSlackWorkflowNotification(row) };
+}
+
+export function markSlackWorkflowNotificationStatus(input: {
+  channelId: string;
+  threadTs: string;
+  notificationType: string;
+  stateKey: string;
+  postStatus: SlackWorkflowNotificationStatus;
+}): SlackWorkflowNotification | null {
+  updateSlackWorkflowNotificationStatusStmt.run(
+    input.postStatus,
+    input.channelId,
+    input.threadTs,
+    input.notificationType,
+    input.stateKey
+  );
+  const row = getSlackWorkflowNotificationStmt.get(input.channelId, input.threadTs, input.notificationType, input.stateKey);
+  return row ? rowToSlackWorkflowNotification(row) : null;
+}
+
+export function listSlackWorkflowNotifications(channelId: string, threadTs: string, limit = 20): SlackWorkflowNotification[] {
+  return listSlackWorkflowNotificationsStmt
+    .all(channelId, threadTs, Math.max(1, limit))
+    .map(rowToSlackWorkflowNotification);
 }
 
 export function upsertSlackBehaviorMemory(input: UpsertSlackBehaviorMemoryInput): SlackBehaviorMemory {

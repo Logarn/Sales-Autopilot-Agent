@@ -16,6 +16,7 @@ import {
   BROWSER_USER_DATA_DIR,
   BROWSER_WORKER_ENABLED,
   DISCOVERY_SLACK_CHANNEL_ID,
+  SLACK_ALLOWED_CHANNEL_IDS,
   SLACK_CHANNEL_WEBHOOK_URL,
 } from "./config";
 import { buildBrowserApplyPlan } from "./browserApply";
@@ -67,6 +68,13 @@ import { decideLeadHandling } from "./leadDecision";
 import { sendSlackMessage } from "./slack";
 import { postSlackChannelMessage, postSlackThreadMessage } from "./slackThread";
 import { rewriteSlackCopyWithKimi, type SlackCopyProvider } from "./slackCopywriter";
+import {
+  buildBlockerNotificationText,
+  postSlackPromiseNotification,
+  slackPromiseStateKey,
+  type SlackPromiseNotificationPlan,
+} from "./slackPromiseNotifications";
+import { captureThreadTargetsForAction } from "./captureActionOwnership";
 import type { IncomingWebhookSendArguments } from "@slack/webhook";
 import {
   BrowserSessionStatus,
@@ -437,6 +445,33 @@ function getSlackThreadContextFromPayload(action: BrowserAction): SlackThreadCon
   return mapped
     ? { channelId: mapped.channelId, threadTs: mapped.threadTs, messageTs: mapped.messageTs }
     : null;
+}
+
+function getSlackThreadContextsForCaptureAction(action: BrowserAction): SlackThreadContext[] {
+  if (action.actionType !== "capture_job_from_url") {
+    const thread = getSlackThreadContextFromPayload(action);
+    return thread ? [thread] : [];
+  }
+
+  const contexts: SlackThreadContext[] = captureThreadTargetsForAction(action).map((target) => ({
+    channelId: target.channelId,
+    messageTs: target.messageTs,
+    threadTs: target.threadTs,
+  }));
+  const fallback = getSlackThreadContextFromPayload(action);
+  if (fallback) contexts.push(fallback);
+
+  const seen = new Set<string>();
+  return contexts.filter((context) => {
+    if (SLACK_ALLOWED_CHANNEL_IDS.length > 0 && !SLACK_ALLOWED_CHANNEL_IDS.includes(context.channelId)) {
+      logger.warn(`Skipped capture fan-out to non-allowlisted Slack channel ${context.channelId} for action #${action.id}.`);
+      return false;
+    }
+    const key = `${context.channelId}:${context.threadTs}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function extractUpworkUrlToken(value: string): string | null {
@@ -1014,22 +1049,34 @@ export async function postV3CapturePacketToThread(
     return "skipped";
   }
   const packet = await writeV3CapturePacketWithLlm(job, context);
-  const posted = await postThreadMessage({
-    channel: thread.channelId,
+  const workflowState = job.applicationDraft?.proofStrategy ? "proof_plan_ready" : "draft_ready";
+  const stateKey = slackPromiseStateKey([
+    "capture_draft_proof_plan_ready",
+    job.id,
+    job.applicationDraft?.proposalVersion,
+    job.applicationDraft?.generatedAt,
+    context.browserCaptureActionId,
+  ]);
+  const result = await postSlackPromiseNotification({
+    channelId: thread.channelId,
     threadTs: thread.threadTs,
-    text: packet.text,
-    blocks: packet.blocks,
-  });
-  if (posted && job.applicationDraft) {
-    updateApplicationStatus(job.id, "sent_to_slack", "Lead packet posted to Slack for review.");
-    markSlackWorkflowPromiseStatus({
-      channelId: thread.channelId,
+    plan: {
+      notificationType: "capture_draft_proof_plan_ready",
+      workflowState,
+      stateKey,
+      text: packet.text,
+      promiseStatus: "fulfilled",
+    },
+    postThreadMessage: async () => postThreadMessage({
+      channel: thread.channelId,
       threadTs: thread.threadTs,
-      status: "fulfilled",
-      workflowState: job.applicationDraft.proofStrategy ? "proof_plan_ready" : "draft_ready",
-      lastAgentReply: "Capture completed and draft/proof plan posted to Slack.",
-    });
-  } else if (!posted) {
+      text: packet.text,
+      blocks: packet.blocks,
+    }),
+  });
+  if (result.posted && job.applicationDraft) {
+    updateApplicationStatus(job.id, "sent_to_slack", "Lead packet posted to Slack for review.");
+  } else if (result.status === "failed") {
     markSlackWorkflowPromiseStatus({
       channelId: thread.channelId,
       threadTs: thread.threadTs,
@@ -1039,7 +1086,7 @@ export async function postV3CapturePacketToThread(
       lastAgentReply: "Capture completed, but the Slack draft/proof plan post failed.",
     });
   }
-  return posted ? "posted" : "failed";
+  return result.posted ? "posted" : result.duplicate ? "skipped" : "failed";
 }
 
 function buildPrepareDraftStatusMessage(input: {
@@ -1255,12 +1302,13 @@ export async function postPrepareDraftStatus(
   }, deps.copyProvider);
   const text = copy.text;
   if (input.thread) {
-    const posted = await (deps.postThreadMessage ?? postSlackThreadMessage)({
-      channel: input.thread.channelId,
+    const result = await postSlackPromiseNotification({
+      channelId: input.thread.channelId,
       threadTs: input.thread.threadTs,
-      text,
+      plan: promiseNotificationForPrepareDraftStatus({ diagnostics: input.diagnostics, text }),
+      postThreadMessage: async (target) => (deps.postThreadMessage ?? postSlackThreadMessage)(target),
     });
-    return posted ? "posted" : "failed";
+    return result.posted ? "posted" : result.duplicate ? "skipped" : "failed";
   }
 
   const discoveryChannelId = DISCOVERY_SLACK_CHANNEL_ID.trim();
@@ -1290,6 +1338,30 @@ function countPrepareDraftStatusPost(result: ProcessActionResult, postStatus: "p
   }
 }
 
+function promiseNotificationForPrepareDraftStatus(input: {
+  diagnostics: ApplyPreparationDiagnostics;
+  text: string;
+}): SlackPromiseNotificationPlan {
+  const isReady = input.diagnostics.state === "apply_page_loaded";
+  const blocker = isReady ? null : stateStatusMessage(input.diagnostics.state as DetectedBrowserState);
+  return {
+    notificationType: isReady ? "qa_ready" : "qa_blocked",
+    workflowState: isReady ? "qa_ready" : "qa_blocked",
+    stateKey: slackPromiseStateKey([
+      isReady ? "qa_ready" : "qa_blocked",
+      input.diagnostics.jobId,
+      input.diagnostics.state,
+      input.diagnostics.coverLetterLength,
+      (input.diagnostics.filesAttached ?? []).join(","),
+      (input.diagnostics.selectedHighlights ?? []).join(","),
+      (input.diagnostics.validationIssues ?? []).map((issue) => issue.code).join(","),
+    ]),
+    text: input.text,
+    promiseStatus: isReady ? "fulfilled" : "blocked",
+    blocker,
+  };
+}
+
 async function postSoulAwareBrowserThreadMessage(input: {
   thread: SlackThreadContext;
   deterministicText: string;
@@ -1310,6 +1382,94 @@ async function postSoulAwareBrowserThreadMessage(input: {
     text: copy.text,
     soulComposed: true,
   });
+}
+
+async function postCaptureBlockerNotification(input: {
+  thread: SlackThreadContext | null;
+  action: BrowserAction;
+  reason: string;
+  nextSafeAction?: string;
+  stateKeyPart?: string | null;
+}): Promise<"posted" | "skipped" | "failed"> {
+  if (!input.thread) return "skipped";
+  const text = buildBlockerNotificationText({
+    fallbackLabel: typeof input.action.payload.url === "string" ? input.action.payload.url : input.action.jobId,
+    reason: input.reason,
+    nextSafeAction: input.nextSafeAction ?? "Reply \"retry capture\" in this thread after the page is readable, or send the listing link again.",
+  });
+  const result = await postSlackPromiseNotification({
+    channelId: input.thread.channelId,
+    threadTs: input.thread.threadTs,
+    plan: {
+      notificationType: "capture_blocked",
+      workflowState: "capture_failed",
+      stateKey: slackPromiseStateKey(["capture_blocked", input.action.jobId, input.stateKeyPart, input.reason]),
+      text,
+      promiseStatus: "blocked",
+      blocker: input.reason,
+    },
+    postThreadMessage: async (target) => postSlackThreadMessage(target),
+  });
+  return result.posted ? "posted" : result.duplicate ? "skipped" : "failed";
+}
+
+function updateCaptureThreadStates(
+  action: BrowserAction,
+  status: string,
+  options?: { jobId?: string | null; upworkUrl?: string | null }
+): void {
+  for (const target of getSlackThreadContextsForCaptureAction(action)) {
+    updateSlackThreadStateStatus(target.channelId, target.threadTs, status, {
+      jobId: options?.jobId ?? action.jobId,
+      upworkUrl: options?.upworkUrl ?? (typeof action.payload.url === "string" ? action.payload.url : undefined),
+    });
+  }
+}
+
+async function postCaptureBlockerNotificationsForAction(input: {
+  action: BrowserAction;
+  reason: string;
+  nextSafeAction?: string;
+  stateKeyPart?: string | null;
+}): Promise<{ posted: number; failed: number }> {
+  let posted = 0;
+  let failed = 0;
+  const threads = getSlackThreadContextsForCaptureAction(input.action);
+  for (const target of threads) {
+    const status = await postCaptureBlockerNotification({
+      thread: target,
+      action: input.action,
+      reason: input.reason,
+      nextSafeAction: input.nextSafeAction,
+      stateKeyPart: input.stateKeyPart,
+    });
+    if (status === "posted") posted += 1;
+    if (status === "failed") failed += 1;
+  }
+  return { posted, failed };
+}
+
+async function postV3CapturePacketToThreads(input: {
+  action: BrowserAction;
+  job: ScoredJob;
+  context: SlackPacketV3Context;
+}): Promise<{ posted: number; failed: number; skipped: number }> {
+  let posted = 0;
+  let failed = 0;
+  let skipped = 0;
+  for (const target of getSlackThreadContextsForCaptureAction(input.action)) {
+    updateSlackThreadStateStatus(target.channelId, target.threadTs, "captured", { jobId: input.job.id });
+    updateSlackThreadStateStatus(target.channelId, target.threadTs, "scored", { jobId: input.job.id });
+    const status = await postV3CapturePacketToThread(input.job, target, input.context);
+    if (status === "posted") {
+      posted += 1;
+    } else if (status === "failed") {
+      failed += 1;
+    } else {
+      skipped += 1;
+    }
+  }
+  return { posted, failed, skipped };
 }
 
 function hasHardRedFlags(job: ScoredJob): boolean {
@@ -2945,7 +3105,10 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       : [];
   const plan = applyPlanResult?.plan ?? null;
   const url = plan?.applyUrl ?? getActionUrl(action);
-  const thread = getSlackThreadContextFromPayload(action);
+  const captureThreads = getSlackThreadContextsForCaptureAction(action);
+  const thread = action.actionType === "capture_job_from_url"
+    ? captureThreads[0] ?? null
+    : getSlackThreadContextFromPayload(action);
 
   if (action.actionType === "prepare_application_review" && (!applyPlanResult?.valid || stalePayloadErrors.length > 0)) {
     const issues = [...(applyPlanResult?.issues ?? []), ...stalePayloadErrors];
@@ -2964,7 +3127,16 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
 
   if (!url) {
     updateBrowserActionStatus(action.id, "paused", "No URL available for browser action.");
-    if (thread) {
+    if (action.actionType === "capture_job_from_url") {
+      updateCaptureThreadStates(action, "capture_failed");
+      const blockerResult = await postCaptureBlockerNotificationsForAction({
+        action,
+        reason: "I could not find a usable Upwork URL for capture, so I stopped before opening anything.",
+        stateKeyPart: "no_url",
+      });
+      result.slackPostsSucceeded += blockerResult.posted;
+      result.slackPostFailures += blockerResult.failed;
+    } else if (thread) {
       updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "capture_failed");
     }
     if (action.actionType === "prepare_application_review") {
@@ -2991,10 +3163,10 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       discovery: action.payload.discovery ?? null,
       reason: message,
     }, null, 2));
-    if (thread) {
-      updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "capture_failed", { jobId: action.jobId });
+    for (const targetThread of captureThreads) {
+      updateSlackThreadStateStatus(targetThread.channelId, targetThread.threadTs, "capture_failed", { jobId: action.jobId });
       await postSoulAwareBrowserThreadMessage({
-        thread,
+        thread: targetThread,
         intent: "browser_capture_unknown_source",
         context: { url },
         deterministicText: [
@@ -3056,10 +3228,11 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         note: "Not auto-preparing because the dry-run capture preview does not include verified live job intelligence.",
       };
       autoPrepareDecision = autoQueuePrepareDraft(scored, {}, thread);
-      if (thread) {
-        updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "captured", { jobId: scored.id });
-        updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "scored", { jobId: scored.id });
-        const threadPostStatus = await postV3CapturePacketToThread(scored, thread, {
+      if (captureThreads.length > 0) {
+        const threadPostResult = await postV3CapturePacketToThreads({
+          action,
+          job: scored,
+          context: {
           upworkUrl: url,
           captureStatus: "packet_sent",
           browserCaptureActionId: action.id,
@@ -3072,14 +3245,14 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           questionAnswers: answers,
           proofRecommendations: extractProofRecommendations(scored.applicationDraft),
           autoPrepareNote: autoPrepareDecision.note,
+          },
         });
-        if (threadPostStatus === "posted") {
-          result.slackPostsSucceeded += 1;
-          updateSlackThreadStateStatus(thread.channelId, thread.threadTs, autoPrepareDecision.actionId && !autoPrepareDecision.duplicate ? "prepare_draft_requested" : "packet_sent", { jobId: scored.id });
-        } else if (threadPostStatus === "failed") {
-          result.slackPostFailures += 1;
+        result.slackPostsSucceeded += threadPostResult.posted;
+        result.slackPostFailures += threadPostResult.failed;
+        if (threadPostResult.posted > 0) {
+          updateCaptureThreadStates(action, autoPrepareDecision.actionId && !autoPrepareDecision.duplicate ? "prepare_draft_requested" : "packet_sent", { jobId: scored.id, upworkUrl: url });
         } else {
-          logger.info(`Dry-run Slack thread lead message was not posted for jobId=${scored.id}; status=${threadPostStatus}`);
+          logger.info(`Dry-run Slack thread lead message was not posted for jobId=${scored.id}; skipped=${threadPostResult.skipped} failed=${threadPostResult.failed}`);
         }
       }
       updateBrowserActionStatus(action.id, "paused", "Dry run: browser capture simulated from URL. Set BROWSER_DRY_RUN=false for real extraction.");
@@ -3288,9 +3461,16 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           inspectionDiagnostics,
           extractionDiagnostics,
         }, null, 2));
-        if (thread) {
-          updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "capture_failed", { jobId: action.jobId });
-        }
+        updateCaptureThreadStates(action, "capture_failed", { jobId: action.jobId, upworkUrl: snapshot?.url ?? url });
+        const blockerResult = await postCaptureBlockerNotificationsForAction({
+          action,
+          reason: state === "source_context_unavailable"
+            ? "I could not read enough job content to score or draft safely."
+            : "I could not find a usable Upwork URL for capture.",
+          stateKeyPart: state,
+        });
+        result.slackPostsSucceeded += blockerResult.posted;
+        result.slackPostFailures += blockerResult.failed;
         updateBrowserActionStatus(action.id, "failed", stateStatusMessage(state));
         logger.warn(`Browser action #${action.id} capture unavailable; marked failed without manual attention: url=${snapshot?.url ?? url} title=${snapshot?.title ?? "n/a"} detector=${inspectionDiagnostics?.finalDetection.source ?? "n/a"}`);
         return result;
@@ -3298,22 +3478,22 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
 
       if (isCaptureManualAttentionState(state)) {
         const threadStatus = String(state);
-        const alreadyManual = thread ? getSlackThreadStateByThreadTs(thread.channelId, thread.threadTs)?.status === "manual_attention_required" : false;
-        if (thread) {
-          updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "manual_attention_required");
-          const incident = ["login_required", "two_factor_required", "captcha_or_security_challenge"].includes(threadStatus)
-            ? markBrowserManualAttentionThreadAlert({
-                actionId: action.id,
-                jobId: action.jobId,
-                applicationId: typeof action.payload.applicationId === "string" ? action.payload.applicationId : null,
-                url: snapshot?.url ?? url,
-                title: snapshot?.title ?? null,
-                reason: threadStatus,
-              })
-            : { shouldPost: !alreadyManual, incidentKey: "", duplicate: alreadyManual };
-          if (!alreadyManual && incident.shouldPost) {
+        if (["login_required", "two_factor_required", "captcha_or_security_challenge"].includes(threadStatus)) {
+          markBrowserManualAttentionThreadAlert({
+            actionId: action.id,
+            jobId: action.jobId,
+            applicationId: typeof action.payload.applicationId === "string" ? action.payload.applicationId : null,
+            url: snapshot?.url ?? url,
+            title: snapshot?.title ?? null,
+            reason: threadStatus,
+          });
+        }
+        for (const targetThread of captureThreads) {
+          const alreadyManual = getSlackThreadStateByThreadTs(targetThread.channelId, targetThread.threadTs)?.status === "manual_attention_required";
+          updateSlackThreadStateStatus(targetThread.channelId, targetThread.threadTs, "manual_attention_required");
+          if (!alreadyManual) {
             await postSoulAwareBrowserThreadMessage({
-              thread,
+              thread: targetThread,
               intent: "browser_capture_blocked",
               context: { browserState: threadStatus, pageTitle: snapshot?.title ?? null },
               deterministicText: [
@@ -3329,13 +3509,11 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
               ].filter((line): line is string => Boolean(line)).join("\n"),
               preservePhrases: ["reply “retry”"],
             });
-          } else if (!incident.shouldPost) {
-            logger.info(`Suppressed duplicate browser capture blocker reply. incidentKey=${incident.incidentKey}`);
           }
           if (["login_required", "two_factor_required", "captcha_or_security_challenge"].includes(threadStatus)) {
             await quarantineBrowserChallenge({
               action,
-              thread,
+              thread: targetThread,
               state: threadStatus,
               url: snapshot?.url ?? url,
               title: snapshot?.title ?? null,
@@ -3355,12 +3533,12 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           title: snapshot?.title ?? null,
           extractionDiagnostics,
         }, null, 2));
-        if (thread) {
-          updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "capture_failed", { jobId: action.jobId });
-          const alreadyManual = getSlackThreadStateByThreadTs(thread.channelId, thread.threadTs)?.status === "manual_attention_required";
+        for (const targetThread of captureThreads) {
+          updateSlackThreadStateStatus(targetThread.channelId, targetThread.threadTs, "capture_failed", { jobId: action.jobId });
+          const alreadyManual = getSlackThreadStateByThreadTs(targetThread.channelId, targetThread.threadTs)?.status === "manual_attention_required";
           if (!alreadyManual) {
             await postSoulAwareBrowserThreadMessage({
-              thread,
+              thread: targetThread,
               intent: "browser_capture_low_confidence",
               context: { currentUrl: snapshot?.url ?? url, currentTitle: snapshot?.title ?? null },
               deterministicText: [
@@ -3433,10 +3611,11 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
       };
       let discoverySlackStatus: DiscoverySlackNotificationStatus | undefined;
       autoPrepareDecision = autoQueuePrepareDraft(scored, {}, thread);
-      if (thread) {
-        updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "captured", { jobId: scored.id });
-        updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "scored", { jobId: scored.id });
-        const threadPostStatus = await postV3CapturePacketToThread(scored, thread, {
+      if (captureThreads.length > 0) {
+        const threadPostResult = await postV3CapturePacketToThreads({
+          action,
+          job: scored,
+          context: {
           upworkUrl: url,
           captureStatus: "packet_sent",
           browserCaptureActionId: action.id,
@@ -3449,15 +3628,15 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           questionAnswers,
           proofRecommendations: extractProofRecommendations(scored.applicationDraft),
           autoPrepareNote: autoPrepareDecision.note,
+          },
         });
-        packetPosted = threadPostStatus === "posted";
+        packetPosted = threadPostResult.posted > 0;
+        result.slackPostsSucceeded += threadPostResult.posted;
+        result.slackPostFailures += threadPostResult.failed;
         if (packetPosted) {
-          result.slackPostsSucceeded += 1;
-          updateSlackThreadStateStatus(thread.channelId, thread.threadTs, autoPrepareDecision.actionId && !autoPrepareDecision.duplicate ? "prepare_draft_requested" : "packet_sent", { jobId: scored.id });
-        } else if (threadPostStatus === "failed") {
-          result.slackPostFailures += 1;
+          updateCaptureThreadStates(action, autoPrepareDecision.actionId && !autoPrepareDecision.duplicate ? "prepare_draft_requested" : "packet_sent", { jobId: scored.id, upworkUrl: url });
         } else {
-          logger.info(`Slack thread lead message was not posted for jobId=${scored.id}; status=${threadPostStatus}`);
+          logger.info(`Slack thread lead message was not posted for jobId=${scored.id}; skipped=${threadPostResult.skipped} failed=${threadPostResult.failed}`);
         }
       } else {
         const discoveryNotification = await postDiscoveryCapturePacket({
@@ -3485,7 +3664,16 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     updateBrowserActionStatus(action.id, "failed", message);
-    if (thread) {
+    if (action.actionType === "capture_job_from_url") {
+      updateCaptureThreadStates(action, "capture_failed", { jobId: action.jobId });
+      const blockerResult = await postCaptureBlockerNotificationsForAction({
+        action,
+        reason: message,
+        stateKeyPart: "exception",
+      });
+      result.slackPostsSucceeded += blockerResult.posted;
+      result.slackPostFailures += blockerResult.failed;
+    } else if (thread) {
       updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "capture_failed");
     }
     logger.error(`Browser action #${action.id} failed: ${message}`);
