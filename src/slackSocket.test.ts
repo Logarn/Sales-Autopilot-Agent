@@ -56,7 +56,7 @@ async function runTests(): Promise<void> {
   process.env.PROOF_ASSET_ROOT = proofRoot;
   process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
   process.env.SLACK_ALLOWED_USER_IDS = "U_ALLOWED";
-  process.env.SLACK_ALLOWED_CHANNEL_IDS = "C123,C456,CBRAIN,CDEAL,CDISC,CEVERY,CMULTI,CNO,COWN,CPREVIEW,CQA,CSKIP,CSUBMIT,C_SHARED,C0AQW8W6RFU";
+  process.env.SLACK_ALLOWED_CHANNEL_IDS = "C123,C456,CBRAIN,CDEAL,CDISC,CEVERY,CMULTI,CNO,COWN,CPREVIEW,CQA,CSKIP,CSUBMIT,C_SHARED,CREJECT,CRETRYDONE,C0AQW8W6RFU";
   process.env.SLACK_COPY_LLM_ENABLED = "false";
   process.env.BROWSER_QA_MAX_PROTECTED_TABS = "5";
 
@@ -74,7 +74,7 @@ async function runTests(): Promise<void> {
       outcomeStatus?: string;
     };
     parseUpworkJobUrlFromText: (value: string) => { originalUrl: string; normalizedUrl: string; canonicalJobUrl: string; jobId: string } | null;
-    queueCaptureFromSlackUrl: (input: { channelId: string; messageTs: string; threadTs: string; text: string }) => { parsed: any; state: any; action: any } | null;
+    queueCaptureFromSlackUrl: (input: { channelId: string; messageTs: string; threadTs: string; text: string }) => { parsed: any; state: any; action: any; ownershipStatus?: string } | null;
     queuePrepareDraftFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string; actionId?: number };
     resetSlackSocketEventDedupeForTests: () => void;
   };
@@ -1100,7 +1100,15 @@ async function runTests(): Promise<void> {
     assert(directDraftPreview.ok, "Draft preview helper should return the stored proposal without queuing browser work.");
     assert(directDraftPreview.text.includes("I have not filled the Upwork form yet."), "Draft preview must state the Upwork form has not been filled.");
     assert(directDraftPreview.text.includes("Final submit remains manual."), "Draft preview must keep final submit manual.");
+    assert(!/slack_preview_v\d+/i.test(directDraftPreview.text), "Normal Slack draft preview should not expose internal slack_preview version labels.");
     assert(/draft_ready|proof_plan_ready/.test(getSlackWorkflowState("C123", "111.222")?.workflowState ?? ""), "Showing a stored draft should advance workflow state to draft/proof ready.");
+    const previewVersionsAfterFirst = listProposalVersions(prepareJob.id).filter((version) => version.source === "slack_preview").length;
+    const repeatedDraftPreview = buildDraftPreviewFromSlackThread({ channelId: "C123", threadTs: "111.222" });
+    const previewVersionsAfterRepeat = listProposalVersions(prepareJob.id).filter((version) => version.source === "slack_preview").length;
+    assert(repeatedDraftPreview.ok, "Repeated draft preview should still answer.");
+    assert(repeatedDraftPreview.text.includes("already posted the current draft above"), "Repeated draft preview should point to the existing draft instead of reposting the full proposal.");
+    assert(!repeatedDraftPreview.text.includes(prepareJob.applicationDraft.proposalText), "Repeated draft preview should not spam the same proposal body.");
+    assert(previewVersionsAfterRepeat === previewVersionsAfterFirst, "Repeated draft preview should not create another slack_preview proposal version.");
 
     const previewReplies: string[] = [];
     const actionCountBeforePreview = listBrowserActions(null, 1000).length;
@@ -1116,7 +1124,7 @@ async function runTests(): Promise<void> {
         },
       },
     });
-    assert(previewReplies.some((reply) => reply.includes("Draft preview for")), "Draft-preview command should post the draft in-thread.");
+    assert(previewReplies.some((reply) => reply.includes("already posted the current draft above")), "Repeated draft-preview command should point to the existing in-thread draft.");
     assert(previewReplies.some((reply) => reply.includes("I have not filled the Upwork form yet.")), "Draft-preview command must not imply browser fill happened.");
     assert(listBrowserActions(null, 1000).length === actionCountBeforePreview, "Draft-preview command must not queue a browser preparation action.");
     assert(getSlackThreadStateByThreadTs("C123", "111.222")?.status === "draft_preview_sent", "Draft-preview command should mark the thread preview-sent.");
@@ -1157,6 +1165,85 @@ async function runTests(): Promise<void> {
       listBrowserActions(null, 1000).some((action) => action.jobId === previewUseJob.id && action.actionType === "prepare_application_review"),
       "Use-this after a draft preview should queue Upwork browser preparation.",
     );
+
+    const rejectDraftJob = {
+      ...prepareJob,
+      id: "reject-draft-job",
+      applicationDraft: {
+        ...prepareJob.applicationDraft,
+        jobId: "reject-draft-job",
+      },
+    };
+    markJobSeen(rejectDraftJob, false);
+    upsertSlackThreadState({
+      channelId: "CREJECT",
+      messageTs: "555.111",
+      threadTs: "555.111",
+      upworkUrl: rejectDraftJob.url,
+      jobId: rejectDraftJob.id,
+      status: "draft_preview_sent",
+    });
+    const rejectReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "CREJECT",
+      threadTs: "555.111",
+      text: "Stop. Do not prep this draft. I do not approve this version. Wait.",
+      client: { chat: { postMessage: async (payload: { text: string }) => rejectReplies.push(payload.text) } },
+    });
+    assert(rejectReplies.some((reply) => /won.t prep this version|what should i change|rewrite/i.test(reply)), "Negative draft feedback should ask for revision direction.");
+    const rejectedWorkflow = getSlackWorkflowState("CREJECT", "555.111");
+    assert(rejectedWorkflow?.latestAgentPromise?.status === "blocked", "Rejected draft should block the current draft promise.");
+    assert(/draft_rejected/i.test(rejectedWorkflow?.latestAgentPromise?.blocker ?? ""), "Rejected draft should be recorded as a draft_rejected blocker.");
+    const prepareCountBeforeRejectedPrep = listBrowserActions(null, 1000).filter((action) => action.actionType === "prepare_application_review").length;
+    const rejectedPrepReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "CREJECT",
+      threadTs: "555.111",
+      text: "prep it",
+      client: { chat: { postMessage: async (payload: { text: string }) => rejectedPrepReplies.push(payload.text) } },
+    });
+    assert(rejectedPrepReplies.some((reply) => /not approved|rewrite|revise/i.test(reply)), "Prep after rejected draft should ask for revision approval first.");
+    assert(
+      listBrowserActions(null, 1000).filter((action) => action.actionType === "prepare_application_review").length === prepareCountBeforeRejectedPrep,
+      "Prep after a rejected draft must not queue prepare_application_review.",
+    );
+
+    const retryDoneJob = {
+      ...prepareJob,
+      id: "manual:upwork-088053866890130225260",
+      url: "https://www.upwork.com/jobs/~088053866890130225260",
+      applicationDraft: {
+        ...prepareJob.applicationDraft,
+        jobId: "manual:upwork-088053866890130225260",
+      },
+    };
+    markJobSeen(retryDoneJob, false);
+    const completedCapture = queueCaptureFromSlackUrl({
+      channelId: "CRETRYDONE",
+      messageTs: "666.001",
+      threadTs: "666.001",
+      text: retryDoneJob.url,
+    });
+    if (!completedCapture) {
+      throw new Error("Completed-capture retry setup should queue initial capture.");
+    }
+    updateBrowserActionStatus(completedCapture.action.id, "completed", "capture completed in prior thread");
+    const attachedCompleted = queueCaptureFromSlackUrl({
+      channelId: "CRETRYDONE",
+      messageTs: "666.002",
+      threadTs: "666.002",
+      text: retryDoneJob.url,
+    });
+    assert(attachedCompleted?.ownershipStatus === "attached_completed", "Second thread should attach to the completed capture.");
+    const retryDoneReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "CRETRYDONE",
+      threadTs: "666.002",
+      text: "retry capture",
+      client: { chat: { postMessage: async (payload: { text: string }) => retryDoneReplies.push(payload.text) } },
+    });
+    assert(retryDoneReplies.some((reply) => /Capture is already complete/i.test(reply) && /regenerate|revise/i.test(reply)), "Retry capture with completed capture and draft should explain recapture is unnecessary.");
+    assert(!retryDoneReplies.join("\n").includes(retryDoneJob.applicationDraft.proposalText), "Retry capture with completed capture and draft should not repost the same draft body.");
 
     const llmPrepareJob = {
       ...prepareJob,

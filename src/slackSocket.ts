@@ -132,6 +132,8 @@ import type { ApplicationStatus, BrowserAction, BrowserActionEnqueueResult, Prop
 import {
   buildThreadWorkflowStatusReply,
   buildUnifiedSlackJobContext,
+  isDraftRejectionFeedbackIntent,
+  isWorkflowDraftRejected,
   type SlackWorkflowProofPlanSnapshot,
   type UnifiedSlackJobContext,
 } from "./slackWorkflowContext";
@@ -273,6 +275,7 @@ function hasSlackMention(value: string): boolean {
 
 function matchesApprovePrepareIntent(value: string, mentioned: boolean): boolean {
   const text = value.toLowerCase();
+  if (isDraftRejectionFeedbackIntent(text)) return false;
   return (
     /\b(?:yeah|yes|yep|yup|sure|ok|okay|looks good)\b.*\b(?:prep|prepare|draft|drafts|apply|applications?|write|proceed|move forward)\b/.test(text) ||
     /\b(?:use this|put it in upwork|put this in upwork|fill it in upwork|fill this in upwork)\b/.test(text) ||
@@ -1255,6 +1258,7 @@ function matchesNaturalStatusIntent(text: string): boolean {
 
 function activeCtaApprovesPrep(text: string, activeCta: SlackActiveCta | null): boolean {
   if (matchesDraftPreviewIntent(text)) return false;
+  if (isDraftRejectionFeedbackIntent(text)) return false;
   return activeCta?.action === "prep_application" &&
     (matchesVagueAffirmative(text) || matchesPrepCorrectionIntent(text) || matchesApprovePrepareIntent(text, hasSlackMention(text)));
 }
@@ -1719,10 +1723,71 @@ function buildNoDraftPrepareBlocker(state: NonNullable<ReturnType<typeof getSlac
   };
 }
 
+const DRAFT_REJECTION_BLOCKER = "draft_rejected: operator did not approve this draft.";
+
+function draftRevisionFeedbackReply(): string {
+  return "Got it — I won’t prep this version. What should I change? I can rewrite it with a sharper customer pain angle, less generic proof, and a more human opener.";
+}
+
+function markDraftRejectedFromSlackThread(input: { channelId: string; threadTs: string; userMessage: string }): { ok: boolean; text: string } {
+  const state = getSlackThreadStateByThreadTs(input.channelId, input.threadTs);
+  if (!state?.jobId) {
+    return {
+      ok: false,
+      text: "Got it — I won’t prep anything yet. Send the Upwork job URL or current lead, then tell me what you want changed.",
+    };
+  }
+  const reply = draftRevisionFeedbackReply();
+  const existingWorkflow = getSlackWorkflowState(input.channelId, input.threadTs);
+  if (!existingWorkflow?.latestAgentPromise) {
+    recordSlackWorkflowPromise({
+      channelId: input.channelId,
+      threadTs: input.threadTs,
+      type: "draft_preview",
+      text: "Draft preview rejected; waiting for rewrite direction.",
+      workflowState: "draft_ready",
+      requestedByUserText: input.userMessage,
+      draftRequested: true,
+    });
+  }
+  markSlackWorkflowPromiseStatus({
+    channelId: input.channelId,
+    threadTs: input.threadTs,
+    status: "blocked",
+    workflowState: "draft_ready",
+    blocker: DRAFT_REJECTION_BLOCKER,
+    lastAgentReply: reply,
+  });
+  upsertSlackWorkflowState({
+    channelId: input.channelId,
+    threadTs: input.threadTs,
+    workflowState: "draft_ready",
+    draftRequested: true,
+    prepRequested: false,
+    lastUserMessage: input.userMessage,
+    lastAgentReply: reply,
+  });
+  recordApplicationRevisionRequest(state.jobId, input.userMessage);
+  return { ok: true, text: reply };
+}
+
 export function queuePrepareDraftFromSlackThread(input: { channelId: string; threadTs: string; ackText?: string | null; forceRetryPaused?: boolean }): { ok: boolean; text: string; actionId?: number; threadStatus?: "capture_pending" | "error" } {
   const state = getSlackThreadStateByThreadTs(input.channelId, input.threadTs);
   if (!state?.jobId) {
     return { ok: false, text: "I cannot queue a browser draft without a tracked job id for this thread." };
+  }
+  const workflowState = getSlackWorkflowState(input.channelId, input.threadTs);
+  if (isWorkflowDraftRejected(workflowState)) {
+    const text = "I won’t prep this draft because it is not approved yet. Tell me what to change or ask me to rewrite it first. Final submit remains manual.";
+    upsertSlackWorkflowState({
+      channelId: input.channelId,
+      threadTs: input.threadTs,
+      workflowState: "draft_ready",
+      draftRequested: true,
+      prepRequested: false,
+      lastAgentReply: text,
+    });
+    return { ok: false, text, threadStatus: "error" };
   }
 
   const draft = getApplicationDraft(state.jobId);
@@ -2230,6 +2295,7 @@ export function buildDraftPreviewFromSlackThread(input: {
   const scoredJob = getScoredJobForSlackPreview(state.jobId);
   const requestedVersion = input.source ? getLatestProposalVersion(state.jobId, input.source) : null;
   const latestVersion = requestedVersion ?? getLatestProposalVersion(state.jobId);
+  const latestSlackPreview = !input.source ? getLatestProposalVersion(state.jobId, "slack_preview") : null;
   const textToShow = requestedVersion?.proposalText ?? (!input.source ? draft?.proposalText.trim() : latestVersion?.proposalText) ?? "";
   if (!textToShow.trim()) {
     const context = resolveUnifiedSlackJobContext({ channelId: input.channelId, threadTs: input.threadTs });
@@ -2245,6 +2311,29 @@ export function buildDraftPreviewFromSlackThread(input: {
         ? "The draft is still being generated for this lead. I’ll post it here when it is ready; final submit remains manual."
         : "Quick blocker: I do not have the generated draft for this lead yet. I need capture/draft generation before I can show or prep the application.",
     };
+  }
+  if (
+    latestSlackPreview &&
+    !input.source &&
+    latestVersion &&
+    latestVersion.versionNumber <= latestSlackPreview.versionNumber &&
+    latestSlackPreview.proposalText.trim() === textToShow.trim()
+  ) {
+    const text = [
+      `I already posted the current draft above for ${scoredJob?.title ?? state.jobId}.`,
+      "I have not filled the Upwork form yet.",
+      "If you want changes, tell me what to revise.",
+      "Final submit remains manual.",
+    ].join("\n");
+    updateSlackThreadStateStatus(state.channelId, state.threadTs, "draft_preview_sent");
+    markSlackWorkflowPromiseStatus({
+      channelId: state.channelId,
+      threadTs: state.threadTs,
+      status: "fulfilled",
+      workflowState: draft?.proofStrategy ? "proof_plan_ready" : "draft_ready",
+      lastAgentReply: `Draft preview already posted for ${scoredJob?.title ?? state.jobId}.`,
+    });
+    return { ok: true, text };
   }
   const previewVersion = input.source
     ? requestedVersion
@@ -2266,10 +2355,12 @@ export function buildDraftPreviewFromSlackThread(input: {
   const shownVersion = requestedVersion ?? previewVersion ?? latestVersion;
   const label = shownVersion?.label ?? "current draft";
   const sourceLine = input.source && !requestedVersion
-    ? shownVersion?.isFallback
-      ? `I do not have a ${input.source.replace(/_/g, " ")} readback; showing the lower-confidence latest verified fallback instead (${label}).`
-      : `I do not have a ${input.source.replace(/_/g, " ")} capture yet; showing the latest captured draft instead (${label}).`
-    : `Version: ${label}`;
+      ? shownVersion?.isFallback
+        ? `I do not have a ${input.source.replace(/_/g, " ")} readback; showing the lower-confidence latest verified fallback instead (${label}).`
+        : `I do not have a ${input.source.replace(/_/g, " ")} capture yet; showing the latest captured draft instead (${label}).`
+    : input.source
+      ? `Version: ${label}`
+      : "Current draft:";
   const finalSubmittedQualifier = shownVersion?.isFallback
     ? "This is a lower-confidence latest verified fallback, not a visible final submitted readback."
     : "I only call this final submitted text when Steve marked it submitted or the page was captured before that outcome update.";
@@ -2841,6 +2932,22 @@ async function executeConversationPlan(params: {
   userMessage: string;
   copyProvider?: SlackCopyProvider;
 }): Promise<void> {
+  if (params.plan.actions.includes("mark_draft_rejected")) {
+    const result = markDraftRejectedFromSlackThread({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      userMessage: params.userMessage,
+    });
+    const text = await userFacingSlackCopy({
+      deterministicText: result.text,
+      userMessage: params.userMessage,
+      intent: params.plan.intent,
+      context: { jobId: params.state.jobId, threadStatus: params.state.status, draftRejected: true },
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return;
+  }
   if (params.plan.actions.includes("send_draft_preview")) {
     recordSlackWorkflowPromise({
       channelId: params.channelId,
@@ -2943,17 +3050,15 @@ async function executeConversationPlan(params: {
     });
     await postThreadReply(params.client, params.channelId, params.threadTs, text);
     if (queued.ownershipStatus === "attached_completed" && queued.actionRecord && getApplicationDraft(queued.actionRecord.jobId)) {
-      const draftPreview = buildDraftPreviewFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs });
-      if (draftPreview.ok) {
-        const draftText = await userFacingSlackCopyWithExactBody({
-          deterministicText: draftPreview.text,
-          userMessage: params.userMessage,
-          intent: "draft_preview",
-          context: { jobId: queued.actionRecord.jobId, ok: true, reusedCompletedCapture: true, exactProposalBodyPreserved: true },
-          copyProvider: params.copyProvider,
-        });
-        await postThreadReply(params.client, params.channelId, params.threadTs, draftText);
-      }
+      const draftText = await userFacingSlackCopy({
+        deterministicText: "Capture is already complete. If the issue is the draft, I should regenerate or revise the draft, not recapture the listing. I already posted the current draft above; tell me what to change or say \"regenerate draft\".",
+        userMessage: params.userMessage,
+        intent: "retry_capture_completed_with_draft",
+        context: { jobId: queued.actionRecord.jobId, reusedCompletedCapture: true, draftAvailable: true },
+        preservePhrases: ["Capture is already complete"],
+        copyProvider: params.copyProvider,
+      });
+      await postThreadReply(params.client, params.channelId, params.threadTs, draftText);
     }
     return;
   }
@@ -3885,6 +3990,23 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
       intent: "manual_submit_reminder",
       context: { jobId: state?.jobId ?? null, finalSubmitManual: true },
       preservePhrases: ["final submit stays manual"],
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return;
+  }
+
+  if (canExecuteConversationBrainAction && state && isDraftRejectionFeedbackIntent(params.text)) {
+    const result = markDraftRejectedFromSlackThread({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      userMessage: params.text,
+    });
+    const text = await userFacingSlackCopy({
+      deterministicText: result.text,
+      userMessage: params.text,
+      intent: "draft_rejection_feedback",
+      context: { jobId: state.jobId, threadStatus: state.status, draftRejected: true },
       copyProvider: params.copyProvider,
     });
     await postThreadReply(params.client, params.channelId, params.threadTs, text);

@@ -3,6 +3,7 @@ import { looksLikeProofPlanRevision } from "./proofPlanOverrides";
 import {
   buildThreadWorkflowStatusReply,
   isDraftPreviewStatusIntent,
+  isDraftRejectionFeedbackIntent,
   isExplicitRevisionIntent,
   type UnifiedSlackJobContext,
 } from "./slackWorkflowContext";
@@ -33,6 +34,7 @@ export type SlackConversationAction =
   | "retry_prepare_after_files"
   | "queue_proof_recheck"
   | "show_debug_details"
+  | "mark_draft_rejected"
   | "mark_skip"
   | "none"
   | "retry_capture";
@@ -89,6 +91,7 @@ function conciseJobLabel(job: ScoredJob | null): string {
 }
 
 function isVagueAffirmative(text: string): boolean {
+  if (isDraftRejectionFeedbackIntent(text)) return false;
   return /^(?:yes|yep|yeah|yup|sure|sure thing|ok|okay|go for it|do it|sounds good|move on it|let'?s run it|handle it|prep it|go ahead)(?:\s+please)?$/.test(text) ||
     /^(?:yes|yep|yeah|yup|sure|ok|okay),?\s+(?:go for it|do it|sounds good|move on it|let'?s run it|handle it|prep it|go ahead)$/.test(text) ||
     /\b(?:go for it|sounds good|move on it|let'?s run it|handle it|prep it|go ahead)\b/.test(text);
@@ -210,6 +213,8 @@ function coverLetterReply(input: SlackConversationPlannerInput): string {
 export function planSlackConversation(input: SlackConversationPlannerInput): SlackConversationPlan {
   const text = normalize(input.latestMessage);
   const debugRequested = /\b(debug|technical details|raw status|full details|dump|which skills|skills did you use|skill trace|skill-use trace)\b/.test(text);
+  const draftRejected = Boolean(input.workflowContext?.draftRejected);
+  const draftRejectionFeedback = isDraftRejectionFeedbackIntent(input.latestMessage);
 
   // ===== LAYER 1 FIX: State-aware intent routing =====
   // If user wants to prep but no draft exists, route to status/capture-retry instead
@@ -219,6 +224,17 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
                        isProceedWithApplicationIntent(text) ||
                        (input.activeCta?.action === "prep_application" && (isVagueAffirmative(text) || isPrepCorrection(text)));
 
+  if (draftRejectionFeedback) {
+    return {
+      intent: "revise_draft",
+      confidence: "high",
+      reply: "Got it — I won’t prep this version. What should I change? I can rewrite it with a sharper customer pain angle, less generic proof, and a more human opener.",
+      actions: ["mark_draft_rejected"],
+      clarificationNeeded: false,
+      debugRequested: false,
+    };
+  }
+
   if (wantsToPrep && !input.job && !input.workflowContext?.threadState?.upworkUrl) {
     return {
       intent: "unknown_clarify",
@@ -226,6 +242,17 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
       reply: "I can prep one controlled application, but I need the Upwork job URL or the current lead first. I will stop before submit, and final submit remains manual.",
       actions: ["none"],
       clarificationNeeded: true,
+      debugRequested: false,
+    };
+  }
+
+  if (wantsToPrep && draftRejected) {
+    return {
+      intent: "status_summary",
+      confidence: "high",
+      reply: "I won’t prep this draft because it is not approved yet. Tell me what to change or ask me to rewrite it first. Final submit remains manual.",
+      actions: ["none"],
+      clarificationNeeded: false,
       debugRequested: false,
     };
   }
@@ -408,8 +435,8 @@ export function planSlackConversation(input: SlackConversationPlannerInput): Sla
     return {
       intent: "revise_draft",
       confidence: "high",
-      reply: "Got it — I’ll treat that as a draft revision request for this application.",
-      actions: ["none"],
+      reply: "Got it — I won’t prep this version until the draft is revised and approved. What exact direction should I use for the rewrite?",
+      actions: ["mark_draft_rejected"],
       clarificationNeeded: false,
       debugRequested: false,
     };
