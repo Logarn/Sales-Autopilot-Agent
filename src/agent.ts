@@ -262,15 +262,15 @@ function voiceClosingLine(artifacts: KnowledgeArtifact[]): string | null {
   const preferredTag = artifacts
     .flatMap((artifact) => artifact.tags.filter((tag) => tag.startsWith("prefer:")))
     .map((tag) => tag.slice(7).trim())
-    .find(Boolean);
+    .find((tag) => !/\bstore url\b/i.test(tag));
   if (preferredTag) {
     return preferredTag;
   }
   if (/short(er)?\s+cta|concise\s+cta|confident.*next step|specific next step/i.test(combined)) {
-    return "Send me the store URL and I can point to the first retention fixes I would make.";
+    return "If it makes sense, I can start from the job details, map the first retention fixes, and make the work more specific once the site or account context is available.";
   }
   if (/audit|diagnos/i.test(combined)) {
-    return "Send me the store URL and I can give you a practical read on where I would start.";
+    return "If it makes sense, I would start with a practical diagnostic of the current lifecycle paths and prioritize the first fixes from there.";
   }
   return null;
 }

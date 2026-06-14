@@ -197,6 +197,7 @@ const gateBase = {
 };
 assert(evaluateDraftQualityGate({ ...gateBase, proposalText: "I am a Klaviyo expert with years of experience. Send me the store URL." }).issues.some((issue) => issue.code === "generic_expert_opener"), "Generic opener should fail quality gate.");
 assert(evaluateDraftQualityGate({ ...gateBase, proposalText: `${beautyDraft.proposalText}\n\njust adding noise.` }).issues.some((issue) => issue.code === "banned_noise_phrase"), "Banned noise phrase should fail quality gate.");
+assert(evaluateDraftQualityGate({ ...gateBase, proposalText: `${beautyDraft.proposalText}\n\nSend me the store URL and I can point to the first retention fixes I would make.` }).issues.some((issue) => issue.code === "store_url_punt_cta"), "Store URL punt CTA should fail quality gate.");
 assert(evaluateDraftQualityGate({
   ...gateBase,
   proposalText: `${beautyDraft.proposalText}\n\nRelevant background: Klaviyo and DTC lifecycle.\nTo answer the application notes directly: Rate: $35/hr.\nAdditional relevant example: Truly Beauty.`,

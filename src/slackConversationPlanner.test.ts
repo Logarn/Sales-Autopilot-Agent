@@ -302,7 +302,7 @@ const reusedCaptureStatus = planSlackConversation({
   }),
 });
 assert.equal(reusedCaptureStatus.intent, "status_summary");
-assert.match(reusedCaptureStatus.reply, /Capture: reused captured job/i);
+assert.match(reusedCaptureStatus.reply, /Capture: done from existing capture/i);
 assert.doesNotMatch(reusedCaptureStatus.reply, /Capture: failed/i);
 assert.doesNotMatch(reusedCaptureStatus.reply, /Stale duplicate capture|ownership reconciliation/i);
 
@@ -328,6 +328,14 @@ assert.match(negativeDraftFeedback.reply, /won.t prep this version/i);
 const genericCvFeedback = planSlackConversation({ ...baseInput, latestMessage: "The CV is generic, does not sound researched, and is not in my voice" });
 assert.equal(genericCvFeedback.intent, "revise_draft");
 assert.deepEqual(genericCvFeedback.actions, ["mark_draft_rejected"]);
+
+const makeItBetterFeedback = planSlackConversation({ ...baseInput, latestMessage: "Make it better, this sounds weak" });
+assert.equal(makeItBetterFeedback.intent, "revise_draft");
+assert.deepEqual(makeItBetterFeedback.actions, ["mark_draft_rejected"]);
+
+const badAngleFeedback = planSlackConversation({ ...baseInput, latestMessage: "I don't like this angle" });
+assert.equal(badAngleFeedback.intent, "revise_draft");
+assert.deepEqual(badAngleFeedback.actions, ["mark_draft_rejected"]);
 
 const doNotPrepFeedback = planSlackConversation({
   ...baseInput,

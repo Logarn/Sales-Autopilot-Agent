@@ -357,7 +357,7 @@ export function buildThreadWorkflowStatusReply(ctx: UnifiedSlackJobContext): str
       isInternalSlackWorkflowReconciliation(ctx.captureAction?.lastError) ||
       isInternalSlackWorkflowReconciliation(ctx.latestAgentPromise?.blocker)
     )
-      ? "reused captured job"
+      ? "done from existing capture"
       : ctx.captureState.replace(/_/g, " ");
   const draft = ctx.draftState === "ready"
     ? ctx.draftRejected ? "needs revision" : "ready"
@@ -392,9 +392,9 @@ export function isDraftRejectionFeedbackIntent(value: string): boolean {
   const text = value.toLowerCase().replace(/[.!?]+$/g, "").trim();
   return (
     /\b(?:i\s+don['’]?t\s+like|do\s+not\s+like|don['’]?t\s+approve|do\s+not\s+approve|not\s+approved|i\s+do\s+not\s+approve)\b.*\b(?:draft|proposal|cover\s*letter|cv|version|this)\b/.test(text) ||
-    /\b(?:this|the\s+(?:draft|proposal|cover\s*letter|cv))\s+(?:is\s+)?(?:bad|weak|generic|not\s+good\s+enough|not\s+researched|not\s+my\s+voice|not\s+in\s+my\s+voice|too\s+generic)\b/.test(text) ||
+    /\b(?:this|the\s+(?:draft|proposal|cover\s*letter|cv))\s+(?:is\s+|sounds\s+)?(?:bad|weak|generic|not\s+good\s+enough|not\s+researched|not\s+my\s+voice|not\s+in\s+my\s+voice|too\s+generic)\b/.test(text) ||
     /\b(?:rewrite|redo|rework)\s+(?:this|it|the\s+(?:draft|proposal|cover\s*letter|cv))\b/.test(text) ||
-    /\b(?:make\s+it\s+more\s+human|make\s+this\s+more\s+human|too\s+generic|not\s+researched|not\s+in\s+my\s+voice|generic\s+cv|generic\s+draft)\b/.test(text) ||
+    /\b(?:make\s+it\s+better|make\s+this\s+better|make\s+it\s+more\s+human|make\s+this\s+more\s+human|too\s+generic|sounds\s+weak|not\s+good\s+enough|not\s+researched|not\s+in\s+my\s+voice|generic\s+cv|generic\s+draft)\b/.test(text) ||
     /\b(?:stop|wait)\b.*\b(?:do\s+not|don['’]?t)\s+(?:prep|prepare|fill|put)\b/.test(text) ||
     /\b(?:do\s+not|don['’]?t)\s+(?:prep|prepare|fill|put)\b/.test(text) ||
     /\b(?:stop|wait)\b.*\b(?:not\s+approved|do\s+not\s+approve|don['’]?t\s+approve)\b/.test(text)

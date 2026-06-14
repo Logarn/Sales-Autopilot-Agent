@@ -3050,17 +3050,15 @@ async function executeConversationPlan(params: {
     });
     await postThreadReply(params.client, params.channelId, params.threadTs, text);
     if (queued.ownershipStatus === "attached_completed" && queued.actionRecord && getApplicationDraft(queued.actionRecord.jobId)) {
-      const draftPreview = buildDraftPreviewFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs });
-      if (draftPreview.ok) {
-        const draftText = await userFacingSlackCopyWithExactBody({
-          deterministicText: draftPreview.text,
-          userMessage: params.userMessage,
-          intent: "draft_preview",
-          context: { jobId: queued.actionRecord.jobId, ok: true, reusedCompletedCapture: true, exactProposalBodyPreserved: true },
-          copyProvider: params.copyProvider,
-        });
-        await postThreadReply(params.client, params.channelId, params.threadTs, draftText);
-      }
+      const draftText = await userFacingSlackCopy({
+        deterministicText: "Capture is already complete. If the issue is the draft, I should regenerate or revise the draft, not recapture the listing. I already posted the current draft above; tell me what to change or say \"regenerate draft\".",
+        userMessage: params.userMessage,
+        intent: "retry_capture_completed_with_draft",
+        context: { jobId: queued.actionRecord.jobId, reusedCompletedCapture: true, draftAvailable: true },
+        preservePhrases: ["Capture is already complete"],
+        copyProvider: params.copyProvider,
+      });
+      await postThreadReply(params.client, params.channelId, params.threadTs, draftText);
     }
     return;
   }

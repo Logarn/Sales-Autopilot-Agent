@@ -515,6 +515,9 @@ export function evaluateDraftQualityGate(input: {
   if (/\bjust adding noise\b/i.test(text)) {
     addIssue(issues, { code: "banned_noise_phrase", severity: "critical", message: "Cover letter contains the banned phrase just adding noise." });
   }
+  if (/\bsend me the store url\b/i.test(text)) {
+    addIssue(issues, { code: "store_url_punt_cta", severity: "critical", message: "Cover letter punts to a store URL instead of using the available job context first." });
+  }
   if (/\b(?:Relevant background|To answer the application notes directly|Relevant examples|Additional relevant example|Relevant proof|Approach|Credentials):/i.test(text)) {
     addIssue(issues, {
       code: "internal_scaffold_labels",

@@ -56,7 +56,7 @@ async function runTests(): Promise<void> {
   process.env.PROOF_ASSET_ROOT = proofRoot;
   process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
   process.env.SLACK_ALLOWED_USER_IDS = "U_ALLOWED";
-  process.env.SLACK_ALLOWED_CHANNEL_IDS = "C123,C456,CBRAIN,CDEAL,CDISC,CEVERY,CMULTI,CNO,COWN,CPREVIEW,CQA,CSKIP,CSUBMIT,C_SHARED,C0AQW8W6RFU";
+  process.env.SLACK_ALLOWED_CHANNEL_IDS = "C123,C456,CBRAIN,CDEAL,CDISC,CEVERY,CMULTI,CNO,COWN,CPREVIEW,CQA,CSKIP,CSUBMIT,C_SHARED,CREJECT,CRETRYDONE,C0AQW8W6RFU";
   process.env.SLACK_COPY_LLM_ENABLED = "false";
   process.env.BROWSER_QA_MAX_PROTECTED_TABS = "5";
 
@@ -74,7 +74,7 @@ async function runTests(): Promise<void> {
       outcomeStatus?: string;
     };
     parseUpworkJobUrlFromText: (value: string) => { originalUrl: string; normalizedUrl: string; canonicalJobUrl: string; jobId: string } | null;
-    queueCaptureFromSlackUrl: (input: { channelId: string; messageTs: string; threadTs: string; text: string }) => { parsed: any; state: any; action: any } | null;
+    queueCaptureFromSlackUrl: (input: { channelId: string; messageTs: string; threadTs: string; text: string }) => { parsed: any; state: any; action: any; ownershipStatus?: string } | null;
     queuePrepareDraftFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string; actionId?: number };
     resetSlackSocketEventDedupeForTests: () => void;
   };
@@ -1207,6 +1207,43 @@ async function runTests(): Promise<void> {
       listBrowserActions(null, 1000).filter((action) => action.actionType === "prepare_application_review").length === prepareCountBeforeRejectedPrep,
       "Prep after a rejected draft must not queue prepare_application_review.",
     );
+
+    const retryDoneJob = {
+      ...prepareJob,
+      id: "manual:upwork-088053866890130225260",
+      url: "https://www.upwork.com/jobs/~088053866890130225260",
+      applicationDraft: {
+        ...prepareJob.applicationDraft,
+        jobId: "manual:upwork-088053866890130225260",
+      },
+    };
+    markJobSeen(retryDoneJob, false);
+    const completedCapture = queueCaptureFromSlackUrl({
+      channelId: "CRETRYDONE",
+      messageTs: "666.001",
+      threadTs: "666.001",
+      text: retryDoneJob.url,
+    });
+    if (!completedCapture) {
+      throw new Error("Completed-capture retry setup should queue initial capture.");
+    }
+    updateBrowserActionStatus(completedCapture.action.id, "completed", "capture completed in prior thread");
+    const attachedCompleted = queueCaptureFromSlackUrl({
+      channelId: "CRETRYDONE",
+      messageTs: "666.002",
+      threadTs: "666.002",
+      text: retryDoneJob.url,
+    });
+    assert(attachedCompleted?.ownershipStatus === "attached_completed", "Second thread should attach to the completed capture.");
+    const retryDoneReplies: string[] = [];
+    await handleThreadCommand({
+      channelId: "CRETRYDONE",
+      threadTs: "666.002",
+      text: "retry capture",
+      client: { chat: { postMessage: async (payload: { text: string }) => retryDoneReplies.push(payload.text) } },
+    });
+    assert(retryDoneReplies.some((reply) => /Capture is already complete/i.test(reply) && /regenerate|revise/i.test(reply)), "Retry capture with completed capture and draft should explain recapture is unnecessary.");
+    assert(!retryDoneReplies.join("\n").includes(retryDoneJob.applicationDraft.proposalText), "Retry capture with completed capture and draft should not repost the same draft body.");
 
     const llmPrepareJob = {
       ...prepareJob,
