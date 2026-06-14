@@ -272,6 +272,40 @@ assert.match(threadSpecificStatus.reply, /Draft: being generated/i);
 assert.match(threadSpecificStatus.reply, /Proof plan:/i);
 assert.match(threadSpecificStatus.reply, /Next safe action:/i);
 
+const reusedCaptureStatus = planSlackConversation({
+  ...baseInput,
+  latestMessage: "Where are we with it?",
+  workflowContext: workflow({
+    draft: baseInput.draft,
+    captureAction: {
+      id: 44,
+      jobId: "job-1",
+      actionType: "capture_job_from_url",
+      status: "cancelled",
+      payload: {},
+      attempts: 0,
+      lastError: "Stale duplicate capture replaced by Slack thread ownership reconciliation.",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    } as any,
+    latestBrowserAction: {
+      id: 44,
+      jobId: "job-1",
+      actionType: "capture_job_from_url",
+      status: "cancelled",
+      payload: {},
+      attempts: 0,
+      lastError: "Stale duplicate capture replaced by Slack thread ownership reconciliation.",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    } as any,
+  }),
+});
+assert.equal(reusedCaptureStatus.intent, "status_summary");
+assert.match(reusedCaptureStatus.reply, /Capture: reused captured job/i);
+assert.doesNotMatch(reusedCaptureStatus.reply, /Capture: failed/i);
+assert.doesNotMatch(reusedCaptureStatus.reply, /Stale duplicate capture|ownership reconciliation/i);
+
 const retryCapture = planSlackConversation({ ...baseInput, draft: null, latestMessage: "retry capture" });
 assert.equal(retryCapture.intent, "retry_capture");
 assert.deepEqual(retryCapture.actions, ["retry_capture"]);
@@ -286,8 +320,58 @@ assert.equal(dangerousSubmit.intent, "status_summary");
 assert.deepEqual(dangerousSubmit.actions, ["none"]);
 assert.match(dangerousSubmit.reply, /final submit stays manual/i);
 
+const negativeDraftFeedback = planSlackConversation({ ...baseInput, latestMessage: "I don't like the draft" });
+assert.equal(negativeDraftFeedback.intent, "revise_draft");
+assert.deepEqual(negativeDraftFeedback.actions, ["mark_draft_rejected"]);
+assert.match(negativeDraftFeedback.reply, /won.t prep this version/i);
+
+const genericCvFeedback = planSlackConversation({ ...baseInput, latestMessage: "The CV is generic, does not sound researched, and is not in my voice" });
+assert.equal(genericCvFeedback.intent, "revise_draft");
+assert.deepEqual(genericCvFeedback.actions, ["mark_draft_rejected"]);
+
+const doNotPrepFeedback = planSlackConversation({
+  ...baseInput,
+  latestMessage: "Stop. Do not prep this draft. I do not approve this version. Wait.",
+  activeCta: {
+    action: "prep_application",
+    source: "latest_bot_cta",
+    text: "Reply \"use this\", \"looks good\", or \"put it in Upwork\" when you want me to fill the remote Chrome apply page.",
+  },
+});
+assert.equal(doNotPrepFeedback.intent, "revise_draft");
+assert.deepEqual(doNotPrepFeedback.actions, ["mark_draft_rejected"]);
+
+const rejectedWorkflow = workflow({
+  draft: baseInput.draft,
+  workflowStateRecord: {
+    channelId: "C123",
+    threadTs: "111.222",
+    workflowState: "draft_ready",
+    draftRequested: true,
+    prepRequested: false,
+    latestAgentPromise: {
+      type: "draft_preview",
+      status: "blocked",
+      text: "Draft preview rejected; waiting for rewrite direction.",
+      createdAt: new Date(0).toISOString(),
+      blocker: "draft_rejected: operator did not approve this draft.",
+    },
+    lastUserMessage: "I don't like the draft",
+    lastAgentReply: "Got it — I won’t prep this version.",
+  },
+});
+const prepRejectedDraft = planSlackConversation({
+  ...baseInput,
+  latestMessage: "prep it",
+  workflowContext: rejectedWorkflow,
+});
+assert.equal(prepRejectedDraft.intent, "status_summary");
+assert.deepEqual(prepRejectedDraft.actions, ["none"]);
+assert.match(prepRejectedDraft.reply, /not approved/i);
+
 const revision = planSlackConversation({ ...baseInput, latestMessage: "change the opener" });
 assert.equal(revision.intent, "revise_draft");
+assert.deepEqual(revision.actions, ["mark_draft_rejected"]);
 
 const naturalStatus = planSlackConversation({ ...baseInput, latestMessage: "what the fuck are you up to?" });
 assert.equal(naturalStatus.intent, "status_summary");

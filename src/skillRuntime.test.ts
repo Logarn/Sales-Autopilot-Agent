@@ -197,6 +197,10 @@ const gateBase = {
 };
 assert(evaluateDraftQualityGate({ ...gateBase, proposalText: "I am a Klaviyo expert with years of experience. Send me the store URL." }).issues.some((issue) => issue.code === "generic_expert_opener"), "Generic opener should fail quality gate.");
 assert(evaluateDraftQualityGate({ ...gateBase, proposalText: `${beautyDraft.proposalText}\n\njust adding noise.` }).issues.some((issue) => issue.code === "banned_noise_phrase"), "Banned noise phrase should fail quality gate.");
+assert(evaluateDraftQualityGate({
+  ...gateBase,
+  proposalText: `${beautyDraft.proposalText}\n\nRelevant background: Klaviyo and DTC lifecycle.\nTo answer the application notes directly: Rate: $35/hr.\nAdditional relevant example: Truly Beauty.`,
+}).issues.some((issue) => issue.code === "internal_scaffold_labels"), "Internal proof/application-note scaffolding should fail quality gate.");
 assert(evaluateDraftQualityGate({ ...gateBase, proposalText: `${beautyDraft.proposalText}\n\nThis ends...` }).issues.some((issue) => issue.code === "truncated_or_incomplete"), "Truncated ellipsis should fail quality gate.");
 assert(evaluateDraftQualityGate({ ...gateBase, proposalText: `${beautyDraft.proposalText}\n\nI attached the proof file for review.` }).issues.some((issue) => issue.code === "unverified_proof_claim"), "Unverified proof claim should fail quality gate.");
 

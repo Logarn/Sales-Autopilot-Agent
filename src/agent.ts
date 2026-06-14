@@ -189,22 +189,22 @@ function extractClientRequestAnswers(
   };
 
   if (/rate|hourly|budget|price|retainer/i.test(source)) {
-    add(`Rate: ${trimTerminalPunctuation(suggestedBid)}. If this becomes a retainer, I would scope the first month around audit, priority fixes, and reporting before expanding.`);
+    add(`For rate, I would use ${trimTerminalPunctuation(suggestedBid)}. If this becomes a retainer, I would scope the first month around audit, priority fixes, and reporting before expanding.`);
   }
   if (/portfolio|example|case stud|sample|previous work|proof/i.test(source)) {
     const namedExamples = portfolioItems.map((item) => `${displayPortfolioExample(item)}${item.result ? ` (${item.result})` : ""}`);
     const fallbackExamples = proofPoints.filter((point) => /beauty|dtc|klaviyo|retention|lifecycle|shopify|revenue/i.test(point)).slice(0, 2);
     const examples = [...namedExamples, ...fallbackExamples].slice(0, 2);
-    add(examples.length ? `Relevant examples: ${examples.join("; ")}.` : "Relevant proof: DTC lifecycle, Klaviyo, segmentation, and retention work tied to repeat purchase and revenue.");
+    add(examples.length ? `The closest examples I would use are ${examples.join("; ")}.` : "I would keep the proof tied to DTC lifecycle, Klaviyo, segmentation, and retention work that connects to repeat purchase and revenue.");
   }
   if (/availability|start|timeline|when can you/i.test(source)) {
-    add("Availability: I can start with a short diagnostic pass, then prioritize the highest-impact lifecycle fixes first.");
+    add("I can start with a short diagnostic pass, then prioritize the highest-impact lifecycle fixes first.");
   }
   if (/approach|plan|how would you|strategy|what would you/i.test(source)) {
-    add("Approach: I would audit the account, find the revenue leaks, fix the highest-impact flows/segments/campaign process, then measure repeat-purchase impact.");
+    add("I would audit the account, find the revenue leaks, fix the highest-impact flows, segments, or campaign process, then measure repeat-purchase impact.");
   }
   if (/certif|klaviyo partner|partner/i.test(source)) {
-    add("Credentials: Klaviyo Silver Partner with DTC lifecycle and retention experience.");
+    add("I bring Klaviyo partner experience plus DTC lifecycle and retention work.");
   }
 
   return answers.slice(0, 4);

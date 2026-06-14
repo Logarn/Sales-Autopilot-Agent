@@ -95,6 +95,7 @@ export interface UnifiedSlackJobContext {
   prepState: "none" | "requested" | "blocked_missing_draft" | "queued" | "in_progress" | "blocked" | "done";
   qaState: "none" | "waiting" | "blocked";
   latestAgentPromise: SlackWorkflowPromiseSnapshot | null;
+  draftRejected: boolean;
   nextSafeAction: string;
   blocker: string | null;
   finalSubmitManual: true;
@@ -140,8 +141,30 @@ function hasProofPlan(input: Pick<BuildUnifiedSlackJobContextInput, "draft" | "p
   );
 }
 
+export function isInternalSlackWorkflowReconciliation(value: string | null | undefined): boolean {
+  return /\b(?:stale duplicate capture|slack thread ownership reconciliation|thread ownership reconciliation|current slack thread retry|capture ownership)\b/i.test(value ?? "");
+}
+
+export function isDraftRejectionBlocker(value: string | null | undefined): boolean {
+  return /\b(?:draft_rejected|draft rejected|not approved|needs revision|rejected draft)\b/i.test(value ?? "");
+}
+
+export function isWorkflowDraftRejected(record: SlackWorkflowStateSnapshot | null | undefined): boolean {
+  return Boolean(
+    record?.latestAgentPromise?.type === "draft_preview" &&
+    record.latestAgentPromise.status === "blocked" &&
+    isDraftRejectionBlocker(record.latestAgentPromise.blocker)
+  );
+}
+
 function deriveCaptureState(input: BuildUnifiedSlackJobContextInput): UnifiedSlackJobContext["captureState"] {
   if (isActionType(input.captureAction, "capture_job_from_url")) {
+    const captureAction = input.captureAction!;
+    const staleDuplicateWasReconciled = isActionStatus(input.captureAction, ["failed", "paused", "cancelled"]) &&
+      isInternalSlackWorkflowReconciliation(captureAction.lastError);
+    if (staleDuplicateWasReconciled && (input.job || hasDraft(input.draft) || input.threadState?.jobId)) {
+      return "done";
+    }
     if (isActionStatus(input.captureAction, ["pending"])) return "queued";
     if (isActionStatus(input.captureAction, ["in_progress"])) return "in_progress";
     if (isActionStatus(input.captureAction, ["failed", "paused", "cancelled"])) return "failed";
@@ -154,6 +177,7 @@ function deriveCaptureState(input: BuildUnifiedSlackJobContextInput): UnifiedSla
 }
 
 function derivePrepState(input: BuildUnifiedSlackJobContextInput, draftReady: boolean): UnifiedSlackJobContext["prepState"] {
+  if (isWorkflowDraftRejected(input.workflowStateRecord)) return "blocked";
   if (input.applicationStatus === "prepared_for_qa") return "done";
   if (isActionType(input.prepAction, "prepare_application_review")) {
     if (isActionStatus(input.prepAction, ["pending"])) return "queued";
@@ -204,10 +228,24 @@ function buildBlocker(input: {
   prepState: UnifiedSlackJobContext["prepState"];
   latestBrowserAction: BrowserAction | null;
   promise: SlackWorkflowPromiseSnapshot | null;
+  draftRejected: boolean;
+  draftReady: boolean;
 }): string | null {
-  if (input.promise?.status === "blocked" && input.promise.blocker) return input.promise.blocker;
+  if (input.draftRejected) return "Draft is not approved yet.";
+  if (
+    input.promise?.status === "blocked" &&
+    input.promise.blocker &&
+    !(input.draftReady && isInternalSlackWorkflowReconciliation(input.promise.blocker))
+  ) {
+    return input.promise.blocker;
+  }
   if (input.workflowState === "prep_blocked_missing_draft") return "Safe browser prep is blocked until the proposal draft exists.";
-  if (input.captureState === "failed") return input.latestBrowserAction?.lastError || "Capture failed or was paused before the draft was generated.";
+  if (input.captureState === "failed") {
+    const lastError = input.latestBrowserAction?.lastError;
+    return lastError && !isInternalSlackWorkflowReconciliation(lastError)
+      ? lastError
+      : "Capture failed or was paused before the draft was generated.";
+  }
   if (input.prepState === "blocked") return input.latestBrowserAction?.lastError || "Browser prep is blocked and needs review.";
   return null;
 }
@@ -219,8 +257,10 @@ function buildNextSafeAction(input: {
   prepState: UnifiedSlackJobContext["prepState"];
   qaState: UnifiedSlackJobContext["qaState"];
   blocker: string | null;
+  draftRejected: boolean;
 }): string {
   if (!input.hasTarget) return "Send the Upwork job URL.";
+  if (input.draftRejected) return "Tell me what to change or ask me to rewrite it; I will not prep this draft until a revised version is approved.";
   if (input.qaState === "waiting") return "Review the prepared application in QA; final submit remains manual.";
   if (input.qaState === "blocked") return "Clear or report the browser blocker, then ask me to retry.";
   if (input.prepState === "queued" || input.prepState === "in_progress") return "Wait for browser prep to finish, then QA the held application.";
@@ -234,6 +274,7 @@ export function buildUnifiedSlackJobContext(input: BuildUnifiedSlackJobContextIn
   const captureState = deriveCaptureState(input);
   const draftState = deriveDraftState(input, captureState);
   const prepState = derivePrepState(input, draftState === "ready");
+  const draftRejected = isWorkflowDraftRejected(input.workflowStateRecord);
   const qaState: UnifiedSlackJobContext["qaState"] = input.applicationStatus === "prepared_for_qa" || prepState === "done"
     ? "waiting"
     : prepState === "blocked"
@@ -247,6 +288,8 @@ export function buildUnifiedSlackJobContext(input: BuildUnifiedSlackJobContextIn
     prepState,
     latestBrowserAction: input.latestBrowserAction ?? null,
     promise: input.workflowStateRecord?.latestAgentPromise ?? null,
+    draftRejected,
+    draftReady: draftState === "ready",
   });
   const normalizedJobId = input.threadState?.jobId ?? input.job?.id ?? null;
   const hasTarget = Boolean(normalizedJobId || input.threadState?.upworkUrl || input.explicitUpworkUrl);
@@ -273,7 +316,8 @@ export function buildUnifiedSlackJobContext(input: BuildUnifiedSlackJobContextIn
     prepState,
     qaState,
     latestAgentPromise: input.workflowStateRecord?.latestAgentPromise ?? null,
-    nextSafeAction: buildNextSafeAction({ hasTarget, captureState, draftState, prepState, qaState, blocker }),
+    draftRejected,
+    nextSafeAction: buildNextSafeAction({ hasTarget, captureState, draftState, prepState, qaState, blocker, draftRejected }),
     blocker,
     finalSubmitManual: true,
   };
@@ -307,9 +351,16 @@ export function workflowStateFromSlackThreadStatus(status: string | null | undef
 
 export function buildThreadWorkflowStatusReply(ctx: UnifiedSlackJobContext): string {
   const label = ctx.job?.title?.trim() || ctx.threadState?.upworkUrl || ctx.explicitUpworkUrl || "this application";
-  const capture = ctx.captureState === "none" ? "not started" : ctx.captureState.replace(/_/g, " ");
+  const capture = ctx.captureState === "none"
+    ? "not started"
+    : ctx.captureState === "done" && (
+      isInternalSlackWorkflowReconciliation(ctx.captureAction?.lastError) ||
+      isInternalSlackWorkflowReconciliation(ctx.latestAgentPromise?.blocker)
+    )
+      ? "reused captured job"
+      : ctx.captureState.replace(/_/g, " ");
   const draft = ctx.draftState === "ready"
-    ? "ready"
+    ? ctx.draftRejected ? "needs revision" : "ready"
     : ctx.draftState === "generating"
       ? "being generated"
       : ctx.draftState;
@@ -334,6 +385,19 @@ export function isDraftPreviewStatusIntent(value: string): boolean {
     /\bwhat\s+did\s+you\s+write\b/.test(text) ||
     /\b(?:send|post)\s+it\s+(?:here\s+)?(?:too\s+)?(?:once|when)\s+(?:it\s+is\s+)?ready\b/.test(text) ||
     /\b(?:send|post)\s+(?:me\s+)?(?:the\s+)?(?:draft|proposal|cover\s*letter|cv)\s+(?:here\s+)?(?:once|when)\s+(?:it\s+is\s+)?ready\b/.test(text)
+  );
+}
+
+export function isDraftRejectionFeedbackIntent(value: string): boolean {
+  const text = value.toLowerCase().replace(/[.!?]+$/g, "").trim();
+  return (
+    /\b(?:i\s+don['’]?t\s+like|do\s+not\s+like|don['’]?t\s+approve|do\s+not\s+approve|not\s+approved|i\s+do\s+not\s+approve)\b.*\b(?:draft|proposal|cover\s*letter|cv|version|this)\b/.test(text) ||
+    /\b(?:this|the\s+(?:draft|proposal|cover\s*letter|cv))\s+(?:is\s+)?(?:bad|weak|generic|not\s+good\s+enough|not\s+researched|not\s+my\s+voice|not\s+in\s+my\s+voice|too\s+generic)\b/.test(text) ||
+    /\b(?:rewrite|redo|rework)\s+(?:this|it|the\s+(?:draft|proposal|cover\s*letter|cv))\b/.test(text) ||
+    /\b(?:make\s+it\s+more\s+human|make\s+this\s+more\s+human|too\s+generic|not\s+researched|not\s+in\s+my\s+voice|generic\s+cv|generic\s+draft)\b/.test(text) ||
+    /\b(?:stop|wait)\b.*\b(?:do\s+not|don['’]?t)\s+(?:prep|prepare|fill|put)\b/.test(text) ||
+    /\b(?:do\s+not|don['’]?t)\s+(?:prep|prepare|fill|put)\b/.test(text) ||
+    /\b(?:stop|wait)\b.*\b(?:not\s+approved|do\s+not\s+approve|don['’]?t\s+approve)\b/.test(text)
   );
 }
 
