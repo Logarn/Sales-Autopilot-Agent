@@ -1965,7 +1965,10 @@ function highlightAliases(highlight: string): string[] {
   if (/truly beauty/i.test(highlight)) aliases.push("From $250k to $1.2 Million In 12 Months");
   if (/design case studies/i.test(highlight)) aliases.push("Steve's Design Case Studies");
   if (/fly boutique/i.test(highlight)) aliases.push("The Fly Boutique");
-  if (/lifely/i.test(highlight)) aliases.push("How Lifely Transformed Their Retention Marketing");
+  if (/lifely/i.test(highlight)) {
+    aliases.push("How Lifely Transformed Their Retention Marketing");
+    aliases.push("How Lifely Transformed Their Retention M");
+  }
   return Array.from(new Set(aliases.filter(Boolean)));
 }
 

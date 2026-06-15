@@ -1294,6 +1294,17 @@ async function runTests(): Promise<void> {
     assert(Boolean(verifiedApplyVerification.find((item) => item.field === "attachments")?.detail.includes("package.json")), "Attachment verification should name verified files.");
     assert(Boolean(verifiedApplyVerification.find((item) => item.field === "profileHighlights")?.detail.includes("Klaviyo retention proof")), "Portfolio/profile verification should name verified labels.");
 
+    const truncatedLifelyVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({
+        visibleText: "Required for proposal: 8 Connects\nProfile highlights\nPortfolio\n4 - How Lifely Transformed Their Retention M...\nSkills: Email Deliverability, List Building\nBoost your proposal\nSend for 8 Connects",
+        inputValues: [verificationPlan.coverLetter, "$50"],
+      }),
+      plan: { ...verificationPlan, screeningAnswers: [], attachments: [], highlights: ["How Lifely Transformed Their Retention Marketing"] },
+      fields: { attemptedFields: ["coverLetter", "rate", "highlights"], skippedFields: [], manualFields: ["finalSubmit"] },
+      bodyText: "Required for proposal: 8 Connects\nSend for 8 Connects",
+    });
+    assert(truncatedLifelyVerification.find((item) => item.field === "profileHighlights")?.status === "verified", "Upwork-truncated selected Lifely portfolio title should verify in browser diagnostics.");
+
     const duplicateAttachmentVerification = await verifyApplyPreparationOnPage({
       page: fakeApplyPage({
         visibleText: "Required for proposal: 8 Connects\nSend for 8 Connects\npackage.json\npackage.json",
