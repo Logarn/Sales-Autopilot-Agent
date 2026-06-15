@@ -12,6 +12,8 @@ function snapshot(overrides: Partial<ApplyPageSnapshot> = {}): ApplyPageSnapshot
     fieldValues: [],
     checkedLabels: [],
     fileNames: [],
+    attachmentRows: [],
+    selectedHighlightLabels: [],
     actionLabels: [],
     ...overrides,
   };
@@ -149,6 +151,29 @@ const selectedBoost = analyzeApplyPageSnapshot(snapshot({
 }), plan({ connects: { ...filledPlan.connects, boost: 12, total: 20 } }));
 assert.equal(selectedBoost.boost.state, "visible_set");
 assert.equal(selectedBoost.boost.selectedValue, 12);
+
+const duplicateAttachmentRows = analyzeApplyPageSnapshot(snapshot({
+  visibleText: "Required for proposal: 8 Connects\nSend for 8 Connects",
+  fieldValues: [
+    { kind: "textarea", inputType: null, label: "Cover letter", id: null, name: null, ariaLabel: null, placeholder: null, dataTest: null, value: filledPlan.coverLetter },
+    { kind: "input", inputType: "text", label: "Hourly rate", id: null, name: null, ariaLabel: "Hourly rate", placeholder: null, dataTest: null, value: "80" },
+  ],
+  attachmentRows: ["proof.pdf", "proof.pdf"],
+  actionLabels: ["Send for 8 Connects"],
+}), plan({ attachments: [{ id: "proof", name: "Proof", filePath: "proof.pdf", sensitivity: "approved_external" }] }));
+assert.equal(duplicateAttachmentRows.attachments.state, "visible_requires_input");
+assert(duplicateAttachmentRows.warnings.includes("attachments_not_verified"), "Duplicate attachment rows must not verify.");
+
+const modalOnlyPortfolioNames = analyzeApplyPageSnapshot(snapshot({
+  visibleText: "Required for proposal: 8 Connects\nProfile highlights\nAdd a portfolio project\nAdd a certificate\nBoost your proposal\nKlaviyo retention proof\nSend for 8 Connects",
+  fieldValues: [
+    { kind: "textarea", inputType: null, label: "Cover letter", id: null, name: null, ariaLabel: null, placeholder: null, dataTest: null, value: filledPlan.coverLetter },
+    { kind: "input", inputType: "text", label: "Hourly rate", id: null, name: null, ariaLabel: "Hourly rate", placeholder: null, dataTest: null, value: "80" },
+  ],
+  actionLabels: ["Send for 8 Connects"],
+}), plan({ highlights: ["Klaviyo retention proof"] }));
+assert.equal(modalOnlyPortfolioNames.portfolioHighlights.state, "visible_requires_input");
+assert(modalOnlyPortfolioNames.warnings.includes("portfolio_highlights_not_verified"), "Portfolio names outside selected evidence must not verify.");
 
 const unsetBoostWithAmbientConnects = analyzeApplyPageSnapshot(snapshot({
   visibleText: "Required for proposal: 9 Connects\nBoost your proposal\n#4 bid 25 Connects\nSend for 9 Connects",

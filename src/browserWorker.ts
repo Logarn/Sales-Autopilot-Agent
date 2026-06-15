@@ -1860,6 +1860,56 @@ async function trySetFiles(page: PlaywrightPageLike, selectors: string[], files:
   return false;
 }
 
+async function readAttachmentRowsOnPage(page: PlaywrightPageLike): Promise<string[]> {
+  if (!page.evaluate) return [];
+  return page.evaluate(() => Array.from(document.querySelectorAll("button"))
+    .map((button) => button.getAttribute("aria-label") ?? button.textContent ?? "")
+    .map((label) => label.match(/delete\s+attachment\s+(.+)/i)?.[1] ?? "")
+    .map((value) => value.replace(/\s*\([^)]*\)\s*$/, "").trim())
+    .filter(Boolean)).catch(() => []);
+}
+
+async function cleanupDuplicateAttachments(page: PlaywrightPageLike, expectedNames: string[]): Promise<{ before: string[]; after: string[]; removed: number }> {
+  if (!page.evaluate || expectedNames.length === 0) return { before: [], after: [], removed: 0 };
+  const before = await readAttachmentRowsOnPage(page);
+  const removed = await page.evaluate((names = []) => {
+    const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
+    const expected = names.map(normalize).filter(Boolean);
+    const rows = Array.from(document.querySelectorAll("button"))
+      .map((button) => {
+        const label = button.getAttribute("aria-label") ?? button.textContent ?? "";
+        const name = label.match(/delete\s+attachment\s+(.+)/i)?.[1]?.replace(/\s*\([^)]*\)\s*$/, "").trim() ?? "";
+        return { button, name, normalized: normalize(name) };
+      })
+      .filter((row) => row.name);
+    const kept = new Set<string>();
+    let clicked = 0;
+    for (const row of rows) {
+      if (!expected.includes(row.normalized)) {
+        row.button.click();
+        clicked += 1;
+        continue;
+      }
+      if (!kept.has(row.normalized)) {
+        kept.add(row.normalized);
+        continue;
+      }
+      row.button.click();
+      clicked += 1;
+    }
+    return clicked;
+  }, expectedNames).catch(() => 0);
+  if (removed > 0) await page.waitForTimeout?.(750).catch(() => undefined);
+  const after = await readAttachmentRowsOnPage(page);
+  return { before, after, removed };
+}
+
+function attachmentRowsMatchExpected(rows: string[], expectedNames: string[]): boolean {
+  return expectedNames.length > 0 &&
+    rows.length === expectedNames.length &&
+    expectedNames.every((name) => rows.filter((row) => normalizeVerificationValue(row).includes(normalizeVerificationValue(name))).length === 1);
+}
+
 async function tryCheckHighlight(page: PlaywrightPageLike, highlight: string): Promise<boolean> {
   for (const alias of highlightAliases(highlight)) {
     const escaped = alias.replace(/["\\]/g, "\\$&");
@@ -1899,36 +1949,66 @@ function highlightAliases(highlight: string): string[] {
   return Array.from(new Set(aliases.filter(Boolean)));
 }
 
-async function trySelectHighlightFromOpenDialog(page: PlaywrightPageLike, highlight: string): Promise<boolean> {
-  if (!page.evaluate) return false;
-  return page.evaluate((aliases = []) => {
+async function trySelectHighlightsFromOpenDialog(page: PlaywrightPageLike, highlights: string[]): Promise<number> {
+  if (!page.evaluate) return 0;
+  return page.evaluate((highlightAliasesByName = []) => {
     const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
-    const normalizedAliases = aliases.map(normalize).filter(Boolean);
+    const normalizedHighlights = highlightAliasesByName
+      .map((aliases) => Array.isArray(aliases) ? aliases.map(normalize).filter(Boolean) : [])
+      .filter((aliases) => aliases.length > 0);
     const dialog = document.querySelector("[role='dialog']");
-    if (!dialog || normalizedAliases.length === 0) return false;
+    if (!dialog || normalizedHighlights.length === 0) return 0;
+    const visible = (element: Element) => Boolean((element as HTMLElement).offsetWidth || (element as HTMLElement).offsetHeight || element.getClientRects().length);
     const buttons = Array.from(dialog.querySelectorAll("button"))
       .filter((button) => /select highlight/i.test(button.textContent ?? "") && !(button as HTMLButtonElement).disabled)
-      .filter((button) => Boolean(button.offsetWidth || button.offsetHeight || button.getClientRects().length));
+      .filter(visible);
+    let selected = 0;
+    const selectedIndexes = new Set<number>();
     for (const button of buttons) {
-      let node: Element | null = button.parentElement;
-      let depth = 0;
-      while (node && node !== dialog.parentElement && depth < 20) {
-        const text = normalize(node.textContent ?? "");
-        if (normalizedAliases.some((alias) => text.includes(alias))) {
-          (button as HTMLButtonElement).click();
-          return true;
+      for (let index = 0; index < normalizedHighlights.length; index += 1) {
+        if (selectedIndexes.has(index)) continue;
+        let node: Element | null = button.parentElement;
+        let depth = 0;
+        while (node && node !== dialog.parentElement && depth < 24) {
+          const text = normalize(node.textContent ?? "");
+          if (normalizedHighlights[index].some((alias) => text.includes(alias))) {
+            (button as HTMLButtonElement).click();
+            selectedIndexes.add(index);
+            selected += 1;
+            break;
+          }
+          node = node.parentElement;
+          depth += 1;
         }
-        node = node.parentElement;
-        depth += 1;
+        if (selectedIndexes.has(index)) break;
       }
     }
-    return false;
-  }, highlightAliases(highlight)).catch(() => false);
+    return selected;
+  }, highlights.map(highlightAliases)).catch(() => 0);
 }
 
-async function trySelectProofFromSelector(page: PlaywrightPageLike, highlight: string): Promise<boolean> {
-  if (await trySelectHighlightFromOpenDialog(page, highlight)) return true;
-  if (await tryCheckHighlight(page, highlight)) return true;
+async function tryConfirmHighlightsDialog(page: PlaywrightPageLike): Promise<boolean> {
+  if (!page.evaluate) return false;
+  const confirmed = await page.evaluate(() => {
+    const dialog = document.querySelector("[role='dialog']");
+    if (!dialog) return false;
+    const button = Array.from(dialog.querySelectorAll("button"))
+      .find((candidate) => /^add to highlights$/i.test((candidate.textContent ?? "").replace(/\s+/g, " ").trim()) && !(candidate as HTMLButtonElement).disabled);
+    if (!button) return false;
+    (button as HTMLButtonElement).click();
+    return true;
+  }).catch(() => false);
+  if (confirmed) await page.waitForTimeout?.(1000).catch(() => undefined);
+  return confirmed;
+}
+
+async function trySelectProofHighlights(page: PlaywrightPageLike, highlights: string[]): Promise<number> {
+  if (highlights.length === 0) return 0;
+  let selected = await trySelectHighlightsFromOpenDialog(page, highlights);
+  if (selected > 0) {
+    await tryConfirmHighlightsDialog(page);
+    return selected;
+  }
   const opened = await tryClickFirst(page, [
     { selector: "button:has-text('Add portfolio project')", label: "Add portfolio project" },
     { selector: "a:has-text('Add portfolio project')", label: "Add portfolio project" },
@@ -1945,16 +2025,24 @@ async function trySelectProofFromSelector(page: PlaywrightPageLike, highlight: s
     { selector: "div:text-is('Add a certificate')", label: "Add certificate" },
     { selector: "div:text-is('Add certificate')", label: "Add certificate" },
   ]);
-  if (!opened) return false;
+  if (!opened) {
+    let fallbackSelected = 0;
+    for (const highlight of highlights) {
+      if (await tryCheckHighlight(page, highlight)) fallbackSelected += 1;
+    }
+    return fallbackSelected;
+  }
   await page.waitForTimeout?.(500).catch(() => undefined);
-  const selected = await trySelectHighlightFromOpenDialog(page, highlight) || await tryCheckHighlight(page, highlight);
-  if (!selected) return false;
-  await tryClickFirst(page, [
-    { selector: "button:has-text('Add')", label: "Confirm proof selection" },
-    { selector: "button:has-text('Save')", label: "Save proof selection" },
-    { selector: "button:has-text('Done')", label: "Done proof selection" },
-  ]);
-  return true;
+  selected = await trySelectHighlightsFromOpenDialog(page, highlights);
+  if (selected > 0) {
+    await tryConfirmHighlightsDialog(page);
+    return selected;
+  }
+  let fallbackSelected = 0;
+  for (const highlight of highlights) {
+    if (await tryCheckHighlight(page, highlight)) fallbackSelected += 1;
+  }
+  return fallbackSelected;
 }
 
 function assertSubmitGuard(plan: BrowserApplyFillPlan | null): asserts plan is BrowserApplyFillPlan {
@@ -2473,12 +2561,29 @@ const APPLY_VERIFICATION_SNAPSHOT_SCRIPT = `(() => {
       return [text, labelText, aria, value].filter(Boolean).join(" ");
     })
     .filter((value) => value.trim().length > 0);
+  const visibleText = documentLike && documentLike.body ? documentLike.body.innerText || "" : "";
+  const sectionText = (startPattern, endPattern) => {
+    const startMatch = visibleText.match(startPattern);
+    if (!startMatch || startMatch.index === undefined) return "";
+    const afterStart = visibleText.slice(startMatch.index + startMatch[0].length);
+    const endMatch = afterStart.match(endPattern);
+    return (endMatch && endMatch.index !== undefined ? afterStart.slice(0, endMatch.index) : afterStart).replace(/\\s+/g, " ").trim();
+  };
+  const attachmentRows = actionLabels
+    .map((label) => label.match(/delete\\s+attachment\\s+(.+?)(?:\\s*$|\\s+delete\\s+attachment)/i)?.[1] || "")
+    .map((value) => value.replace(/\\s*\\([^)]*\\)\\s*$/, "").trim())
+    .filter((value) => value.length > 0);
+  const profileHighlightsSection = sectionText(/profile\\s+highlights(?:\\s+new)?/i, /boost\\s+your\\s+proposal/i);
+  const profileHighlightsPickerOpen = /\\b(?:add profile highlights|select highlight|add to highlights|highlights\\s*\\(\\d\\s*[/]\\s*4\\)|portfolio\\s*\\(\\d+\\))\\b/i.test(profileHighlightsSection);
+  const selectedHighlightLabels = profileHighlightsSection && !profileHighlightsPickerOpen ? [profileHighlightsSection] : [];
   return {
-    visibleText: documentLike && documentLike.body ? documentLike.body.innerText || "" : "",
+    visibleText,
     inputValues,
     fieldValues,
     checkedLabels,
     fileNames,
+    attachmentRows,
+    selectedHighlightLabels,
     actionLabels,
   };
 })()`;
@@ -2492,6 +2597,8 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
       fieldValues: [],
       checkedLabels: [],
       fileNames: [],
+      attachmentRows: [],
+      selectedHighlightLabels: [],
       actionLabels: [],
     };
   }
@@ -2511,6 +2618,8 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
       fieldValues?: ApplyVerificationSnapshot["fieldValues"];
       checkedLabels?: string[];
       fileNames?: string[];
+      attachmentRows?: string[];
+      selectedHighlightLabels?: string[];
       actionLabels?: string[];
     }>(APPLY_VERIFICATION_SNAPSHOT_SCRIPT);
     return {
@@ -2520,6 +2629,8 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
       fieldValues: snapshot.fieldValues ?? [],
       checkedLabels: snapshot.checkedLabels ?? [],
       fileNames: snapshot.fileNames ?? [],
+      attachmentRows: snapshot.attachmentRows ?? [],
+      selectedHighlightLabels: snapshot.selectedHighlightLabels ?? [],
       actionLabels: snapshot.actionLabels ?? [],
     };
   } catch {
@@ -2530,6 +2641,8 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
       fieldValues: [],
       checkedLabels: [],
       fileNames: [],
+      attachmentRows: [],
+      selectedHighlightLabels: [],
       actionLabels: [],
     };
   }
@@ -2544,7 +2657,7 @@ export async function verifyApplyPreparationOnPage(input: {
   const { plan, fields } = input;
   const snapshot = await readApplyVerificationSnapshot(input.page, input.bodyText);
   const analysis = analyzeApplyPageSnapshot(snapshot, plan);
-  const visibleAndValues = [snapshot.visibleText, ...snapshot.inputValues, ...snapshot.checkedLabels, ...snapshot.fileNames];
+  const visibleAndValues = [snapshot.visibleText, ...snapshot.inputValues, ...snapshot.checkedLabels, ...snapshot.fileNames, ...snapshot.attachmentRows];
   const results: ApplyFieldVerification[] = [];
 
   if (analysis.pageKind === "apply") {
@@ -2632,13 +2745,14 @@ export async function verifyApplyPreparationOnPage(input: {
       results.push(verification("attachments", "missing_local_file", `Missing local files: ${missing.map((item) => item.filePath).join(", ")}`));
     } else {
       const expectedNames = plan.attachments.map((attachment) => path.basename(attachment.filePath));
-      const verifiedNames = expectedNames.filter((name) => textCollectionContains(visibleAndValues, name));
-      if (verifiedNames.length === expectedNames.length) {
+      const attachmentEvidence = snapshot.attachmentRows.length > 0 ? snapshot.attachmentRows : snapshot.fileNames;
+      const verifiedNames = expectedNames.filter((name) => attachmentEvidence.filter((value) => textCollectionContains([value], name)).length === 1);
+      if (verifiedNames.length === expectedNames.length && attachmentEvidence.length === expectedNames.length) {
         results.push(verification("attachments", "verified", `Verified attached files: ${verifiedNames.join(", ")}.`, { actual: verifiedNames.join(", ") }));
       } else if (fields.manualFields.includes("attachments")) {
         results.push(verification("attachments", "blocked_by_upwork_ui", `Upload field was unavailable. Expected files: ${expectedNames.join(", ")}`));
       } else {
-        results.push(verification("attachments", "attempted_unverified", `File upload was attempted but not verified. Expected files: ${expectedNames.join(", ")}`, { expected: expectedNames.join(", "), actual: snapshot.fileNames.join(", ") }));
+        results.push(verification("attachments", "attempted_unverified", `Attachment rows need QA. Expected exactly once: ${expectedNames.join(", ")}`, { expected: expectedNames.join(", "), actual: attachmentEvidence.join(", ") }));
       }
     }
   }
@@ -2646,11 +2760,12 @@ export async function verifyApplyPreparationOnPage(input: {
   if (plan.highlights.length === 0) {
     results.push(verification("profileHighlights", "skipped_by_strategy", "No profile highlights were selected by strategy."));
   } else {
-    const verifiedHighlights = plan.highlights.filter((highlight) => textCollectionContainsHighlight([...snapshot.checkedLabels, snapshot.visibleText], highlight));
+    const highlightEvidence = [...snapshot.checkedLabels, ...snapshot.selectedHighlightLabels];
+    const verifiedHighlights = plan.highlights.filter((highlight) => textCollectionContainsHighlight(highlightEvidence, highlight));
     if (verifiedHighlights.length === plan.highlights.length) {
       results.push(verification("profileHighlights", "verified", `Verified selected portfolio/profile proof: ${verifiedHighlights.join(", ")}.`, { actual: verifiedHighlights.join(", ") }));
     } else if (/add a portfolio project|add portfolio project|add a certificate|add certificate/i.test(snapshot.visibleText)) {
-      results.push(verification("profileHighlights", "attempted_unverified", `Portfolio/certificate selector entry is visible, but selected proof is not verified yet. Expected: ${plan.highlights.join(", ")}`, { expected: plan.highlights.join(", "), actual: snapshot.checkedLabels.join(", ") }));
+      results.push(verification("profileHighlights", "attempted_unverified", `Portfolio/certificate selector entry is visible, but selected proof is not verified yet. Expected: ${plan.highlights.join(", ")}`, { expected: plan.highlights.join(", "), actual: highlightEvidence.join(" | ") }));
     } else if (fields.manualFields.includes("highlights")) {
       results.push(verification("profileHighlights", "blocked_by_upwork_ui", "Profile highlight controls were unavailable or could not be selected safely."));
     } else {
@@ -2754,16 +2869,23 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
   }
 
   const attachmentFiles = plan.attachments.map((attachment) => resolveProofAssetPath(attachment.filePath));
-  if (await trySetFiles(page, ["input[type='file']"], attachmentFiles)) {
-    attemptedFields.push("attachments");
-  } else if (attachmentFiles.length > 0) {
-    manualFields.push("attachments");
+  const expectedAttachmentNames = plan.attachments.map((attachment) => path.basename(attachment.filePath));
+  if (attachmentFiles.length > 0) {
+    const cleanupBefore = await cleanupDuplicateAttachments(page, expectedAttachmentNames);
+    if (cleanupBefore.removed > 0) {
+      logger.info(`Removed ${cleanupBefore.removed} duplicate attachment row(s) before upload verification.`);
+    }
+    if (attachmentRowsMatchExpected(cleanupBefore.after.length > 0 ? cleanupBefore.after : cleanupBefore.before, expectedAttachmentNames)) {
+      attemptedFields.push("attachments");
+    } else if (await trySetFiles(page, ["input[type='file']"], attachmentFiles)) {
+      await cleanupDuplicateAttachments(page, expectedAttachmentNames);
+      attemptedFields.push("attachments");
+    } else {
+      manualFields.push("attachments");
+    }
   }
 
-  let checkedHighlights = 0;
-  for (const highlight of plan.highlights) {
-    if (await trySelectProofFromSelector(page, highlight)) checkedHighlights += 1;
-  }
+  const checkedHighlights = await trySelectProofHighlights(page, plan.highlights);
   if (checkedHighlights > 0) {
     attemptedFields.push("highlights");
   } else if (plan.highlights.length > 0) {

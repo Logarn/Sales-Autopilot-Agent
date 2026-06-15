@@ -495,33 +495,34 @@ function requestedToolSentence(strategy: CopyStrategy): string | null {
 
 function conciseHook(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
+  const opener = "Steve here - how is your day going?";
   if (strategy.category === "gardening" && tools.length > 0) {
-    return `Two details stood out: the work needs seasonal care/replenishment logic first, and ${tools[0]} flows should support those customer moments instead of just sending more emails.`;
+    return `${opener}\n\nI would not treat this like "set up more emails." The customer has seasonal logic first: what they are planting, what they are worried about, and when ${tools[0]} should help them buy or replenish next.`;
   }
   if (strategy.category === "email_design") {
-    return "Two details stood out: the email templates need clearer hierarchy, and the goal is conversion rather than decoration.";
+    return `${opener}\n\nI would not treat this like "make the emails prettier." The reader needs the offer to be obvious before they have a chance to drift.`;
   }
   if (tools.length >= 3 && /engagement|conversion/i.test(strategy.client_commercial_pain)) {
-    return `Two customer-lifecycle details stood out: you want engagement/conversion improved through subscriber lists and campaign performance insights, across ${tools.slice(0, 3).join(", ")}.`;
+    return `${opener}\n\nI would not treat this like "make some ecommerce emails." The actual win is cleaning up the customer path: who gets what message, when they get it, and what they should do next across ${tools.slice(0, 3).join(", ")}.`;
   }
   if (tools.length >= 2) {
-    return `Two customer-lifecycle details stood out: each moment needs the right timing, message, and next step, and the work spans ${tools.join(" and ")}.`;
+    return `${opener}\n\nI would not make the tools the strategy here. The strategy is the customer moment: right timing, right message, and a next step that makes sense across ${tools.join(" and ")}.`;
   }
   if (tools.length === 1) {
-    return `Two customer-lifecycle details stood out: customers need a clearer reason to take the next step, and ${tools[0]} should make that timing useful instead of just sending more emails.`;
+    return `${opener}\n\nThe customer needs a clearer reason to take the next step. ${tools[0]} is just the delivery system; the real work is making the timing useful instead of noisy.`;
   }
-  return `Two customer-lifecycle details stood out: customers need a clearer reason to trust, click, buy, or return, and ${strategy.client_commercial_pain}.`;
+  return `${opener}\n\nI would start with the customer path, not the task list. The customer needs a clearer reason to trust, click, buy, or return, and ${strategy.client_commercial_pain}.`;
 }
 
 function oneStepSolution(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
   if (strategy.category === "email_design") {
-    return "I would start with a 3-5 day design/validation slice. Done = offer hierarchy, mobile readability, product path, and CTA visibility tightened on the priority templates, with before/after screenshots.";
+    return "I would start with a tight design/validation slice: offer hierarchy, mobile readability, product path, and CTA visibility on the priority templates. Pretty is nice. Clear is what gets paid.";
   }
   if (tools.length >= 3) {
-    return "I would start with a commercially pointed 3-5 day audit/fix slice. Done = active flows, campaign cadence, subscriber segments, and reporting gaps mapped; first three fixes ranked by likely lift to engagement and conversion.";
+    return "I would start with a tight audit/fix pass: active flows, subscriber/list logic, campaign cadence, and reporting. Then I would rank the first three fixes by likely lift to engagement and conversion, not by how tidy they look in a checklist.";
   }
-  return `I would start with a commercially pointed 3-5 day diagnostic slice. Done = ${strategy.repeat_purchase_or_conversion_moment}, with the clearest leak turned into the first practical fix.`;
+  return `I would start with a tight diagnostic pass: ${strategy.repeat_purchase_or_conversion_moment}. Then I would turn the clearest leak into the first practical fix.`;
 }
 
 function singleProofPoint(proofPoints: string[], portfolioItems: PortfolioItem[]): string {
@@ -532,39 +533,39 @@ function singleProofPoint(proofPoints: string[], portfolioItems: PortfolioItem[]
   if (selectedProof) {
     const [name, ...headlineParts] = selectedProof.split(":");
     const headline = headlineParts.join(":").trim().replace(/[.!?]+$/g, "");
-    return `Recent proof: ${name.trim()} — ${headline}. I would use this as the one matched artifact, not a proof dump.`;
+    return `For proof, I would keep it simple: ${name.trim()} - ${headline}. One matched artifact beats a proof dump.`;
   }
   const proofText = [...proofPoints, ...portfolioItems.map((item) => item.result), ...portfolioItems.map((item) => item.name)].join(" ");
   if (/klaviyo silver partner/i.test(proofText) || /8\+?\s*years/i.test(proofText)) {
-    return "Recent proof: one Klaviyo lifecycle artifact, kept tight to the actual scope instead of dumping credentials.";
+    return "For proof, I would keep it tight to one Klaviyo/lifecycle artifact instead of dumping credentials.";
   }
   const portfolio = firstProofLabel(proofPoints, portfolioItems);
   if (portfolio && !/portfolio|general/i.test(portfolio)) {
-    return `Recent proof: ${portfolio}.`;
+    return `For proof, I would use ${portfolio} only if it is the cleanest match for this scope.`;
   }
-  return "Recent proof: audit-style lifecycle work; I would only use one proof artifact if it matches this application after browser QA.";
+  return "For proof, I would only use one artifact if it matches this application after browser QA.";
 }
 
 function logisticsLine(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
   if (strategy.category === "email_design") {
-    return "Logistics: I can keep this async-friendly, work from the existing template examples, and share a short before/after readout before expanding the set.";
+    return "I can keep this async-friendly, work from the existing template examples, and show the before/after logic before expanding the set.";
   }
   if (tools.length >= 3) {
-    return "Logistics: I can keep this async-friendly, start with the audit/fix slice, and share a short performance readout before any bigger rebuild.";
+    return "I can keep this async-friendly, start with the audit/fix pass, and show the performance logic before any bigger rebuild.";
   }
-  return "Logistics: I can start with a small audit pass, keep the first scope tied to the highest-leverage fix, and work from the stack/details already in the brief.";
+  return "I can start small, keep the first scope tied to the highest-leverage fix, and work from the stack/details already in the brief.";
 }
 
 function ctaLine(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
   if (strategy.category === "email_design") {
-    return "If useful, choose a 10-minute call or a 2-slide plan today with the first template fixes I would make - your pick.";
+    return "If it makes sense, send me the priority templates and I will point to the first fixes I would make.";
   }
   if (tools.length >= 3) {
-    return "If useful, choose a 10-minute call or a 2-slide plan today with the first fixes I would make - your pick. If the priorities are already clear, I can keep it async.";
+    return "If it makes sense, send me the current flow/campaign setup and I will map the first fixes I would make.";
   }
-  return "If useful, choose a 10-minute call or a 2-slide plan today with the first fix I would prioritize - your pick.";
+  return "If it makes sense, send me the current setup and I will point to the first fix I would prioritize.";
 }
 
 export function draftCoverLetterFromCopyStrategy(input: {
@@ -656,6 +657,12 @@ export function evaluateDraftQualityGate(input: {
   const genericExpertStart = /^(?:steve here,\s*)?(?:how is your day going\?\s*)?(?:hi[,\s-]*)?(?:i am|i'm)\s+(?:a\s+)?(?:klaviyo|email|crm|marketing|design)[^.\n]{0,80}(?:expert|specialist|professional|consultant|with)/i;
   if (genericExpertStart.test(text) || /^i (?:am|'m) (?:a )?klaviyo expert/i.test(text)) {
     addIssue(issues, { code: "generic_expert_opener", severity: "critical", message: "Cover letter starts with generic expert/credential copy.", evidence: text.slice(0, 120) });
+  }
+  if (!/^steve here\b/i.test(text) || !/\bhow is your day going\?/i.test(text)) {
+    addIssue(issues, { code: "human_opener_missing", severity: "critical", message: "Cover letter is missing the required Steve here / human opener." });
+  }
+  if (/\b(?:Two customer-lifecycle details stood out|commercially pointed)\b/i.test(text)) {
+    addIssue(issues, { code: "sterile_template_voice", severity: "critical", message: "Cover letter still contains the old sterile proposal template voice.", evidence: text.match(/\b(?:Two customer-lifecycle details stood out|commercially pointed)\b/i)?.[0] });
   }
   if (/\bjust adding noise\b/i.test(text)) {
     addIssue(issues, { code: "banned_noise_phrase", severity: "critical", message: "Cover letter contains the banned phrase just adding noise." });

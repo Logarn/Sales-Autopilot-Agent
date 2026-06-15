@@ -167,6 +167,8 @@ async function runTests(): Promise<void> {
     }>;
     checkedLabels?: string[];
     fileNames?: string[];
+    attachmentRows?: string[];
+    selectedHighlightLabels?: string[];
   }) {
     const makeElement = (field: {
       value: string;
@@ -235,8 +237,21 @@ async function runTests(): Promise<void> {
           getAttribute: () => null,
           closest: () => null,
         }));
+        const actionElements = [
+          ...(input.attachmentRows ?? []).map((name) => ({
+            value: "",
+            checked: false,
+            type: "button",
+            tagName: "BUTTON",
+            name: null,
+            files: [],
+            textContent: "",
+            getAttribute: (attributeName: string) => attributeName === "aria-label" ? `Delete attachment ${name}` : null,
+            closest: () => null,
+          })),
+        ];
         holder.document = {
-          body: { innerText: input.visibleText ?? "" },
+          body: { innerText: [input.visibleText ?? "", ...(input.selectedHighlightLabels ?? [])].filter(Boolean).join("\n") },
           querySelectorAll: (selector: string) => {
             const allElements = [...inputElements, ...checkedElements, ...fileElements];
             if (selector === "textarea") return allElements.filter((element) => element.tagName === "TEXTAREA");
@@ -246,7 +261,8 @@ async function runTests(): Promise<void> {
               return allElements.filter((element) => element.tagName === "INPUT" && element.type === type);
             }
             if (selector.startsWith("label[for=")) return [];
-            if (selector === "button" || selector === "a[role='button']") return [];
+            if (selector === "button") return actionElements;
+            if (selector === "a[role='button']") return [];
             return allElements;
           },
         };
@@ -1261,6 +1277,34 @@ async function runTests(): Promise<void> {
     assert(verifiedApplyVerification.find((item) => item.field === "finalSubmitButton")?.status === "verified", "Final submit button should be detected but not clicked.");
     assert(Boolean(verifiedApplyVerification.find((item) => item.field === "attachments")?.detail.includes("package.json")), "Attachment verification should name verified files.");
     assert(Boolean(verifiedApplyVerification.find((item) => item.field === "profileHighlights")?.detail.includes("Klaviyo retention proof")), "Portfolio/profile verification should name verified labels.");
+
+    const duplicateAttachmentVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({
+        visibleText: "Required for proposal: 8 Connects\nSend for 8 Connects\npackage.json\npackage.json",
+        inputValues: [verificationPlan.coverLetter, "$50"],
+        attachmentRows: ["package.json", "package.json"],
+      }),
+      plan: {
+        ...verificationPlan,
+        screeningAnswers: [],
+        highlights: [],
+        attachments: [{ id: "truly", name: "Truly Beauty case study", filePath: "package.json", sensitivity: "approved_external" }],
+      },
+      fields: { attemptedFields: ["coverLetter", "rate", "attachments"], skippedFields: [], manualFields: ["finalSubmit"] },
+      bodyText: "Required for proposal: 8 Connects\nSend for 8 Connects",
+    });
+    assert(duplicateAttachmentVerification.find((item) => item.field === "attachments")?.status === "attempted_unverified", "Duplicate visible attachment rows must not verify.");
+
+    const modalOnlyPortfolioVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({
+        visibleText: "Required for proposal: 8 Connects\nProfile highlights\nAdd a portfolio project\nAdd a certificate\nBoost your proposal\nKlaviyo retention proof\nSend for 8 Connects",
+        inputValues: [verificationPlan.coverLetter, "$50"],
+      }),
+      plan: { ...verificationPlan, screeningAnswers: [], attachments: [], highlights: ["Klaviyo retention proof"] },
+      fields: { attemptedFields: ["coverLetter", "rate", "highlights"], skippedFields: [], manualFields: ["finalSubmit"] },
+      bodyText: "Required for proposal: 8 Connects\nSend for 8 Connects",
+    });
+    assert(modalOnlyPortfolioVerification.find((item) => item.field === "profileHighlights")?.status === "attempted_unverified", "Portfolio names outside selected highlight evidence must not verify.");
 
     const missingSubmitVerification = await verifyApplyPreparationOnPage({
       page: fakeApplyPage({
