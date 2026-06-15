@@ -1745,6 +1745,9 @@ async function tryFillFirst(page: PlaywrightPageLike, selectors: string[], value
         }
       }
     } catch {
+      if (await forceSetFirstFieldValue(page, selector, value) && await firstFieldValueMatches(page, selector, value)) {
+        return true;
+      }
       // Try the next conservative selector.
     }
   }
@@ -1758,9 +1761,19 @@ async function firstFieldValueMatches(page: PlaywrightPageLike, selector: string
   return page.evaluate((input) => {
     if (!input) return false;
     const { selector: cssSelector, expected: prefix } = input;
-    const element = document.querySelector(cssSelector) as HTMLInputElement | HTMLTextAreaElement | null;
-    const value = element?.value ?? "";
-    return value.replace(/\s+/g, " ").trim().toLowerCase().includes(prefix);
+    const elements = Array.from(document.querySelectorAll(cssSelector)) as Array<HTMLInputElement | HTMLTextAreaElement>;
+    const isVisible = (element: Element) => {
+      const htmlElement = element as HTMLElement;
+      const hasLayoutApi = typeof htmlElement.offsetWidth === "number" || typeof htmlElement.offsetHeight === "number" || typeof element.getClientRects === "function";
+      if (!hasLayoutApi) return true;
+      const rectCount = typeof element.getClientRects === "function" ? element.getClientRects().length : 0;
+      return Boolean(htmlElement.offsetWidth || htmlElement.offsetHeight || rectCount);
+    };
+    return elements.some((element) => {
+      if (!isVisible(element)) return false;
+      const value = element?.value ?? "";
+      return value.replace(/\s+/g, " ").trim().toLowerCase().includes(prefix);
+    });
   }, { selector, expected: expectedPrefix }).catch(() => false);
 }
 
@@ -1769,7 +1782,15 @@ async function forceSetFirstFieldValue(page: PlaywrightPageLike, selector: strin
   return page.evaluate((input) => {
     if (!input) return false;
     const { selector: cssSelector, value: nextValue } = input;
-    const element = document.querySelector(cssSelector) as HTMLInputElement | HTMLTextAreaElement | null;
+    const elements = Array.from(document.querySelectorAll(cssSelector)) as Array<HTMLInputElement | HTMLTextAreaElement>;
+    const isVisible = (element: Element) => {
+      const htmlElement = element as HTMLElement;
+      const hasLayoutApi = typeof htmlElement.offsetWidth === "number" || typeof htmlElement.offsetHeight === "number" || typeof element.getClientRects === "function";
+      if (!hasLayoutApi) return true;
+      const rectCount = typeof element.getClientRects === "function" ? element.getClientRects().length : 0;
+      return Boolean(htmlElement.offsetWidth || htmlElement.offsetHeight || rectCount);
+    };
+    const element = elements.find(isVisible) ?? elements[0] ?? null;
     if (!element) return false;
     const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
@@ -2924,6 +2945,9 @@ const APPLY_VERIFICATION_SNAPSHOT_SCRIPT = `(() => {
       const id = attr(node, "id");
       const label = node.closest && node.closest("label") ? textOf(node.closest("label")) : "";
       const kind = String(node.tagName || "").toLowerCase() === "textarea" ? "textarea" : "input";
+      const hasLayoutApi = typeof node.offsetWidth === "number" || typeof node.offsetHeight === "number" || typeof node.getClientRects === "function";
+      const rectCount = typeof node.getClientRects === "function" ? node.getClientRects().length : 0;
+      const visible = hasLayoutApi ? Boolean(node.offsetWidth || node.offsetHeight || rectCount) : true;
       return {
         kind,
         inputType,
@@ -2934,9 +2958,9 @@ const APPLY_VERIFICATION_SNAPSHOT_SCRIPT = `(() => {
         placeholder: attr(node, "placeholder"),
         dataTest: attr(node, "data-test"),
         value,
+        visible,
       };
-    })
-    .filter((field) => field.value.trim().length > 0);
+    });
   const checkedLabels = nodes
     .filter((node) => Boolean(node.checked))
     .map((node) => {
@@ -3266,6 +3290,7 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
     "[data-test='up-fe-rate-widget'] [data-test='hourly-rate'] input",
     "[data-test='up-fe-rate-widget'] input[data-test='currency-input']",
     "[data-test='hourly-rate'] input[data-test='currency-input']",
+    "input#step-rate",
     "input[aria-label*='hourly rate' i]",
     "input[aria-label*='bid' i]",
     "input[name*='hourlyRate' i]",

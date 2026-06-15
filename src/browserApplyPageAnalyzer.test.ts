@@ -127,6 +127,107 @@ assert.equal(visibleReady.rate.state, "visible_filled");
 assert.equal(visibleReady.finalSubmit.visible, true, "final submit should be detected without clicking");
 assert.equal(visibleReady.finalSubmit.clicked, false);
 
+const currentUpworkPlan = plan({
+  rate: "$35/hr",
+  screeningAnswers: [],
+});
+const currentUpworkEmpty = analyzeApplyPageSnapshot(snapshot({
+  url: "https://www.upwork.com/nx/proposals/job/~022065875609716105358/apply/",
+  title: "Submit a Proposal",
+  visibleText: [
+    "Submit a Proposal",
+    "Proposal settings",
+    "This proposal requires 17 Connects",
+    "Required for proposal:",
+    "17 Connects",
+    "Cover Letter",
+    "Hourly rate",
+    "Profile highlights",
+    "Add a portfolio project",
+    "Boost your proposal",
+    "Send for 17 Connects",
+  ].join("\n"),
+  fieldValues: [
+    {
+      kind: "textarea",
+      inputType: null,
+      label: "",
+      id: null,
+      name: null,
+      ariaLabel: null,
+      placeholder: null,
+      dataTest: null,
+      value: "",
+      visible: true,
+    },
+    {
+      kind: "input",
+      inputType: "text",
+      label: "Hourly rate",
+      id: "step-rate",
+      name: null,
+      ariaLabel: null,
+      placeholder: null,
+      dataTest: null,
+      value: "$35.00",
+      visible: true,
+    },
+  ],
+  actionLabels: ["Attach files", "Add a portfolio project", "Send for 17 Connects"],
+}), currentUpworkPlan);
+assert.equal(currentUpworkEmpty.pageKind, "apply");
+assert.equal(currentUpworkEmpty.connects.visible, true);
+assert.equal(currentUpworkEmpty.connects.value, 17);
+assert.equal(currentUpworkEmpty.coverLetter.state, "visible_empty", "generic visible empty textarea should be recognized as cover letter input");
+assert.equal(currentUpworkEmpty.rate.state, "visible_filled", "current Upwork #step-rate field should verify as the hourly rate");
+assert.equal(currentUpworkEmpty.finalSubmit.visible, true);
+
+const currentUpworkFilled = analyzeApplyPageSnapshot(snapshot({
+  url: "https://www.upwork.com/nx/proposals/job/~022065875609716105358/apply/",
+  title: "Submit a Proposal",
+  visibleText: [
+    "Submit a Proposal",
+    "Proposal settings",
+    "This proposal requires 17 Connects",
+    "Required for proposal:",
+    "17 Connects",
+    "Cover Letter",
+    "Hourly rate",
+    "Profile highlights",
+    "Add a portfolio project",
+    "Boost your proposal",
+    "Send for 17 Connects",
+  ].join("\n"),
+  fieldValues: [
+    {
+      kind: "textarea",
+      inputType: null,
+      label: "",
+      id: null,
+      name: null,
+      ariaLabel: null,
+      placeholder: null,
+      dataTest: null,
+      value: currentUpworkPlan.coverLetter,
+      visible: true,
+    },
+    {
+      kind: "input",
+      inputType: "text",
+      label: "Hourly rate",
+      id: "step-rate",
+      name: null,
+      ariaLabel: null,
+      placeholder: null,
+      dataTest: null,
+      value: "$35.00",
+      visible: true,
+    },
+  ],
+  actionLabels: ["Attach files", "Add a portfolio project", "Send for 17 Connects"],
+}), currentUpworkPlan);
+assert.equal(currentUpworkFilled.ready, true, "filled current Upwork markup should pass hard apply-page gates");
+
 const unreadableConnects = analyzeApplyPageSnapshot(snapshot({
   visibleText: "Cover letter\nHourly rate\nSend proposal",
   fieldValues: [

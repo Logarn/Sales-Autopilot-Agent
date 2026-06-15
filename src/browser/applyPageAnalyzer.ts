@@ -17,6 +17,7 @@ export interface ApplyPageFieldSnapshot {
   placeholder: string | null;
   dataTest: string | null;
   value: string;
+  visible?: boolean;
 }
 
 export interface ApplyPageSnapshot {
@@ -117,6 +118,10 @@ function isUserTextField(field: ApplyPageFieldSnapshot): boolean {
   if (field.kind === "textarea") return true;
   const inputType = (field.inputType ?? "text").toLowerCase();
   return !["button", "checkbox", "file", "hidden", "image", "radio", "reset", "submit"].includes(inputType);
+}
+
+function isVisibleField(field: ApplyPageFieldSnapshot): boolean {
+  return field.visible !== false;
 }
 
 function parseNumber(value: string): number | null {
@@ -246,7 +251,12 @@ function analyzeCoverLetter(snapshot: ApplyPageSnapshot, plan?: BrowserApplyFill
   if (best) {
     return { state: "visible_filled", visible: true, filled: true, valuePreview: compact(best).slice(0, 160), detail: "Cover letter field has text, but it does not match the planned text." };
   }
-  const visible = snapshot.fieldValues.some((field) => field.kind === "textarea" && /\b(?:cover|letter|proposal|message)\b/i.test(fieldDescriptor(field)));
+  const visible = snapshot.fieldValues.some((field) =>
+    field.kind === "textarea" &&
+    isUserTextField(field) &&
+    isVisibleField(field) &&
+    (/\b(?:cover|letter|proposal|message)\b/i.test(fieldDescriptor(field)) || !field.value.trim())
+  );
   return visible
     ? { state: "visible_empty", visible: true, filled: false, detail: "Cover letter field is visible but empty." }
     : { state: "not_visible", visible: false, filled: false, detail: "Cover letter field was not detected." };
