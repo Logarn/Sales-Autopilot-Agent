@@ -1958,37 +1958,6 @@ function attachmentRowsMatchExpected(rows: string[], expectedNames: string[]): b
     expectedNames.every((name) => rows.filter((row) => normalizeVerificationValue(row).includes(normalizeVerificationValue(name))).length === 1);
 }
 
-async function tryCheckHighlight(page: PlaywrightPageLike, highlight: string): Promise<boolean> {
-  for (const alias of highlightAliases(highlight)) {
-    const escaped = alias.replace(/["\\]/g, "\\$&");
-    const selectors = [
-      `label:has-text("${escaped}") input[type='checkbox']`,
-      `label:has-text("${escaped}")`,
-      `button:has-text("${escaped}")`,
-      `[role='option']:has-text("${escaped}")`,
-      `[role='checkbox']:has-text("${escaped}")`,
-      `text="${escaped}"`,
-    ];
-    for (const selector of selectors) {
-      const locator = page.locator(selector).first();
-      try {
-        if ((await locator.count()) > 0) {
-          try {
-            await locator.check({ timeout: 1500 });
-          } catch {
-            if (typeof locator.click !== "function") throw new Error("Highlight locator was not clickable.");
-            await guardedClick(locator as PlaywrightLocatorLike & { click(options?: { timeout?: number }): Promise<unknown> }, { selector, label: alias }, { timeout: 1500 });
-          }
-          return true;
-        }
-      } catch {
-        // Try the next conservative selector.
-      }
-    }
-  }
-  return false;
-}
-
 function highlightAliases(highlight: string): string[] {
   const aliases = [highlight];
   const withoutSlashSuffix = highlight.replace(/\s*\/\s*[^/]+$/, "").trim();
@@ -2001,11 +1970,56 @@ function highlightAliases(highlight: string): string[] {
 }
 
 async function trySelectHighlightsFromOpenDialog(page: PlaywrightPageLike, highlights: string[]): Promise<number> {
+  if (!await waitForHighlightDialogReady(page)) return 0;
   let selected = 0;
   for (const highlight of highlights) {
-    if (await tryTrustedSelectHighlightFromOpenDialog(page, highlight)) selected += 1;
+    if (await openDialogHasSelectedHighlight(page, highlight)) {
+      selected += 1;
+      continue;
+    }
+    if (await tryTrustedSelectHighlightFromOpenDialog(page, highlight) && await openDialogHasSelectedHighlight(page, highlight)) selected += 1;
   }
   return selected;
+}
+
+async function waitForHighlightDialogReady(page: PlaywrightPageLike): Promise<boolean> {
+  if (!page.evaluate) return false;
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const ready = await page.evaluate(() => {
+      const dialog = document.querySelector("[role='dialog']");
+      if (!dialog) return false;
+      return Array.from(dialog.querySelectorAll("button"))
+        .some((button) => /^select highlight$/i.test((button.textContent ?? "").replace(/\s+/g, " ").trim()));
+    }).catch(() => false);
+    if (ready) return true;
+    await page.waitForTimeout?.(500).catch(() => undefined);
+  }
+  return false;
+}
+
+async function readSelectedHighlightCountInOpenDialog(page: PlaywrightPageLike): Promise<number> {
+  if (!page.evaluate) return 0;
+  return page.evaluate(() => {
+    const dialog = document.querySelector("[role='dialog']");
+    const text = (dialog?.textContent ?? "").replace(/\s+/g, " ").trim();
+    const match = text.match(/highlights\s*\(\s*(\d+)\s*[/]\s*4\s*\)/i);
+    return match ? Number.parseInt(match[1], 10) : 0;
+  }).catch(() => 0);
+}
+
+async function openDialogHasSelectedHighlight(page: PlaywrightPageLike, highlight: string): Promise<boolean> {
+  if (!page.evaluate) return false;
+  return page.evaluate((aliases = []) => {
+    const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
+    const normalizedAliases = Array.isArray(aliases) ? aliases.map(normalize).filter(Boolean) : [];
+    const dialog = document.querySelector("[role='dialog']");
+    if (!dialog || normalizedAliases.length === 0) return false;
+    const text = normalize(dialog.textContent ?? "");
+    const selectedStart = text.search(/highlights\s*\(\s*\d+\s*[/]\s*4\s*\)/i);
+    if (selectedStart < 0) return false;
+    const selectedText = text.slice(selectedStart);
+    return normalizedAliases.some((alias) => selectedText.includes(alias));
+  }, highlightAliases(highlight)).catch(() => false);
 }
 
 async function findHighlightButtonIndexInOpenDialog(page: PlaywrightPageLike, highlight: string): Promise<number> {
@@ -2053,6 +2067,8 @@ async function findHighlightButtonIndexInOpenDialog(page: PlaywrightPageLike, hi
 }
 
 async function tryTrustedSelectHighlightFromOpenDialog(page: PlaywrightPageLike, highlight: string): Promise<boolean> {
+  if (await openDialogHasSelectedHighlight(page, highlight)) return true;
+  const selectedBefore = await readSelectedHighlightCountInOpenDialog(page);
   const buttonIndex = await findHighlightButtonIndexInOpenDialog(page, highlight);
   if (buttonIndex < 0 || typeof page.locator("[role='dialog'] button").nth !== "function") return false;
   const button = page.locator("[role='dialog'] button").nth!(buttonIndex);
@@ -2061,7 +2077,8 @@ async function tryTrustedSelectHighlightFromOpenDialog(page: PlaywrightPageLike,
     if (typeof button.click !== "function") return false;
     await guardedClick(button as PlaywrightLocatorLike & { click(options?: { timeout?: number }): Promise<unknown> }, { selector: "[role='dialog'] button", label: `Select highlight: ${highlight}` }, { timeout: 2500 });
     await page.waitForTimeout?.(650).catch(() => undefined);
-    return true;
+    return await openDialogHasSelectedHighlight(page, highlight) ||
+      await readSelectedHighlightCountInOpenDialog(page) > selectedBefore;
   } catch {
     return false;
   }
@@ -2121,23 +2138,14 @@ async function trySelectProofHighlights(page: PlaywrightPageLike, highlights: st
     { selector: "div:text-is('Add certificate')", label: "Add certificate" },
   ]);
   if (!opened) {
-    let fallbackSelected = 0;
-    for (const highlight of highlights) {
-      if (await tryCheckHighlight(page, highlight)) fallbackSelected += 1;
-    }
-    return fallbackSelected;
+    return 0;
   }
-  await page.waitForTimeout?.(500).catch(() => undefined);
   selected = await trySelectHighlightsFromOpenDialog(page, highlights);
   if (selected > 0) {
     await tryConfirmHighlightsDialog(page);
     return selected;
   }
-  let fallbackSelected = 0;
-  for (const highlight of highlights) {
-    if (await tryCheckHighlight(page, highlight)) fallbackSelected += 1;
-  }
-  return fallbackSelected;
+  return 0;
 }
 
 function assertSubmitGuard(plan: BrowserApplyFillPlan | null): asserts plan is BrowserApplyFillPlan {
