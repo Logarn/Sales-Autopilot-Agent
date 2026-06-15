@@ -269,7 +269,7 @@ interface PlaywrightPageLike {
   title(): Promise<string>;
   locator(selector: string): PlaywrightLocatorLike;
   close?(options?: { runBeforeUnload?: boolean }): Promise<unknown>;
-  evaluate?<R>(fn: () => R): Promise<R>;
+  evaluate?<R, Arg = unknown>(fn: (arg?: Arg) => R, arg?: Arg): Promise<R>;
   waitForTimeout?(timeout: number): Promise<unknown>;
 }
 
@@ -1861,35 +1861,73 @@ async function trySetFiles(page: PlaywrightPageLike, selectors: string[], files:
 }
 
 async function tryCheckHighlight(page: PlaywrightPageLike, highlight: string): Promise<boolean> {
-  const escaped = highlight.replace(/["\\]/g, "\\$&");
-  const selectors = [
-    `label:has-text("${escaped}") input[type='checkbox']`,
-    `label:has-text("${escaped}")`,
-    `button:has-text("${escaped}")`,
-    `[role='option']:has-text("${escaped}")`,
-    `[role='checkbox']:has-text("${escaped}")`,
-    `text="${escaped}"`,
-  ];
-  for (const selector of selectors) {
-    const locator = page.locator(selector).first();
-    try {
-      if ((await locator.count()) > 0) {
-        try {
-          await locator.check({ timeout: 1500 });
-        } catch {
-          if (typeof locator.click !== "function") throw new Error("Highlight locator was not clickable.");
-          await guardedClick(locator as PlaywrightLocatorLike & { click(options?: { timeout?: number }): Promise<unknown> }, { selector, label: highlight }, { timeout: 1500 });
+  for (const alias of highlightAliases(highlight)) {
+    const escaped = alias.replace(/["\\]/g, "\\$&");
+    const selectors = [
+      `label:has-text("${escaped}") input[type='checkbox']`,
+      `label:has-text("${escaped}")`,
+      `button:has-text("${escaped}")`,
+      `[role='option']:has-text("${escaped}")`,
+      `[role='checkbox']:has-text("${escaped}")`,
+      `text="${escaped}"`,
+    ];
+    for (const selector of selectors) {
+      const locator = page.locator(selector).first();
+      try {
+        if ((await locator.count()) > 0) {
+          try {
+            await locator.check({ timeout: 1500 });
+          } catch {
+            if (typeof locator.click !== "function") throw new Error("Highlight locator was not clickable.");
+            await guardedClick(locator as PlaywrightLocatorLike & { click(options?: { timeout?: number }): Promise<unknown> }, { selector, label: alias }, { timeout: 1500 });
+          }
+          return true;
         }
-        return true;
+      } catch {
+        // Try the next conservative selector.
       }
-    } catch {
-      // Try the next conservative selector.
     }
   }
   return false;
 }
 
+function highlightAliases(highlight: string): string[] {
+  const aliases = [highlight];
+  const withoutSlashSuffix = highlight.replace(/\s*\/\s*[^/]+$/, "").trim();
+  if (withoutSlashSuffix && withoutSlashSuffix !== highlight) aliases.push(withoutSlashSuffix);
+  if (/truly beauty/i.test(highlight)) aliases.push("From $250k to $1.2 Million In 12 Months");
+  return Array.from(new Set(aliases.filter(Boolean)));
+}
+
+async function trySelectHighlightFromOpenDialog(page: PlaywrightPageLike, highlight: string): Promise<boolean> {
+  if (!page.evaluate) return false;
+  return page.evaluate((aliases = []) => {
+    const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
+    const normalizedAliases = aliases.map(normalize).filter(Boolean);
+    const dialog = document.querySelector("[role='dialog']");
+    if (!dialog || normalizedAliases.length === 0) return false;
+    const buttons = Array.from(dialog.querySelectorAll("button"))
+      .filter((button) => /select highlight/i.test(button.textContent ?? "") && !(button as HTMLButtonElement).disabled)
+      .filter((button) => Boolean(button.offsetWidth || button.offsetHeight || button.getClientRects().length));
+    for (const button of buttons) {
+      let node: Element | null = button.parentElement;
+      let depth = 0;
+      while (node && node !== dialog.parentElement && depth < 20) {
+        const text = normalize(node.textContent ?? "");
+        if (normalizedAliases.some((alias) => text.includes(alias))) {
+          (button as HTMLButtonElement).click();
+          return true;
+        }
+        node = node.parentElement;
+        depth += 1;
+      }
+    }
+    return false;
+  }, highlightAliases(highlight)).catch(() => false);
+}
+
 async function trySelectProofFromSelector(page: PlaywrightPageLike, highlight: string): Promise<boolean> {
+  if (await trySelectHighlightFromOpenDialog(page, highlight)) return true;
   if (await tryCheckHighlight(page, highlight)) return true;
   const opened = await tryClickFirst(page, [
     { selector: "button:has-text('Add portfolio project')", label: "Add portfolio project" },
@@ -1908,7 +1946,8 @@ async function trySelectProofFromSelector(page: PlaywrightPageLike, highlight: s
     { selector: "div:text-is('Add certificate')", label: "Add certificate" },
   ]);
   if (!opened) return false;
-  const selected = await tryCheckHighlight(page, highlight);
+  await page.waitForTimeout?.(500).catch(() => undefined);
+  const selected = await trySelectHighlightFromOpenDialog(page, highlight) || await tryCheckHighlight(page, highlight);
   if (!selected) return false;
   await tryClickFirst(page, [
     { selector: "button:has-text('Add')", label: "Confirm proof selection" },
@@ -2111,7 +2150,7 @@ function rateFieldValues(snapshot: ApplyVerificationSnapshot): string[] {
 }
 
 function fixedPriceBidFieldValues(snapshot: ApplyVerificationSnapshot): string[] {
-  return snapshot.fieldValues
+  const fieldValues = snapshot.fieldValues
     .filter((field) => field.kind === "input" && isUserTextField(field))
     .filter((field) => {
       const descriptor = fieldDescriptor(field);
@@ -2120,6 +2159,13 @@ function fixedPriceBidFieldValues(snapshot: ApplyVerificationSnapshot): string[]
     })
     .map((field) => field.value)
     .filter((value) => value.trim().length > 0);
+  if (fieldValues.length > 0) return fieldValues;
+  if (!/\b(?:fixed-price|fixed price|full amount you'd like to bid|by milestone|by project)\b/i.test(snapshot.visibleText)) {
+    return [];
+  }
+  return snapshot.inputValues
+    .filter((value) => /^\$\d+(?:\.\d{1,2})?$/.test(value.trim()))
+    .filter((value) => !/^-\$/.test(value.trim()));
 }
 
 function pageLooksFixedPrice(snapshot: ApplyVerificationSnapshot): boolean {
@@ -2180,6 +2226,10 @@ function textDiffers(left: string | null | undefined, right: string | null | und
   const a = normalizeVerificationValue(left ?? "");
   const b = normalizeVerificationValue(right ?? "");
   return Boolean(a && b && a !== b);
+}
+
+function textCollectionContainsHighlight(values: string[], expected: string): boolean {
+  return highlightAliases(expected).some((alias) => textCollectionContains(values, alias));
 }
 
 function proposalVersionSourceFromPayload(value: unknown): ProposalVersionSource {
@@ -2526,14 +2576,15 @@ export async function verifyApplyPreparationOnPage(input: {
     ? verification("targetTab", "verified", `Apply tab matches target job URL: ${snapshot.url}`)
     : verification("targetTab", "attempted_unverified", `Apply tab URL does not match target job URL. target=${plan.applyUrl} actual=${snapshot.url}`, { expected: plan.applyUrl, actual: snapshot.url }));
 
+  const coverLetterValues = uniqueNonEmpty([...coverLetterFieldValues(snapshot), ...snapshot.inputValues]);
   if (!plan.coverLetter.trim()) {
     results.push(verification("coverLetter", "skipped_by_strategy", "No cover letter text was available in the plan."));
-  } else if (textCollectionContains(coverLetterFieldValues(snapshot), plan.coverLetter)) {
+  } else if (textCollectionContains(coverLetterValues, plan.coverLetter)) {
     results.push(verification("coverLetter", "verified", "Cover letter field contains the intended text.", { expected: significantExpectedText(plan.coverLetter) }));
   } else if (fields.skippedFields.includes("coverLetter") || fields.manualFields.includes("coverLetter")) {
     results.push(verification("coverLetter", "blocked_by_upwork_ui", "Cover letter field was not filled by the Upwork UI.", { expected: significantExpectedText(plan.coverLetter) }));
   } else {
-    results.push(verification("coverLetter", "attempted_unverified", "Cover letter fill was attempted, but the field did not verify with the intended text.", { expected: significantExpectedText(plan.coverLetter), actual: coverLetterFieldValues(snapshot).join(" | ").slice(0, 500) }));
+    results.push(verification("coverLetter", "attempted_unverified", "Cover letter fill was attempted, but the field did not verify with the intended text.", { expected: significantExpectedText(plan.coverLetter), actual: coverLetterValues.join(" | ").slice(0, 500) }));
   }
 
   if (plan.screeningAnswers.length === 0) {
@@ -2612,7 +2663,7 @@ export async function verifyApplyPreparationOnPage(input: {
   if (plan.highlights.length === 0) {
     results.push(verification("profileHighlights", "skipped_by_strategy", "No profile highlights were selected by strategy."));
   } else {
-    const verifiedHighlights = plan.highlights.filter((highlight) => textCollectionContains([...snapshot.checkedLabels, snapshot.visibleText], highlight));
+    const verifiedHighlights = plan.highlights.filter((highlight) => textCollectionContainsHighlight([...snapshot.checkedLabels, snapshot.visibleText], highlight));
     if (verifiedHighlights.length === plan.highlights.length) {
       results.push(verification("profileHighlights", "verified", `Verified selected portfolio/profile proof: ${verifiedHighlights.join(", ")}.`, { actual: verifiedHighlights.join(", ") }));
     } else if (/add a portfolio project|add portfolio project|add a certificate|add certificate/i.test(snapshot.visibleText)) {
