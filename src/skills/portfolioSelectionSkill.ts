@@ -229,6 +229,10 @@ function hasLifecycleEmailPlatformScope(text: string): boolean {
     /\b(?:flow|flows|automation|automations|campaign|campaigns|subscriber|subscribers|list|lists|engagement|conversion|performance|insights|ecommerce|e-commerce|retention|lifecycle)\b/.test(text);
 }
 
+function isBroadLifecycleEmailScope(text: string): boolean {
+  return hasLifecycleEmailPlatformScope(text) && !/\b(?:beauty|skincare|cosmetic|health|wellness|supplement|men'?s health|high-aov|high aov|furniture|home goods|sofa|mattress|fashion|apparel|boutique|clothing|deliverability|spam|rfm|pet|dog|cat|chicken|farm|hobby|beverage|drink|art|anime|fandom|jewelry)\b/.test(text);
+}
+
 function isDesignRelevant(text: string): boolean {
   const strongDesignSignal = /\b(?:figma|email design|design system|campaign design|flow design|creative direction|visual design|mockup)\b/.test(text);
   if (hasLifecycleEmailPlatformScope(text) && !strongDesignSignal) {
@@ -255,6 +259,8 @@ function rankAutoAttachAssets(text: string, assets: PortfolioAsset[]): Portfolio
   const score = (asset: PortfolioAsset): number => {
     let value = 0;
     const haystack = `${asset.name} ${asset.categories.join(" ")} ${asset.recommendedUsage}`.toLowerCase();
+    if (isBroadLifecycleEmailScope(text) && /klaviyo/.test(haystack) && asset.kind === "screenshot") value += 8;
+    if (isBroadLifecycleEmailScope(text) && /(case study|portfolio)/.test(haystack)) value -= 5;
     if (/(beauty|skincare|cosmetic)/.test(text) && /beauty|skincare/.test(haystack)) value += 5;
     if (/(health|wellness|supplement)/.test(text) && /health|wellness|supplement/.test(haystack)) value += 4;
     if (/(subscription|lifecycle foundation|foundation|recharge)/.test(text) && /subscription|foundation|recharge/.test(haystack)) value += 4;
@@ -268,7 +274,74 @@ function rankAutoAttachAssets(text: string, assets: PortfolioAsset[]): Portfolio
     if (/design case studies/i.test(asset.name) && !isDesignRelevant(text)) value -= 10;
     return value;
   };
-  return [...assets].sort((left, right) => score(right) - score(left)).slice(0, 3);
+  return [...assets].sort((left, right) => score(right) - score(left));
+}
+
+function proofAssetPaths(proofs: ProofRecord[], proofIds: Set<string>): Set<string> {
+  const paths = new Set<string>();
+  for (const proof of proofs) {
+    if (!proofIds.has(proof.id)) continue;
+    for (const rule of proof.assetRules) {
+      paths.add(rule.path);
+    }
+  }
+  return paths;
+}
+
+function proofIdsForAssets(proofs: ProofRecord[], assets: PortfolioAsset[]): Set<string> {
+  const assetPaths = new Set(assets.map((asset) => asset.path));
+  const proofIds = new Set<string>();
+  for (const proof of proofs) {
+    if (proof.assetRules.some((rule) => assetPaths.has(rule.path))) {
+      proofIds.add(proof.id);
+    }
+  }
+  return proofIds;
+}
+
+function finalizeOneArtifactSelection(result: PortfolioSelectionResult, proofBank: ProofRecord[], text: string): void {
+  result.matchedThemes = uniqueStrings(result.matchedThemes);
+  result.selectedProof = uniqueById(result.selectedProof);
+  result.selectedUpworkPortfolioItems = uniqueById(result.selectedUpworkPortfolioItems);
+  result.autoAttachAssets = rankAutoAttachAssets(text, uniqueById(result.autoAttachAssets).filter((asset) => !(asset.requiresManualReview || !asset.safeToAttach)));
+  result.recommendOnlyAssets = uniqueById(result.recommendOnlyAssets)
+    .filter((asset) => !result.autoAttachAssets.some((item) => item.id === asset.id))
+    .filter((asset) => !(/design case studies/i.test(asset.name) && !isDesignRelevant(text)))
+    .filter((asset) => !(/endurance wellness/i.test(asset.name) && !/(subscription|lifecycle foundation|foundation|health|wellness)/.test(text)));
+  result.mentionOnlyProof = uniqueById(result.mentionOnlyProof);
+  result.doNotUseAssets = uniqueById(result.doNotUseAssets);
+
+  result.selectedUpworkPortfolioItems = result.selectedUpworkPortfolioItems.slice(0, 1);
+
+  if (result.selectedUpworkPortfolioItems.length > 0) {
+    const portfolioProofIds = new Set(result.selectedUpworkPortfolioItems.flatMap((item) => item.proofIds));
+    const portfolioAssetPaths = proofAssetPaths(proofBank, portfolioProofIds);
+    result.autoAttachAssets = result.autoAttachAssets.filter((asset) => !portfolioAssetPaths.has(asset.path));
+    result.autoAttachAssets = [];
+
+    const matchingProof = result.selectedProof.find((proof) => portfolioProofIds.has(proof.id)) ??
+      proofBank.find((proof) => portfolioProofIds.has(proof.id));
+    result.selectedProof = matchingProof ? [matchingProof] : result.selectedProof.slice(0, 1);
+  } else {
+    result.autoAttachAssets = result.autoAttachAssets.slice(0, 1);
+    const selectedAssetProofIds = proofIdsForAssets(proofBank, result.autoAttachAssets);
+    if (selectedAssetProofIds.size > 0) {
+      const matchingProof = result.selectedProof.find((proof) => selectedAssetProofIds.has(proof.id)) ??
+        proofBank.find((proof) => selectedAssetProofIds.has(proof.id));
+      result.selectedProof = matchingProof ? [matchingProof] : result.selectedProof.slice(0, 1);
+    } else {
+      result.selectedProof = result.selectedProof.slice(0, 1);
+    }
+  }
+
+  result.recommendOnlyAssets = result.recommendOnlyAssets
+    .filter((asset) => !result.autoAttachAssets.some((item) => item.id === asset.id))
+    .slice(0, 1);
+  result.mentionOnlyProof = result.mentionOnlyProof
+    .filter((proof) => !result.selectedProof.some((selected) => selected.id === proof.id))
+    .slice(0, 1);
+  result.selectedFigmaLinks = uniqueById(result.selectedFigmaLinks).slice(0, 1);
+  result.selectedVideoLinks = uniqueById(result.selectedVideoLinks).slice(0, 1);
 }
 
 export function selectPortfolioAssetsForJob(job: JobPosting | ScoredJob): PortfolioSelectionResult {
@@ -314,7 +387,7 @@ export function selectPortfolioAssetsForJob(job: JobPosting | ScoredJob): Portfo
     addTheme("health_supplements");
     addProofAndAssets(result, findProofById(proofBank, "dr-rachael-institute"), assets, "auto_attach");
     addProofAndAssets(result, findProofById(proofBank, "dr-rachael-klaviyo-screenshot"), assets, "auto_attach");
-    if (/(subscription|foundation|setup|recharge)/.test(primaryText)) {
+    if (/(foundation|setup|recharge)/.test(primaryText)) {
       addProofAndAssets(result, findProofById(proofBank, "endurance-wellness"), assets, "auto_attach");
     }
   }
@@ -363,26 +436,26 @@ export function selectPortfolioAssetsForJob(job: JobPosting | ScoredJob): Portfo
 
   if (/(dtc|d2c|ecommerce|shopify|klaviyo|email marketing|retention|lifecycle)/.test(text) && /(portfolio|proof|case stud|sample|examples?|track record|results)/.test(text)) {
     addTheme("generic_klaviyo_proof");
-    addUpworkPortfolioForProof(result, "fly-boutique");
-    addUpworkPortfolioForProof(result, "lifely");
-    addUpworkPortfolioForProof(result, "truly-beauty");
+    if (/(beauty|skincare|cosmetic)/.test(text)) {
+      addProofAndAssets(result, findProofById(proofBank, "truly-beauty"), assets, "auto_attach");
+      addUpworkPortfolioForProof(result, "truly-beauty");
+    } else if (/(fashion|apparel|boutique|clothing|deliverability|spam|rfm)/.test(text)) {
+      addProofAndAssets(result, findProofById(proofBank, "fly-boutique"), assets, "auto_attach");
+      addUpworkPortfolioForProof(result, "fly-boutique");
+    } else if (/(high-aov|high aov|furniture|home goods|sofa|mattress|premium lifestyle|considered purchase)/.test(text)) {
+      addProofAndAssets(result, findProofById(proofBank, "lifely"), assets, "auto_attach");
+      addUpworkPortfolioForProof(result, "lifely");
+    } else {
+      addProofAndAssets(result, findProofById(proofBank, "hangaritas-screenshot"), assets, "auto_attach");
+    }
+  } else if (hasLifecycleEmailPlatformScope(text) && result.selectedProof.length === 0 && result.autoAttachAssets.length === 0 && result.selectedUpworkPortfolioItems.length === 0) {
+    addTheme("generic_klaviyo_performance");
+    addProofAndAssets(result, findProofById(proofBank, "hangaritas-screenshot"), assets, "auto_attach");
   }
 
   result.selectedVideoLinks.push(...pickVideoLinks(text, videoLinks));
 
-  result.matchedThemes = uniqueStrings(result.matchedThemes);
-  result.selectedProof = uniqueById(result.selectedProof).slice(0, 3);
-  result.autoAttachAssets = rankAutoAttachAssets(text, uniqueById(result.autoAttachAssets).filter((asset) => !(asset.requiresManualReview || !asset.safeToAttach)));
-  result.recommendOnlyAssets = uniqueById(result.recommendOnlyAssets)
-    .filter((asset) => !result.autoAttachAssets.some((item) => item.id === asset.id))
-    .filter((asset) => !(/design case studies/i.test(asset.name) && !isDesignRelevant(text)))
-    .filter((asset) => !(/endurance wellness/i.test(asset.name) && !/(subscription|lifecycle foundation|foundation|health|wellness)/.test(text)))
-    .slice(0, 3);
-  result.mentionOnlyProof = uniqueById(result.mentionOnlyProof).slice(0, 2);
-  result.doNotUseAssets = uniqueById(result.doNotUseAssets);
-  result.selectedUpworkPortfolioItems = uniqueById(result.selectedUpworkPortfolioItems).slice(0, 3);
-  result.selectedFigmaLinks = uniqueById(result.selectedFigmaLinks).slice(0, 2);
-  result.selectedVideoLinks = uniqueById(result.selectedVideoLinks).slice(0, 1);
+  finalizeOneArtifactSelection(result, proofBank, text);
 
   if (result.autoAttachAssets.some((asset) => asset.requiresManualReview || !asset.safeToAttach)) {
     result.warnings.push("Sensitive assets attempted to auto-attach; selection rules should be reviewed.");

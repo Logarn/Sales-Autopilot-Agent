@@ -383,8 +383,8 @@ async function runTests(): Promise<void> {
   assertNotIncludes(fileProofText, "Portfolio.pdf", "proof angle should not expose raw proof filenames");
   assert(!/\b[\w .'’()-]+\.(?:pdf|png|jpe?g|webp)\b/i.test(fileProofText), `proof angle should not expose file labels:\n${fileProofText}`);
   assert(
-    /The Fly Boutique|Lifely|Truly Beauty|verified portfolio proof/i.test(fileProofText),
-    `proof angle should name a verified portfolio proof instead of a generic file: ${fileProofText}`,
+    /The Fly Boutique|Lifely|Truly Beauty|Hangaritas|Klaviyo screenshot|verified portfolio proof/i.test(fileProofText),
+    `proof angle should name a verified portfolio proof/artifact instead of a generic file: ${fileProofText}`,
   );
 
   const badLead = createScoredJob({

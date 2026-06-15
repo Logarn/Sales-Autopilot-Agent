@@ -444,7 +444,6 @@ function buildPreparationDiagnostics(input: {
     skippedAttachments: input.skippedAttachments,
     proofHighlights: uniqueStrings([...input.proofHighlights, ...input.mentionOnlyProof]),
     portfolioHighlights: uniqueStrings([
-      ...input.attachments.map((attachment) => `${attachment.name}: selected for upload`),
       ...input.manualReviewAssets,
       ...input.figmaRecommendations,
       ...input.videoRecommendations,
@@ -550,9 +549,10 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
     ? applyProofPlanOverridesToSelection(basePortfolioSelection, proofOverrides)
     : null;
 
-  const profileAttachments = portfolioSelection?.autoAttachAssets.map((asset) => asset.path) ?? profileContext?.selectedAttachments ?? [];
-  const fallbackDraftAttachments = draft.selectedPortfolioItems.map((item) => item.filePath).filter(Boolean);
-  const selected = profileAttachments.length > 0
+  const profileAttachments = portfolioSelection
+    ? portfolioSelection.autoAttachAssets.map((asset) => asset.path)
+    : profileContext?.selectedAttachments ?? [];
+  const selected = portfolioSelection || profileAttachments.length > 0
     ? buildAutoAttachmentInstructions(profileAttachments)
     : buildAttachmentInstructions(draft.selectedPortfolioItems);
   const skipped = selected.skipped;
@@ -575,10 +575,9 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
   const videoRecommendations = profileContext?.selectedVideoLinks.map((link) => `${link.name}: ${link.url}`) ?? [];
   const manualReviewWarnings = profileContext?.manualReviewWarnings ?? [];
   const profileHighlights = profileContext?.selectedPositioning ?? draft.structuredProposal?.browserFillNotes.profileNotes ?? [];
-  const upworkPortfolioHighlights = uniqueStrings([
-    ...(portfolioSelection?.selectedUpworkPortfolioItems.map((item) => item.name) ?? []),
-    ...upworkPortfolioLabelsFromDraftItems(draft.selectedPortfolioItems),
-  ]);
+  const upworkPortfolioHighlights = portfolioSelection
+    ? uniqueStrings(portfolioSelection.selectedUpworkPortfolioItems.map((item) => item.name))
+    : uniqueStrings(upworkPortfolioLabelsFromDraftItems(draft.selectedPortfolioItems));
   const proofHighlights = [
     ...(portfolioSelection?.selectedProof.flatMap((proof) => [
       `${proof.name}: ${proof.headline}`,
@@ -709,7 +708,6 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
         proofHighlights,
         portfolioHighlights: uniqueStrings([
           ...upworkPortfolioHighlights.map((label) => `Upwork portfolio: ${label}`),
-          ...attachments.map((attachment) => `${attachment.name}: selected for upload`),
           ...manualReviewAssets,
           ...figmaRecommendations,
           ...videoRecommendations,

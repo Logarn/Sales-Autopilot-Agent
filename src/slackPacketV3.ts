@@ -600,7 +600,9 @@ function connectsBoostNote(job: ScoredJob, context: SlackPacketV3Context, connec
 function proofAngle(job: ScoredJob, context: SlackPacketV3Context): string {
   const intelligence = context.jobIntelligence ?? job.applicationDraft?.jobIntelligence;
   const selection = selectPortfolioAssetsForJob(job);
-  const selectedPortfolioProof = selection.selectedUpworkPortfolioItems[0]?.name ?? selection.selectedProof[0]?.headline;
+  const selectedProof = selection.selectedProof[0];
+  const selectedPortfolioProof = selection.selectedUpworkPortfolioItems[0]?.name ??
+    (selectedProof ? `${selectedProof.name}: ${selectedProof.headline}` : undefined);
   const rawProof = firstUsefulLine(
     [
       intelligence?.proofRecommendations?.[0],

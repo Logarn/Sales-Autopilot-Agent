@@ -28,6 +28,9 @@ async function runTests(): Promise<void> {
   process.env.DISCOVERY_SLACK_CHANNEL_ID = "C123";
   process.env.SLACK_BOT_TOKEN = "";
   process.env.SLACK_CHANNEL_WEBHOOK_URL = "";
+  const genericKlaviyoScreenshotPath = resolve(proofRoot, "profile/screenshots/hangaritas-klaviyo-performance.png");
+  mkdirSync(dirname(genericKlaviyoScreenshotPath), { recursive: true });
+  writeFileSync(genericKlaviyoScreenshotPath, "png");
 
   const { buildApplicationDraft } = require("./agent") as {
     buildApplicationDraft: (job: any) => any;
@@ -934,7 +937,7 @@ async function runTests(): Promise<void> {
 
     const beautyPlanResult = buildBrowserApplyPlan(beautyJob.id);
     assert(Boolean(beautyPlanResult.plan), "Beauty job should produce an apply plan");
-    assert(!beautyPlanResult.valid, "Beauty job plan should block final prep while a selected required attachment is missing locally");
+    assert(beautyPlanResult.valid, "Beauty job plan should stay valid when proof is selected via Upwork portfolio instead of a missing local file");
     assert(beautyPlanResult.plan.stopBeforeSubmit === true, "Apply plan must enforce stopBeforeSubmit=true");
     assert(beautyPlanResult.plan.finalPreparationDiagnostics.stopBeforeSubmit === true, "Final-prep diagnostics must also enforce stopBeforeSubmit=true");
     assert(beautyPlanResult.plan.coverLetter.length > 0, "Apply plan should expose a browser-fill cover letter");
@@ -957,39 +960,26 @@ async function runTests(): Promise<void> {
       "Apply plan should expose Connects evidence when available",
     );
     assert(
-      beautyPlanResult.plan.attachments.some((item: { filePath: string }) => item.filePath === "profile/attachments/truly-beauty-case-study.pdf"),
-      "Beauty job should auto-attach Truly Beauty case study",
+      !beautyPlanResult.plan.attachments.some((item: { filePath: string }) => item.filePath === "profile/attachments/truly-beauty-case-study.pdf"),
+      "Beauty job should not attach Truly Beauty file when the matching Upwork portfolio item is selected",
     );
-    assert(
-      beautyPlanResult.plan.filesAttached.includes("profile/attachments/truly-beauty-case-study.pdf"),
-      "Apply plan should expose files selected for attachment",
-    );
-    assert(
-      beautyPlanResult.plan.missingLocalAssets.includes("profile/attachments/truly-beauty-case-study.pdf"),
-      "Browser draft prep should report selected assets that are missing locally",
-    );
-    assert(
-      beautyPlanResult.plan.missingFiles.includes("profile/attachments/truly-beauty-case-study.pdf"),
-      "Apply plan should expose missing files in final-prep diagnostics fields",
-    );
-    assert(
-      beautyPlanResult.plan.proofAvailability.some((line: string) => line.includes("Status: File missing locally - manual upload needed")),
-      "Browser draft prep should include proof availability status lines",
-    );
+    assert(!beautyPlanResult.plan.filesAttached.includes("profile/attachments/truly-beauty-case-study.pdf"), "Apply plan should not duplicate portfolio proof as a file attachment");
+    assert(!beautyPlanResult.plan.missingLocalAssets.includes("profile/attachments/truly-beauty-case-study.pdf"), "Portfolio-only proof should not create a missing local file blocker");
+    assert(!beautyPlanResult.plan.missingFiles.includes("profile/attachments/truly-beauty-case-study.pdf"), "Portfolio-only proof should not expose missing files");
     assert(beautyPlanResult.plan.proofHighlights.length > 0, "Apply plan should expose proof highlights");
     assert(beautyPlanResult.plan.portfolioHighlights.some((line: string) => line.includes("Truly Beauty")), "Apply plan should expose portfolio highlights");
     assert(!beautyPlanResult.plan.portfolioHighlights.some((line: string) => /profile\/attachments|\.pdf\b|\.png\b|\.jpe?g\b/i.test(line)), "Portfolio highlights should use display labels, not proof filenames");
     assert(!beautyPlanResult.plan.finalPreparationDiagnostics.proofHighlights.some((line: string) => /profile\/attachments|\.pdf\b|\.png\b|\.jpe?g\b/i.test(line)), "Final-prep proof highlights should not leak proof filenames");
     assert(beautyPlanResult.plan.profileHighlights.length > 0, "Apply plan should expose profile highlights");
-    assert(beautyPlanResult.plan.manualFields.includes("attachments"), "Missing selected attachment should add attachments to manual fields");
+    assert(!beautyPlanResult.plan.manualFields.includes("attachments"), "Portfolio-only proof should not add attachments to manual fields");
     assert(beautyPlanResult.plan.manualFields.includes("finalSubmit"), "Final submit should remain a manual field");
     assert(
-      beautyPlanResult.plan.finalPreparationDiagnostics.blockers.some((line: string) => line.includes("required_attachment_missing_locally")),
-      "Missing required attachment should be surfaced as a blocker",
+      !beautyPlanResult.plan.finalPreparationDiagnostics.blockers.some((line: string) => line.includes("required_attachment_missing_locally")),
+      "Portfolio-only proof should not create an attachment blocker",
     );
     assert(
-      beautyPlanResult.issues.some((issue) => issue.code === "required_attachment_missing_locally" && issue.severity === "error"),
-      "Missing local assets selected for browser prep should be surfaced as blocking diagnostics",
+      !beautyPlanResult.issues.some((issue) => issue.code === "required_attachment_missing_locally" && issue.severity === "error"),
+      "Portfolio-only proof should not require a local file",
     );
     assert(
       !beautyPlanResult.plan.attachments.some((item: { filePath: string }) => item.filePath.includes("dr-rachael")),
@@ -1034,11 +1024,11 @@ async function runTests(): Promise<void> {
       "Bonus-only health/wellness text must not select health-specific attachments",
     );
     assert(
-      lowBudgetPlanResult.plan.highlights.some((label: string) => label.includes("The Fly Boutique")) &&
-      lowBudgetPlanResult.plan.highlights.some((label: string) => label.includes("How Lifely")) &&
-      lowBudgetPlanResult.plan.highlights.some((label: string) => label.includes("$250k")),
-      "Generic Klaviyo proof requests should plan real Upwork portfolio highlights",
+      lowBudgetPlanResult.plan.attachments.length <= 1 &&
+      lowBudgetPlanResult.plan.attachments.some((item: { filePath: string }) => item.filePath === "profile/screenshots/hangaritas-klaviyo-performance.png"),
+      "Generic Klaviyo proof requests should plan one Klaviyo screenshot instead of multiple portfolio highlights",
     );
+    assert(lowBudgetPlanResult.plan.highlights.length === 0, "Generic Klaviyo proof requests should not dump Upwork portfolio highlights");
 
     const ingestedRelativePath = "slack-intake/beauty-job-1/truly-beauty-case-study.pdf";
     const ingestedAbsolutePath = resolve(proofRoot, ingestedRelativePath);
@@ -1057,12 +1047,12 @@ async function runTests(): Promise<void> {
     });
     const beautyPlanAfterSlackUpload = buildBrowserApplyPlan(beautyJob.id);
     assert(
-      beautyPlanAfterSlackUpload.plan.attachments.some((item: { filePath: string }) => item.filePath === ingestedRelativePath),
-      "Slack-ingested file with the matching filename should replace the missing manifest path.",
+      !beautyPlanAfterSlackUpload.plan.attachments.some((item: { filePath: string }) => item.filePath === ingestedRelativePath),
+      "Slack-ingested file should not be attached when the same proof is already represented by an Upwork portfolio item.",
     );
     assert(
       !beautyPlanAfterSlackUpload.plan.missingLocalAssets.includes("profile/attachments/truly-beauty-case-study.pdf"),
-      "Slack upload should resolve the missing file blocker for the matching planned proof file.",
+      "Portfolio-selected proof should not carry a missing file blocker.",
     );
 
     const prepareReply = buildPrepareDraftQueueReply({
@@ -1590,7 +1580,8 @@ async function runTests(): Promise<void> {
     markJobSeen(designJob, false);
     const designPlanResult = buildBrowserApplyPlan(designJob.id);
     assert(Boolean(designPlanResult.plan), "Design job should produce an apply plan");
-    assert(designPlanResult.plan.attachments.some((item: { filePath: string }) => item.filePath === "profile/attachments/design-case-studies-steve-logarn.pdf"), "Design job should auto-attach design case studies");
+    assert(!designPlanResult.plan.attachments.some((item: { filePath: string }) => item.filePath === "profile/attachments/design-case-studies-steve-logarn.pdf"), "Design job should not attach the same proof file when the Upwork portfolio item is selected");
+    assert(designPlanResult.plan.portfolioHighlights.some((line: string) => line.includes("Design Case Studies")), "Design job should select design case studies through Upwork portfolio");
     assert(designPlanResult.plan.figmaRecommendations.length > 0, "Design job should keep Figma links as recommendations only");
     assert(designPlanResult.plan.videoRecommendations.length === 0, "Design job should not add video by default");
 
