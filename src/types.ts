@@ -443,13 +443,42 @@ export interface DraftQualityGateIssue {
   evidence?: string;
 }
 
+export interface ProposalScorecardDimension {
+  dimension: string;
+  weight: number;
+  score: number;
+  passed: boolean;
+  hardFail: boolean;
+  message: string;
+}
+
+export interface ProposalScorecardResult {
+  score: number;
+  ready: boolean;
+  wordCount: number;
+  operatingBand: {
+    min: number;
+    max: number;
+    actual: number;
+  };
+  dimensions: ProposalScorecardDimension[];
+  hardFailures: string[];
+  feedbackMessages: string[];
+  jobSpecificSignalCount: number;
+  proofCount: number;
+  screeningAnswerCount: number;
+  soulLoaded: boolean;
+}
+
 export interface DraftQualityGateResult {
   ready: boolean;
   skillLoaded: boolean;
+  soulLoaded?: boolean;
   fullJobDescriptionRead: boolean;
   copyStrategyCreated: boolean;
   finalSubmitManual: boolean;
   issues: DraftQualityGateIssue[];
+  scorecard?: ProposalScorecardResult;
 }
 
 export interface ProposalBrowserFillNotes {

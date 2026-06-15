@@ -13,14 +13,16 @@ The proposal must prove Steve understood the client, the client customer, the co
 
 ## Runtime order
 1. Read the full Upwork job title and description.
-2. Confirm `job_understanding` exists.
-3. Confirm `brand_fact_pack` exists when brand/category clues exist.
-4. Confirm proof/portfolio strategy exists or is marked unavailable.
-5. Create `copy_strategy`.
-6. Draft cover letter and screening answers from this skill.
-7. Run copy quality gates.
-8. Only fill browser fields if the draft passes.
-9. Stop before final submit.
+2. Load `soul.md` before writing or rewriting any proposal, screening answer, or Slack-facing proposal copy.
+3. Confirm `job_understanding` exists.
+4. Confirm `brand_fact_pack` exists when brand/category clues exist.
+5. Confirm proof/portfolio strategy exists or is marked unavailable.
+6. Create `copy_strategy`.
+7. Draft screening answers first when client questions exist.
+8. Draft cover letter and screening answers from this skill.
+9. Run the proposal scorecard and copy quality gates.
+10. Only fill browser fields if the draft passes.
+11. Stop before final submit.
 
 ## Copy strategy schema
 The runtime must create:
@@ -57,12 +59,17 @@ Unknown fields stay unknown. Do not fake research, proof, portfolio, metrics, at
 
 ## Required copy shape
 - Human opener: `Steve here,` then `How is your day going?`
+- First two sentences contain at least two concrete details from the job post or visible company context.
 - Client/customer insight before tools.
 - Commercial opportunity before credentials.
 - Pain/desire before proof.
 - Specific mechanism before flow names.
+- Exactly one proof artifact or relevant example. Never proof dump.
+- One 3-5 day micro-milestone with explicit acceptance criteria using `Done = ...`.
+- One logistics sentence.
+- End with a choice-based CTA, such as quick call vs async outline, or one direct scope-tied question.
+- Default supervised proposal length: 150-220 words.
 - Proof only when verified or clearly framed as planned.
-- Soft human CTA.
 
 ## Direct-response principles
 - Pain first.
@@ -84,6 +91,8 @@ Unknown fields stay unknown. Do not fake research, proof, portfolio, metrics, at
 
 ## Fatal quality gates
 Fail or revise before browser fill if:
+- `soul.md` was not loaded before proposal copywriting
+- the first two sentences do not contain two job-specific details
 - the cover letter starts with generic expert/experience copy
 - copy contains placeholder/debug/test/scraped UI noise
 - copy contains `just adding noise`
@@ -91,9 +100,28 @@ Fail or revise before browser fill if:
 - copy has no customer insight
 - copy has no business opportunity or commercial pain
 - copy lists tools/flows before explaining customer logic
+- copy has no single relevant proof artifact/example, or mentions more than one proof item
+- copy has no `Done = ...` micro-milestone
+- copy has no choice-based CTA
 - copy claims proof/portfolio/attachments without verification
 - copy has no complete CTA
 - copy suggests final submit or bypassing login/CAPTCHA/security/passkey/2FA
+
+## Proposal scorecard
+Run this before browser fill. Ready requires 85+ with no hard failures.
+
+| Dimension | Weight | Hard fail |
+|---|---:|---|
+| Opener specificity | 15 | Generic opener that could fit any job |
+| Client-goal understanding | 15 | Misreads or ignores the main ask |
+| Proof relevance | 15 | No proof, or more than one unrelated proof |
+| Micro-milestone clarity | 15 | No first slice or no `Done = ...` criteria |
+| Screening-answer quality | 10 | Required question skipped or vague |
+| Tone / humanity | 10 | `soul.md` missing or generic AI voice |
+| Logistics | 5 | No availability/timeline/async rhythm |
+| CTA quality | 5 | Passive or missing close |
+| Readability | 5 | Wall of text or outside 150-220 word band without reason |
+| Honesty / risk control | 5 | Invented research, fake guarantee, or off-platform/payment language |
 
 ## Screening answers
 Screening answers should be short, direct, and proof-backed:

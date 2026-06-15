@@ -59,7 +59,7 @@ const PAIN_MARKERS = [
   "noise",
 ];
 
-const CTA_MARKERS = ["send me", "share", "store url", "quick sense", "what is working", "what is not working", "where i would start"];
+const CTA_MARKERS = ["send me", "share", "store url", "quick sense", "what is working", "what is not working", "where i would start", "would you prefer", "quick call", "async outline"];
 
 const PROOF_MARKERS = ["relevant background", "proof", "audit", "klaviyo", "email", "sms", "flow", "campaign", "retention", "lifecycle", "dtc"];
 const PLATFORM_MARKERS = ["klaviyo", "hubspot", "brevo", "omnisend", "mailchimp", "postscript", "attentive", "shopify"];
@@ -197,15 +197,15 @@ export function critiqueProposal(proposalText: string, job: JobPosting, profile?
     });
   }
 
-  if (wordCount < 90 || wordCount > 220) {
+  if (wordCount < 150 || wordCount > 220) {
     addIssue(issues, {
       category: "length",
-      severity: wordCount < 60 || wordCount > 280 ? "critical" : "warning",
-      message: `Proposal length is ${wordCount} words; Steve's preference is roughly 120-190 words.`,
-      suggestion: "Keep the draft tight: pain, first diagnostic moves, relevant proof, and one low-friction CTA.",
+      severity: wordCount < 60 || wordCount > 320 ? "critical" : "warning",
+      message: `Proposal length is ${wordCount} words; default supervised agent band is 150-220 words.`,
+      suggestion: "Keep the draft tight: two specifics, one proof, one Done = milestone, logistics, and one low-friction CTA.",
     });
-  } else if (wordCount >= 120 && wordCount <= 190) {
-    positiveSignals.push("Length matches the preferred 120-190 word range.");
+  } else {
+    positiveSignals.push("Length matches the default supervised agent band.");
   }
   const paragraphCount = text.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean).length;
   if (paragraphCount > 4) {
@@ -218,19 +218,19 @@ export function critiqueProposal(proposalText: string, job: JobPosting, profile?
     });
   }
 
-  if (!CTA_MARKERS.some((marker) => lower.includes(marker)) || !/[?]|send me|share|quick sense/i.test(text)) {
+  if (!CTA_MARKERS.some((marker) => lower.includes(marker)) || !/[?]|send me|share|quick sense|would you prefer|quick call|async outline/i.test(text)) {
     addIssue(issues, {
       category: "cta",
       severity: "warning",
       message: "CTA is missing or too vague.",
-      suggestion: "End with a specific low-friction next step, such as asking for the store URL or current Klaviyo problem.",
+      suggestion: "End with a specific low-friction choice, such as quick call or async outline.",
     });
   } else if (/let me know|happy to discuss|schedule a call/i.test(text) && !/store url|account|klaviyo|shopify|current/i.test(text)) {
     addIssue(issues, {
       category: "cta",
       severity: "warning",
       message: "CTA is polite but too generic.",
-      suggestion: "Ask for the exact asset Steve needs next, such as the store URL, account access after hire, or the current retention problem.",
+      suggestion: "Ask for a concrete choice tied to scope, such as call vs async outline from the current setup.",
     });
   } else {
     positiveSignals.push("Ends with a specific, low-friction CTA.");
