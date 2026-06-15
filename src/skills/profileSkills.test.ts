@@ -1,5 +1,9 @@
 import { buildProposalContextPack } from "./profileContextSkill";
-import { selectPortfolioAssetsForJob } from "./portfolioSelectionSkill";
+import {
+  DEFAULT_UPWORK_PORTFOLIO_ITEM_IDS,
+  MAX_UPWORK_PORTFOLIO_SELECTIONS,
+  selectPortfolioAssetsForJob,
+} from "./portfolioSelectionSkill";
 import { JobPosting } from "../types";
 
 function createJob(overrides: Partial<JobPosting> = {}): JobPosting {
@@ -35,6 +39,13 @@ function includes<T extends { id: string }>(items: T[], id: string): boolean {
   return items.some((item) => item.id === id);
 }
 
+function assertDefaultUpworkPortfolioSet(items: Array<{ id: string }>, message: string): void {
+  assert(items.length === MAX_UPWORK_PORTFOLIO_SELECTIONS, `${message}: should select four Upwork portfolio items`);
+  for (const id of DEFAULT_UPWORK_PORTFOLIO_ITEM_IDS) {
+    assert(includes(items, id), `${message}: missing ${id}`);
+  }
+}
+
 function runTests(): void {
   const beautyJob = createJob({
     title: "Klaviyo manager for beauty skincare Shopify brand",
@@ -44,6 +55,7 @@ function runTests(): void {
   const beautySelection = selectPortfolioAssetsForJob(beautyJob);
   assert(includes(beautySelection.selectedProof, "truly-beauty"), "Beauty job should select Truly Beauty proof");
   assert(includes(beautySelection.selectedUpworkPortfolioItems, "truly-beauty-upwork"), "Beauty job should select the matching Upwork portfolio item");
+  assertDefaultUpworkPortfolioSet(beautySelection.selectedUpworkPortfolioItems, "Beauty job");
   assert(!includes(beautySelection.autoAttachAssets, "truly-beauty-case-study"), "Beauty job should not attach the same proof file when the Upwork portfolio item is selected");
   assert(beautySelection.autoAttachAssets.length <= 1, "Beauty job should use at most one proof artifact");
   assert(beautySelection.selectedFigmaLinks.length === 0, "Non-design beauty job should not include Figma links by default");
@@ -69,7 +81,7 @@ function runTests(): void {
   assert(!includes(genericSelection.autoAttachAssets, "endurance-wellness-strategy"), "Bonus-only health text should not auto-attach Endurance Wellness");
   assert(includes(genericSelection.selectedProof, "hangaritas-screenshot"), "Generic Klaviyo proof requests should select one platform-performance proof");
   assert(includes(genericSelection.autoAttachAssets, "hangaritas-screenshot"), "Generic Klaviyo proof requests should use one Klaviyo screenshot instead of a portfolio dump");
-  assert(genericSelection.selectedUpworkPortfolioItems.length === 0, "Generic Klaviyo proof requests should not dump multiple Upwork portfolio highlights");
+  assertDefaultUpworkPortfolioSet(genericSelection.selectedUpworkPortfolioItems, "Generic Klaviyo proof requests");
 
   const homeJob = createJob({
     title: "Retention lead for premium furniture ecommerce brand",
@@ -79,6 +91,7 @@ function runTests(): void {
   const homeSelection = selectPortfolioAssetsForJob(homeJob);
   assert(includes(homeSelection.selectedProof, "lifely"), "High-AOV home job should select Lifely");
   assert(includes(homeSelection.selectedUpworkPortfolioItems, "lifely-upwork"), "High-AOV home job should select Lifely in Upwork portfolio");
+  assert(homeSelection.selectedUpworkPortfolioItems[0]?.id === "lifely-upwork", "High-AOV home job should rank Lifely first in Upwork portfolio");
   assert(!includes(homeSelection.autoAttachAssets, "lifely-case-study"), "High-AOV home job should not attach the same proof file when portfolio is selected");
 
   const fashionJob = createJob({
@@ -89,6 +102,7 @@ function runTests(): void {
   const fashionSelection = selectPortfolioAssetsForJob(fashionJob);
   assert(includes(fashionSelection.selectedProof, "fly-boutique"), "Fashion job should select Fly Boutique");
   assert(includes(fashionSelection.selectedUpworkPortfolioItems, "fly-boutique-upwork"), "Fashion job should select Fly Boutique in Upwork portfolio");
+  assert(fashionSelection.selectedUpworkPortfolioItems[0]?.id === "fly-boutique-upwork", "Fashion job should rank Fly Boutique first in Upwork portfolio");
   assert(!includes(fashionSelection.autoAttachAssets, "fly-boutique-case-study"), "Fashion job should not attach the same proof file when portfolio is selected");
 
   const designJob = createJob({
@@ -99,6 +113,7 @@ function runTests(): void {
   const designSelection = selectPortfolioAssetsForJob(designJob);
   assert(includes(designSelection.selectedProof, "design-case-studies"), "Design job should select design case studies");
   assert(includes(designSelection.selectedUpworkPortfolioItems, "design-case-studies-upwork"), "Design job should select design case studies in Upwork portfolio");
+  assert(designSelection.selectedUpworkPortfolioItems[0]?.id === "design-case-studies-upwork", "Design job should rank design case studies first in Upwork portfolio");
   assert(!includes(designSelection.autoAttachAssets, "design-case-studies"), "Design job should not attach the same proof file when portfolio is selected");
   assert(designSelection.selectedFigmaLinks.length > 0, "Design job should include Figma links");
 
@@ -125,7 +140,7 @@ function runTests(): void {
   assert(includes(crossPlatformSelection.selectedProof, "hangaritas-screenshot"), "Cross-platform lifecycle email work should pick one Klaviyo performance proof");
   assert(includes(crossPlatformSelection.autoAttachAssets, "hangaritas-screenshot"), "Cross-platform lifecycle email work should attach one Klaviyo PNG proof");
   assert(crossPlatformSelection.autoAttachAssets.length === 1, "Cross-platform lifecycle email work should not attach multiple proof files");
-  assert(crossPlatformSelection.selectedUpworkPortfolioItems.length === 0, "Cross-platform lifecycle email work should not select multiple portfolio highlights by default");
+  assertDefaultUpworkPortfolioSet(crossPlatformSelection.selectedUpworkPortfolioItems, "Cross-platform lifecycle email work");
 
   const petJob = createJob({
     title: "Retention strategist for pet DTC brand",

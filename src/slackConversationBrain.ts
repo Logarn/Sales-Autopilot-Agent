@@ -409,7 +409,7 @@ export const SLACK_CONVERSATION_HARD_SAFETY_RULES = [
   "Never bypass CAPTCHA, security checks, or browser eligibility checks.",
   "Only count files as verified after deterministic remote Chrome filename verification.",
   "Only count portfolio/profile proof as verified after deterministic remote Chrome selected-label verification.",
-  "Use Proof planned until verification is explicit; use Proof verified only after deterministic page verification.",
+  "Keep proof files and portfolio highlights separate. Use verified language only after deterministic page verification.",
   "Never show action ids, channel ids, thread ids, queue internals, or raw status unless the user asks for debug, raw status, or technical details.",
   "Do not show generic command menus for natural questions.",
 ];
@@ -675,7 +675,7 @@ export async function planSlackConversationWithLlm(
           "When Steve is frustrated, acknowledge the bad prior response briefly and answer directly.",
           "Do not show command menus. Only ask clarification when genuinely ambiguous.",
           "Normal replies must hide raw ids and internals. Raw ids are allowed only when the user asks debug, raw status, or technical details.",
-          "Never claim proof is verified unless proof.verified is true. Use Proof planned otherwise. Never say Proof I used.",
+          "Never claim proof is verified unless proof.verified is true. Keep proof files and portfolio highlights separate. Never say Proof I used.",
           "Never click, promise, or claim final submit. Final submit remains manual.",
           "Never bypass CAPTCHA/security/browser checks.",
           "If Steve corrects you, include a concise memoryUpdate rule. If code is needed, include failureReflection with fixType code_pr and proposedTask.",

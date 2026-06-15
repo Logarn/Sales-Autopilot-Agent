@@ -56,6 +56,8 @@ export interface UpworkPortfolioItem {
   name: string;
   proofIds: string[];
   aliases: string[];
+  verticals: string[];
+  keywords: string[];
 }
 
 export interface PortfolioSelectionResult {
@@ -101,26 +103,54 @@ export const UPWORK_PORTFOLIO_ITEMS: UpworkPortfolioItem[] = [
     name: "Steve's Design Case Studies",
     proofIds: ["design-case-studies"],
     aliases: ["design case studies", "steve's design case studies"],
+    verticals: ["design", "email_design", "creative"],
+    keywords: ["figma", "email design", "design system", "template design", "creative direction", "visual design", "campaign design"],
   },
   {
     id: "fly-boutique-upwork",
     name: "The Fly Boutique (Retain Like Crazy)",
     proofIds: ["fly-boutique"],
     aliases: ["fly boutique", "retain like crazy"],
+    verticals: ["fashion", "apparel", "deliverability", "ecommerce"],
+    keywords: ["fashion", "apparel", "boutique", "clothing", "deliverability", "spam", "rfm", "retention", "klaviyo"],
   },
   {
     id: "lifely-upwork",
     name: "How Lifely Transformed Their Retention Marketing",
     proofIds: ["lifely"],
     aliases: ["lifely"],
+    verticals: ["home", "home_improvement", "furniture", "high_aov", "ecommerce"],
+    keywords: ["home", "home improvement", "furniture", "home goods", "sofa", "mattress", "high aov", "high-aov", "premium lifestyle", "considered purchase"],
   },
   {
     id: "truly-beauty-upwork",
     name: "From $250k to $1.2 Million In 12 Months / Truly Beauty",
     proofIds: ["truly-beauty"],
     aliases: ["truly beauty", "$1.2 million", "250k"],
+    verticals: ["beauty", "skincare", "cosmetics", "ecommerce"],
+    keywords: ["beauty", "skincare", "skin care", "cosmetic", "makeup", "dtc", "d2c", "shopify", "retention", "klaviyo", "quiz", "zero-party"],
   },
 ];
+
+export const MAX_UPWORK_PORTFOLIO_SELECTIONS = 4;
+
+export const DEFAULT_UPWORK_PORTFOLIO_ITEM_IDS = [
+  "design-case-studies-upwork",
+  "fly-boutique-upwork",
+  "lifely-upwork",
+  "truly-beauty-upwork",
+] as const;
+
+export const REQUIRED_UPWORK_PORTFOLIO_ITEM_IDS = DEFAULT_UPWORK_PORTFOLIO_ITEM_IDS;
+
+export function defaultUpworkPortfolioItems(): UpworkPortfolioItem[] {
+  const defaultIds = new Set<string>(DEFAULT_UPWORK_PORTFOLIO_ITEM_IDS);
+  return UPWORK_PORTFOLIO_ITEMS.filter((item) => defaultIds.has(item.id));
+}
+
+export function requiredUpworkPortfolioItems(): UpworkPortfolioItem[] {
+  return defaultUpworkPortfolioItems();
+}
 
 function readJson<T>(filePath: string): T {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as T;
@@ -255,6 +285,66 @@ function pickVideoLinks(text: string, videoLinks: PortfolioLink[]): PortfolioLin
   return videoLinks.filter((link) => link.safeToMention).slice(0, 1);
 }
 
+const VERTICAL_TERMS: Record<string, string[]> = {
+  apparel: ["apparel", "clothing", "fashion", "boutique"],
+  beauty: ["beauty", "skincare", "skin care", "cosmetic", "makeup"],
+  cosmetics: ["beauty", "skincare", "skin care", "cosmetic", "makeup"],
+  creative: ["creative", "visual", "campaign design", "template"],
+  deliverability: ["deliverability", "spam", "inbox", "rfm"],
+  design: ["figma", "email design", "template design", "creative direction", "visual design", "design system"],
+  ecommerce: ["dtc", "d2c", "ecommerce", "e-commerce", "shopify", "woocommerce", "bigcommerce", "retention", "lifecycle"],
+  email_design: ["figma", "email design", "email template", "campaign design", "flow design", "template design"],
+  fashion: ["fashion", "apparel", "boutique", "clothing"],
+  food: ["food", "beverage", "drink", "cpg"],
+  furniture: ["furniture", "sofa", "mattress", "home goods"],
+  health: ["health", "healthcare", "wellness", "supplement", "men's health", "mens health"],
+  high_aov: ["high aov", "high-aov", "premium lifestyle", "considered purchase"],
+  home: ["home", "furniture", "decor", "home goods", "home improvement"],
+  home_improvement: ["home improvement", "home services", "renovation", "furniture", "home goods"],
+  pet: ["pet", "dog", "cat", "chicken", "farm"],
+  saas: ["saas", "software", "b2b"],
+  skincare: ["skincare", "skin care", "beauty", "cosmetic"],
+  supplements: ["supplement", "wellness", "health", "nutrition"],
+};
+
+function upworkPortfolioScore(text: string, item: UpworkPortfolioItem, preferredIds: Set<string>, defaultIds: Set<string>): number {
+  let score = defaultIds.has(item.id) ? 2 : 0;
+  if (preferredIds.has(item.id)) score += 80;
+  if (includesAny(text, item.aliases)) score += 12;
+  if (includesAny(text, item.keywords)) score += 8;
+  for (const vertical of item.verticals) {
+    if (includesAny(text, VERTICAL_TERMS[vertical] ?? [vertical.replace(/_/g, " ")])) {
+      score += 10;
+    }
+  }
+  if (item.proofIds.some((proofId) => text.includes(proofId.replace(/-/g, " ")))) {
+    score += 5;
+  }
+  return score;
+}
+
+export function selectUpworkPortfolioItemsForJobText(
+  text: string,
+  preferredItems: UpworkPortfolioItem[] = [],
+  excludedItemIds: Set<string> = new Set(),
+): UpworkPortfolioItem[] {
+  const normalizedText = normalizeText(text);
+  const preferredIds = new Set(preferredItems.map((item) => item.id));
+  const defaultItems = defaultUpworkPortfolioItems();
+  const defaultIds = new Set(defaultItems.map((item) => item.id));
+  const candidates = uniqueById([...preferredItems, ...UPWORK_PORTFOLIO_ITEMS, ...defaultItems])
+    .filter((item) => !excludedItemIds.has(item.id));
+  return candidates
+    .map((item, index) => ({
+      item,
+      index,
+      score: upworkPortfolioScore(normalizedText, item, preferredIds, defaultIds),
+    }))
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .slice(0, MAX_UPWORK_PORTFOLIO_SELECTIONS)
+    .map((entry) => entry.item);
+}
+
 function rankAutoAttachAssets(text: string, assets: PortfolioAsset[]): PortfolioAsset[] {
   const score = (asset: PortfolioAsset): number => {
     let value = 0;
@@ -311,17 +401,14 @@ function finalizeOneArtifactSelection(result: PortfolioSelectionResult, proofBan
   result.mentionOnlyProof = uniqueById(result.mentionOnlyProof);
   result.doNotUseAssets = uniqueById(result.doNotUseAssets);
 
-  result.selectedUpworkPortfolioItems = result.selectedUpworkPortfolioItems.slice(0, 1);
+  result.selectedUpworkPortfolioItems = selectUpworkPortfolioItemsForJobText(text, result.selectedUpworkPortfolioItems);
 
   if (result.selectedUpworkPortfolioItems.length > 0) {
     const portfolioProofIds = new Set(result.selectedUpworkPortfolioItems.flatMap((item) => item.proofIds));
     const portfolioAssetPaths = proofAssetPaths(proofBank, portfolioProofIds);
     result.autoAttachAssets = result.autoAttachAssets.filter((asset) => !portfolioAssetPaths.has(asset.path));
-    result.autoAttachAssets = [];
-
-    const matchingProof = result.selectedProof.find((proof) => portfolioProofIds.has(proof.id)) ??
-      proofBank.find((proof) => portfolioProofIds.has(proof.id));
-    result.selectedProof = matchingProof ? [matchingProof] : result.selectedProof.slice(0, 1);
+    result.autoAttachAssets = result.autoAttachAssets.slice(0, 1);
+    result.selectedProof = result.selectedProof.slice(0, 1);
   } else {
     result.autoAttachAssets = result.autoAttachAssets.slice(0, 1);
     const selectedAssetProofIds = proofIdsForAssets(proofBank, result.autoAttachAssets);

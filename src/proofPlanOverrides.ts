@@ -1,6 +1,7 @@
 import {
   loadProofBank,
   loadPortfolioAssets,
+  MAX_UPWORK_PORTFOLIO_SELECTIONS,
   UPWORK_PORTFOLIO_ITEMS,
   type PortfolioAsset,
   type PortfolioSelectionResult,
@@ -367,7 +368,8 @@ export function applyProofPlanOverridesToSelection(
     autoAttachAssets = [];
   }
 
-  let selectedUpworkPortfolioItems = selection.selectedUpworkPortfolioItems.filter((item) => !excludedPortfolioItemIds.has(item.id));
+  let selectedUpworkPortfolioItems = selection.selectedUpworkPortfolioItems
+    .filter((item) => !excludedPortfolioItemIds.has(item.id));
   for (const itemId of normalized.includePortfolioItemIds) {
     const item = upworkById.get(itemId);
     if (item && !excludedPortfolioItemIds.has(item.id)) {
@@ -393,7 +395,7 @@ export function applyProofPlanOverridesToSelection(
     autoAttachAssets: uniqueAssets(autoAttachAssets).slice(0, normalized.attachAllRelevantScreenshots ? 3 : 3),
     recommendOnlyAssets: selection.recommendOnlyAssets.filter((asset) => !excludedAssetIds.has(asset.id)),
     mentionOnlyProof,
-    selectedUpworkPortfolioItems: selectedUpworkPortfolioItems.slice(0, 2),
+    selectedUpworkPortfolioItems: selectedUpworkPortfolioItems.slice(0, MAX_UPWORK_PORTFOLIO_SELECTIONS),
   };
 }
 

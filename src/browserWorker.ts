@@ -1118,21 +1118,18 @@ function buildPrepareDraftStatusMessage(input: {
     : screeningVerification?.status === "skipped_by_strategy"
       ? "none generated"
       : "needs QA";
-  const selectedFiles = (diagnostics.filesAttached ?? []).length > 0
-    ? (diagnostics.filesAttached ?? []).map((item) => path.basename(item)).slice(0, 3)
-    : (diagnostics.selectedAttachments ?? []).slice(0, 3);
-  const selectedPortfolio = (diagnostics.selectedHighlights ?? diagnostics.profileHighlights ?? diagnostics.portfolioHighlights ?? []).slice(0, 2);
-  const plannedProofParts = [
-    selectedPortfolio.length > 0 ? `Portfolio: ${selectedPortfolio.join(", ")}` : null,
-    selectedFiles.length > 0 ? `Files: ${selectedFiles.join(", ")}` : null,
-  ].filter((item): item is string => Boolean(item));
-  const plannedProofSummary = plannedProofParts.length > 0 ? plannedProofParts.join("; ") : "none selected";
-  const proofFilesSummary = selectedFiles.length > 0 ? selectedFiles.join(", ") : "none";
-  const portfolioSummary = selectedPortfolio.length > 0 ? selectedPortfolio.join(", ") : "none";
+  const selectedFiles = Array.from(new Set(((diagnostics.filesAttached ?? []).length > 0
+    ? (diagnostics.filesAttached ?? []).map((item) => path.basename(item))
+    : (diagnostics.selectedAttachments ?? [])).filter(Boolean))).slice(0, 4);
+  const selectedPortfolio = Array.from(new Set((diagnostics.selectedHighlights ?? diagnostics.profileHighlights ?? diagnostics.portfolioHighlights ?? []).filter(Boolean))).slice(0, 4);
   const attachmentsVerified = selectedFiles.length === 0 || attachmentVerification?.status === "verified";
   const portfolioVerified = selectedPortfolio.length === 0 || highlightVerification?.status === "verified";
-  const proofVerified = plannedProofParts.length > 0 && attachmentsVerified && portfolioVerified;
-  const proofLabel = proofVerified ? "Proof verified" : "Proof planned";
+  const proofFilesSummary = selectedFiles.length === 0
+    ? "none"
+    : `${attachmentsVerified ? "attached" : "planned"}: ${selectedFiles.join(", ")}`;
+  const portfolioSummary = selectedPortfolio.length === 0
+    ? "none"
+    : `${portfolioVerified ? "selected" : "needs selection check"}: ${selectedPortfolio.join(", ")}`;
   const correctionLine = "You can correct proof here in Slack: “Use Fly Boutique instead”, “Remove the intro PDF”, “Attach Design Case Studies too”, “Use Truly + Lifely”, “Don’t attach screenshots”, or “Use portfolio only”.";
   const missingFiles = diagnostics.missingLocalAssets.map((asset) => path.basename(asset)).slice(0, 2);
   const manualFields = [
@@ -1164,9 +1161,8 @@ function buildPrepareDraftStatusMessage(input: {
       [
         `• *Cover letter:* ${coverLetterSummary}`,
         `• *Screening answers:* ${screeningSummary}`,
-        `• *${proofLabel}:* ${plannedProofSummary}`,
         `• *Proof files:* ${proofFilesSummary}`,
-        `• *Portfolio:* ${portfolioSummary}`,
+        `• *Portfolio highlights:* ${portfolioSummary}`,
         `• *Connects:* ${connectsSummary}`,
         `• *Boost:* ${boostSummary}`,
         "• *Final submit:* untouched — nothing submitted",
@@ -1185,13 +1181,12 @@ function buildPrepareDraftStatusMessage(input: {
       "I can see the proposal page, but the Connects section isn’t readable right now. I left submit untouched and skipped boost for now.",
       "Nothing submitted: I did not click the final Upwork submit button.",
       "",
-      "What I planned:",
+      "Current readback:",
       [
         `• *Cover letter:* ${coverLetterSummary}`,
         `• *Screening answers:* ${screeningSummary}`,
-        `• *${proofLabel}:* ${plannedProofSummary}`,
         `• *Proof files:* ${proofFilesSummary}`,
-        `• *Portfolio:* ${portfolioSummary}`,
+        `• *Portfolio highlights:* ${portfolioSummary}`,
         "• *Connects:* not verified",
         "• *Boost:* not set yet",
         "• *Final submit:* untouched — nothing submitted",
@@ -1210,19 +1205,19 @@ function buildPrepareDraftStatusMessage(input: {
     ? "clear it in remote Chrome, then reply “retry” and I’ll pick this back up."
     : "reply “retry” after the page finishes loading, or “open it” and I’ll bring the tab forward.";
   return [
-    "⚠️ *Blocked before QA*",
+    "⚠️ *Needs QA in Upwork*",
     "",
     isBrowserChallengeState(diagnostics.state)
       ? blockerReason
-      : `I reached the Upwork apply page, but ${blockerReason}`,
+      : `I reached the Upwork application and stopped before submit. ${blockerReason}`,
     "Nothing submitted: I did not click the final Upwork submit button.",
     "",
-    "What I planned:",
+    "Current readback:",
     [
-      `• *Cover letter:* ${diagnostics.coverLetterPresent ? "drafted" : "not generated yet"}`,
-      `• *${proofLabel}:* ${plannedProofSummary}`,
+      `• *Cover letter:* ${coverLetterSummary}`,
+      `• *Screening answers:* ${screeningSummary}`,
       `• *Proof files:* ${proofFilesSummary}`,
-      `• *Portfolio:* ${portfolioSummary}`,
+      `• *Portfolio highlights:* ${portfolioSummary}`,
       `• *Connects:* ${connectsSummary}`,
       `• *Boost:* ${boostSummary}`,
       "• *Final submit:* untouched — nothing submitted",
@@ -1262,6 +1257,8 @@ export async function postPrepareDraftStatus(
   const safetyPhrases = [
     "Final submit remains manual.",
     "• *Final submit:* untouched — nothing submitted",
+    "• *Proof files:*",
+    "• *Portfolio highlights:*",
     ...(deterministicText.includes("Proof planned") ? ["Proof planned"] : []),
     ...(deterministicText.includes("Proof verified") ? ["Proof verified"] : []),
   ];
@@ -2394,8 +2391,17 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
           querySelectorAll?: (selector: string) => ArrayLike<LooseElement>;
         };
       }).document;
-      const nodes = Array.from(documentLike?.querySelectorAll?.("textarea,input") ?? []);
-      const actionNodes = Array.from(documentLike?.querySelectorAll?.("button,a[role='button'],input[type='submit'],input[type='button']") ?? []);
+      const querySelectorAll = documentLike?.querySelectorAll?.bind(documentLike);
+      const nodes = [
+        ...Array.from(querySelectorAll?.("textarea") ?? []),
+        ...Array.from(querySelectorAll?.("input") ?? []),
+      ];
+      const actionNodes = [
+        ...Array.from(querySelectorAll?.("button") ?? []),
+        ...Array.from(querySelectorAll?.("a[role='button']") ?? []),
+        ...Array.from(querySelectorAll?.("input[type='submit']") ?? []),
+        ...Array.from(querySelectorAll?.("input[type='button']") ?? []),
+      ];
       const isUserTextNode = (node: LooseElement) => {
         const tagName = String(node.tagName ?? "").toLowerCase();
         if (tagName === "textarea") return true;
@@ -2412,10 +2418,10 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
           const inputType = node.type ?? node.getAttribute?.("type") ?? null;
           const id = node.getAttribute?.("id") ?? null;
           let explicitLabel = "";
-          if (id && documentLike?.querySelectorAll) {
+          if (id && querySelectorAll) {
             try {
               const safeId = id.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
-              explicitLabel = Array.from(documentLike.querySelectorAll(`label[for="${safeId}"]`) ?? [])
+              explicitLabel = Array.from(querySelectorAll(`label[for="${safeId}"]`) ?? [])
                 .map((labelNode) => "textContent" in labelNode && typeof (labelNode as { textContent?: unknown }).textContent === "string"
                   ? String((labelNode as { textContent?: string }).textContent)
                   : "")
