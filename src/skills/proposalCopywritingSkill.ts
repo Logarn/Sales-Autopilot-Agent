@@ -62,6 +62,8 @@ export interface CopyStrategy {
   offer_or_project_mechanism: string;
   proof_angle: string;
   proof_verification_state: ProofVerificationState;
+  requested_tools: string[];
+  requested_deliverables: string[];
   tone: CopyTone;
   opening_angle: string;
   one_sentence_sales_argument: string;
@@ -192,12 +194,25 @@ function categoryFor(job: JobPosting, intelligence: JobIntelligence): string {
   if (/garden|plant|lawn|seed|nursery|horticulture/.test(text)) return "gardening";
   if (/beauty|skincare|cosmetic|skin care|makeup/.test(text)) return "beauty";
   if (/fashion|apparel|clothing|boutique|jewelry/.test(text)) return "fashion";
-  if (/email design|design system|figma|creative|visual/.test(text)) return "email_design";
+  if (isStrongDesignScope(text)) return "email_design";
+  if (hasLifecycleEmailPlatformScope(text)) return "dtc ecommerce";
   if (/\b(?:klaviyo|mailchimp|omnisend|ecommerce|e-commerce|customer retention|retention|email campaign|email marketing|flows?)\b/.test(text)) return "dtc ecommerce";
   if (/saas|b2b|software|crm implementation|sales pipeline/.test(text)) return "b2b_saas";
   if (intelligence.ecommerceVertical && intelligence.ecommerceVertical !== "unknown") return intelligence.ecommerceVertical;
   if (/shopify|ecommerce|e-commerce|dtc|d2c/.test(text)) return "dtc ecommerce";
   return job.category || "unknown";
+}
+
+function hasLifecycleEmailPlatformScope(text: string): boolean {
+  return /\b(?:klaviyo|mailchimp|omnisend)\b/.test(text) &&
+    /\b(?:flow|flows|automation|automations|campaign|campaigns|subscriber|subscribers|list|lists|engagement|conversion|performance|insights|ecommerce|e-commerce|retention|lifecycle)\b/.test(text);
+}
+
+function isStrongDesignScope(text: string): boolean {
+  if (hasLifecycleEmailPlatformScope(text) && !/\b(?:figma|email design|design system|campaign design|flow design|creative direction|visual design|mockup)\b/.test(text)) {
+    return false;
+  }
+  return /\b(?:figma|email design|design system|campaign design|flow design|creative direction|visual design|mockup)\b/.test(text);
 }
 
 function targetCustomerFor(category: string): string {
@@ -240,7 +255,7 @@ function customerInsightFor(category: string): string {
 
 function commercialPainFor(job: JobPosting, category: string): string {
   const text = lowerSource(job);
-  if (/design|template|figma|creative/.test(text)) {
+  if (isStrongDesignScope(text)) {
     return "emails may look busy or finished without making the offer, CTA, and product path obvious fast enough";
   }
   if (/crm|customer data|segment|segmentation|list/.test(text)) {
@@ -264,7 +279,7 @@ function commercialPainFor(job: JobPosting, category: string): string {
 function mechanismFor(job: JobPosting, category: string, platform: string): string {
   const text = lowerSource(job);
   const platformLabel = platform && platform !== "unknown" ? platform : "the CRM";
-  if (category === "email_design" || /design|template|figma|creative/.test(text)) {
+  if (category === "email_design" || isStrongDesignScope(text)) {
     return "build the work around hierarchy first: the reason to care, the offer, the proof, the product path, and one clear action";
   }
   if (category === "gardening") {
@@ -384,6 +399,8 @@ export function buildCopyStrategy(input: {
       ? "proof unavailable; do not claim specific proof"
       : input.brandFactPack.proofAngle || "use proof after the customer and commercial logic is clear",
     proof_verification_state: proofState,
+    requested_tools: input.understanding.requestedTools,
+    requested_deliverables: input.understanding.requestedDeliverables,
     tone: category === "beauty" ? "warm" : category === "email_design" ? "direct" : "sharp",
     opening_angle: `The opportunity${ctaTarget !== "the business" ? ` for ${ctaTarget}` : ""} here is ${input.brandFactPack.likelyLifecycleLeak || input.understanding.commercialPain}.`,
     one_sentence_sales_argument: `${customerInsight} That is why I would ${mechanism}.`,
@@ -460,28 +477,98 @@ function proofSentence(strategy: CopyStrategy, proofPoints: string[], portfolioI
   return "Relevant proof can be selected once the exact scope is clear.";
 }
 
+function requestedTools(strategy: CopyStrategy): string[] {
+  const toolOrder = ["Klaviyo", "Mailchimp", "Omnisend", "Shopify", "Postscript", "Attentive"];
+  return toolOrder.filter((tool) => strategy.requested_tools.some((item) => item.toLowerCase() === tool.toLowerCase()));
+}
+
+function requestedToolSentence(strategy: CopyStrategy): string | null {
+  const tools = requestedTools(strategy);
+  if (tools.length >= 3 && tools.some((tool) => /mailchimp|omnisend/i.test(tool))) {
+    return `Because this touches ${tools.slice(0, 3).join(", ")}, I would not treat it like a generic template refresh. I would separate the flows, campaigns, subscriber list work, and reporting so each platform has a clear job tied to engagement and conversion.`;
+  }
+  if (tools.length >= 2) {
+    return `Since the work touches ${tools.join(" and ")}, I would keep the plan tied to the customer moments first, then make the platform execution clean.`;
+  }
+  return null;
+}
+
+function conciseHook(strategy: CopyStrategy): string {
+  const tools = requestedTools(strategy);
+  if (strategy.category === "email_design") {
+    return "Two details stood out: the email templates need clearer hierarchy, and the goal is conversion rather than decoration.";
+  }
+  if (tools.length >= 3 && /engagement|conversion/i.test(strategy.client_commercial_pain)) {
+    return `Two customer-lifecycle details stood out: you want engagement/conversion improved through subscriber lists and campaign performance insights, across ${tools.slice(0, 3).join(", ")}.`;
+  }
+  if (tools.length >= 2) {
+    return `Two customer-lifecycle details stood out: each moment needs the right timing, message, and next step, and the work spans ${tools.join(" and ")}.`;
+  }
+  return `Two customer-lifecycle details stood out: customers need a clearer reason to trust, click, buy, or return, and ${strategy.client_commercial_pain}.`;
+}
+
+function oneStepSolution(strategy: CopyStrategy): string {
+  const tools = requestedTools(strategy);
+  if (strategy.category === "email_design") {
+    return "I would start with a 3-5 day design/validation slice. Done = offer hierarchy, mobile readability, product path, and CTA visibility tightened on the priority templates, with before/after screenshots.";
+  }
+  if (tools.length >= 3) {
+    return "I would start with a commercially pointed 3-5 day audit/fix slice. Done = active flows, campaign cadence, subscriber segments, and reporting gaps mapped; first three fixes ranked by likely lift to engagement and conversion.";
+  }
+  return `I would start with a commercially pointed 3-5 day diagnostic slice. Done = ${strategy.repeat_purchase_or_conversion_moment}, with the clearest leak turned into the first practical fix.`;
+}
+
+function singleProofPoint(proofPoints: string[], portfolioItems: PortfolioItem[]): string {
+  const proofText = [...proofPoints, ...portfolioItems.map((item) => item.result), ...portfolioItems.map((item) => item.name)].join(" ");
+  if (/klaviyo silver partner/i.test(proofText) || /8\+?\s*years/i.test(proofText)) {
+    return "Recent proof: Klaviyo Silver Partner with 8+ years in retention/lifecycle work; I can keep the proof to one audit-style artifact if it matches the application.";
+  }
+  const portfolio = firstProofLabel(proofPoints, portfolioItems);
+  if (portfolio && !/portfolio|general/i.test(portfolio)) {
+    return `Recent proof: ${portfolio}.`;
+  }
+  return "Recent proof: audit-style lifecycle work; I would only use one proof artifact if it matches this application after browser QA.";
+}
+
+function logisticsLine(strategy: CopyStrategy): string {
+  const tools = requestedTools(strategy);
+  if (strategy.category === "email_design") {
+    return "Logistics: I can keep this async-friendly, work from the existing template examples, and share a short before/after readout before expanding the set.";
+  }
+  if (tools.length >= 3) {
+    return "Logistics: I can keep this async-friendly, start with the audit/fix slice, and share a short performance readout before any bigger rebuild.";
+  }
+  return "Logistics: I can start with a small audit pass, keep the first scope tied to the highest-leverage fix, and work from the stack/details already in the brief.";
+}
+
+function ctaLine(strategy: CopyStrategy): string {
+  const tools = requestedTools(strategy);
+  if (strategy.category === "email_design") {
+    return "If useful, choose a 10-minute call or a 2-slide plan today with the first template fixes I would make - your pick.";
+  }
+  if (tools.length >= 3) {
+    return "If useful, choose a 10-minute call or a 2-slide plan today with the first fixes I would make - your pick. If the priorities are already clear, I can keep it async.";
+  }
+  return "If useful, choose a 10-minute call or a 2-slide plan today with the first fix I would prioritize - your pick.";
+}
+
 export function draftCoverLetterFromCopyStrategy(input: {
   strategy: CopyStrategy;
   proofPoints: string[];
   portfolioItems: PortfolioItem[];
 }): string {
   const strategy = input.strategy;
-  const projectMechanism = strategy.offer_or_project_mechanism.replace(/\.$/, "");
   return [
-    "Steve here,",
+    conciseHook(strategy),
     "",
-    "I would approach this by finding the email revenue leaks first, not by starting with a tool checklist.",
+    oneStepSolution(strategy),
     "",
-    strategy.opening_angle,
+    singleProofPoint(input.proofPoints, input.portfolioItems),
     "",
-    strategy.customer_state_of_mind,
+    logisticsLine(strategy),
     "",
-    `That means I would keep the work practical and commercially pointed: ${projectMechanism}.`,
-    "",
-    proofSentence(strategy, input.proofPoints, input.portfolioItems),
-    "",
-    strategy.cta,
-  ].join("\n").trim();
+    ctaLine(strategy),
+  ].filter((line) => line !== null).join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 export function draftScreeningAnswersFromCopyStrategy(input: {
@@ -521,7 +608,7 @@ function addIssue(issues: DraftQualityGateIssue[], issue: DraftQualityGateIssue)
 }
 
 function hasCompleteCta(text: string): boolean {
-  return /\b(if it makes sense|happy to|send me|share|we can start|walk me through|take a quick look)\b/i.test(text) && /[.!?]$/.test(text.trim());
+  return /\b(if it makes sense|if useful|happy to|send me|share|we can start|walk me through|take a quick look|choose a 10-minute call|2-slide plan)\b/i.test(text) && /[.!?]$/.test(text.trim());
 }
 
 function endsMidThought(text: string): boolean {
@@ -581,13 +668,30 @@ export function evaluateDraftQualityGate(input: {
   if (/(\.\.\.|…)\s*$/.test(text) || endsMidThought(text)) {
     addIssue(issues, { code: "truncated_or_incomplete", severity: "critical", message: "Cover letter appears truncated or ends mid-thought.", evidence: text.slice(-120) });
   }
+  if (text.split(/\s+/).filter(Boolean).length > 260) {
+    addIssue(issues, { code: "proposal_too_long", severity: "critical", message: "Cover letter should stay tight and near the 200-word winning proposal structure." });
+  }
   const customerInsight = input.copyStrategy?.customer_state_of_mind ?? "";
-  if (!customerInsight || !text.toLowerCase().includes(customerInsight.slice(0, 28).toLowerCase())) {
+  if (!customerInsight || (!text.toLowerCase().includes(customerInsight.slice(0, 28).toLowerCase()) && !/\b(?:customer|buyer|reader|shopper|subscriber)\b/i.test(text))) {
     addIssue(issues, { code: "missing_customer_insight", severity: "critical", message: "Cover letter does not include a clear customer insight before selling services." });
   }
   const commercialPain = input.copyStrategy?.client_commercial_pain ?? "";
   if (!commercialPain || !/(opportunity|money|revenue|commercial|leak|conversion|retention|repeat|trust|friction|sender reputation|offer clarity|replenishment)/i.test(text)) {
     addIssue(issues, { code: "missing_commercial_pain", severity: "critical", message: "Cover letter does not name a business opportunity or commercial pain." });
+  }
+  const jobText = sourceText(input.job).toLowerCase();
+  const requiredPlatforms = ["klaviyo", "mailchimp", "omnisend"].filter((platform) => jobText.includes(platform));
+  const missingPlatforms = requiredPlatforms.filter((platform) => !lower.includes(platform));
+  if (missingPlatforms.length > 0) {
+    addIssue(issues, {
+      code: "missing_requested_platform_specificity",
+      severity: "critical",
+      message: `Cover letter omits requested platform(s): ${missingPlatforms.join(", ")}.`,
+      evidence: missingPlatforms.join(", "),
+    });
+  }
+  if (/\bengagement\b/.test(jobText) && !/\bengagement\b/.test(lower)) {
+    addIssue(issues, { code: "missing_requested_engagement_goal", severity: "critical", message: "Cover letter omits the job's engagement goal." });
   }
   const toolIndex = indexOfAny(lower, ["klaviyo", "brevo", "figma", "flow", "flows", "automation", "automations", "crm", "template"]);
   const customerIndex = indexOfAny(lower, ["customer", "reader", "buyer", "shopper", "gardener", "skincare", "beauty", "offer", "trust", "season", "routine", "hierarchy"]);

@@ -109,6 +109,16 @@ function runTests(): void {
   assert(!includes(mailchimpSelection.autoAttachAssets, "design-case-studies"), "Mailchimp automation job should not auto-attach design case studies");
   assert(!includes(mailchimpSelection.autoAttachAssets, "endurance-wellness"), "Mailchimp automation job should not auto-attach Endurance Wellness by default");
 
+  const crossPlatformEmailJob = createJob({
+    title: "Email Marketing | Klaviyo Expert| Mailchimp |Omnisend| Ecommerce Flows",
+    description: "Ecommerce brand needs Klaviyo, Mailchimp, and Omnisend flows, campaigns, subscriber list management, campaign performance analysis, and actionable insights. Responsibilities include designing email templates, but the goal is engagement and conversion.",
+    skills: ["Klaviyo", "Mailchimp", "Omnisend", "Customer Retention", "Copywriting"],
+  });
+  const crossPlatformSelection = selectPortfolioAssetsForJob(crossPlatformEmailJob);
+  assert(!includes(crossPlatformSelection.selectedProof, "design-case-studies"), "Lifecycle/platform email work with incidental template wording should not select design case studies");
+  assert(!includes(crossPlatformSelection.autoAttachAssets, "design-case-studies"), "Lifecycle/platform email work should not auto-attach design proof unless design is primary");
+  assert(crossPlatformSelection.selectedFigmaLinks.length === 0, "Lifecycle/platform email work should not show Figma links unless Figma/design is primary");
+
   const petJob = createJob({
     title: "Retention strategist for pet DTC brand",
     description: "Need Klaviyo/Recharge help for pet ecommerce lifecycle and repeat purchase.",

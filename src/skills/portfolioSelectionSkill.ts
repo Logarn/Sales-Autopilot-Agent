@@ -224,8 +224,17 @@ function addUpworkPortfolioForProof(result: PortfolioSelectionResult, proofId: s
   result.selectedUpworkPortfolioItems.push(...matches);
 }
 
+function hasLifecycleEmailPlatformScope(text: string): boolean {
+  return /\b(?:klaviyo|mailchimp|omnisend)\b/.test(text) &&
+    /\b(?:flow|flows|automation|automations|campaign|campaigns|subscriber|subscribers|list|lists|engagement|conversion|performance|insights|ecommerce|e-commerce|retention|lifecycle)\b/.test(text);
+}
+
 function isDesignRelevant(text: string): boolean {
-  return /(figma|design|email design|template|campaign design|flow design|creative|visual|mockup)/.test(text);
+  const strongDesignSignal = /\b(?:figma|email design|design system|campaign design|flow design|creative direction|visual design|mockup)\b/.test(text);
+  if (hasLifecycleEmailPlatformScope(text) && !strongDesignSignal) {
+    return false;
+  }
+  return strongDesignSignal || /\b(?:template design|email templates?|creative|visual|mockup)\b/.test(text);
 }
 
 function pickFigmaLinks(text: string, figmaLinks: PortfolioLink[]): PortfolioLink[] {
@@ -322,7 +331,7 @@ export function selectPortfolioAssetsForJob(job: JobPosting | ScoredJob): Portfo
     addUpworkPortfolioForProof(result, "fly-boutique");
   }
 
-  if (/(figma|design|email design|template|visual|campaign design|flow design)/.test(text)) {
+  if (isDesignRelevant(text)) {
     addTheme("design_figma");
     addProofAndAssets(result, findProofById(proofBank, "design-case-studies"), assets, "auto_attach");
     addUpworkPortfolioForProof(result, "design-case-studies");

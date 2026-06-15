@@ -79,12 +79,25 @@ function categoryFor(job: Pick<JobPosting, "title" | "description" | "skills" | 
   if (/garden|plant|lawn|seed|nursery|horticulture/.test(text)) return "gardening";
   if (/beauty|skincare|cosmetic|skin care|makeup/.test(text)) return "beauty/skincare";
   if (/fashion|apparel|clothing|boutique|jewelry/.test(text)) return "fashion/apparel";
-  if (/email design|template|figma|design|creative|visual/.test(text)) return "email design";
+  if (isStrongDesignScope(text)) return "email design";
+  if (hasLifecycleEmailPlatformScope(text)) return "DTC ecommerce";
   if (/\b(?:pet|dog|cat|farm|hobby)\b/.test(text)) return "pet and hobby DTC";
   if (/supplement|wellness|health/.test(text)) return "health/wellness";
   if (/saas|b2b|software|crm implementation|sales pipeline/.test(text)) return "B2B/SaaS";
-  if (/shopify|ecommerce|e-commerce|dtc|d2c/.test(text)) return "DTC ecommerce";
+  if (/shopify|ecommerce|e-commerce|dtc|d2c|klaviyo|mailchimp|omnisend|email marketing|retention|lifecycle/.test(text)) return "DTC ecommerce";
   return job.category || "unknown";
+}
+
+function hasLifecycleEmailPlatformScope(text: string): boolean {
+  return /\b(?:klaviyo|mailchimp|omnisend)\b/.test(text) &&
+    /\b(?:flow|flows|automation|automations|campaign|campaigns|subscriber|subscribers|list|lists|engagement|conversion|performance|insights|ecommerce|e-commerce|retention|lifecycle)\b/.test(text);
+}
+
+function isStrongDesignScope(text: string): boolean {
+  if (hasLifecycleEmailPlatformScope(text) && !/\b(?:figma|email design|design system|campaign design|flow design|creative direction|visual design|mockup)\b/.test(text)) {
+    return false;
+  }
+  return /\b(?:figma|email design|design system|campaign design|flow design|creative direction|visual design|mockup)\b/.test(text);
 }
 
 function proofAngleFor(category: string): string {
@@ -96,6 +109,9 @@ function proofAngleFor(category: string): string {
   }
   if (category === "email design") {
     return "Use proof around hierarchy, mobile readability, offer clarity, CTA visibility, and conversion logic before design-tool fluency.";
+  }
+  if (category === "DTC ecommerce") {
+    return "Use audit-style Klaviyo/email lifecycle proof when relevant; keep proof focused on flows, campaigns, segmentation, list quality, and revenue/engagement diagnostics instead of forcing unrelated design assets.";
   }
   if (category === "fashion/apparel") {
     return "Use proof around browse intent, fit/occasion confidence, drop timing, and repeat purchase moments; keep any brand-specific style claims source-backed.";
@@ -150,6 +166,21 @@ function categoryLogic(category: string): Omit<BrandFactPack, "brandName" | "web
       customerEducationGaps: ["offer hierarchy", "product value", "proof placement", "single-action CTA"],
       objectionsOrTrustGaps: ["what is this", "why should I care", "what happens if I click"],
       languageOrHooks: ["hierarchy before decoration", "make the offer obvious fast"],
+    };
+  }
+  if (category === "DTC ecommerce") {
+    return {
+      whatTheBrandSells: "ecommerce products or offers sold through email/lifecycle marketing",
+      productCategory: "DTC ecommerce",
+      targetCustomerIcp: "ecommerce customers deciding whether the timing, offer, product path, and next step are relevant enough to act on",
+      customerBuyingMoment: "welcome intent, campaign interest, abandoned intent, post-purchase education, replenishment, winback, or segmented product discovery",
+      repeatPurchaseMoment: "post-purchase education, replenishment timing, next-best product, campaign segmentation, and winback",
+      emotionalPainOrDesire: "feel that the message is relevant now and the next action is worth taking",
+      likelyLifecycleLeak: "engagement and conversion can leak when flows, campaigns, subscriber list work, and reporting are not tied to clear customer moments",
+      likelyConversionLeak: "campaigns may be sent without enough segmentation, offer clarity, lifecycle timing, or performance feedback loops",
+      customerEducationGaps: ["why this offer now", "what to click next", "what product path makes sense", "when to return"],
+      objectionsOrTrustGaps: ["is this relevant", "why now", "what happens if I click", "is this offer worth attention"],
+      languageOrHooks: ["flows, campaigns, list quality, reporting, engagement, conversion", "make each lifecycle moment earn the click"],
     };
   }
   if (category === "fashion/apparel") {
