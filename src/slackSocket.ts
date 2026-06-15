@@ -43,6 +43,7 @@ import {
   markSlackWorkflowPromiseStatus,
   recordApplicationRevisionRequest,
   mergeBrowserActionPayload,
+  saveApplicationDraft,
   updateBrowserActionStatus,
   updateApplicationProofPlanOverrides,
 } from "./db";
@@ -64,6 +65,7 @@ import {
   type CaptureThreadWaiter,
 } from "./captureActionOwnership";
 import { buildConfiguredDiscoverySources } from "./browserDiscoveryTool";
+import { buildApplicationDraftWithResearch } from "./agent";
 import {
   clearPausedDiscoverySourceHealth,
   formatDiscoverySourceHealthForSlack,
@@ -1742,13 +1744,112 @@ function draftRevisionFeedbackReply(): string {
   return "Got it — I won’t prep this version. What should I change? I can rewrite it with a sharper customer pain angle, less generic proof, and a more human opener.";
 }
 
-function markDraftRejectedFromSlackThread(input: { channelId: string; threadTs: string; userMessage: string }): { ok: boolean; text: string } {
+function hasExplicitDraftRewriteDirection(value: string): boolean {
+  const text = value.toLowerCase();
+  if (/\b(?:regenerate|rewrite|redo|rework|revise|make it|make this|change|fix|improve)\b/.test(text)) return true;
+  const directiveSignals = [
+    /\bin my voice\b/,
+    /\bnot in my voice\b/,
+    /\btoo generic\b/,
+    /\bless generic\b/,
+    /\bmore human\b/,
+    /\bsharper\b/,
+    /\bcustomer pain\b/,
+    /\bactual job\b/,
+    /\bbrand research\b/,
+    /\bproof plan\b/,
+    /\bcover letter\b/,
+    /\bklaviyo\b/,
+    /\bmailchimp\b/,
+    /\bomnisend\b/,
+    /\bdo not treat\b/,
+    /\bdefault proof\b/,
+  ];
+  return directiveSignals.filter((pattern) => pattern.test(text)).length >= 2;
+}
+
+async function regenerateDraftFromSlackThread(input: {
+  channelId: string;
+  threadTs: string;
+  userMessage: string;
+}): Promise<{ ok: boolean; text: string; proposalVersion?: number }> {
+  const state = getSlackThreadStateByThreadTs(input.channelId, input.threadTs);
+  if (!state?.jobId) {
+    return { ok: false, text: "I cannot regenerate a draft without a tracked job id for this thread." };
+  }
+  const scoredJob = getScoredJobForSlackPreview(state.jobId);
+  if (!scoredJob) {
+    recordApplicationRevisionRequest(state.jobId, input.userMessage);
+    return { ok: false, text: "I recorded the rewrite request, but I cannot regenerate yet because the captured job is not readable from storage." };
+  }
+
+  const regenerated = await buildApplicationDraftWithResearch(scoredJob);
+  saveApplicationDraft(regenerated);
+  const revision = applyApplicationRevision(state.jobId, input.userMessage, regenerated.proposalText);
+  updateSlackThreadStateStatus(state.channelId, state.threadTs, "draft_preview_sent");
+
+  if (!revision) {
+    return { ok: false, text: "I regenerated the draft, but I could not persist the revised proposal version. I will not prep this version." };
+  }
+
+  const qualityIssues = regenerated.draftQualityGate?.issues ?? [];
+  const criticalIssues = qualityIssues.filter((issue) => issue.severity === "critical");
+  const qualityLine = criticalIssues.length > 0
+    ? `Quality gate: blocked - ${criticalIssues.map((issue) => issue.code).join(", ")}.`
+    : "Quality gate: passed for draft preview. I still need browser QA before submit.";
+  const proofLine = regenerated.proofStrategy?.summary
+    ? `Proof plan: ${regenerated.proofStrategy.summary}`
+    : "Proof plan: no verified proof selected yet; do not force a generic proof.";
+  const connectsLine = regenerated.connectsStrategy?.totalConnects === null
+    ? "Connects: unknown until the apply page is verified."
+    : `Connects plan: required ${regenerated.connectsStrategy?.requiredConnects ?? regenerated.suggestedConnects}, boost ${regenerated.connectsStrategy?.suggestedBoostConnects ?? regenerated.suggestedBoostConnects}, total ${regenerated.connectsStrategy?.totalConnects ?? "unknown"}.`;
+
+  const reply = [
+    `Rewritten draft for ${scoredJob.title}:`,
+    `Stored proposal version: v${revision.proposalVersion}`,
+    qualityLine,
+    proofLine,
+    connectsLine,
+    "",
+    regenerated.proposalText,
+    "",
+    criticalIssues.length > 0
+      ? "I will not prep this until the draft passes the quality gate."
+      : "If this version is approved, say \"put it in Upwork\" and I will fill the remote Chrome page, then stop before submit.",
+    "Final submit remains manual.",
+  ].join("\n");
+
+  markSlackWorkflowPromiseStatus({
+    channelId: state.channelId,
+    threadTs: state.threadTs,
+    status: criticalIssues.length > 0 ? "blocked" : "fulfilled",
+    workflowState: regenerated.proofStrategy ? "proof_plan_ready" : "draft_ready",
+    blocker: criticalIssues.length > 0 ? `draft_quality_gate_failed: ${criticalIssues.map((issue) => issue.code).join(", ")}` : null,
+    lastAgentReply: reply,
+  });
+  upsertSlackWorkflowState({
+    channelId: state.channelId,
+    threadTs: state.threadTs,
+    workflowState: regenerated.proofStrategy ? "proof_plan_ready" : "draft_ready",
+    draftRequested: true,
+    prepRequested: false,
+    lastUserMessage: input.userMessage,
+    lastAgentReply: reply,
+  });
+
+  return { ok: criticalIssues.length === 0, text: reply, proposalVersion: revision.proposalVersion };
+}
+
+async function markDraftRejectedFromSlackThread(input: { channelId: string; threadTs: string; userMessage: string }): Promise<{ ok: boolean; text: string; proposalVersion?: number }> {
   const state = getSlackThreadStateByThreadTs(input.channelId, input.threadTs);
   if (!state?.jobId) {
     return {
       ok: false,
       text: "Got it — I won’t prep anything yet. Send the Upwork job URL or current lead, then tell me what you want changed.",
     };
+  }
+  if (hasExplicitDraftRewriteDirection(input.userMessage)) {
+    return regenerateDraftFromSlackThread(input);
   }
   const reply = draftRevisionFeedbackReply();
   const existingWorkflow = getSlackWorkflowState(input.channelId, input.threadTs);
@@ -3034,18 +3135,20 @@ async function executeConversationPlan(params: {
   copyProvider?: SlackCopyProvider;
 }): Promise<void> {
   if (params.plan.actions.includes("mark_draft_rejected")) {
-    const result = markDraftRejectedFromSlackThread({
+    const result = await markDraftRejectedFromSlackThread({
       channelId: params.channelId,
       threadTs: params.threadTs,
       userMessage: params.userMessage,
     });
-    const text = await userFacingSlackCopy({
-      deterministicText: result.text,
-      userMessage: params.userMessage,
-      intent: params.plan.intent,
-      context: { jobId: params.state.jobId, threadStatus: params.state.status, draftRejected: true },
-      copyProvider: params.copyProvider,
-    });
+    const text = result.proposalVersion
+      ? result.text
+      : await userFacingSlackCopy({
+        deterministicText: result.text,
+        userMessage: params.userMessage,
+        intent: params.plan.intent,
+        context: { jobId: params.state.jobId, threadStatus: params.state.status, draftRejected: true },
+        copyProvider: params.copyProvider,
+      });
     await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
@@ -4098,18 +4201,20 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
   }
 
   if (canExecuteConversationBrainAction && state && isDraftRejectionFeedbackIntent(params.text)) {
-    const result = markDraftRejectedFromSlackThread({
+    const result = await markDraftRejectedFromSlackThread({
       channelId: params.channelId,
       threadTs: params.threadTs,
       userMessage: params.text,
     });
-    const text = await userFacingSlackCopy({
-      deterministicText: result.text,
-      userMessage: params.text,
-      intent: "draft_rejection_feedback",
-      context: { jobId: state.jobId, threadStatus: state.status, draftRejected: true },
-      copyProvider: params.copyProvider,
-    });
+    const text = result.proposalVersion
+      ? result.text
+      : await userFacingSlackCopy({
+        deterministicText: result.text,
+        userMessage: params.text,
+        intent: "draft_rejection_feedback",
+        context: { jobId: state.jobId, threadStatus: state.status, draftRejected: true },
+        copyProvider: params.copyProvider,
+      });
     await postThreadReply(params.client, params.channelId, params.threadTs, text);
     return;
   }
