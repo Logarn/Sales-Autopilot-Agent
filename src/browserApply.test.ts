@@ -2078,6 +2078,28 @@ async function runTests(): Promise<void> {
     );
     assert(bestMatchesDetection.state === "captured", "Best Matches job detail modal URL should not be classified as a challenge");
 
+    const openApplyOnJobDetailDetection = detectStateWithDiagnostics(
+      {
+        url: "https://www.upwork.com/jobs/Beauty-Klaviyo-Retention_~beautye2e123456",
+        title: "Klaviyo retention strategist for beauty skincare brand",
+        textExcerpt: "This is the job detail page, not the proposal apply page.",
+      },
+      { id: 7, jobId: beautyJob.id, actionType: "open_apply_page", payload: { url: "https://www.upwork.com/ab/proposals/job/~beautye2e123456/apply/" } },
+    );
+    assert(openApplyOnJobDetailDetection.state === "job_page_loaded", "open_apply_page must not report apply_page_loaded while still on the job detail URL");
+    assert(openApplyOnJobDetailDetection.source === "url", "open_apply_page job-detail fallback should be URL-evidence based, not action-type based");
+
+    const openApplyOnApplyUrlDetection = detectStateWithDiagnostics(
+      {
+        url: "https://www.upwork.com/ab/proposals/job/~beautye2e123456/apply/",
+        title: "Submit a Proposal - Upwork",
+        textExcerpt: "Cover letter Hourly rate Required for proposal: 8 Connects",
+      },
+      { id: 8, jobId: beautyJob.id, actionType: "open_apply_page", payload: { url: "https://www.upwork.com/ab/proposals/job/~beautye2e123456/apply/" } },
+    );
+    assert(openApplyOnApplyUrlDetection.state === "apply_page_loaded", "open_apply_page should report apply_page_loaded when the actual apply URL is visible");
+    assert(openApplyOnApplyUrlDetection.source === "url", "Apply page detection must be based on visible URL evidence");
+
     const challengeWordInJobDetection = detectStateWithDiagnostics(
       {
         url: "https://www.upwork.com/jobs/Beauty-Klaviyo-Retention_~beautye2e123456",
