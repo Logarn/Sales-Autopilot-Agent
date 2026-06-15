@@ -257,6 +257,7 @@ interface PlaywrightLocatorLike {
   first(): PlaywrightLocatorLike;
   nth?(index: number): PlaywrightLocatorLike;
   textContent(options?: { timeout?: number }): Promise<string | null>;
+  scrollIntoViewIfNeeded?(options?: { timeout?: number }): Promise<unknown>;
   click?(options?: { timeout?: number }): Promise<unknown>;
   fill(value: string, options?: { timeout?: number }): Promise<unknown>;
   setInputFiles(files: string[], options?: { timeout?: number }): Promise<unknown>;
@@ -1725,15 +1726,52 @@ async function tryFillFirst(page: PlaywrightPageLike, selectors: string[], value
     const locator = page.locator(selector).first();
     try {
       if ((await locator.count()) > 0) {
+        await locator.scrollIntoViewIfNeeded?.({ timeout: 1500 }).catch(() => undefined);
         await locator.fill("", { timeout: 1500 });
         await locator.fill(value, { timeout: 1500 });
-        return true;
+        if (await firstFieldValueMatches(page, selector, value)) return true;
+        if (await forceSetFirstFieldValue(page, selector, value) && await firstFieldValueMatches(page, selector, value)) {
+          return true;
+        }
       }
     } catch {
       // Try the next conservative selector.
     }
   }
   return false;
+}
+
+async function firstFieldValueMatches(page: PlaywrightPageLike, selector: string, expected: string): Promise<boolean> {
+  if (!page.evaluate) return true;
+  const expectedPrefix = significantExpectedText(expected);
+  if (!expectedPrefix) return false;
+  return page.evaluate((input) => {
+    if (!input) return false;
+    const { selector: cssSelector, expected: prefix } = input;
+    const element = document.querySelector(cssSelector) as HTMLInputElement | HTMLTextAreaElement | null;
+    const value = element?.value ?? "";
+    return value.replace(/\s+/g, " ").trim().toLowerCase().includes(prefix);
+  }, { selector, expected: expectedPrefix }).catch(() => false);
+}
+
+async function forceSetFirstFieldValue(page: PlaywrightPageLike, selector: string, value: string): Promise<boolean> {
+  if (!page.evaluate) return false;
+  return page.evaluate((input) => {
+    if (!input) return false;
+    const { selector: cssSelector, value: nextValue } = input;
+    const element = document.querySelector(cssSelector) as HTMLInputElement | HTMLTextAreaElement | null;
+    if (!element) return false;
+    const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+    if (setter) {
+      setter.call(element, nextValue);
+    } else {
+      element.value = nextValue;
+    }
+    element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: nextValue }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }, { selector, value }).catch(() => false);
 }
 
 function hourlyRateInputValue(value: string): string | null {
@@ -1950,54 +1988,73 @@ function highlightAliases(highlight: string): string[] {
 }
 
 async function trySelectHighlightsFromOpenDialog(page: PlaywrightPageLike, highlights: string[]): Promise<number> {
-  if (!page.evaluate) return 0;
-  return page.evaluate((highlightAliasesByName = []) => {
+  let selected = 0;
+  for (const highlight of highlights) {
+    if (await tryTrustedSelectHighlightFromOpenDialog(page, highlight)) selected += 1;
+  }
+  return selected;
+}
+
+async function findHighlightButtonIndexInOpenDialog(page: PlaywrightPageLike, highlight: string): Promise<number> {
+  if (!page.evaluate) return -1;
+  return page.evaluate((aliases = []) => {
     const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
-    const normalizedHighlights = highlightAliasesByName
-      .map((aliases) => Array.isArray(aliases) ? aliases.map(normalize).filter(Boolean) : [])
-      .filter((aliases) => aliases.length > 0);
+    const normalizedAliases = Array.isArray(aliases) ? aliases.map(normalize).filter(Boolean) : [];
     const dialog = document.querySelector("[role='dialog']");
-    if (!dialog || normalizedHighlights.length === 0) return 0;
-    const visible = (element: Element) => Boolean((element as HTMLElement).offsetWidth || (element as HTMLElement).offsetHeight || element.getClientRects().length);
-    const buttons = Array.from(dialog.querySelectorAll("button"))
-      .filter((button) => /select highlight/i.test(button.textContent ?? "") && !(button as HTMLButtonElement).disabled)
-      .filter(visible);
-    let selected = 0;
-    const selectedIndexes = new Set<number>();
-    for (const button of buttons) {
-      for (let index = 0; index < normalizedHighlights.length; index += 1) {
-        if (selectedIndexes.has(index)) continue;
-        let node: Element | null = button.parentElement;
-        let depth = 0;
-        while (node && node !== dialog.parentElement && depth < 24) {
-          const text = normalize(node.textContent ?? "");
-          if (normalizedHighlights[index].some((alias) => text.includes(alias))) {
-            (button as HTMLButtonElement).click();
-            selectedIndexes.add(index);
-            selected += 1;
-            break;
-          }
-          node = node.parentElement;
-          depth += 1;
+    if (!dialog || normalizedAliases.length === 0) return -1;
+    const buttons = Array.from(dialog.querySelectorAll("button"));
+    for (let buttonIndex = 0; buttonIndex < buttons.length; buttonIndex += 1) {
+      const button = buttons[buttonIndex] as HTMLButtonElement;
+      if (!/^select highlight$/i.test((button.textContent ?? "").replace(/\s+/g, " ").trim()) || button.disabled) continue;
+      let node: Element | null = button.parentElement;
+      let depth = 0;
+      while (node && node !== dialog.parentElement && depth < 24) {
+        const text = normalize(node.textContent ?? "");
+        if (normalizedAliases.some((alias) => text.includes(alias))) {
+          return buttonIndex;
         }
-        if (selectedIndexes.has(index)) break;
+        node = node.parentElement;
+        depth += 1;
       }
     }
-    return selected;
-  }, highlights.map(highlightAliases)).catch(() => 0);
+    return -1;
+  }, highlightAliases(highlight)).catch(() => -1);
+}
+
+async function tryTrustedSelectHighlightFromOpenDialog(page: PlaywrightPageLike, highlight: string): Promise<boolean> {
+  const buttonIndex = await findHighlightButtonIndexInOpenDialog(page, highlight);
+  if (buttonIndex < 0 || typeof page.locator("[role='dialog'] button").nth !== "function") return false;
+  const button = page.locator("[role='dialog'] button").nth!(buttonIndex);
+  try {
+    await button.scrollIntoViewIfNeeded?.({ timeout: 1500 }).catch(() => undefined);
+    if (typeof button.click !== "function") return false;
+    await guardedClick(button as PlaywrightLocatorLike & { click(options?: { timeout?: number }): Promise<unknown> }, { selector: "[role='dialog'] button", label: `Select highlight: ${highlight}` }, { timeout: 2500 });
+    await page.waitForTimeout?.(650).catch(() => undefined);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function tryConfirmHighlightsDialog(page: PlaywrightPageLike): Promise<boolean> {
   if (!page.evaluate) return false;
-  const confirmed = await page.evaluate(() => {
+  const buttonIndex = await page.evaluate(() => {
     const dialog = document.querySelector("[role='dialog']");
-    if (!dialog) return false;
-    const button = Array.from(dialog.querySelectorAll("button"))
-      .find((candidate) => /^add to highlights$/i.test((candidate.textContent ?? "").replace(/\s+/g, " ").trim()) && !(candidate as HTMLButtonElement).disabled);
-    if (!button) return false;
-    (button as HTMLButtonElement).click();
-    return true;
-  }).catch(() => false);
+    if (!dialog) return -1;
+    return Array.from(dialog.querySelectorAll("button"))
+      .findIndex((candidate) => /^add to highlights$/i.test((candidate.textContent ?? "").replace(/\s+/g, " ").trim()) && !(candidate as HTMLButtonElement).disabled);
+  }).catch(() => -1);
+  if (buttonIndex < 0 || typeof page.locator("[role='dialog'] button").nth !== "function") return false;
+  const button = page.locator("[role='dialog'] button").nth!(buttonIndex);
+  let confirmed = false;
+  try {
+    await button.scrollIntoViewIfNeeded?.({ timeout: 1500 }).catch(() => undefined);
+    if (typeof button.click !== "function") return false;
+    await guardedClick(button as PlaywrightLocatorLike & { click(options?: { timeout?: number }): Promise<unknown> }, { selector: "[role='dialog'] button", label: "Add to highlights" }, { timeout: 2500 });
+    confirmed = true;
+  } catch {
+    confirmed = false;
+  }
   if (confirmed) await page.waitForTimeout?.(1000).catch(() => undefined);
   return confirmed;
 }
