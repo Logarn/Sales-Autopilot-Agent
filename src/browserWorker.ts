@@ -2504,7 +2504,7 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
       pageGlobal.scrollTo?.(0, pageGlobal.document?.body?.scrollHeight ?? 0);
       return null;
     }).catch(() => null);
-    const evaluateString = page.evaluate as unknown as <R>(script: string) => Promise<R>;
+    const evaluateString = page.evaluate.bind(page) as unknown as <R>(script: string) => Promise<R>;
     const snapshot = await evaluateString<{
       visibleText?: string;
       inputValues?: string[];
