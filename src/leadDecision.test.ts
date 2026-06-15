@@ -85,15 +85,30 @@ const weakClientBreakdown = {
 const weakClient = decideLeadHandling(mkJob({
   score: 86,
   clientSpend: 0,
+  clientHireRate: 20,
   clientTotalHires: 0,
   clientFeedbackCount: 0,
-  scoreBreakdown: weakClientBreakdown,
+  scoreBreakdown: { ...weakClientBreakdown, clientQualityScore: { score: 30, reasons: [], risks: ["Low hire rate (20%)"] } },
 }), intel({ primaryPlatform: "Klaviyo", platformsMentioned: ["Klaviyo"] }));
 assert.equal(weakClient.decision, "skip");
 assert.equal(weakClient.shouldPostToSlack, false);
 assert.equal(weakClient.internalSkipReason, "weak_client_quality");
 assert(weakClient.watchOuts.includes("No client spend recorded"));
 assert(weakClient.watchOuts.includes("No prior client hires recorded"));
+
+const missingClientData = decideLeadHandling(mkJob({
+  score: 86,
+  clientRating: 0,
+  clientSpend: 0,
+  clientHireRate: 0,
+  clientTotalHires: 0,
+  clientFeedbackCount: 0,
+  scoreBreakdown: weakClientBreakdown,
+}), intel({ primaryPlatform: "Klaviyo", platformsMentioned: ["Klaviyo"] }));
+assert.equal(missingClientData.decision, "manual_review");
+assert.equal(missingClientData.shouldPostToSlack, true);
+assert.equal(missingClientData.shouldAutoPrepare, false);
+assert(missingClientData.watchOuts.includes("No client spend recorded"));
 
 const reviewClient = decideLeadHandling(mkJob({
   score: 89,
