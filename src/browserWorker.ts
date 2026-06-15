@@ -403,16 +403,17 @@ function loadOptions(): BrowserWorkerOptions {
   };
 }
 
-function getActionUrl(action: BrowserAction): string | null {
-  const canonicalPayloadUrl = typeof action.payload.canonicalJobUrl === "string" ? action.payload.canonicalJobUrl : null;
-  if (canonicalPayloadUrl) return canonicalizeUpworkJobUrl(canonicalPayloadUrl) ?? canonicalPayloadUrl;
+export function getActionUrl(action: BrowserAction): string | null {
   const payloadUrl = typeof action.payload.url === "string" ? action.payload.url : null;
-  if (payloadUrl && action.actionType === "capture_application_snapshot") return payloadUrl;
-  if (payloadUrl) return canonicalizeUpworkJobUrl(payloadUrl) ?? payloadUrl;
+  if (payloadUrl && (action.actionType === "capture_application_snapshot" || action.actionType === "open_apply_page")) return payloadUrl;
   if (action.actionType === "prepare_application_review") {
     const plan = action.payload.applyPlan as BrowserApplyFillPlan | undefined;
-    return typeof plan?.applyUrl === "string" ? plan.applyUrl : null;
+    return typeof plan?.applyUrl === "string" ? plan.applyUrl : payloadUrl;
   }
+  const canonicalPayloadUrl = typeof action.payload.canonicalJobUrl === "string" ? action.payload.canonicalJobUrl : null;
+  if (canonicalPayloadUrl) return canonicalizeUpworkJobUrl(canonicalPayloadUrl) ?? canonicalPayloadUrl;
+  if (payloadUrl && action.actionType === "capture_application_snapshot") return payloadUrl;
+  if (payloadUrl) return canonicalizeUpworkJobUrl(payloadUrl) ?? payloadUrl;
   if (action.actionType === "open_job") return `https://www.upwork.com/jobs/${action.jobId}`;
   if (action.actionType === "open_apply_page") return `https://www.upwork.com/ab/proposals/job/${action.jobId}/apply/`;
   if (action.actionType === "capture_job_from_url") return `https://www.upwork.com/jobs/${action.jobId}`;
