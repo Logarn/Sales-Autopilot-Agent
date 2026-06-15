@@ -270,6 +270,7 @@ interface PlaywrightPageLike {
   locator(selector: string): PlaywrightLocatorLike;
   close?(options?: { runBeforeUnload?: boolean }): Promise<unknown>;
   evaluate?<R>(fn: () => R): Promise<R>;
+  waitForTimeout?(timeout: number): Promise<unknown>;
 }
 
 export type ApplyVerificationStatus =
@@ -1771,6 +1772,24 @@ async function tryFillScreeningAnswers(page: PlaywrightPageLike, answers: string
   return { filled, skipped: cleanAnswers.length - filled };
 }
 
+async function hasFixedPriceBidReady(page: PlaywrightPageLike): Promise<boolean> {
+  if (!page.evaluate) return false;
+  return page.evaluate(() => {
+    const pageDocument = (globalThis as unknown as {
+      document?: {
+        body?: { innerText?: string };
+        querySelector?: (selector: string) => { value?: string } | null;
+      };
+    }).document;
+    const text = pageDocument?.body?.innerText ?? "";
+    const bidInput = pageDocument?.querySelector?.("#charged-amount-id");
+    return Boolean(
+      bidInput?.value?.trim() &&
+      /\b(?:fixed-price|fixed price|full amount you'd like to bid|by milestone|by project)\b/i.test(text)
+    );
+  }).catch(() => false);
+}
+
 async function tryClickFirst(page: PlaywrightPageLike, targets: Array<{ selector: string; label: string }>): Promise<boolean> {
   for (const target of targets) {
     const locator = page.locator(target.selector).first();
@@ -2086,6 +2105,23 @@ function rateFieldValues(snapshot: ApplyVerificationSnapshot): string[] {
     .filter((value) => value.trim().length > 0);
 }
 
+function fixedPriceBidFieldValues(snapshot: ApplyVerificationSnapshot): string[] {
+  return snapshot.fieldValues
+    .filter((field) => field.kind === "input" && isUserTextField(field))
+    .filter((field) => {
+      const descriptor = fieldDescriptor(field);
+      return /\bcharged-amount-id\b/i.test(descriptor) ||
+        /\bbid\b/i.test(descriptor) && /\b(?:currency|amount)\b/i.test(descriptor);
+    })
+    .map((field) => field.value)
+    .filter((value) => value.trim().length > 0);
+}
+
+function pageLooksFixedPrice(snapshot: ApplyVerificationSnapshot): boolean {
+  return fixedPriceBidFieldValues(snapshot).length > 0 &&
+    /\b(?:fixed-price|fixed price|full amount you'd like to bid|by milestone|by project)\b/i.test(snapshot.visibleText);
+}
+
 function boostFieldValues(snapshot: ApplyVerificationSnapshot): string[] {
   return snapshot.fieldValues
     .filter((field) => field.kind === "input" && isUserTextField(field))
@@ -2125,6 +2161,14 @@ function screeningValuesForIndex(snapshot: ApplyVerificationSnapshot, coverLette
     .map((field) => field.value)
     .filter((value) => value.trim().length > 0);
   return likelyScreening;
+}
+
+function hasScreeningAnswerFields(snapshot: ApplyVerificationSnapshot, coverLetter: string): boolean {
+  return snapshot.fieldValues.some((field) => {
+    if (!isUserTextField(field)) return false;
+    if (field.value === coverLetter) return false;
+    return field.kind === "textarea" || /\b(?:question|answer|screening)\b/i.test(fieldDescriptor(field));
+  });
 }
 
 function textDiffers(left: string | null | undefined, right: string | null | undefined): boolean {
@@ -2365,9 +2409,23 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
       const fieldValues = nodes
         .map((node) => {
           const value = typeof node.value === "string" ? node.value : "";
-          const label = node.closest?.("label")?.textContent ?? "";
           const inputType = node.type ?? node.getAttribute?.("type") ?? null;
           const id = node.getAttribute?.("id") ?? null;
+          let explicitLabel = "";
+          if (id && documentLike?.querySelectorAll) {
+            try {
+              const safeId = id.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+              explicitLabel = Array.from(documentLike.querySelectorAll(`label[for="${safeId}"]`) ?? [])
+                .map((labelNode) => "textContent" in labelNode && typeof (labelNode as { textContent?: unknown }).textContent === "string"
+                  ? String((labelNode as { textContent?: string }).textContent)
+                  : "")
+                .filter(Boolean)
+                .join(" ");
+            } catch {
+              explicitLabel = "";
+            }
+          }
+          const label = [node.closest?.("label")?.textContent ?? "", explicitLabel].filter(Boolean).join(" ");
           const ariaLabel = node.getAttribute?.("aria-label") ?? null;
           const placeholder = node.getAttribute?.("placeholder") ?? null;
           const name = node.name ?? node.getAttribute?.("name") ?? null;
@@ -2468,8 +2526,13 @@ export async function verifyApplyPreparationOnPage(input: {
     results.push(verification("screeningAnswers", "skipped_by_strategy", "No screening answers were generated for this application."));
   } else {
     const coverLetterValue = bestCoverLetterValue(snapshot, plan.coverLetter) ?? "";
-    const verifiedCount = plan.screeningAnswers.filter((answer, index) => textCollectionContains(screeningValuesForIndex(snapshot, coverLetterValue, index), answer)).length;
-    if (verifiedCount === plan.screeningAnswers.length) {
+    const hasScreeningFields = hasScreeningAnswerFields(snapshot, coverLetterValue);
+    const verifiedCount = hasScreeningFields
+      ? plan.screeningAnswers.filter((answer, index) => textCollectionContains(screeningValuesForIndex(snapshot, coverLetterValue, index), answer)).length
+      : 0;
+    if (!hasScreeningFields) {
+      results.push(verification("screeningAnswers", "skipped_by_strategy", "No screening answer fields are visible on this Upwork application."));
+    } else if (verifiedCount === plan.screeningAnswers.length) {
       results.push(verification("screeningAnswers", "verified", `${verifiedCount}/${plan.screeningAnswers.length} screening answers are present.`));
     } else if (verifiedCount > 0) {
       results.push(verification("screeningAnswers", "attempted_unverified", `${verifiedCount}/${plan.screeningAnswers.length} screening answers verified; remaining answers need QA.`));
@@ -2481,7 +2544,10 @@ export async function verifyApplyPreparationOnPage(input: {
   }
 
   const rateValue = rateNeedle(plan.rate);
-  if (!rateValue) {
+  if (pageLooksFixedPrice(snapshot)) {
+    const fixedPriceValues = fixedPriceBidFieldValues(snapshot);
+    results.push(verification("rate", "verified", `Fixed-price bid field is present with ${fixedPriceValues[0]}.`, { actual: fixedPriceValues.join(" | ") }));
+  } else if (!rateValue) {
     results.push(verification("rate", "skipped_by_strategy", "No safe rate value was available in the plan."));
   } else if (rateFieldValues(snapshot).some((value) => rateFieldValueMatches(value, rateValue))) {
     results.push(verification("rate", "verified", `Rate field contains ${rateValue}.`, { expected: rateValue }));
@@ -2592,8 +2658,11 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
     }
   }
 
+  const fixedPriceBidReady = await hasFixedPriceBidReady(page);
   const rateInputValue = hourlyRateInputValue(plan.rate);
-  if (rateInputValue && await tryFillFirst(page, [
+  if (fixedPriceBidReady) {
+    attemptedFields.push("rate");
+  } else if (rateInputValue && await tryFillFirst(page, [
     "[data-test='up-fe-rate-widget'] [data-test='hourly-rate'] input",
     "[data-test='up-fe-rate-widget'] input[data-test='currency-input']",
     "[data-test='hourly-rate'] input[data-test='currency-input']",
@@ -2632,6 +2701,7 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
 
   manualFields.push("finalSubmit");
   logger.info(`Submit guard after fill: stopBeforeSubmit=${plan.stopBeforeSubmit}; final submit remains manual.`);
+  await page.waitForTimeout?.(1000).catch(() => undefined);
   const fieldVerification = await verifyApplyPreparationOnPage({
     page,
     plan,

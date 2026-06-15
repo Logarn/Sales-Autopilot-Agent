@@ -1129,6 +1129,38 @@ async function runTests(): Promise<void> {
     assert(unknownOnlySkipPlan.connects.required === 8, "Verified required Connects should be copied into the plan");
     assert(unknownOnlySkipPlan.connectsStrategy.decision === "safe_apply", "Unknown-only Connects skip should become safe prep after verification");
 
+    const fixedPriceVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({
+        visibleText: "Fixed-price\nWhat is the full amount you'd like to bid for this job?\nRequired for proposal: 9 Connects\nSend for 9 Connects",
+        fields: [
+          { kind: "textarea", value: verificationPlan.coverLetter },
+          { kind: "input", type: "text", id: "charged-amount-id", label: "Bid", dataTest: "currency-input", value: "$10.00" },
+          { kind: "input", type: "file", value: "C:\\fakepath\\hangaritas-klaviyo-performance.png", files: ["hangaritas-klaviyo-performance.png"] },
+        ],
+      }),
+      plan: {
+        ...verificationPlan,
+        rate: "$10.82/hr",
+        screeningAnswers: ["Planned answer that should not block when no screening field exists."],
+        attachments: [
+          {
+            id: "profile/screenshots/hangaritas-klaviyo-performance.png",
+            name: "Hangaritas Klaviyo Performance",
+            filePath: "profile/screenshots/hangaritas-klaviyo-performance.png",
+            sensitivity: "approved_external",
+          },
+        ],
+        connects: { ...verificationPlan.connects, required: 9, total: 9 },
+      },
+      fields: { attemptedFields: ["coverLetter", "rate", "attachments"], skippedFields: [], manualFields: ["finalSubmit"] },
+      bodyText: "Fixed-price\nRequired for proposal: 9 Connects\nSend for 9 Connects",
+    });
+    assert(fixedPriceVerification.find((item) => item.field === "coverLetter")?.status === "verified", "Fixed-price application should verify the filled cover letter.");
+    assert(fixedPriceVerification.find((item) => item.field === "rate")?.status === "verified", "Fixed-price bid field should satisfy rate/bid verification.");
+    assert(fixedPriceVerification.find((item) => item.field === "screeningAnswers")?.status === "skipped_by_strategy", "Absent screening fields should not block fixed-price applications.");
+    assert(fixedPriceVerification.find((item) => item.field === "attachments")?.status === "verified", "Uploaded attachment filename should verify.");
+    assert(fixedPriceVerification.find((item) => item.field === "finalSubmit")?.status === "skipped_by_strategy", "Final submit must remain untouched.");
+
     const emptyCoverVerification = await verifyApplyPreparationOnPage({
       page: fakeApplyPage({ visibleText: "Required for proposal: 8 Connects\nSend for 8 Connects\nAdd a portfolio project\nAdd a certificate", inputValues: ["", "$35"], checkedLabels: [], fileNames: [] }),
       plan: verificationPlan,
@@ -1183,7 +1215,7 @@ async function runTests(): Promise<void> {
       bodyText: "Required for proposal: 8 Connects\nSend for 8 Connects",
     });
     assert(pollutedApplyVerification.find((item) => item.field === "coverLetter")?.status === "verified", "Cover letter should still verify from its textarea.");
-    assert(pollutedApplyVerification.find((item) => item.field === "screeningAnswers")?.status === "attempted_unverified", "Radio/hidden field values must not verify screening answers.");
+    assert(pollutedApplyVerification.find((item) => item.field === "screeningAnswers")?.status === "skipped_by_strategy", "Radio/hidden field values must not verify screening answers.");
     assert(pollutedApplyVerification.find((item) => item.field === "rate")?.status === "attempted_unverified", "Concatenated stale rate values like 3535 must not verify as a $35 bid.");
 
     writeFileSync(resolve(proofRoot, "package.json"), "{}");
