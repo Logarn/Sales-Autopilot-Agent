@@ -26,6 +26,7 @@ import {
   listBatchApplyCandidateThreads,
   listBatchApplyWorkspaceItems,
   listBrowserActions,
+  listProposalVersions,
   listRecentSlackFailureReflections,
   getLatestProposalVersion,
   recordLatestVerifiedProposalFallback,
@@ -305,6 +306,15 @@ function matchesDraftPreviewIntent(value: string): boolean {
     /\b(?:show|send|post)\s+me\b.*\bdraft\s+cv\b/.test(text) ||
     /\bdraft\s+(?:cv|proposal)\b.*\b(?:here|first|slack)\b/.test(text) ||
     /\bprepare\b.*\bshow\s+me\b.*\bdraft\b.*\bfirst\b/.test(text)
+  );
+}
+
+function shouldShowDraftBodyForExplicitRequest(value: string): boolean {
+  const normalized = normalizeSlackTextInput(value);
+  if (/\b(?:once ready|when ready|as soon as it'?s ready|when it'?s done)\b/i.test(normalized)) return false;
+  return (
+    /\b(?:show|send|post)\s+(?:me\s+)?(?:the|teh)?\s*(?:draft|proposal|cover\s*letter|cv)\b/i.test(normalized) ||
+    /\b(?:draft|proposal|cover\s*letter|cv)\s+(?:here|please|pls)\b/i.test(normalized)
   );
 }
 
@@ -2400,6 +2410,7 @@ export function buildDraftPreviewFromSlackThread(input: {
   channelId: string;
   threadTs: string;
   source?: ProposalVersionSource;
+  forceBody?: boolean;
 }): { ok: boolean; text: string } {
   const state = getSlackThreadStateByThreadTs(input.channelId, input.threadTs);
   if (!state?.jobId) {
@@ -2409,7 +2420,12 @@ export function buildDraftPreviewFromSlackThread(input: {
   const scoredJob = getScoredJobForSlackPreview(state.jobId);
   const requestedVersion = input.source ? getLatestProposalVersion(state.jobId, input.source) : null;
   const latestVersion = requestedVersion ?? getLatestProposalVersion(state.jobId);
-  const latestSlackPreview = !input.source ? getLatestProposalVersion(state.jobId, "slack_preview") : null;
+  const slackThreadPreviewMarker = `slackThread=${input.channelId}:${input.threadTs}`;
+  const latestSlackPreview = !input.source
+    ? [...listProposalVersions(state.jobId)]
+      .reverse()
+      .find((version) => version.source === "slack_preview" && (version.note ?? "").includes(slackThreadPreviewMarker)) ?? null
+    : null;
   const textToShow = requestedVersion?.proposalText ?? (!input.source ? draft?.proposalText.trim() : latestVersion?.proposalText) ?? "";
   if (!textToShow.trim()) {
     const context = resolveUnifiedSlackJobContext({ channelId: input.channelId, threadTs: input.threadTs });
@@ -2446,6 +2462,7 @@ export function buildDraftPreviewFromSlackThread(input: {
   }
   if (
     latestSlackPreview &&
+    !input.forceBody &&
     !input.source &&
     latestVersion &&
     latestVersion.versionNumber <= latestSlackPreview.versionNumber &&
@@ -2469,12 +2486,14 @@ export function buildDraftPreviewFromSlackThread(input: {
   }
   const previewVersion = input.source
     ? requestedVersion
+    : latestSlackPreview?.proposalText.trim() === textToShow.trim()
+      ? latestSlackPreview
     : recordProposalVersion({
         jobId: state.jobId,
         source: "slack_preview",
         proposalText: textToShow,
         screeningAnswers: draft?.structuredProposal?.clientRequestAnswers ?? latestVersion?.screeningAnswers ?? [],
-        note: "Slack draft/CV preview shown to Steve.",
+        note: `Slack draft/CV preview shown to Steve. ${slackThreadPreviewMarker}`,
   });
   updateSlackThreadStateStatus(state.channelId, state.threadTs, "draft_preview_sent");
   markSlackWorkflowPromiseStatus({
@@ -2690,9 +2709,9 @@ function splitExactBodyReply(text: string): { lead: string; body: string; tail: 
     return null;
   }
   const lead = text.slice(0, firstBreak).trim();
-  const body = text.slice(firstBreak + 2, lastBreak).trim();
+  const body = text.slice(firstBreak + 2, lastBreak);
   const tail = text.slice(lastBreak + 2).trim();
-  if (!lead || !body || !tail) {
+  if (!lead || !body.trim() || !tail) {
     return null;
   }
   return { lead, body, tail };
@@ -3162,7 +3181,11 @@ async function executeConversationPlan(params: {
       requestedByUserText: params.userMessage,
       draftRequested: true,
     });
-    const result = buildDraftPreviewFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs });
+    const result = buildDraftPreviewFromSlackThread({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      forceBody: shouldShowDraftBodyForExplicitRequest(params.userMessage),
+    });
     const text = result.ok
       ? await userFacingSlackCopyWithExactBody({
         deterministicText: result.text,
@@ -4302,7 +4325,11 @@ export async function handleSlackReasoningGateway(params: SlackReasoningGatewayP
       requestedByUserText: params.text,
       draftRequested: true,
     });
-    const result = buildDraftPreviewFromSlackThread({ channelId: params.channelId, threadTs: params.threadTs });
+    const result = buildDraftPreviewFromSlackThread({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      forceBody: shouldShowDraftBodyForExplicitRequest(params.text),
+    });
     const text = result.ok
       ? await userFacingSlackCopyWithExactBody({
         deterministicText: result.text,
@@ -4933,9 +4960,16 @@ async function handleThreadCommandFallback(params: SlackReasoningGatewayParams, 
       channelId: params.channelId,
       threadTs: params.threadTs,
       source: command.proposalVersionSource,
+      forceBody: shouldShowDraftBodyForExplicitRequest(params.text),
     });
     const text = result.ok
-      ? result.text
+      ? await userFacingSlackCopyWithExactBody({
+        deterministicText: result.text,
+        userMessage: params.text,
+        intent: "draft_preview",
+        context: { jobId: state.jobId, ok: result.ok, exactProposalBodyPreserved: true },
+        copyProvider: params.copyProvider,
+      })
       : await userFacingSlackCopy({
         deterministicText: result.text,
         userMessage: params.text,

@@ -495,6 +495,9 @@ function requestedToolSentence(strategy: CopyStrategy): string | null {
 
 function conciseHook(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
+  if (strategy.category === "gardening" && tools.length > 0) {
+    return `Two details stood out: the work needs seasonal care/replenishment logic first, and ${tools[0]} flows should support those customer moments instead of just sending more emails.`;
+  }
   if (strategy.category === "email_design") {
     return "Two details stood out: the email templates need clearer hierarchy, and the goal is conversion rather than decoration.";
   }
@@ -503,6 +506,9 @@ function conciseHook(strategy: CopyStrategy): string {
   }
   if (tools.length >= 2) {
     return `Two customer-lifecycle details stood out: each moment needs the right timing, message, and next step, and the work spans ${tools.join(" and ")}.`;
+  }
+  if (tools.length === 1) {
+    return `Two customer-lifecycle details stood out: customers need a clearer reason to take the next step, and ${tools[0]} should make that timing useful instead of just sending more emails.`;
   }
   return `Two customer-lifecycle details stood out: customers need a clearer reason to trust, click, buy, or return, and ${strategy.client_commercial_pain}.`;
 }
@@ -519,9 +525,18 @@ function oneStepSolution(strategy: CopyStrategy): string {
 }
 
 function singleProofPoint(proofPoints: string[], portfolioItems: PortfolioItem[]): string {
+  const selectedProof = proofPoints.find((point) =>
+    /^[^:\n]{2,80}:\s+[^:\n]{8,}$/i.test(point) &&
+    !/\b(?:Klaviyo Silver Partner|Senior director|Comfortable owning)\b/i.test(point)
+  );
+  if (selectedProof) {
+    const [name, ...headlineParts] = selectedProof.split(":");
+    const headline = headlineParts.join(":").trim().replace(/[.!?]+$/g, "");
+    return `Recent proof: ${name.trim()} — ${headline}. I would use this as the one matched artifact, not a proof dump.`;
+  }
   const proofText = [...proofPoints, ...portfolioItems.map((item) => item.result), ...portfolioItems.map((item) => item.name)].join(" ");
   if (/klaviyo silver partner/i.test(proofText) || /8\+?\s*years/i.test(proofText)) {
-    return "Recent proof: Klaviyo Silver Partner with 8+ years in retention/lifecycle work; I can keep the proof to one audit-style artifact if it matches the application.";
+    return "Recent proof: one Klaviyo lifecycle artifact, kept tight to the actual scope instead of dumping credentials.";
   }
   const portfolio = firstProofLabel(proofPoints, portfolioItems);
   if (portfolio && !/portfolio|general/i.test(portfolio)) {

@@ -230,6 +230,8 @@ assert(/mailchimp/i.test(noisyDraft.proposalText), `Noisy captured proposal shou
 assert(/omnisend/i.test(noisyDraft.proposalText), `Noisy captured proposal should mention the requested Omnisend scope:\n${noisyDraft.proposalText}`);
 assert(/engagement/i.test(noisyDraft.proposalText), `Noisy captured proposal should mention the requested engagement goal:\n${noisyDraft.proposalText}`);
 assert(!/design case studies|figma|visual hierarchy/i.test(noisyDraft.proposalText), `Lifecycle/platform email proposal should not drift into design-proof copy:\n${noisyDraft.proposalText}`);
+assert(/Hangaritas|£21,681\.29|173%/i.test(noisyDraft.proposalText), `Lifecycle/platform email proposal should use the selected one-proof artifact instead of generic credentials:\n${noisyDraft.proposalText}`);
+assert(!/Klaviyo Silver Partner with 8\+ years/i.test(noisyDraft.proposalText), `Proposal body should not use credential-first proof when a matched proof artifact exists:\n${noisyDraft.proposalText}`);
 assert(noisyDraft.draftQualityGate.ready, `Noisy captured proposal should pass after removing parsed page noise. Issues: ${JSON.stringify(noisyDraft.draftQualityGate.issues)}`);
 
 assert(evaluateDraftQualityGate({

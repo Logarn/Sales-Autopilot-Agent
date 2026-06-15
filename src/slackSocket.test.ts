@@ -62,7 +62,7 @@ async function runTests(): Promise<void> {
 
   const { applySlackThreadRevision, buildDraftPreviewFromSlackThread, buildSlackSocketStartupError, handleSlackSocketTextEvent, handleThreadCommand, parseSlackThreadCommand, parseUpworkJobUrlFromText, parseUpworkJobUrlsFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread, resetSlackSocketEventDedupeForTests } = require("./slackSocket") as {
     applySlackThreadRevision: (input: { channelId: string; threadTs: string; instruction: string }) => { ok: boolean; text: string; proposalVersion?: number };
-    buildDraftPreviewFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string };
+    buildDraftPreviewFromSlackThread: (input: { channelId: string; threadTs: string; source?: string; forceBody?: boolean }) => { ok: boolean; text: string };
     buildSlackSocketStartupError: (input: { socketEnabled: boolean; botToken: string; appToken: string }) => string | null;
     handleSlackSocketTextEvent: (event: { channel: string; channel_type?: string; ts: string; text?: string; thread_ts?: string; client_msg_id?: string; event_id?: string; event_ts?: string; user?: string; bot_id?: string; subtype?: string; files?: any[] }, client: any) => Promise<void>;
     handleThreadCommand: (input: { channelId: string; threadTs: string; text: string; client: any; intentProvider?: any; conversationProvider?: any; copyProvider?: any; focusQaTab?: any; operatorDeps?: any }) => Promise<void>;
@@ -90,7 +90,7 @@ async function runTests(): Promise<void> {
     getSlackWorkflowState: (channelId: string, threadTs: string) => { workflowState: string; draftRequested: boolean; prepRequested: boolean; latestAgentPromise: { type: string; status: string; text: string; blocker?: string | null } | null } | null;
     listActiveSlackBehaviorMemories: (limit?: number) => Array<{ type: string; rule: string; source: string }>;
     listApplicationAssets: (jobId: string) => Array<{ originalName: string; relativePath: string | null; source: string; attachPolicy: string }>;
-    listProposalVersions: (jobId: string) => Array<{ versionNumber: number; source: string; proposalText: string }>;
+    listProposalVersions: (jobId: string) => Array<{ versionNumber: number; source: string; proposalText: string; note?: string | null }>;
     listRecentSlackFailureReflections: (limit?: number) => Array<{ whatHappened: string; whyItFailed: string; nextBehavior: string; proposedTask?: string | null }>;
     markJobSeen: (job: any, notified: boolean) => void;
     mergeBrowserActionPayload: (id: number, patch: Record<string, unknown>) => unknown;
@@ -1153,6 +1153,21 @@ async function runTests(): Promise<void> {
     assert(!repeatedDraftPreview.text.includes(prepareJob.applicationDraft.proposalText), "Repeated draft preview should not spam the same proposal body.");
     assert(previewVersionsAfterRepeat === previewVersionsAfterFirst, "Repeated draft preview should not create another slack_preview proposal version.");
 
+    upsertSlackThreadState({
+      channelId: "CNEW",
+      messageTs: "333.111",
+      threadTs: "333.111",
+      upworkUrl: prepareJob.url,
+      jobId: prepareJob.id,
+      status: "packet_sent",
+    });
+    const freshThreadDraftPreview = buildDraftPreviewFromSlackThread({ channelId: "CNEW", threadTs: "333.111" });
+    assert(freshThreadDraftPreview.ok, "A fresh Slack thread attached to the same job should still get the draft body.");
+    assert(freshThreadDraftPreview.text.includes(prepareJob.applicationDraft.proposalText), "Job-level slack_preview history must not suppress the draft body in a different Slack thread.");
+    const forcedRepeatedDraftPreview = buildDraftPreviewFromSlackThread({ channelId: "C123", threadTs: "111.222", forceBody: true });
+    assert(forcedRepeatedDraftPreview.ok, "Explicit draft-body requests should still answer.");
+    assert(forcedRepeatedDraftPreview.text.includes(prepareJob.applicationDraft.proposalText), "Explicit 'show me the draft here' should show the current draft even after an earlier preview.");
+
     const previewReplies: string[] = [];
     const actionCountBeforePreview = listBrowserActions(null, 1000).length;
     await handleThreadCommand({
@@ -1167,7 +1182,7 @@ async function runTests(): Promise<void> {
         },
       },
     });
-    assert(previewReplies.some((reply) => reply.includes("already posted the current draft above")), "Repeated draft-preview command should point to the existing in-thread draft.");
+    assert(previewReplies.some((reply) => reply.includes(prepareJob.applicationDraft.proposalText)), "Explicit repeated draft-preview command should show the current draft body.");
     assert(previewReplies.some((reply) => reply.includes("I have not filled the Upwork form yet.")), "Draft-preview command must not imply browser fill happened.");
     assert(listBrowserActions(null, 1000).length === actionCountBeforePreview, "Draft-preview command must not queue a browser preparation action.");
     assert(getSlackThreadStateByThreadTs("C123", "111.222")?.status === "draft_preview_sent", "Draft-preview command should mark the thread preview-sent.");

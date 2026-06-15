@@ -494,9 +494,12 @@ export function buildApplicationDraft(job: ScoredJob, options: BuildApplicationD
   const salesLearningGuidance = salesLearning.relevantMemories
     .map((memory) => `Sales learning (${memory.type}, ${memory.confidence}, evidence ${memory.evidenceCount}): ${memory.hypothesis}`)
     .slice(0, 6);
-  const proofPoints = selectProofPoints(profile, job, proofKnowledge);
-  const portfolioItems = selectPortfolioItems(job);
   const proofSelection = selectPortfolioAssetsForJob(job);
+  const proofPoints = [
+    ...proofSelection.selectedProof.map((proof) => `${proof.name}: ${proof.headline}`),
+    ...selectProofPoints(profile, job, proofKnowledge),
+  ].slice(0, 5);
+  const portfolioItems = selectPortfolioItems(job);
   const proofStrategy = buildProofStrategy({ proofSelection, portfolioItems, proofPoints });
   const fitReasons = [
     ...job.scoreBreakdown.reasons.slice(0, 6),
