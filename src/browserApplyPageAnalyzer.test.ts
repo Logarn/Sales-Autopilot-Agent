@@ -175,6 +175,17 @@ const modalOnlyPortfolioNames = analyzeApplyPageSnapshot(snapshot({
 assert.equal(modalOnlyPortfolioNames.portfolioHighlights.state, "visible_requires_input");
 assert(modalOnlyPortfolioNames.warnings.includes("portfolio_highlights_not_verified"), "Portfolio names outside selected evidence must not verify.");
 
+const truncatedLifelySelected = analyzeApplyPageSnapshot(snapshot({
+  visibleText: "Required for proposal: 8 Connects\nProfile highlights\nBoost your proposal\nSend for 8 Connects",
+  fieldValues: [
+    { kind: "textarea", inputType: null, label: "Cover letter", id: null, name: null, ariaLabel: null, placeholder: null, dataTest: null, value: filledPlan.coverLetter },
+    { kind: "input", inputType: "text", label: "Hourly rate", id: null, name: null, ariaLabel: "Hourly rate", placeholder: null, dataTest: null, value: "80" },
+  ],
+  selectedHighlightLabels: ["Portfolio\n4 - How Lifely Transformed Their Retention M...\nSkills: Email Deliverability, List Building"],
+  actionLabels: ["Send for 8 Connects"],
+}), plan({ highlights: ["How Lifely Transformed Their Retention Marketing"] }));
+assert.equal(truncatedLifelySelected.portfolioHighlights.state, "visible_filled", "Upwork-truncated selected Lifely portfolio title should verify from selected-highlight evidence.");
+
 const unsetBoostWithAmbientConnects = analyzeApplyPageSnapshot(snapshot({
   visibleText: "Required for proposal: 9 Connects\nBoost your proposal\n#4 bid 25 Connects\nSend for 9 Connects",
   fieldValues: [
