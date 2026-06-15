@@ -80,7 +80,7 @@ async function runTests(): Promise<void> {
     selectPageForBrowserAction: (context: { pages?: () => Array<{ url: () => string }>; newPage: () => Promise<any> }, targetUrl: string, options?: { protectedApplyUrls?: string[] }) => Promise<{ page: any; reusedExistingPage: boolean; reason: string }>;
     settlePageAndDetect: (page: any, action: any) => Promise<{ snapshot: any; bodyText: string; detection: { state: string; source: string; matchedText?: string }; samples: Array<any> }>;
     verifyApplyPageConnects: (plan: any, bodyText: string) => Array<{ severity: string; code: string; message: string }>;
-    verifyApplyPreparationOnPage: (input: { page: any; plan: any; fields: { attemptedFields: string[]; skippedFields: string[]; manualFields: string[] }; bodyText: string }) => Promise<Array<{ field: string; status: string; detail: string }>>;
+    verifyApplyPreparationOnPage: (input: { page: any; plan: any; fields: { attemptedFields: string[]; skippedFields: string[]; manualFields: string[] }; bodyText: string }) => Promise<Array<{ field: string; status: string; detail: string; expected?: string; actual?: string }>>;
   };
   const { buildPrepareDraftQueueReply } = require("./slackSocket") as {
     buildPrepareDraftQueueReply: (input: {
@@ -1206,6 +1206,22 @@ async function runTests(): Promise<void> {
     assert(emptyCoverVerification.find((item) => item.field === "requiredConnects")?.status === "verified", "Apply-page required Connects should verify separately from boost.");
     assert(emptyCoverVerification.find((item) => item.field === "boostConnects")?.detail === "No boost set.", "No boost should be reported honestly when none is set.");
     assert(emptyCoverVerification.find((item) => item.field === "profileHighlights")?.status === "attempted_unverified", "Add portfolio/certificate UI should be treated as a selector entry point, not immediate unavailable proof.");
+
+    const applyPageConnectsOnlyVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({
+        visibleText: "This proposal requires 9 Connects\nWhen you submit this proposal, you'll have 522 Connects remaining.\nSend for 9 Connects",
+        inputValues: [verificationPlan.coverLetter, "$50"],
+      }),
+      plan: {
+        ...verificationPlan,
+        highlights: [],
+        connects: { ...verificationPlan.connects, required: null, boost: 0, total: null, approvalRequired: true },
+      },
+      fields: { attemptedFields: ["coverLetter", "rate"], skippedFields: [], manualFields: ["finalSubmit"] },
+      bodyText: "This proposal requires 9 Connects\nSend for 9 Connects",
+    });
+    assert(applyPageConnectsOnlyVerification.find((item) => item.field === "requiredConnects")?.status === "verified", "Visible apply-page Connects should verify even when the stored draft started unknown.");
+    assert(applyPageConnectsOnlyVerification.find((item) => item.field === "requiredConnects")?.actual === "9", "Verified required Connects should report the visible bottom-of-page value.");
 
     const unsafeBoostVerification = await verifyApplyPreparationOnPage({
       page: fakeApplyPage({ visibleText: "Required for proposal: 8 Connects\nBoost: 80 Connects", inputValues: [verificationPlan.coverLetter, "80"] }),
