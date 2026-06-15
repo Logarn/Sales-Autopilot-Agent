@@ -3,6 +3,7 @@ import {
   closeDb,
   enqueueBrowserAction,
   enqueueBrowserActionDeduped,
+  getBrowserActionById,
   listBrowserActions,
   updateBrowserActionStatus,
 } from "./db";
@@ -232,7 +233,7 @@ function retry(): void {
     process.exitCode = 1;
     return;
   }
-  const action = listBrowserActions(null, 100).find((item) => item.id === id);
+  const action = getBrowserActionById(id);
   if (!action) {
     logger.error(`No browser action found for id=${id}`);
     process.exitCode = 1;
