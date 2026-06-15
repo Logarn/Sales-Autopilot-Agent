@@ -198,10 +198,13 @@ async function runTests(): Promise<void> {
       },
       closest: () => field.label ? ({ textContent: field.label }) : null,
     });
-    return {
+    const page = {
       url: () => input.url ?? "https://www.upwork.com/ab/proposals/job/~beautyjob123456/apply/",
       locator: () => ({ first: () => ({ textContent: async () => input.visibleText ?? "" }) }),
-      evaluate: async (fn: (() => unknown) | string) => {
+      evaluate: async function (this: unknown, fn: (() => unknown) | string) {
+        if (this !== page) {
+          throw new Error("page.evaluate must be called with the page binding preserved");
+        }
         const holder = globalThis as unknown as { document?: unknown; scrollTo?: (x: number, y: number) => void };
         const previousDocument = holder.document;
         const previousScrollTo = holder.scrollTo;
@@ -259,6 +262,7 @@ async function runTests(): Promise<void> {
         }
       },
     };
+    return page;
   }
 
   try {
