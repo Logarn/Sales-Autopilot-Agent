@@ -10,6 +10,7 @@ import { buildSoulPromptContext, buildSoulPromptSection } from "./soul";
 export type SlackCopyPath =
   | "conversation_reply"
   | "qa_handoff"
+  | "manual_attention_alert"
   | "lead_packet"
   | "daily_digest";
 
@@ -259,6 +260,9 @@ function compactSafeFallbackText(request: SlackCopyRequest, reason: string): str
       url,
     ].filter(Boolean).join("\n");
   }
+  if (request.path === "manual_attention_alert") {
+    return "Upwork is showing a browser check in remote Chrome. I paused safely and did not submit anything. Clear the check, then reply retry in the relevant thread. Final submit remains manual.";
+  }
   void reason;
   return deterministic;
 }
@@ -301,6 +305,7 @@ export async function rewriteSlackCopyWithKimi(
             "Never output dashboard headings like Overall health, Workers, Heartbeats, Findings, QA queue, or raw service state unless debug was explicitly requested.",
             "For lead packets: be concise, human, commercially opinionated, and varied; include the Upwork link; include one clear next-step CTA; avoid raw packet fields.",
             "For normal Slack replies: answer the actual question directly and conversationally. Do not route natural language into a command-menu fallback.",
+            "For manual-attention alerts: write one calm, non-repetitive blocker update. Do not repeat the same sentence structure from recent alerts.",
             "Use sales memories as hypotheses when provided. Current context and hard safety override learned preferences.",
             "Avoid starting with any recent opening listed in recentOpenings.",
             "Do not decide actions, change status, add facts, add raw ids, or expose internals.",

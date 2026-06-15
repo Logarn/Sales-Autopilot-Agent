@@ -9,6 +9,7 @@ import {
 import { getApplicationJobLink } from "./db";
 import { logger } from "./logger";
 import { sendSlackMessage } from "./slack";
+import { rewriteSlackCopyWithKimi } from "./slackCopywriter";
 
 export type BrowserSessionState = "healthy" | "manual_attention_required" | "cooling_down" | "disabled_until_manual_retry" | "browser_session_unhealthy";
 
@@ -173,7 +174,24 @@ function manualAttentionIncidentGroup(reason: string): string {
   return "manual_attention";
 }
 
-function manualAttentionIncidentTarget(event: Pick<BrowserManualAttentionEvent, "actionId" | "jobId" | "applicationId" | "url" | "reason">): string {
+type ManualAttentionIdentityInput = Pick<BrowserManualAttentionEvent, "actionId" | "jobId" | "applicationId" | "url" | "reason"> & {
+  title?: string | null;
+};
+
+function isGenericUpworkChallenge(event: Pick<BrowserManualAttentionEvent, "url" | "reason"> & { title?: string | null }): boolean {
+  const title = event.title ?? "";
+  const url = event.url ?? "";
+  return (
+    /just\s+a\s+moment|checking if the site connection is secure|cloudflare|captcha|security/i.test(title) ||
+    /__cf_chl|captcha|challenge|security/i.test(url) ||
+    /captcha|security|challenge|just.?a.?moment|manual_attention_required/i.test(event.reason)
+  );
+}
+
+function manualAttentionIncidentTarget(event: ManualAttentionIdentityInput): string {
+  if (manualAttentionIncidentGroup(event.reason) === "browser_check" && isGenericUpworkChallenge(event)) {
+    return "upwork_challenge";
+  }
   if (manualAttentionIncidentGroup(event.reason) === "browser_check" && !event.actionId && !event.jobId && !event.applicationId) {
     return "session";
   }
@@ -184,7 +202,7 @@ function manualAttentionIncidentTarget(event: Pick<BrowserManualAttentionEvent, 
   return "session";
 }
 
-export function browserManualAttentionIncidentKey(event: Pick<BrowserManualAttentionEvent, "actionId" | "jobId" | "applicationId" | "url" | "reason">): { key: string; group: string; target: string } {
+export function browserManualAttentionIncidentKey(event: ManualAttentionIdentityInput): { key: string; group: string; target: string } {
   const group = manualAttentionIncidentGroup(event.reason);
   const target = manualAttentionIncidentTarget(event);
   return { group, target, key: `${group}:${target}` };
@@ -308,6 +326,7 @@ export function shouldSuppressBrowserManualAttentionChannelPost(input: {
   jobId?: string;
   applicationId?: string | null;
   url?: string | null;
+  title?: string | null;
   reason: string;
 }): boolean {
   const identity = browserManualAttentionIncidentKey({
@@ -315,6 +334,7 @@ export function shouldSuppressBrowserManualAttentionChannelPost(input: {
     jobId: input.jobId,
     applicationId: input.applicationId ?? null,
     url: input.url ?? null,
+    title: input.title ?? null,
     reason: input.reason,
   });
   const incident = findActiveManualAttentionIncident(readRawSession().manualAttentionIncidents, identity, {
@@ -467,12 +487,12 @@ function humanBrowserAttentionReason(reason: string): string {
 export function buildManualAttentionSlackText(event: BrowserManualAttentionEvent): string {
   const jobLine = event.jobTitle ? `\nJob: ${event.jobTitle}` : "";
   const pageLine = event.title ? `\nPage: ${event.title}` : "";
-	  return [
-	    "Upwork checked one application page. I paused that one safely.",
-	    `${humanBrowserAttentionReason(event.reason)} I did not submit anything.${jobLine}${pageLine}`,
-	    "Clear the remote Chrome check, then reply “retry” in the relevant Slack thread and I’ll pick this back up.",
-	    "Ask for debug details only if you need the raw action state.",
-	  ].join("\n");
+  return [
+    "Browser attention needed.",
+    `${humanBrowserAttentionReason(event.reason)} I paused safely and did not submit anything.${jobLine}${pageLine}`,
+    "Clear the remote Chrome check, then reply “retry” in the relevant Slack thread.",
+    "Final submit remains manual.",
+  ].join("\n");
 }
 
 function recentChallengeEvents(events: BrowserManualAttentionEvent[], now: Date): BrowserManualAttentionEvent[] {
@@ -491,15 +511,30 @@ async function maybeSendManualAttentionAlert(record: BrowserSessionRecord, event
     return record;
   }
 
-  const text = buildManualAttentionSlackText(event);
+  const deterministicText = buildManualAttentionSlackText(event);
+  const copy = await rewriteSlackCopyWithKimi({
+    path: "manual_attention_alert",
+    deterministicText,
+    intent: "browser_manual_attention",
+    context: {
+      reason: event.reason,
+      title: event.title ?? null,
+      jobTitle: event.jobTitle ?? null,
+      hasThread: Boolean(event.threadChannelId && event.threadTs),
+      finalSubmitManual: true,
+      stopBeforeSubmit: true,
+    },
+    preservePhrases: ["Final submit remains manual."],
+  });
   const sent = await sendSlackMessage({
-    text: "Upwork needs a browser check",
+    text: copy.text,
+    soulComposed: true,
     blocks: [
       {
         type: "section",
         text: {
           type: "mrkdwn",
-          text,
+          text: copy.text,
         },
       },
     ],
