@@ -1899,7 +1899,26 @@ async function trySelectProjectDuration(page: PlaywrightPageLike): Promise<boole
     { selector: "button:has-text('Less than 1 month')", label: "Less than 1 month" },
     { selector: "text=\"Less than 1 month\"", label: "Less than 1 month" },
   ]);
-  if (!selected) return false;
+  if (!selected && page.evaluate) {
+    const fallbackSelected = await page.evaluate(() => {
+      const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
+      const isVisible = (element: Element): boolean => {
+        const htmlElement = element as HTMLElement;
+        const style = window.getComputedStyle(htmlElement);
+        return style.visibility !== "hidden" &&
+          style.display !== "none" &&
+          htmlElement.getClientRects().length > 0 &&
+          Boolean(htmlElement.offsetWidth || htmlElement.offsetHeight);
+      };
+      const option = Array.from(document.querySelectorAll("[role='option'], li, button, div"))
+        .find((candidate) => normalize(candidate.textContent ?? "") === "less than 1 month" && isVisible(candidate));
+      (option as HTMLElement | undefined)?.click();
+      return Boolean(option);
+    }).catch(() => false);
+    if (!fallbackSelected) return false;
+  } else if (!selected) {
+    return false;
+  }
   await page.waitForTimeout?.(500).catch(() => undefined);
   return true;
 }
@@ -2221,6 +2240,21 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike): Promise<boo
     return Array.from(dialog.querySelectorAll("button"))
       .some((candidate) => /^(?:add to highlights|add\s+\d+\s*[/]\s*4)$/i.test((candidate.textContent ?? "").replace(/\s+/g, " ").trim()) && !(candidate as HTMLButtonElement).disabled && isVisibleButton(candidate as HTMLButtonElement));
   }).catch(() => false);
+  const clickConfirmWithDom = () => evaluate(() => {
+    const dialog = document.querySelector("[role='dialog']");
+    if (!dialog) return false;
+    const isVisibleButton = (button: HTMLButtonElement): boolean => {
+      const style = window.getComputedStyle(button);
+      return style.visibility !== "hidden" &&
+        style.display !== "none" &&
+        button.getClientRects().length > 0 &&
+        Boolean(button.offsetWidth || button.offsetHeight);
+    };
+    const button = Array.from(dialog.querySelectorAll("button"))
+      .find((candidate) => /^(?:add to highlights|add\s+\d+\s*[/]\s*4)$/i.test((candidate.textContent ?? "").replace(/\s+/g, " ").trim()) && !(candidate as HTMLButtonElement).disabled && isVisibleButton(candidate as HTMLButtonElement)) as HTMLButtonElement | undefined;
+    button?.click();
+    return Boolean(button);
+  }).catch(() => false);
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const buttonIndex = await findButtonIndex();
@@ -2233,13 +2267,11 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike): Promise<boo
         await guardedClick(button as PlaywrightLocatorLike & { click(options?: { timeout?: number }): Promise<unknown> }, { selector: "[role='dialog'] button", label: "Add to highlights" }, { timeout: 2500 });
       }
     } catch {
-      await page.evaluate(() => {
-        const dialog = document.querySelector("[role='dialog']");
-        const button = Array.from(dialog?.querySelectorAll("button") ?? [])
-          .find((candidate) => /^(?:add to highlights|add\s+\d+\s*[/]\s*4)$/i.test((candidate.textContent ?? "").replace(/\s+/g, " ").trim())) as HTMLButtonElement | undefined;
-        button?.click();
-      }).catch(() => undefined);
+      await clickConfirmWithDom();
     }
+    await page.waitForTimeout?.(1000).catch(() => undefined);
+    if (!await hasOpenConfirmButton()) return true;
+    await clickConfirmWithDom();
     await page.waitForTimeout?.(1000).catch(() => undefined);
     if (!await hasOpenConfirmButton()) return true;
   }
@@ -3110,6 +3142,10 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
     if (screening.skipped > 0) {
       manualFields.push("screeningAnswers");
     }
+  }
+
+  if (await tryConfirmHighlightsDialog(page)) {
+    attemptedFields.push("highlights");
   }
 
   const fixedPricePage = await pageLooksFixedPriceLive(page);
