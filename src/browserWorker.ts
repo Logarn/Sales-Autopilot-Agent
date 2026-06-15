@@ -1886,11 +1886,22 @@ async function hasFixedPriceTermsReady(page: PlaywrightPageLike): Promise<boolea
 
 async function trySelectProjectDuration(page: PlaywrightPageLike): Promise<boolean> {
   if (await hasFixedPriceTermsReady(page)) return true;
-  const opened = await tryClickFirst(page, [
+  let opened = await tryClickFirst(page, [
     { selector: "[role='combobox'][aria-labelledby='duration-label']", label: "Project duration" },
     { selector: "[data-test='dropdown-toggle'][aria-labelledby='duration-label']", label: "Project duration" },
     { selector: "[aria-describedby='duration-error'][role='combobox']", label: "Project duration" },
   ]);
+  if (!opened && page.evaluate) {
+    opened = await page.evaluate(() => {
+      const toggle = document.querySelector("[role='combobox'][aria-labelledby='duration-label'], [data-test='dropdown-toggle'][aria-labelledby='duration-label'], [aria-describedby='duration-error'][role='combobox']") as HTMLElement | null;
+      if (!toggle) return false;
+      toggle.scrollIntoView({ block: "center", inline: "nearest" });
+      toggle.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+      toggle.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+      toggle.click();
+      return true;
+    }).catch(() => false);
+  }
   if (!opened) return false;
   await page.waitForTimeout?.(500).catch(() => undefined);
   const selected = await tryClickFirst(page, [
@@ -2219,6 +2230,13 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHigh
   if (!page.evaluate) return false;
   const evaluate = page.evaluate.bind(page) as NonNullable<PlaywrightPageLike["evaluate"]>;
   const expectedAliases = expectedHighlights.map(highlightAliases);
+  const hasVisibleDialog = () => evaluate(() => {
+    const dialog = document.querySelector("[role='dialog']") as HTMLElement | null;
+    if (!dialog) return false;
+    const rect = dialog.getBoundingClientRect();
+    const style = window.getComputedStyle(dialog);
+    return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+  }).catch(() => false);
   const findButtonIndex = () => evaluate(() => {
     const dialog = document.querySelector("[role='dialog']");
     if (!dialog) return -1;
@@ -2290,9 +2308,36 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHigh
     button?.click();
     return Boolean(button);
   }).catch(() => false);
+  const closeCommittedHighlightsDialog = async (): Promise<boolean> => {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const clicked = await evaluate(() => {
+        const dialog = document.querySelector("[role='dialog']");
+        if (!dialog) return true;
+        const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
+        const isVisibleButton = (button: HTMLButtonElement): boolean => {
+          const style = window.getComputedStyle(button);
+          return style.visibility !== "hidden" &&
+            style.display !== "none" &&
+            button.getClientRects().length > 0 &&
+            Boolean(button.offsetWidth || button.offsetHeight);
+        };
+        const buttons = Array.from(dialog.querySelectorAll("button")) as HTMLButtonElement[];
+        const button = buttons.find((candidate) => /close and discard highlights/i.test(normalize(candidate.textContent ?? "")) && isVisibleButton(candidate)) ??
+          buttons.find((candidate) => /^cancel$/i.test(normalize(candidate.textContent ?? "")) && isVisibleButton(candidate)) ??
+          buttons.find((candidate) => /close/i.test(normalize(candidate.textContent ?? "") || normalize(candidate.getAttribute("aria-label") ?? "")) && isVisibleButton(candidate));
+        button?.click();
+        return Boolean(button);
+      }).catch(() => false);
+      if (!clicked) return !await hasVisibleDialog();
+      await page.waitForTimeout?.(800).catch(() => undefined);
+      if (!await hasVisibleDialog()) return true;
+    }
+    return false;
+  };
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const buttonIndex = await findButtonIndex();
+    if (await hasCommittedHighlights() && await closeCommittedHighlightsDialog()) return true;
     if (buttonIndex < 0) return !await hasOpenConfirmButton();
     if (typeof page.locator("[role='dialog'] button").nth !== "function") return false;
     const button = page.locator("[role='dialog'] button").nth!(buttonIndex);
@@ -2307,17 +2352,15 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHigh
     await page.waitForTimeout?.(1000).catch(() => undefined);
     if (!await hasOpenConfirmButton()) return true;
     if (await hasCommittedHighlights()) {
+      if (await closeCommittedHighlightsDialog()) return true;
       await closeDialogWithDom();
-      await page.waitForTimeout?.(750).catch(() => undefined);
-      return true;
     }
     await clickConfirmWithDom();
     await page.waitForTimeout?.(1000).catch(() => undefined);
     if (!await hasOpenConfirmButton()) return true;
     if (await hasCommittedHighlights()) {
+      if (await closeCommittedHighlightsDialog()) return true;
       await closeDialogWithDom();
-      await page.waitForTimeout?.(750).catch(() => undefined);
-      return true;
     }
   }
   return false;
