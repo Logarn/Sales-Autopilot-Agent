@@ -60,7 +60,7 @@ async function runTests(): Promise<void> {
   process.env.SLACK_COPY_LLM_ENABLED = "false";
   process.env.BROWSER_QA_MAX_PROTECTED_TABS = "5";
 
-  const { applySlackThreadRevision, buildDraftPreviewFromSlackThread, buildSlackSocketStartupError, handleSlackSocketTextEvent, handleThreadCommand, parseSlackThreadCommand, parseUpworkJobUrlFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread, resetSlackSocketEventDedupeForTests } = require("./slackSocket") as {
+  const { applySlackThreadRevision, buildDraftPreviewFromSlackThread, buildSlackSocketStartupError, handleSlackSocketTextEvent, handleThreadCommand, parseSlackThreadCommand, parseUpworkJobUrlFromText, parseUpworkJobUrlsFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread, resetSlackSocketEventDedupeForTests } = require("./slackSocket") as {
     applySlackThreadRevision: (input: { channelId: string; threadTs: string; instruction: string }) => { ok: boolean; text: string; proposalVersion?: number };
     buildDraftPreviewFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string };
     buildSlackSocketStartupError: (input: { socketEnabled: boolean; botToken: string; appToken: string }) => string | null;
@@ -74,6 +74,7 @@ async function runTests(): Promise<void> {
       outcomeStatus?: string;
     };
     parseUpworkJobUrlFromText: (value: string) => { originalUrl: string; normalizedUrl: string; canonicalJobUrl: string; jobId: string } | null;
+    parseUpworkJobUrlsFromText: (value: string) => Array<{ originalUrl: string; normalizedUrl: string; canonicalJobUrl: string; jobId: string }>;
     queueCaptureFromSlackUrl: (input: { channelId: string; messageTs: string; threadTs: string; text: string }) => { parsed: any; state: any; action: any; ownershipStatus?: string } | null;
     queuePrepareDraftFromSlackThread: (input: { channelId: string; threadTs: string }) => { ok: boolean; text: string; actionId?: number };
     resetSlackSocketEventDedupeForTests: () => void;
@@ -214,6 +215,19 @@ async function runTests(): Promise<void> {
       const pass = JSON.stringify(t.got) === JSON.stringify(t.want);
       assert(pass, `${t.name}: expected ${JSON.stringify(t.want)}, got ${JSON.stringify(t.got)}`);
     }
+
+    const multiUrls = parseUpworkJobUrlsFromText([
+      "Batch these:",
+      "https://www.upwork.com/jobs/~066053866890130225260",
+      "https://www.upwork.com/jobs/Email-Flow-Setup_~067053866890130225260/",
+      "duplicate https://www.upwork.com/ab/proposals/job/~066053866890130225260/apply/",
+    ].join(" "));
+    assert(multiUrls.length === 2, `Multi-link parser should dedupe canonical Upwork jobs, got ${multiUrls.length}`);
+    assert(
+      multiUrls.map((url) => url.canonicalJobUrl).join("|") ===
+        "https://www.upwork.com/jobs/~066053866890130225260|https://www.upwork.com/jobs/~067053866890130225260",
+      `Multi-link parser should preserve first-seen canonical URL order, got ${multiUrls.map((url) => url.canonicalJobUrl).join("|")}`,
+    );
 
     const commandTests: Array<{ name: string; input: string; expectType: string; instruction?: string; actionId?: number; outcomeStatus?: string }> = [
       { name: "status", input: "status", expectType: "status" },
@@ -359,6 +373,35 @@ async function runTests(): Promise<void> {
     const mentionedWorkflow = getSlackWorkflowState("C456", "333.666");
     assert(mentionedWorkflow?.latestAgentPromise?.type === "capture_draft_proof_plan", "URL acknowledgment should store a capture/draft/proof-plan promise.");
     assert(mentionedWorkflow?.latestAgentPromise?.status === "pending", "URL acknowledgment promise should start pending.");
+
+    const multiUrlReplies: string[] = [];
+    await handleSlackSocketTextEvent({
+      channel: "C456",
+      ts: "333.667",
+      user: "U_ALLOWED",
+      text: [
+        "<@UAGENT> prep these roles:",
+        "https://www.upwork.com/jobs/~068053866890130225260",
+        "https://www.upwork.com/jobs/Retention-Audit_~069053866890130225260/",
+        "same as first https://www.upwork.com/ab/proposals/job/~068053866890130225260/apply/",
+      ].join(" "),
+    }, {
+      chat: {
+        postMessage: async (payload: { text: string }) => {
+          multiUrlReplies.push(payload.text);
+        },
+      },
+    });
+    const multiUrlReplyText = multiUrlReplies.join("\n");
+    assert(multiUrlReplies.length === 1, `Multi-link intake should post one summary reply, got ${multiUrlReplies.length}: ${multiUrlReplyText}`);
+    assert(/2 Upwork links/i.test(multiUrlReplyText), `Multi-link intake should report the number of distinct links. Reply: ${multiUrlReplyText}`);
+    assert(/bare "prep it"|Final submit remains manual/i.test(multiUrlReplyText), `Multi-link intake should avoid ambiguous batch prep approval. Reply: ${multiUrlReplyText}`);
+    const multiCaptureActions = listBrowserActions(null, 1000)
+      .filter((action) =>
+        action.actionType === "capture_job_from_url" &&
+        (action.jobId.includes("068053866890130225260") || action.jobId.includes("069053866890130225260"))
+      );
+    assert(multiCaptureActions.length === 2, `Multi-link intake should queue one capture per unique job, got ${multiCaptureActions.length}`);
 
     const duplicateEventReplies: string[] = [];
     const duplicateEvent = {

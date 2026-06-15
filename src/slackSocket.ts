@@ -339,23 +339,35 @@ function parseUrlSafely(value: string): ParsedUpworkUrl | null {
   };
 }
 
-export function parseUpworkJobUrlFromText(text: string): ParsedUpworkUrl | null {
+function sanitizeParsedUpworkUrl(parsed: ParsedUpworkUrl): ParsedUpworkUrl {
+  return {
+    ...parsed,
+    originalUrl: parsed.originalUrl.replace(/[\n\r\t]+/g, ""),
+    normalizedUrl: parsed.normalizedUrl.replace(/[\n\r\t]+/g, ""),
+    canonicalJobUrl: parsed.canonicalJobUrl.replace(/[\n\r\t]+/g, ""),
+  };
+}
+
+export function parseUpworkJobUrlsFromText(text: string): ParsedUpworkUrl[] {
   const matches = text.match(/https?:\/\/[^\s<>]+/gi);
   if (!matches) {
-    return null;
+    return [];
   }
 
+  const byCanonicalUrl = new Map<string, ParsedUpworkUrl>();
   for (const raw of matches) {
     const parsed = parseUrlSafely(raw);
     if (!parsed) continue;
-    return {
-      ...parsed,
-      originalUrl: parsed.originalUrl.replace(/[\n\r\t]+/g, ""),
-      normalizedUrl: parsed.normalizedUrl.replace(/[\n\r\t]+/g, ""),
-      canonicalJobUrl: parsed.canonicalJobUrl.replace(/[\n\r\t]+/g, ""),
-    };
+    const sanitized = sanitizeParsedUpworkUrl(parsed);
+    if (!byCanonicalUrl.has(sanitized.canonicalJobUrl)) {
+      byCanonicalUrl.set(sanitized.canonicalJobUrl, sanitized);
+    }
   }
-  return null;
+  return Array.from(byCanonicalUrl.values());
+}
+
+export function parseUpworkJobUrlFromText(text: string): ParsedUpworkUrl | null {
+  return parseUpworkJobUrlsFromText(text)[0] ?? null;
 }
 
 function parseOutcomeCommand(commandText: string, rawText: string): ParsedSlackSocketCommand | null {
@@ -2743,6 +2755,34 @@ function formatCaptureQueueDetails(result: SlackCaptureQueueResult): string {
   ].join("\n");
 }
 
+function captureQueueStatusLabel(result: SlackCaptureQueueResult): string {
+  if (result.ownershipStatus === "attached_completed") {
+    return "already captured; attached this thread";
+  }
+  if (result.ownershipStatus === "attached_pending") {
+    return "capture already pending; this thread is now waiting";
+  }
+  if (result.ownershipStatus === "duplicate_current_thread") {
+    return "already queued for this thread";
+  }
+  if (result.ownershipStatus === "replaced_stale") {
+    return "stale pending capture replaced";
+  }
+  return "capture queued";
+}
+
+function formatMultiCaptureQueueDetails(results: SlackCaptureQueueResult[]): string {
+  return [
+    `I found ${results.length} Upwork links and handled each listing separately.`,
+    "I will not treat a bare \"prep it\" as approval for every listing in this thread.",
+    "",
+    ...results.map((result, index) => `${index + 1}. ${result.parsed.canonicalJobUrl} — ${captureQueueStatusLabel(result)}`),
+    "",
+    "Next safe action: wait for each draft/proof update, or refer to the specific listing you want me to revise or prep.",
+    "Final submit remains manual.",
+  ].join("\n");
+}
+
 export function queueCaptureFromSlackUrl(input: {
   channelId: string;
   messageTs: string;
@@ -2866,6 +2906,48 @@ async function handleUrlMessage(params: {
   client: App["client"];
   copyProvider?: SlackCopyProvider;
 }): Promise<void> {
+  const parsedUrls = parseUpworkJobUrlsFromText(params.text);
+  if (parsedUrls.length > 1) {
+    const queuedResults: SlackCaptureQueueResult[] = [];
+    for (const parsed of parsedUrls) {
+      const queued = queueCaptureFromSlackUrl({
+        ...params,
+        text: parsed.canonicalJobUrl,
+      });
+      if (queued) {
+        queuedResults.push(queued);
+      }
+    }
+    if (queuedResults.length === 0) {
+      return;
+    }
+
+    const details = formatMultiCaptureQueueDetails(queuedResults);
+    recordSlackWorkflowPromise({
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      type: "capture_draft_proof_plan",
+      text: details,
+      workflowState: "capture_queued",
+      requestedByUserText: params.text,
+      draftRequested: true,
+    });
+
+    const text = await userFacingSlackCopy({
+      deterministicText: details,
+      userMessage: params.text,
+      intent: "capture_multiple_upwork_urls",
+      context: {
+        urlCount: queuedResults.length,
+        ownershipStatuses: queuedResults.map((result) => result.ownershipStatus ?? "created"),
+      },
+      preservePhrases: queuedResults.map((result) => result.parsed.canonicalJobUrl),
+      copyProvider: params.copyProvider,
+    });
+    await postThreadReply(params.client, params.channelId, params.threadTs, text);
+    return;
+  }
+
   const queued = queueCaptureFromSlackUrl(params);
   if (!queued) {
     return;
