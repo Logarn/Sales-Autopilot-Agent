@@ -2320,6 +2320,14 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
     };
   }
   try {
+    await page.evaluate(() => {
+      const pageGlobal = globalThis as unknown as {
+        document?: { body?: { scrollHeight?: number } };
+        scrollTo?: (x: number, y: number) => void;
+      };
+      pageGlobal.scrollTo?.(0, pageGlobal.document?.body?.scrollHeight ?? 0);
+      return null;
+    }).catch(() => null);
     const snapshot = await page.evaluate(() => {
       type LooseElement = {
         value?: string;
