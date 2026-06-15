@@ -1927,7 +1927,11 @@ async function trySelectProjectDuration(page: PlaywrightPageLike): Promise<boole
       };
       const option = Array.from(document.querySelectorAll("[role='option'], #dropdown-menu li, [data-test='dropdown-menu'] li, .air3-dropdown-menu li, ul[role='listbox'] li, button"))
         .find((candidate) => /^(?:less than a month|less than 1 month)$/i.test(normalize(candidate.textContent ?? "")) && isVisible(candidate));
-      (option as HTMLElement | undefined)?.click();
+      const htmlOption = option as HTMLElement | undefined;
+      htmlOption?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      htmlOption?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+      htmlOption?.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+      htmlOption?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
       return Boolean(option);
     }).catch(() => false);
     if (!fallbackSelected) return false;
@@ -2280,9 +2284,14 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHigh
   }).catch(() => false);
   const hasCommittedHighlights = () => evaluate((aliasesByHighlight = []) => {
     const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
-    const dialog = document.querySelector("[role='dialog']");
+    const visibleDialogs = Array.from(document.querySelectorAll("[role='dialog']")).filter((dialog) => {
+      const htmlDialog = dialog as HTMLElement;
+      const rect = htmlDialog.getBoundingClientRect();
+      const style = window.getComputedStyle(htmlDialog);
+      return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    });
     const committedText = Array.from(document.querySelectorAll(".highlights-item, [data-test*='highlight' i], li"))
-      .filter((candidate) => !dialog?.contains(candidate))
+      .filter((candidate) => !visibleDialogs.some((dialog) => dialog.contains(candidate)))
       .map((candidate) => normalize(candidate.textContent ?? ""))
       .filter((text) => /\bportfolio\s+\d+\b/i.test(text))
       .join(" ");
@@ -2311,8 +2320,13 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHigh
   const closeCommittedHighlightsDialog = async (): Promise<boolean> => {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const clicked = await evaluate(() => {
-        const dialog = document.querySelector("[role='dialog']");
-        if (!dialog) return true;
+        const visibleDialogs = Array.from(document.querySelectorAll("[role='dialog']")).filter((dialog) => {
+          const htmlDialog = dialog as HTMLElement;
+          const rect = htmlDialog.getBoundingClientRect();
+          const style = window.getComputedStyle(htmlDialog);
+          return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+        });
+        if (visibleDialogs.length === 0) return true;
         const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
         const isVisibleButton = (button: HTMLButtonElement): boolean => {
           const style = window.getComputedStyle(button);
@@ -2321,11 +2335,16 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHigh
             button.getClientRects().length > 0 &&
             Boolean(button.offsetWidth || button.offsetHeight);
         };
-        const buttons = Array.from(dialog.querySelectorAll("button")) as HTMLButtonElement[];
+        const buttons = visibleDialogs
+          .slice()
+          .reverse()
+          .flatMap((dialog) => Array.from(dialog.querySelectorAll("button")) as HTMLButtonElement[]);
         const button = buttons.find((candidate) => /close and discard highlights/i.test(normalize(candidate.textContent ?? "")) && isVisibleButton(candidate)) ??
           buttons.find((candidate) => /^cancel$/i.test(normalize(candidate.textContent ?? "")) && isVisibleButton(candidate)) ??
           buttons.find((candidate) => /close/i.test(normalize(candidate.textContent ?? "") || normalize(candidate.getAttribute("aria-label") ?? "")) && isVisibleButton(candidate));
-        button?.click();
+        button?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        button?.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        button?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
         return Boolean(button);
       }).catch(() => false);
       if (!clicked) return !await hasVisibleDialog();
