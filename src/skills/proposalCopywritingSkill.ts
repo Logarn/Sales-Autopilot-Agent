@@ -150,6 +150,27 @@ function firstMatch(text: string, patterns: RegExp[]): string | null {
   return null;
 }
 
+function cleanCandidateDomain(value: string): string {
+  return value
+    .replace(/^https?:\/\//i, "")
+    .replace(/^www\./i, "")
+    .replace(/[),.;:]+$/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function isUsefulBrandDomain(value: string): boolean {
+  const domain = cleanCandidateDomain(value);
+  if (!domain || !domain.includes(".")) return false;
+  if (/upwork\.com$/i.test(domain)) return false;
+  if (/\b(?:fixed-price|intermediate|proposals|connects|tooltip|posted|worldwide|hour|hr)\b/i.test(domain)) return false;
+  const parts = domain.split(".");
+  const tld = parts[parts.length - 1] ?? "";
+  if (!/^[a-z]{2,24}$/i.test(tld)) return false;
+  if (/^\d+$/.test(parts[0] ?? "")) return false;
+  return true;
+}
+
 function visibleBrandName(job: JobPosting): string {
   const text = `${job.title}\n${job.description}`;
   return firstMatch(text, [
@@ -159,8 +180,11 @@ function visibleBrandName(job: JobPosting): string {
 }
 
 function visibleBrandUrl(job: JobPosting): string {
-  const match = `${job.title}\n${job.description}`.match(/\b(?:https?:\/\/)?(?:www\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?:\/[^\s),.;]*)?/i);
-  return match?.[1]?.toLowerCase() ?? "";
+  for (const match of `${job.title}\n${job.description}`.matchAll(/\b(?:https?:\/\/)?(?:www\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?:\/[^\s),.;]*)?/gi)) {
+    const candidate = match[1] ?? match[0] ?? "";
+    if (isUsefulBrandDomain(candidate)) return cleanCandidateDomain(candidate);
+  }
+  return "";
 }
 
 function categoryFor(job: JobPosting, intelligence: JobIntelligence): string {
@@ -168,7 +192,8 @@ function categoryFor(job: JobPosting, intelligence: JobIntelligence): string {
   if (/garden|plant|lawn|seed|nursery|horticulture/.test(text)) return "gardening";
   if (/beauty|skincare|cosmetic|skin care|makeup/.test(text)) return "beauty";
   if (/fashion|apparel|clothing|boutique|jewelry/.test(text)) return "fashion";
-  if (/email design|template|figma|design|creative|visual/.test(text)) return "email_design";
+  if (/email design|design system|figma|creative|visual/.test(text)) return "email_design";
+  if (/\b(?:klaviyo|mailchimp|omnisend|ecommerce|e-commerce|customer retention|retention|email campaign|email marketing|flows?)\b/.test(text)) return "dtc ecommerce";
   if (/saas|b2b|software|crm implementation|sales pipeline/.test(text)) return "b2b_saas";
   if (intelligence.ecommerceVertical && intelligence.ecommerceVertical !== "unknown") return intelligence.ecommerceVertical;
   if (/shopify|ecommerce|e-commerce|dtc|d2c/.test(text)) return "dtc ecommerce";
@@ -187,6 +212,8 @@ function targetCustomerFor(category: string): string {
       return "email readers skimming quickly and deciding whether the offer is clear enough to click";
     case "b2b_saas":
       return "business buyers trying to reduce workflow pain, risk, implementation friction, and decision uncertainty";
+    case "dtc ecommerce":
+      return "ecommerce customers deciding whether the message is relevant, the offer is clear, and the next action is worth taking";
     default:
       return "customers who need a clear reason to trust, buy, return, or take the next step";
   }
@@ -204,6 +231,8 @@ function customerInsightFor(category: string): string {
       return "An email reader does not care what tool the template was built in. They care whether the email makes the offer obvious quickly enough to act on it.";
     case "b2b_saas":
       return "A B2B buyer is not just buying implementation. They are trying to reduce risk, wasted time, decision friction, and the anxiety of choosing the wrong fix.";
+    case "dtc ecommerce":
+      return "An ecommerce customer is not reading flows because they love automation. They are deciding whether the offer, timing, and next step feel relevant enough to act on.";
     default:
       return "The customer is not just moving through a funnel. They need timing, clarity, belief, and a reason to take the next step.";
   }
@@ -223,8 +252,12 @@ function commercialPainFor(job: JobPosting, category: string): string {
   if (/flow|automation|journey|lifecycle/.test(text)) {
     return "the flows can exist without giving customers the right reason to trust, return, replenish, or take the next step";
   }
+  if (/klaviyo|mailchimp|omnisend|email marketing|email campaign|customer retention|ecommerce/.test(text)) {
+    return "engagement and conversion can leak when campaigns and flows are not tied to clear customer moments, offer clarity, and useful segmentation";
+  }
   if (category === "gardening") return "retention depends on timing: seasons, product care, replenishment, and what the customer is trying to grow next";
   if (category === "beauty") return "repeat purchase depends on trust, education, routine, replenishment, and product pairing, not just more reminders";
+  if (category === "dtc ecommerce") return "email revenue depends on matching the message, timing, offer, and segment to the customer moment instead of just sending more campaigns";
   return "the business is likely leaving money in unclear timing, weak segmentation, and customer moments that are not being used well enough";
 }
 
@@ -239,6 +272,9 @@ function mechanismFor(job: JobPosting, category: string, platform: string): stri
   }
   if (category === "beauty") {
     return `build ${platformLabel} around trust, first use, first result, routine-building, replenishment, education, and the next best product moment`;
+  }
+  if (category === "dtc ecommerce") {
+    return `audit the current flows/campaigns, find the highest-leverage customer moments, then tighten segmentation, message angle, offer clarity, and measurement across ${platformLabel}`;
   }
   if (/account setup|configuration|configure|implementation|sender|warm|import|cleanup/i.test(text)) {
     const transactional = /transactional|api/.test(text) ? ", and separation of transactional API email from lifecycle flows/newsletters" : "";
@@ -382,6 +418,8 @@ function repeatMomentFor(category: string): string {
       return "first result, habit formation, replenishment timing, education, and next-best product";
     case "email_design":
       return "offer clarity, product path, proof, mobile hierarchy, and one obvious CTA";
+    case "dtc ecommerce":
+      return "welcome intent, abandoned intent, post-purchase education, replenishment, winback, and campaign segmentation";
     default:
       return "post-purchase education, segmentation, next-best action, and a clear reason to come back";
   }
@@ -414,7 +452,10 @@ function proofSentence(strategy: CopyStrategy, proofPoints: string[], portfolioI
   }
   const portfolio = firstProofLabel(proofPoints, portfolioItems);
   if (portfolio) {
-    return `I can share relevant work like ${portfolio} if you want to see how I think about the revenue and customer side together.`;
+    if (/portfolio|general/i.test(portfolio)) {
+      return "I can use a concise audit-style proof angle if helpful, but I would keep the proposal focused on the work: what is leaking, what to fix first, and how we will measure it.";
+    }
+    return `I can use ${portfolio} only if it is the most relevant proof for this scope; otherwise I would keep proof light and focus on the audit/fix path.`;
   }
   return "Relevant proof can be selected once the exact scope is clear.";
 }
@@ -425,15 +466,17 @@ export function draftCoverLetterFromCopyStrategy(input: {
   portfolioItems: PortfolioItem[];
 }): string {
   const strategy = input.strategy;
+  const projectMechanism = strategy.offer_or_project_mechanism.replace(/\.$/, "");
   return [
     "Steve here,",
-    "How is your day going?",
+    "",
+    "I would approach this by finding the email revenue leaks first, not by starting with a tool checklist.",
     "",
     strategy.opening_angle,
     "",
     strategy.customer_state_of_mind,
     "",
-    `That means I would not start by listing tools or flows. I would keep the work practical and commercially pointed: understand the customer moments, then ${strategy.offer_or_project_mechanism}.`,
+    `That means I would keep the work practical and commercially pointed: ${projectMechanism}.`,
     "",
     proofSentence(strategy, input.proofPoints, input.portfolioItems),
     "",
@@ -517,6 +560,12 @@ export function evaluateDraftQualityGate(input: {
   }
   if (/\bsend me the store url\b/i.test(text)) {
     addIssue(issues, { code: "store_url_punt_cta", severity: "critical", message: "Cover letter punts to a store URL instead of using the available job context first." });
+  }
+  if (/(?:upwork\.com|10\.00\w*|fixed[-\s]?price\w*|intermediatei)/i.test(text)) {
+    addIssue(issues, { code: "parsed_page_noise_as_client", severity: "critical", message: "Cover letter appears to treat Upwork or parsed page/budget noise as the client or brand.", evidence: text.match(/(?:upwork\.com|10\.00\w*|fixed[-\s]?price\w*|intermediatei)/i)?.[0] });
+  }
+  if (/\b(?:screenshot\s*\d+|general retention portfolio)\b/i.test(text)) {
+    addIssue(issues, { code: "weak_or_unverified_proof_reference", severity: "critical", message: "Cover letter references vague or unverified proof instead of a relevant verified proof plan.", evidence: text.match(/\b(?:screenshot\s*\d+|general retention portfolio)\b/i)?.[0] });
   }
   if (/\b(?:Relevant background|To answer the application notes directly|Relevant examples|Additional relevant example|Relevant proof|Approach|Credentials):/i.test(text)) {
     addIssue(issues, {

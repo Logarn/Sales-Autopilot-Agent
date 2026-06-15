@@ -37,6 +37,27 @@ function firstMatch(text: string, patterns: RegExp[]): string {
   return "";
 }
 
+function cleanCandidateDomain(value: string): string {
+  return value
+    .replace(/^https?:\/\//i, "")
+    .replace(/^www\./i, "")
+    .replace(/[),.;:]+$/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function isUsefulBrandDomain(value: string): boolean {
+  const domain = cleanCandidateDomain(value);
+  if (!domain || !domain.includes(".")) return false;
+  if (/upwork\.com$/i.test(domain)) return false;
+  if (/\b(?:fixed-price|intermediate|proposals|connects|tooltip|posted|worldwide|hour|hr)\b/i.test(domain)) return false;
+  const parts = domain.split(".");
+  const tld = parts[parts.length - 1] ?? "";
+  if (!/^[a-z]{2,24}$/i.test(tld)) return false;
+  if (/^\d+$/.test(parts[0] ?? "")) return false;
+  return true;
+}
+
 function visibleBrandName(job: Pick<JobPosting, "title" | "description">): string {
   const text = `${job.title}\n${job.description}`;
   return firstMatch(text, [
@@ -48,9 +69,9 @@ function visibleBrandName(job: Pick<JobPosting, "title" | "description">): strin
 function visibleUrls(job: Pick<JobPosting, "title" | "description">): string[] {
   const text = `${job.title}\n${job.description}`;
   return unique([...text.matchAll(/\b(?:https?:\/\/)?(?:www\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?:\/[^\s),.;]*)?/gi)]
-    .map((match) => match[0])
-    .filter((url) => !/upwork\.com/i.test(url))
-    .map((url) => url.startsWith("http") ? url : `https://${url}`));
+    .map((match) => match[1] ?? match[0])
+    .filter(isUsefulBrandDomain)
+    .map((url) => `https://${cleanCandidateDomain(url)}`));
 }
 
 function categoryFor(job: Pick<JobPosting, "title" | "description" | "skills" | "category" | "budget" | "clientCountry">): string {

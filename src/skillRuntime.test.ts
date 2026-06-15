@@ -204,6 +204,28 @@ assert(evaluateDraftQualityGate({
 }).issues.some((issue) => issue.code === "internal_scaffold_labels"), "Internal proof/application-note scaffolding should fail quality gate.");
 assert(evaluateDraftQualityGate({ ...gateBase, proposalText: `${beautyDraft.proposalText}\n\nThis ends...` }).issues.some((issue) => issue.code === "truncated_or_incomplete"), "Truncated ellipsis should fail quality gate.");
 assert(evaluateDraftQualityGate({ ...gateBase, proposalText: `${beautyDraft.proposalText}\n\nI attached the proof file for review.` }).issues.some((issue) => issue.code === "unverified_proof_claim"), "Unverified proof claim should fail quality gate.");
+assert(evaluateDraftQualityGate({
+  ...gateBase,
+  proposalText: "Steve here,\n\nThe opportunity for 10.00Fixed-priceIntermediateI here is conversion can leak when visual hierarchy is unclear.",
+}).issues.some((issue) => issue.code === "parsed_page_noise_as_client"), "Parsed budget/page noise must fail quality gate.");
+assert(evaluateDraftQualityGate({
+  ...gateBase,
+  proposalText: "Steve here,\n\nThe opportunity for upwork.com here is customer moments may not be mapped clearly enough.",
+}).issues.some((issue) => issue.code === "parsed_page_noise_as_client"), "Upwork domain must not be treated as the client.");
+assert(evaluateDraftQualityGate({
+  ...gateBase,
+  proposalText: `${beautyDraft.proposalText}\n\nI can share relevant work like Screenshot 42 if you want to see proof.`,
+}).issues.some((issue) => issue.code === "weak_or_unverified_proof_reference"), "Vague screenshot proof references must fail quality gate.");
+
+const noisyCapturedJob = scored({
+  title: "Email Marketing | Klaviyo Expert| Mailchimp |Omnisend| Ecommerce Flows - Digital Marketing",
+  description: "Skills Email Marketing | Klaviyo Expert| Mailchimp |Omnisend| Ecommerce Flows Posted 4 hours ago Worldwide Summary We are seeking an experienced email marketing expert to enhance our ecommerce flows using Klaviyo, Mailchimp, and Omnisend. The ideal candidate will have a strong background in creating and optimizing email campaigns to boost customer engagement and conversion rates. Responsibilities include designing email templates, managing subscriber lists, and analyzing campaign performance to provide actionable insights. $10.00 Fixed-price Intermediate I am looking for a mix of experience and value.",
+  category: "Email Marketing",
+  skills: ["Klaviyo", "Mailchimp", "Omnisend", "Customer Retention", "Copywriting"],
+});
+const noisyDraft = buildApplicationDraft(noisyCapturedJob);
+assert(!/10\.00|fixed-priceintermediate|upwork\.com|Screenshot\s*\d+|general retention portfolio/i.test(noisyDraft.proposalText), `Noisy captured proposal should not leak parsed page noise or vague proof references:\n${noisyDraft.proposalText}`);
+assert(noisyDraft.draftQualityGate.ready, `Noisy captured proposal should pass after removing parsed page noise. Issues: ${JSON.stringify(noisyDraft.draftQualityGate.issues)}`);
 
 beauty.applicationDraft = beautyDraft;
 markJobSeen(beauty, true);
