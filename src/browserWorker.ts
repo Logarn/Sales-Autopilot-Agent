@@ -2411,6 +2411,78 @@ function verification(
   return { field, status, detail, ...extra };
 }
 
+const APPLY_VERIFICATION_SNAPSHOT_SCRIPT = `(() => {
+  const documentLike = globalThis.document;
+  const querySelectorAll = documentLike && documentLike.querySelectorAll ? documentLike.querySelectorAll.bind(documentLike) : null;
+  const toArray = (value) => Array.prototype.slice.call(value || []);
+  const nodes = toArray(querySelectorAll ? querySelectorAll("textarea") : []).concat(toArray(querySelectorAll ? querySelectorAll("input") : []));
+  const actionNodes = toArray(querySelectorAll ? querySelectorAll("button") : [])
+    .concat(toArray(querySelectorAll ? querySelectorAll("a[role='button']") : []))
+    .concat(toArray(querySelectorAll ? querySelectorAll("input[type='submit']") : []))
+    .concat(toArray(querySelectorAll ? querySelectorAll("input[type='button']") : []));
+  const textOf = (node) => typeof node.textContent === "string" ? node.textContent : "";
+  const attr = (node, name) => node && typeof node.getAttribute === "function" ? node.getAttribute(name) : null;
+  const isUserTextNode = (node) => {
+    const tagName = String(node.tagName || "").toLowerCase();
+    if (tagName === "textarea") return true;
+    const inputType = String(node.type || attr(node, "type") || "text").toLowerCase();
+    return !["button", "checkbox", "file", "hidden", "image", "radio", "reset", "submit"].includes(inputType);
+  };
+  const inputValues = nodes
+    .filter(isUserTextNode)
+    .map((node) => typeof node.value === "string" ? node.value : "")
+    .filter((value) => value.trim().length > 0);
+  const fieldValues = nodes
+    .map((node) => {
+      const value = typeof node.value === "string" ? node.value : "";
+      const inputType = node.type || attr(node, "type") || null;
+      const id = attr(node, "id");
+      const label = node.closest && node.closest("label") ? textOf(node.closest("label")) : "";
+      const kind = String(node.tagName || "").toLowerCase() === "textarea" ? "textarea" : "input";
+      return {
+        kind,
+        inputType,
+        label,
+        id,
+        name: node.name || attr(node, "name"),
+        ariaLabel: attr(node, "aria-label"),
+        placeholder: attr(node, "placeholder"),
+        dataTest: attr(node, "data-test"),
+        value,
+      };
+    })
+    .filter((field) => field.value.trim().length > 0);
+  const checkedLabels = nodes
+    .filter((node) => Boolean(node.checked))
+    .map((node) => {
+      const labelText = node.closest && node.closest("label") ? textOf(node.closest("label")) : "";
+      const aria = attr(node, "aria-label") || "";
+      const name = node.name || "";
+      return [labelText, aria, name].filter(Boolean).join(" ");
+    })
+    .filter((value) => value.trim().length > 0);
+  const fileNames = nodes
+    .flatMap((node) => toArray(node.files).map((file) => file.name || ""))
+    .filter((value) => value.trim().length > 0);
+  const actionLabels = actionNodes
+    .map((node) => {
+      const labelText = node.closest && node.closest("label") ? textOf(node.closest("label")) : "";
+      const aria = attr(node, "aria-label") || "";
+      const text = textOf(node);
+      const value = typeof node.value === "string" ? node.value : "";
+      return [text, labelText, aria, value].filter(Boolean).join(" ");
+    })
+    .filter((value) => value.trim().length > 0);
+  return {
+    visibleText: documentLike && documentLike.body ? documentLike.body.innerText || "" : "",
+    inputValues,
+    fieldValues,
+    checkedLabels,
+    fileNames,
+    actionLabels,
+  };
+})()`;
+
 async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackBodyText: string): Promise<ApplyVerificationSnapshot> {
   if (!page.evaluate) {
     return {
@@ -2432,104 +2504,15 @@ async function readApplyVerificationSnapshot(page: PlaywrightPageLike, fallbackB
       pageGlobal.scrollTo?.(0, pageGlobal.document?.body?.scrollHeight ?? 0);
       return null;
     }).catch(() => null);
-    const snapshot = await page.evaluate(() => {
-      type LooseElement = {
-        value?: string;
-        checked?: boolean;
-        type?: string;
-        name?: string;
-        files?: ArrayLike<{ name?: string }>;
-        tagName?: string;
-        getAttribute?: (name: string) => string | null;
-        closest?: (selector: string) => { textContent?: string | null } | null;
-      };
-      const documentLike = (globalThis as unknown as {
-        document?: {
-          body?: { innerText?: string };
-          querySelectorAll?: (selector: string) => ArrayLike<LooseElement>;
-        };
-      }).document;
-      const querySelectorAll = documentLike?.querySelectorAll?.bind(documentLike);
-      const nodes = [
-        ...Array.from(querySelectorAll?.("textarea") ?? []),
-        ...Array.from(querySelectorAll?.("input") ?? []),
-      ];
-      const actionNodes = [
-        ...Array.from(querySelectorAll?.("button") ?? []),
-        ...Array.from(querySelectorAll?.("a[role='button']") ?? []),
-        ...Array.from(querySelectorAll?.("input[type='submit']") ?? []),
-        ...Array.from(querySelectorAll?.("input[type='button']") ?? []),
-      ];
-      const isUserTextNode = (node: LooseElement) => {
-        const tagName = String(node.tagName ?? "").toLowerCase();
-        if (tagName === "textarea") return true;
-        const inputType = String(node.type ?? "text").toLowerCase();
-        return !["button", "checkbox", "file", "hidden", "image", "radio", "reset", "submit"].includes(inputType);
-      };
-      const inputValues = nodes
-        .filter(isUserTextNode)
-        .map((node) => typeof node.value === "string" ? node.value : "")
-        .filter((value) => value.trim().length > 0);
-      const fieldValues = nodes
-        .map((node) => {
-          const value = typeof node.value === "string" ? node.value : "";
-          const inputType = node.type ?? node.getAttribute?.("type") ?? null;
-          const id = node.getAttribute?.("id") ?? null;
-          let explicitLabel = "";
-          if (id && querySelectorAll) {
-            try {
-              const safeId = id.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
-              explicitLabel = Array.from(querySelectorAll(`label[for="${safeId}"]`) ?? [])
-                .map((labelNode) => "textContent" in labelNode && typeof (labelNode as { textContent?: unknown }).textContent === "string"
-                  ? String((labelNode as { textContent?: string }).textContent)
-                  : "")
-                .filter(Boolean)
-                .join(" ");
-            } catch {
-              explicitLabel = "";
-            }
-          }
-          const label = [node.closest?.("label")?.textContent ?? "", explicitLabel].filter(Boolean).join(" ");
-          const ariaLabel = node.getAttribute?.("aria-label") ?? null;
-          const placeholder = node.getAttribute?.("placeholder") ?? null;
-          const name = node.name ?? node.getAttribute?.("name") ?? null;
-          const dataTest = node.getAttribute?.("data-test") ?? null;
-          const kind: "input" | "textarea" = String(node.tagName ?? "").toLowerCase() === "textarea" ? "textarea" : "input";
-          return { kind, inputType, label, id, name, ariaLabel, placeholder, dataTest, value };
-        })
-        .filter((field) => field.value.trim().length > 0);
-      const checkedLabels = nodes
-        .filter((node) => Boolean(node.checked))
-        .map((node) => {
-          const labelText = node.closest?.("label")?.textContent ?? "";
-          const aria = node.getAttribute?.("aria-label") ?? "";
-          const name = node.name ?? "";
-          return [labelText, aria, name].filter(Boolean).join(" ");
-        })
-        .filter((value) => value.trim().length > 0);
-      const fileNames = nodes
-        .flatMap((node) => Array.from(node.files ?? []).map((file) => file.name ?? ""))
-        .filter((value) => value.trim().length > 0);
-      const actionLabels = actionNodes
-        .map((node) => {
-          const labelText = node.closest?.("label")?.textContent ?? "";
-          const aria = node.getAttribute?.("aria-label") ?? "";
-          const text = "textContent" in node && typeof (node as { textContent?: unknown }).textContent === "string"
-            ? String((node as { textContent?: string }).textContent)
-            : "";
-          const value = typeof node.value === "string" ? node.value : "";
-          return [text, labelText, aria, value].filter(Boolean).join(" ");
-        })
-        .filter((value) => value.trim().length > 0);
-      return {
-        visibleText: documentLike?.body?.innerText ?? "",
-        inputValues,
-        fieldValues,
-        checkedLabels,
-        fileNames,
-        actionLabels,
-      };
-    });
+    const evaluateString = page.evaluate as unknown as <R>(script: string) => Promise<R>;
+    const snapshot = await evaluateString<{
+      visibleText?: string;
+      inputValues?: string[];
+      fieldValues?: ApplyVerificationSnapshot["fieldValues"];
+      checkedLabels?: string[];
+      fileNames?: string[];
+      actionLabels?: string[];
+    }>(APPLY_VERIFICATION_SNAPSHOT_SCRIPT);
     return {
       url: page.url(),
       visibleText: snapshot.visibleText || fallbackBodyText,

@@ -201,7 +201,7 @@ async function runTests(): Promise<void> {
     return {
       url: () => input.url ?? "https://www.upwork.com/ab/proposals/job/~beautyjob123456/apply/",
       locator: () => ({ first: () => ({ textContent: async () => input.visibleText ?? "" }) }),
-      evaluate: async (fn: () => unknown) => {
+      evaluate: async (fn: (() => unknown) | string) => {
         const holder = globalThis as unknown as { document?: unknown; scrollTo?: (x: number, y: number) => void };
         const previousDocument = holder.document;
         const previousScrollTo = holder.scrollTo;
@@ -249,6 +249,9 @@ async function runTests(): Promise<void> {
         };
         holder.scrollTo = () => undefined;
         try {
+          if (typeof fn === "string") {
+            return (0, eval)(fn);
+          }
           return fn();
         } finally {
           holder.document = previousDocument;
