@@ -1789,6 +1789,39 @@ function hourlyRateInputValue(value: string): string | null {
   return match?.[0] ?? null;
 }
 
+function moneyNumber(value: string | null | undefined): number | null {
+  const match = String(value ?? "").replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const amount = Number.parseFloat(match[0]);
+  return Number.isFinite(amount) ? amount : null;
+}
+
+function isPositiveMoneyValue(value: string | null | undefined): boolean {
+  const amount = moneyNumber(value);
+  return amount !== null && amount > 0;
+}
+
+function fixedPriceBudgetAmountFromText(text: string): number | null {
+  const patterns = [
+    /\bbudget\s*:?\s*\$?\s*([1-9]\d*(?:,\d{3})*(?:\.\d{1,2})?)/i,
+    /\$\s*([1-9]\d*(?:,\d{3})*(?:\.\d{1,2})?)\s*(?:fixed-price|fixed price)\b/i,
+    /\b(?:fixed-price|fixed price)\s*\$?\s*([1-9]\d*(?:,\d{3})*(?:\.\d{1,2})?)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    const amount = moneyNumber(match[1]);
+    if (amount !== null && amount > 0) return amount;
+  }
+  return null;
+}
+
+function fixedPriceBidInputValue(plan: BrowserApplyFillPlan, bodyText: string): string | null {
+  const amount = fixedPriceBudgetAmountFromText(bodyText) ?? moneyNumber(plan.rate);
+  if (amount === null || amount <= 0) return null;
+  return Number.isInteger(amount) ? String(amount) : amount.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
 async function tryFillScreeningAnswers(page: PlaywrightPageLike, answers: string[]): Promise<{ filled: number; skipped: number }> {
   const cleanAnswers = answers.map((answer) => answer.trim()).filter(Boolean);
   if (cleanAnswers.length === 0) return { filled: 0, skipped: 0 };
@@ -1817,22 +1850,94 @@ async function tryFillScreeningAnswers(page: PlaywrightPageLike, answers: string
   return { filled, skipped: cleanAnswers.length - filled };
 }
 
-async function hasFixedPriceBidReady(page: PlaywrightPageLike): Promise<boolean> {
+async function pageLooksFixedPriceLive(page: PlaywrightPageLike): Promise<boolean> {
   if (!page.evaluate) return false;
   return page.evaluate(() => {
-    const pageDocument = (globalThis as unknown as {
-      document?: {
-        body?: { innerText?: string };
-        querySelector?: (selector: string) => { value?: string } | null;
-      };
-    }).document;
-    const text = pageDocument?.body?.innerText ?? "";
-    const bidInput = pageDocument?.querySelector?.("#charged-amount-id");
-    return Boolean(
-      bidInput?.value?.trim() &&
-      /\b(?:fixed-price|fixed price|full amount you'd like to bid|by milestone|by project)\b/i.test(text)
-    );
+    const text = document.body?.innerText ?? "";
+    return /\b(?:fixed-price|fixed price|full amount you'd like to bid|by milestone|by project)\b/i.test(text);
   }).catch(() => false);
+}
+
+async function hasFixedPriceTermsReady(page: PlaywrightPageLike): Promise<boolean> {
+  if (!page.evaluate) return false;
+  return page.evaluate(() => {
+    const text = document.body?.innerText ?? "";
+    if (!/\b(?:fixed-price|fixed price|full amount you'd like to bid|by milestone|by project)\b/i.test(text)) return false;
+    const moneyNumber = (value: string | null | undefined): number | null => {
+      const match = String(value ?? "").replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+      if (!match) return null;
+      const amount = Number.parseFloat(match[0]);
+      return Number.isFinite(amount) ? amount : null;
+    };
+    const amountReady = Array.from(document.querySelectorAll<HTMLInputElement>(
+      "#charged-amount-id, #milestone-amount-1, input[data-test='currency-input'], input[aria-label*='bid' i], input[name*='bid' i]"
+    )).some((input) => {
+      const descriptor = [input.id, input.name, input.getAttribute("aria-label"), input.getAttribute("data-test")].filter(Boolean).join(" ");
+      if (/\b(?:boost|connects?)\b/i.test(descriptor)) return false;
+      const amount = moneyNumber(input.value);
+      return amount !== null && amount > 0;
+    });
+    const durationMatch = text.match(/How long will this project take\?\s*([^\n]+?)(?:\s+Additional details|\s+Cover Letter|\s+Attachments|\s+Profile highlights|$)/i);
+    const durationText = (durationMatch?.[1] ?? "").replace(/\s+/g, " ").trim();
+    const durationReady = Boolean(durationText && !/select a duration/i.test(durationText));
+    return amountReady && durationReady;
+  }).catch(() => false);
+}
+
+async function trySelectProjectDuration(page: PlaywrightPageLike): Promise<boolean> {
+  if (await hasFixedPriceTermsReady(page)) return true;
+  const opened = await tryClickFirst(page, [
+    { selector: "[role='combobox'][aria-labelledby='duration-label']", label: "Project duration" },
+    { selector: "[data-test='dropdown-toggle'][aria-labelledby='duration-label']", label: "Project duration" },
+    { selector: "[aria-describedby='duration-error'][role='combobox']", label: "Project duration" },
+  ]);
+  if (!opened) return false;
+  await page.waitForTimeout?.(500).catch(() => undefined);
+  const selected = await tryClickFirst(page, [
+    { selector: "[role='option']:has-text('Less than 1 month')", label: "Less than 1 month" },
+    { selector: "li:has-text('Less than 1 month')", label: "Less than 1 month" },
+    { selector: "button:has-text('Less than 1 month')", label: "Less than 1 month" },
+    { selector: "text=\"Less than 1 month\"", label: "Less than 1 month" },
+  ]);
+  if (!selected) return false;
+  await page.waitForTimeout?.(500).catch(() => undefined);
+  return true;
+}
+
+async function tryFillFixedPriceTerms(page: PlaywrightPageLike, plan: BrowserApplyFillPlan, bodyText: string): Promise<boolean> {
+  if (!await pageLooksFixedPriceLive(page)) return false;
+  if (await hasFixedPriceTermsReady(page)) return true;
+  const amount = fixedPriceBidInputValue(plan, bodyText);
+  let attempted = false;
+
+  await tryClickFirst(page, [
+    { selector: "label:has-text('By project')", label: "By project" },
+    { selector: "input[name='milestoneMode'][value='default']", label: "By project" },
+    { selector: "[role='radio']:has-text('By project')", label: "By project" },
+  ]).catch(() => false);
+
+  if (amount && await tryFillFirst(page, [
+    "#charged-amount-id",
+    "input[aria-label*='bid' i]",
+    "input[name*='bid' i]",
+    "input[data-test='currency-input']",
+    "#milestone-amount-1",
+  ], amount)) {
+    attempted = true;
+  }
+
+  if (await tryFillFirst(page, [
+    "input[data-test='milestone-description']",
+    "input[aria-label*='Description' i]",
+  ], "Lifecycle audit and first-priority fixes")) {
+    attempted = true;
+  }
+
+  if (await trySelectProjectDuration(page)) {
+    attempted = true;
+  }
+
+  return attempted && await hasFixedPriceTermsReady(page);
 }
 
 async function tryClickFirst(page: PlaywrightPageLike, targets: Array<{ selector: string; label: string }>): Promise<boolean> {
@@ -2089,7 +2194,8 @@ async function tryTrustedSelectHighlightFromOpenDialog(page: PlaywrightPageLike,
 
 async function tryConfirmHighlightsDialog(page: PlaywrightPageLike): Promise<boolean> {
   if (!page.evaluate) return false;
-  const buttonIndex = await page.evaluate(() => {
+  const evaluate = page.evaluate.bind(page) as NonNullable<PlaywrightPageLike["evaluate"]>;
+  const findButtonIndex = () => evaluate(() => {
     const dialog = document.querySelector("[role='dialog']");
     if (!dialog) return -1;
     const isVisibleButton = (button: HTMLButtonElement): boolean => {
@@ -2102,27 +2208,49 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike): Promise<boo
     return Array.from(dialog.querySelectorAll("button"))
       .findIndex((candidate) => /^(?:add to highlights|add\s+\d+\s*[/]\s*4)$/i.test((candidate.textContent ?? "").replace(/\s+/g, " ").trim()) && !(candidate as HTMLButtonElement).disabled && isVisibleButton(candidate as HTMLButtonElement));
   }).catch(() => -1);
-  if (buttonIndex < 0 || typeof page.locator("[role='dialog'] button").nth !== "function") return false;
-  const button = page.locator("[role='dialog'] button").nth!(buttonIndex);
-  let confirmed = false;
-  try {
-    await button.scrollIntoViewIfNeeded?.({ timeout: 1500 }).catch(() => undefined);
-    if (typeof button.click !== "function") return false;
-    await guardedClick(button as PlaywrightLocatorLike & { click(options?: { timeout?: number }): Promise<unknown> }, { selector: "[role='dialog'] button", label: "Add to highlights" }, { timeout: 2500 });
-    confirmed = true;
-  } catch {
-    confirmed = false;
+  const hasOpenConfirmButton = () => evaluate(() => {
+    const dialog = document.querySelector("[role='dialog']");
+    if (!dialog) return false;
+    const isVisibleButton = (button: HTMLButtonElement): boolean => {
+      const style = window.getComputedStyle(button);
+      return style.visibility !== "hidden" &&
+        style.display !== "none" &&
+        button.getClientRects().length > 0 &&
+        Boolean(button.offsetWidth || button.offsetHeight);
+    };
+    return Array.from(dialog.querySelectorAll("button"))
+      .some((candidate) => /^(?:add to highlights|add\s+\d+\s*[/]\s*4)$/i.test((candidate.textContent ?? "").replace(/\s+/g, " ").trim()) && !(candidate as HTMLButtonElement).disabled && isVisibleButton(candidate as HTMLButtonElement));
+  }).catch(() => false);
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const buttonIndex = await findButtonIndex();
+    if (buttonIndex < 0) return !await hasOpenConfirmButton();
+    if (typeof page.locator("[role='dialog'] button").nth !== "function") return false;
+    const button = page.locator("[role='dialog'] button").nth!(buttonIndex);
+    try {
+      await button.scrollIntoViewIfNeeded?.({ timeout: 1500 }).catch(() => undefined);
+      if (typeof button.click === "function") {
+        await guardedClick(button as PlaywrightLocatorLike & { click(options?: { timeout?: number }): Promise<unknown> }, { selector: "[role='dialog'] button", label: "Add to highlights" }, { timeout: 2500 });
+      }
+    } catch {
+      await page.evaluate(() => {
+        const dialog = document.querySelector("[role='dialog']");
+        const button = Array.from(dialog?.querySelectorAll("button") ?? [])
+          .find((candidate) => /^(?:add to highlights|add\s+\d+\s*[/]\s*4)$/i.test((candidate.textContent ?? "").replace(/\s+/g, " ").trim())) as HTMLButtonElement | undefined;
+        button?.click();
+      }).catch(() => undefined);
+    }
+    await page.waitForTimeout?.(1000).catch(() => undefined);
+    if (!await hasOpenConfirmButton()) return true;
   }
-  if (confirmed) await page.waitForTimeout?.(1000).catch(() => undefined);
-  return confirmed;
+  return false;
 }
 
 async function trySelectProofHighlights(page: PlaywrightPageLike, highlights: string[]): Promise<number> {
   if (highlights.length === 0) return 0;
   let selected = await trySelectHighlightsFromOpenDialog(page, highlights);
   if (selected > 0) {
-    await tryConfirmHighlightsDialog(page);
-    return selected;
+    return await tryConfirmHighlightsDialog(page) ? selected : 0;
   }
   const opened = await tryClickFirst(page, [
     { selector: "button:has-text('Add portfolio project')", label: "Add portfolio project" },
@@ -2145,8 +2273,7 @@ async function trySelectProofHighlights(page: PlaywrightPageLike, highlights: st
   }
   selected = await trySelectHighlightsFromOpenDialog(page, highlights);
   if (selected > 0) {
-    await tryConfirmHighlightsDialog(page);
-    return selected;
+    return await tryConfirmHighlightsDialog(page) ? selected : 0;
   }
   return 0;
 }
@@ -2359,6 +2486,7 @@ function fixedPriceBidFieldValues(snapshot: ApplyVerificationSnapshot): string[]
     .filter((field) => {
       const descriptor = fieldDescriptor(field);
       return /\bcharged-amount-id\b/i.test(descriptor) ||
+        /\bmilestone-amount-\d+\b/i.test(descriptor) ||
         /\bbid\b/i.test(descriptor) && /\b(?:currency|amount)\b/i.test(descriptor);
     })
     .map((field) => field.value)
@@ -2373,8 +2501,21 @@ function fixedPriceBidFieldValues(snapshot: ApplyVerificationSnapshot): string[]
 }
 
 function pageLooksFixedPrice(snapshot: ApplyVerificationSnapshot): boolean {
-  return fixedPriceBidFieldValues(snapshot).length > 0 &&
-    /\b(?:fixed-price|fixed price|full amount you'd like to bid|by milestone|by project)\b/i.test(snapshot.visibleText);
+  return /\b(?:fixed-price|fixed price|full amount you'd like to bid|by milestone|by project)\b/i.test(snapshot.visibleText);
+}
+
+function fixedPriceProjectDuration(snapshot: ApplyVerificationSnapshot): string | null {
+  const match = snapshot.visibleText.match(/How long will this project take\?\s*([^\n]+?)(?:\s+Additional details|\s+Cover Letter|\s+Attachments|\s+Profile highlights|$)/i);
+  const visibleDuration = match?.[1]?.replace(/\s+/g, " ").trim() ?? "";
+  if (visibleDuration && !/select a duration/i.test(visibleDuration)) return visibleDuration;
+  const actionDuration = snapshot.actionLabels
+    .map((label) => label.replace(/\s+/g, " ").trim())
+    .find((label) => label && !/select a duration/i.test(label) && /\b(?:less than 1 month|1 to 3 months|3 to 6 months|more than 6 months)\b/i.test(label));
+  return actionDuration ?? null;
+}
+
+function fixedPricePositiveBidFieldValues(snapshot: ApplyVerificationSnapshot): string[] {
+  return fixedPriceBidFieldValues(snapshot).filter(isPositiveMoneyValue);
 }
 
 function boostFieldValues(snapshot: ApplyVerificationSnapshot): string[] {
@@ -2622,6 +2763,7 @@ const APPLY_VERIFICATION_SNAPSHOT_SCRIPT = `(() => {
   const nodes = toArray(querySelectorAll ? querySelectorAll("textarea") : []).concat(toArray(querySelectorAll ? querySelectorAll("input") : []));
   const actionNodes = toArray(querySelectorAll ? querySelectorAll("button") : [])
     .concat(toArray(querySelectorAll ? querySelectorAll("a[role='button']") : []))
+    .concat(toArray(querySelectorAll ? querySelectorAll("[role='combobox']") : []))
     .concat(toArray(querySelectorAll ? querySelectorAll("input[type='submit']") : []))
     .concat(toArray(querySelectorAll ? querySelectorAll("input[type='button']") : []));
   const textOf = (node) => typeof node.textContent === "string" ? node.textContent : "";
@@ -2823,7 +2965,17 @@ export async function verifyApplyPreparationOnPage(input: {
   const rateValue = rateNeedle(plan.rate);
   if (pageLooksFixedPrice(snapshot)) {
     const fixedPriceValues = fixedPriceBidFieldValues(snapshot);
-    results.push(verification("rate", "verified", `Fixed-price bid field is present with ${fixedPriceValues[0]}.`, { actual: fixedPriceValues.join(" | ") }));
+    const positiveFixedPriceValues = fixedPricePositiveBidFieldValues(snapshot);
+    const projectDuration = fixedPriceProjectDuration(snapshot);
+    if (positiveFixedPriceValues.length > 0 && projectDuration) {
+      results.push(verification("rate", "verified", `Fixed-price terms are set: bid ${positiveFixedPriceValues[0]}, duration ${projectDuration}.`, { actual: positiveFixedPriceValues.join(" | ") }));
+    } else {
+      const missing = [
+        positiveFixedPriceValues.length === 0 ? "positive fixed-price amount" : null,
+        !projectDuration ? "project duration" : null,
+      ].filter(Boolean).join(" and ");
+      results.push(verification("rate", "attempted_unverified", `Fixed-price terms need QA: missing ${missing}.`, { expected: "positive fixed-price amount and project duration", actual: fixedPriceValues.join(" | ").slice(0, 200) }));
+    }
   } else if (!rateValue) {
     results.push(verification("rate", "skipped_by_strategy", "No safe rate value was available in the plan."));
   } else if (rateFieldValues(snapshot).some((value) => rateFieldValueMatches(value, rateValue))) {
@@ -2960,10 +3112,13 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
     }
   }
 
-  const fixedPriceBidReady = await hasFixedPriceBidReady(page);
+  const fixedPricePage = await pageLooksFixedPriceLive(page);
   const rateInputValue = hourlyRateInputValue(plan.rate);
-  if (fixedPriceBidReady) {
+  if (fixedPricePage && await tryFillFixedPriceTerms(page, plan, bodyText)) {
     attemptedFields.push("rate");
+  } else if (fixedPricePage) {
+    skippedFields.push("rate");
+    manualFields.push("rate");
   } else if (rateInputValue && await tryFillFirst(page, [
     "[data-test='up-fe-rate-widget'] [data-test='hourly-rate'] input",
     "[data-test='up-fe-rate-widget'] input[data-test='currency-input']",

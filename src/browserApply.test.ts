@@ -262,6 +262,7 @@ async function runTests(): Promise<void> {
               return allElements.filter((element) => element.tagName === "INPUT" && element.type === type);
             }
             if (selector.startsWith("label[for=")) return [];
+            if (selector === "[role='combobox']") return [];
             if (selector === "button") return actionElements;
             if (selector === "a[role='button']") return [];
             return allElements;
@@ -1181,7 +1182,7 @@ async function runTests(): Promise<void> {
 
     const fixedPriceVerification = await verifyApplyPreparationOnPage({
       page: fakeApplyPage({
-        visibleText: "Fixed-price\nWhat is the full amount you'd like to bid for this job?\nRequired for proposal: 9 Connects\nSend for 9 Connects",
+        visibleText: "Fixed-price\nWhat is the full amount you'd like to bid for this job?\nHow long will this project take?\nLess than 1 month\nAdditional details\nRequired for proposal: 9 Connects\nSend for 9 Connects",
         fields: [
           { kind: "textarea", value: verificationPlan.coverLetter },
           { kind: "input", type: "text", id: "charged-amount-id", label: "Bid", dataTest: "currency-input", value: "$10.00" },
@@ -1210,6 +1211,28 @@ async function runTests(): Promise<void> {
     assert(fixedPriceVerification.find((item) => item.field === "screeningAnswers")?.status === "skipped_by_strategy", "Absent screening fields should not block fixed-price applications.");
     assert(fixedPriceVerification.find((item) => item.field === "attachments")?.status === "verified", "Uploaded attachment filename should verify.");
     assert(fixedPriceVerification.find((item) => item.field === "finalSubmit")?.status === "skipped_by_strategy", "Final submit must remain untouched.");
+
+    const incompleteFixedPriceVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({
+        visibleText: "Fixed-price\nBy milestone\nMilestone 1 Amount\n$0.00\nHow long will this project take?\nSelect a duration\nAdditional details\nRequired for proposal: 9 Connects\nSend for 9 Connects",
+        fields: [
+          { kind: "textarea", value: verificationPlan.coverLetter },
+          { kind: "input", type: "text", id: "milestone-amount-1", label: "Milestone 1 Amount", dataTest: "currency-input", value: "$0.00" },
+        ],
+      }),
+      plan: {
+        ...verificationPlan,
+        rate: "$10.82/hr",
+        screeningAnswers: [],
+        attachments: [],
+        connects: { ...verificationPlan.connects, required: 9, total: 9 },
+      },
+      fields: { attemptedFields: ["coverLetter", "rate"], skippedFields: [], manualFields: ["finalSubmit"] },
+      bodyText: "Fixed-price\nRequired for proposal: 9 Connects\nSend for 9 Connects",
+    });
+    assert(incompleteFixedPriceVerification.find((item) => item.field === "rate")?.status === "attempted_unverified", "Fixed-price $0.00 without duration must not verify as ready.");
+    assert(Boolean(incompleteFixedPriceVerification.find((item) => item.field === "rate")?.detail.includes("positive fixed-price amount")), "Incomplete fixed-price terms should name the missing positive amount.");
+    assert(Boolean(incompleteFixedPriceVerification.find((item) => item.field === "rate")?.detail.includes("project duration")), "Incomplete fixed-price terms should name the missing duration.");
 
     const emptyCoverVerification = await verifyApplyPreparationOnPage({
       page: fakeApplyPage({ visibleText: "Required for proposal: 8 Connects\nSend for 8 Connects\nAdd a portfolio project\nAdd a certificate", inputValues: ["", "$35"], checkedLabels: [], fileNames: [] }),
