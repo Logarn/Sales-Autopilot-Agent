@@ -639,6 +639,16 @@ function buildApplyDiagnostics(
       : sourceBackedConnects.extractionMethod
     : null;
   const fieldVerification = fields.fieldVerification ?? [];
+  const verifiedRequiredConnects = (() => {
+    const actual = getVerification(fieldVerification, "requiredConnects")?.actual;
+    const parsed = actual?.match(/\d+/)?.[0];
+    return parsed ? Number.parseInt(parsed, 10) : null;
+  })();
+  const requiredConnects = plan?.connects.required ?? verifiedRequiredConnects;
+  const boostConnects = plan?.connects.boost ?? null;
+  const totalConnects = plan?.connects.total ?? (
+    requiredConnects !== null && boostConnects !== null ? requiredConnects + boostConnects : null
+  );
   const fieldsWithStatus = (status: ApplyVerificationStatus): string[] => fieldVerification
     .filter((item) => item.status === status)
     .map((item) => item.field);
@@ -659,9 +669,9 @@ function buildApplyDiagnostics(
     screeningAnswersCount: plan?.screeningAnswers.length ?? 0,
     screeningAnswers: plan?.screeningAnswers ?? [],
     rate: plan?.rate ?? null,
-    requiredConnects: plan?.connects.required ?? null,
-    boostConnects: plan?.connects.boost ?? null,
-    totalConnects: plan?.connects.total ?? null,
+    requiredConnects,
+    boostConnects,
+    totalConnects,
     connectsDecision: plan?.connectsStrategy.decision ?? null,
     connectsExpectedValue: plan?.connectsStrategy.expectedValueScore ?? null,
     connectsConfidence: sourceBackedConnects?.confidence ?? null,
@@ -1984,6 +1994,9 @@ function highlightAliases(highlight: string): string[] {
   const withoutSlashSuffix = highlight.replace(/\s*\/\s*[^/]+$/, "").trim();
   if (withoutSlashSuffix && withoutSlashSuffix !== highlight) aliases.push(withoutSlashSuffix);
   if (/truly beauty/i.test(highlight)) aliases.push("From $250k to $1.2 Million In 12 Months");
+  if (/design case studies/i.test(highlight)) aliases.push("Steve's Design Case Studies");
+  if (/fly boutique/i.test(highlight)) aliases.push("The Fly Boutique");
+  if (/lifely/i.test(highlight)) aliases.push("How Lifely Transformed Their Retention Marketing");
   return Array.from(new Set(aliases.filter(Boolean)));
 }
 
@@ -2002,20 +2015,38 @@ async function findHighlightButtonIndexInOpenDialog(page: PlaywrightPageLike, hi
     const normalizedAliases = Array.isArray(aliases) ? aliases.map(normalize).filter(Boolean) : [];
     const dialog = document.querySelector("[role='dialog']");
     if (!dialog || normalizedAliases.length === 0) return -1;
+    const activePane = dialog.querySelector(".air3-tab-pane.is-active, [role='tabpanel'].is-active") ?? dialog;
     const buttons = Array.from(dialog.querySelectorAll("button"));
-    for (let buttonIndex = 0; buttonIndex < buttons.length; buttonIndex += 1) {
-      const button = buttons[buttonIndex] as HTMLButtonElement;
-      if (!/^select highlight$/i.test((button.textContent ?? "").replace(/\s+/g, " ").trim()) || button.disabled) continue;
+    const isVisibleButton = (button: HTMLButtonElement): boolean => {
+      const style = window.getComputedStyle(button);
+      return style.visibility !== "hidden" &&
+        style.display !== "none" &&
+        button.getClientRects().length > 0 &&
+        Boolean(button.offsetWidth || button.offsetHeight);
+    };
+    const nearestMatchingRowText = (button: HTMLButtonElement): string | null => {
       let node: Element | null = button.parentElement;
       let depth = 0;
-      while (node && node !== dialog.parentElement && depth < 24) {
+      while (node && node !== dialog && depth < 12) {
+        if (node === activePane || node.getAttribute("role") === "tabpanel" || node.classList.contains("air3-tab-pane")) return null;
         const text = normalize(node.textContent ?? "");
-        if (normalizedAliases.some((alias) => text.includes(alias))) {
-          return buttonIndex;
+        if (
+          text.length > 40 &&
+          text.length < 900 &&
+          normalizedAliases.some((alias) => text.includes(alias))
+        ) {
+          return text;
         }
         node = node.parentElement;
         depth += 1;
       }
+      return null;
+    };
+    for (let buttonIndex = 0; buttonIndex < buttons.length; buttonIndex += 1) {
+      const button = buttons[buttonIndex] as HTMLButtonElement;
+      if (!activePane.contains(button)) continue;
+      if (!/^select highlight$/i.test((button.textContent ?? "").replace(/\s+/g, " ").trim()) || button.disabled || !isVisibleButton(button)) continue;
+      if (nearestMatchingRowText(button)) return buttonIndex;
     }
     return -1;
   }, highlightAliases(highlight)).catch(() => -1);
@@ -2041,8 +2072,15 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike): Promise<boo
   const buttonIndex = await page.evaluate(() => {
     const dialog = document.querySelector("[role='dialog']");
     if (!dialog) return -1;
+    const isVisibleButton = (button: HTMLButtonElement): boolean => {
+      const style = window.getComputedStyle(button);
+      return style.visibility !== "hidden" &&
+        style.display !== "none" &&
+        button.getClientRects().length > 0 &&
+        Boolean(button.offsetWidth || button.offsetHeight);
+    };
     return Array.from(dialog.querySelectorAll("button"))
-      .findIndex((candidate) => /^add to highlights$/i.test((candidate.textContent ?? "").replace(/\s+/g, " ").trim()) && !(candidate as HTMLButtonElement).disabled);
+      .findIndex((candidate) => /^(?:add to highlights|add\s+\d+\s*[/]\s*4)$/i.test((candidate.textContent ?? "").replace(/\s+/g, " ").trim()) && !(candidate as HTMLButtonElement).disabled && isVisibleButton(candidate as HTMLButtonElement));
   }).catch(() => -1);
   if (buttonIndex < 0 || typeof page.locator("[role='dialog'] button").nth !== "function") return false;
   const button = page.locator("[role='dialog'] button").nth!(buttonIndex);
@@ -2775,7 +2813,7 @@ export async function verifyApplyPreparationOnPage(input: {
     results.push(verification("rate", "attempted_unverified", "Rate fill was attempted, but the value was not verified.", { expected: rateValue, actual: rateFieldValues(snapshot).join(" | ").slice(0, 200) }));
   }
 
-  if (!analysis.connects.visible || plan.connects.required === null) {
+  if (!analysis.connects.visible || analysis.connects.value === null) {
     results.push(verification("requiredConnects", "attempted_unverified", analysis.connects.detail));
   } else {
     results.push(verification("requiredConnects", "verified", `Required Connects verified as ${analysis.connects.value}.`, { actual: String(analysis.connects.value) }));
