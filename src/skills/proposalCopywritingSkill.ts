@@ -532,18 +532,19 @@ function conciseHook(strategy: CopyStrategy): string {
     return `${opener} I would not treat seasonal replenishment and lifecycle care like "set up more emails." The customer has seasonal logic first: what they are planting, what they are worried about, and when ${tools[0]} should help them buy or replenish next.`;
   }
   if (strategy.category === "email_design") {
-    return `${opener} I would not treat email design templates like "make the emails prettier." The reader needs the offer to be obvious before they have a chance to drift.`;
+    const platformContext = tools.length ? ` through ${tools.join(" and ")}` : "";
+    return `${opener} I would not treat the reader's offer hierarchy and conversion path${platformContext} like "make the emails prettier." The reader needs campaign and template clarity before they have a chance to drift.`;
   }
   if (tools.length >= 3 && /engagement|conversion/i.test(strategy.client_commercial_pain)) {
     return `${opener} I would not treat the customer path across ${tools.slice(0, 3).join(", ")} like "make some ecommerce emails." The actual win is who gets what message, when they get it, and what they should do next.`;
   }
   if (tools.length >= 2) {
-    return `${opener} I would not make the customer moment in ${tools.join(" and ")} a tool-first strategy. The strategy is right timing, right message, and a next step that makes sense.`;
+    return `${opener} I would not make the customer moment in ${tools.join(" and ")} a tool-first strategy. The strategy is engagement, right timing, right message, and a next step that makes sense.`;
   }
   if (tools.length === 1) {
     return `${opener} The customer needs a clearer reason to take the next step, so I would use ${tools[0]} around ${deliverableSpecifics || strategy.category}. The tool is just the delivery system; the real work is making the timing useful instead of noisy.`;
   }
-  return `${opener} I would start with ${strategy.category} and ${deliverableSpecifics || "the customer path"}, not the task list. The customer needs a clearer reason to trust, click, buy, or return, and ${strategy.client_commercial_pain}.`;
+  return `${opener} I would start with the customer path around ${strategy.category}${deliverableSpecifics ? ` and ${deliverableSpecifics}` : ""}, not the task list. The customer needs a clearer reason to trust, click, buy, or return, and ${strategy.client_commercial_pain}.`;
 }
 
 function oneStepSolution(strategy: CopyStrategy): string {
