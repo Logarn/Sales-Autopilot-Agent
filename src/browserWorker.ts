@@ -1895,9 +1895,17 @@ async function trySelectProofFromSelector(page: PlaywrightPageLike, highlight: s
     { selector: "button:has-text('Add portfolio project')", label: "Add portfolio project" },
     { selector: "a:has-text('Add portfolio project')", label: "Add portfolio project" },
     { selector: "[role='button']:has-text('Add portfolio project')", label: "Add portfolio project" },
+    { selector: "text=\"Add a portfolio project\"", label: "Add portfolio project" },
+    { selector: "text=\"Add portfolio project\"", label: "Add portfolio project" },
+    { selector: "div:text-is('Add a portfolio project')", label: "Add portfolio project" },
+    { selector: "div:text-is('Add portfolio project')", label: "Add portfolio project" },
     { selector: "button:has-text('Add certificate')", label: "Add certificate" },
     { selector: "a:has-text('Add certificate')", label: "Add certificate" },
     { selector: "[role='button']:has-text('Add certificate')", label: "Add certificate" },
+    { selector: "text=\"Add a certificate\"", label: "Add certificate" },
+    { selector: "text=\"Add certificate\"", label: "Add certificate" },
+    { selector: "div:text-is('Add a certificate')", label: "Add certificate" },
+    { selector: "div:text-is('Add certificate')", label: "Add certificate" },
   ]);
   if (!opened) return false;
   const selected = await tryCheckHighlight(page, highlight);
@@ -2634,6 +2642,29 @@ function hasUnverifiedRequiredApplyFields(results: ApplyFieldVerification[]): bo
   return getUnverifiedRequiredApplyFields(results).length > 0;
 }
 
+function needsSettledVerificationRetry(results: ApplyFieldVerification[]): boolean {
+  return results.some((item) =>
+    ["coverLetter", "rate", "profileHighlights"].includes(item.field) &&
+    item.status === "attempted_unverified" &&
+    !item.actual?.trim()
+  );
+}
+
+async function verifyApplyPreparationAfterSettle(input: {
+  page: PlaywrightPageLike;
+  plan: BrowserApplyFillPlan;
+  fields: Pick<ApplyPreparationDiagnostics, "attemptedFields" | "skippedFields" | "manualFields">;
+  bodyText: string;
+}): Promise<ApplyFieldVerification[]> {
+  const firstPass = await verifyApplyPreparationOnPage(input);
+  if (!needsSettledVerificationRetry(firstPass)) return firstPass;
+  await input.page.waitForTimeout?.(2500).catch(() => undefined);
+  const secondPass = await verifyApplyPreparationOnPage(input);
+  return getUnverifiedRequiredApplyFields(secondPass).length <= getUnverifiedRequiredApplyFields(firstPass).length
+    ? secondPass
+    : firstPass;
+}
+
 async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillPlan, bodyText: string): Promise<ApplyFillResult> {
   assertSubmitGuard(plan);
   logger.info(`Submit guard before fill: stopBeforeSubmit=${plan.stopBeforeSubmit}; final submit will not be clicked.`);
@@ -2708,7 +2739,7 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
   manualFields.push("finalSubmit");
   logger.info(`Submit guard after fill: stopBeforeSubmit=${plan.stopBeforeSubmit}; final submit remains manual.`);
   await page.waitForTimeout?.(1000).catch(() => undefined);
-  const fieldVerification = await verifyApplyPreparationOnPage({
+  const fieldVerification = await verifyApplyPreparationAfterSettle({
     page,
     plan,
     fields: { attemptedFields, skippedFields, manualFields },
