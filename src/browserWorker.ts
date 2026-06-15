@@ -1894,6 +1894,10 @@ async function trySelectProjectDuration(page: PlaywrightPageLike): Promise<boole
   if (!opened) return false;
   await page.waitForTimeout?.(500).catch(() => undefined);
   const selected = await tryClickFirst(page, [
+    { selector: "[role='option']:has-text('Less than a month')", label: "Less than a month" },
+    { selector: "li:has-text('Less than a month')", label: "Less than a month" },
+    { selector: "button:has-text('Less than a month')", label: "Less than a month" },
+    { selector: "text=\"Less than a month\"", label: "Less than a month" },
     { selector: "[role='option']:has-text('Less than 1 month')", label: "Less than 1 month" },
     { selector: "li:has-text('Less than 1 month')", label: "Less than 1 month" },
     { selector: "button:has-text('Less than 1 month')", label: "Less than 1 month" },
@@ -1910,8 +1914,8 @@ async function trySelectProjectDuration(page: PlaywrightPageLike): Promise<boole
           htmlElement.getClientRects().length > 0 &&
           Boolean(htmlElement.offsetWidth || htmlElement.offsetHeight);
       };
-      const option = Array.from(document.querySelectorAll("[role='option'], li, button, div"))
-        .find((candidate) => normalize(candidate.textContent ?? "") === "less than 1 month" && isVisible(candidate));
+      const option = Array.from(document.querySelectorAll("[role='option'], #dropdown-menu li, [data-test='dropdown-menu'] li, .air3-dropdown-menu li, ul[role='listbox'] li, button"))
+        .find((candidate) => /^(?:less than a month|less than 1 month)$/i.test(normalize(candidate.textContent ?? "")) && isVisible(candidate));
       (option as HTMLElement | undefined)?.click();
       return Boolean(option);
     }).catch(() => false);
@@ -2211,9 +2215,10 @@ async function tryTrustedSelectHighlightFromOpenDialog(page: PlaywrightPageLike,
   }
 }
 
-async function tryConfirmHighlightsDialog(page: PlaywrightPageLike): Promise<boolean> {
+async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHighlights: string[] = []): Promise<boolean> {
   if (!page.evaluate) return false;
   const evaluate = page.evaluate.bind(page) as NonNullable<PlaywrightPageLike["evaluate"]>;
+  const expectedAliases = expectedHighlights.map(highlightAliases);
   const findButtonIndex = () => evaluate(() => {
     const dialog = document.querySelector("[role='dialog']");
     if (!dialog) return -1;
@@ -2255,6 +2260,36 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike): Promise<boo
     button?.click();
     return Boolean(button);
   }).catch(() => false);
+  const hasCommittedHighlights = () => evaluate((aliasesByHighlight = []) => {
+    const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
+    const dialog = document.querySelector("[role='dialog']");
+    const committedText = Array.from(document.querySelectorAll(".highlights-item, [data-test*='highlight' i], li"))
+      .filter((candidate) => !dialog?.contains(candidate))
+      .map((candidate) => normalize(candidate.textContent ?? ""))
+      .filter((text) => /\bportfolio\s+\d+\b/i.test(text))
+      .join(" ");
+    if (!committedText) return false;
+    if (!Array.isArray(aliasesByHighlight) || aliasesByHighlight.length === 0) {
+      return /\bportfolio\s+1\b/i.test(committedText);
+    }
+    return aliasesByHighlight.every((aliases) => Array.isArray(aliases) && aliases.some((alias) => committedText.includes(normalize(String(alias)))));
+  }, expectedAliases).catch(() => false);
+  const closeDialogWithDom = () => evaluate(() => {
+    const dialog = document.querySelector("[role='dialog']");
+    if (!dialog) return true;
+    const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
+    const isVisibleButton = (button: HTMLButtonElement): boolean => {
+      const style = window.getComputedStyle(button);
+      return style.visibility !== "hidden" &&
+        style.display !== "none" &&
+        button.getClientRects().length > 0 &&
+        Boolean(button.offsetWidth || button.offsetHeight);
+    };
+    const button = Array.from(dialog.querySelectorAll("button"))
+      .find((candidate) => /close/.test(normalize(candidate.textContent ?? "") || normalize(candidate.getAttribute("aria-label") ?? "")) && isVisibleButton(candidate as HTMLButtonElement)) as HTMLButtonElement | undefined;
+    button?.click();
+    return Boolean(button);
+  }).catch(() => false);
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const buttonIndex = await findButtonIndex();
@@ -2271,9 +2306,19 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike): Promise<boo
     }
     await page.waitForTimeout?.(1000).catch(() => undefined);
     if (!await hasOpenConfirmButton()) return true;
+    if (await hasCommittedHighlights()) {
+      await closeDialogWithDom();
+      await page.waitForTimeout?.(750).catch(() => undefined);
+      return true;
+    }
     await clickConfirmWithDom();
     await page.waitForTimeout?.(1000).catch(() => undefined);
     if (!await hasOpenConfirmButton()) return true;
+    if (await hasCommittedHighlights()) {
+      await closeDialogWithDom();
+      await page.waitForTimeout?.(750).catch(() => undefined);
+      return true;
+    }
   }
   return false;
 }
@@ -2282,7 +2327,7 @@ async function trySelectProofHighlights(page: PlaywrightPageLike, highlights: st
   if (highlights.length === 0) return 0;
   let selected = await trySelectHighlightsFromOpenDialog(page, highlights);
   if (selected > 0) {
-    return await tryConfirmHighlightsDialog(page) ? selected : 0;
+    return await tryConfirmHighlightsDialog(page, highlights) ? selected : 0;
   }
   const opened = await tryClickFirst(page, [
     { selector: "button:has-text('Add portfolio project')", label: "Add portfolio project" },
@@ -2305,7 +2350,7 @@ async function trySelectProofHighlights(page: PlaywrightPageLike, highlights: st
   }
   selected = await trySelectHighlightsFromOpenDialog(page, highlights);
   if (selected > 0) {
-    return await tryConfirmHighlightsDialog(page) ? selected : 0;
+    return await tryConfirmHighlightsDialog(page, highlights) ? selected : 0;
   }
   return 0;
 }
@@ -3144,7 +3189,7 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
     }
   }
 
-  if (await tryConfirmHighlightsDialog(page)) {
+  if (await tryConfirmHighlightsDialog(page, plan.highlights)) {
     attemptedFields.push("highlights");
   }
 
