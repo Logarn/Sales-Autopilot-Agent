@@ -56,12 +56,13 @@ async function runTests(): Promise<void> {
   const { buildBrowserApplyPlan } = require("./browserApply") as {
     buildBrowserApplyPlan: (jobId: string) => { plan: any; valid: boolean; issues: Array<{ severity: string; code: string; message: string }> };
   };
-  const { autoPrepareDraftForThread, autoQueuePrepareDraft, buildCaptureCompletionStatus, decideAutoPrepareDraft, detectStateWithDiagnostics, isCaptureBlockedState, postDiscoveryCapturePacket, postPrepareDraftStatus, postV3CapturePacketToThread, selectPageForBrowserAction, settlePageAndDetect, verifyApplyPreparationOnPage } = require("./browserWorker") as {
+  const { autoPrepareDraftForThread, autoQueuePrepareDraft, buildCaptureCompletionStatus, decideAutoPrepareDraft, detectStateWithDiagnostics, getActionUrl, isCaptureBlockedState, postDiscoveryCapturePacket, postPrepareDraftStatus, postV3CapturePacketToThread, selectPageForBrowserAction, settlePageAndDetect, verifyApplyPreparationOnPage } = require("./browserWorker") as {
     autoPrepareDraftForThread: (job: any, thread: { channelId: string; messageTs: string; threadTs: string }, options?: any) => { shouldQueue: boolean; category: string; note: string; actionId?: number; duplicate?: boolean };
     autoQueuePrepareDraft: (job: any, options?: any, thread?: { channelId: string; messageTs: string; threadTs: string } | null) => { shouldQueue: boolean; category: string; note: string; actionId?: number; duplicate?: boolean; duplicateStatus?: string | null };
     buildCaptureCompletionStatus: (input: { hasThreadContext: boolean; packetPosted: boolean; discoverySlackStatus?: "not_discovery" | "missing_channel" | "post_failed" | "posted" }) => string;
     decideAutoPrepareDraft: (job: any, options?: any) => { shouldQueue: boolean; category: string; note: string; reason: string };
     detectStateWithDiagnostics: (snapshot: { url: string; title: string; textExcerpt: string }, action: any) => { state: string; source: string; matchedText?: string; summary: string };
+    getActionUrl: (action: any) => string | null;
     isCaptureBlockedState: (state: string) => boolean;
     postDiscoveryCapturePacket: (input: any, deps?: {
       postChannelMessage?: (params: any) => Promise<{ ok: boolean; ts?: string; channel?: string }>;
@@ -2099,6 +2100,10 @@ async function runTests(): Promise<void> {
     );
     assert(openApplyOnApplyUrlDetection.state === "apply_page_loaded", "open_apply_page should report apply_page_loaded when the actual apply URL is visible");
     assert(openApplyOnApplyUrlDetection.source === "url", "Apply page detection must be based on visible URL evidence");
+    assert(
+      getActionUrl({ id: 9, jobId: "manual:upwork-022066462765976847859", actionType: "open_apply_page", payload: { url: "https://www.upwork.com/ab/proposals/job/~022066462765976847859/apply/" } }) === "https://www.upwork.com/ab/proposals/job/~022066462765976847859/apply/",
+      "open_apply_page must preserve the payload apply URL instead of canonicalizing it back to the job detail URL",
+    );
 
     const challengeWordInJobDetection = detectStateWithDiagnostics(
       {
