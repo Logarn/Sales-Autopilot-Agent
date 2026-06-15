@@ -2076,6 +2076,17 @@ function rateFieldValues(snapshot: ApplyVerificationSnapshot): string[] {
     .filter((value) => value.trim().length > 0);
 }
 
+function boostFieldValues(snapshot: ApplyVerificationSnapshot): string[] {
+  return snapshot.fieldValues
+    .filter((field) => field.kind === "input" && isUserTextField(field))
+    .filter((field) => {
+      const descriptor = fieldDescriptor(field);
+      return /\b(?:boost|connects?)\b/i.test(descriptor) && !/\b(?:bid|hourly|rate|currency|amount|terms)\b/i.test(descriptor);
+    })
+    .map((field) => field.value)
+    .filter((value) => value.trim().length > 0);
+}
+
 function bestCoverLetterValue(snapshot: ApplyVerificationSnapshot, expected: string | null | undefined): string | null {
   const matched = bestMatchingValue(coverLetterFieldValues(snapshot), expected);
   if (matched) return matched;
@@ -2473,7 +2484,7 @@ export async function verifyApplyPreparationOnPage(input: {
     results.push(verification("boostConnects", "skipped_by_strategy", analysis.boost.visible ? `No boost set. ${analysis.boost.detail}` : "No boost set."));
   } else if (plannedBoost > 50) {
     results.push(verification("boostConnects", "blocked_by_upwork_ui", `Planned boost ${plannedBoost} exceeds the hard cap 50; boost must not be set.`));
-  } else if (analysis.boost.selectedValue === plannedBoost || textCollectionContains(snapshot.inputValues, String(plannedBoost))) {
+  } else if (textCollectionContains(boostFieldValues(snapshot), String(plannedBoost))) {
     results.push(verification("boostConnects", "verified", `Boost Connects verified as ${plannedBoost}.`, { actual: String(plannedBoost) }));
   } else if (fields.skippedFields.includes("connectsBoost")) {
     results.push(verification("boostConnects", "blocked_by_upwork_ui", "Boost field was not fillable.", { expected: String(plannedBoost) }));
