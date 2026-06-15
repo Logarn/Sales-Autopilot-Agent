@@ -490,6 +490,10 @@ function urlsReferToSameUpworkJob(left: string, right: string): boolean {
   return Boolean(leftToken && rightToken && leftToken === rightToken);
 }
 
+function isUpworkApplyUrl(value: string): boolean {
+  return /\/(?:ab|nx)\/proposals\/job\/~?[A-Za-z0-9_-]{8,}\/apply\/?/i.test(value);
+}
+
 async function buildPageSnapshot(page: PlaywrightPageLike): Promise<{ snapshot: PageSnapshot; bodyText: string }> {
   const url = page.url();
   const title = await page.title();
@@ -578,8 +582,8 @@ export function detectStateWithDiagnostics(snapshot: PageSnapshot, action: Brows
   if (action.actionType === "capture_job_from_url" && targetLooksLikeJobPage) {
     return { state: "captured", source: "url", matchedText: snapshot.url, summary: "Detected Upwork job detail/apply page for capture." };
   }
-  if (action.actionType === "open_apply_page" || snapshot.url.includes("/apply")) {
-    return { state: "apply_page_loaded", source: snapshot.url.includes("/apply") ? "url" : "action_type", matchedText: snapshot.url.includes("/apply") ? snapshot.url : action.actionType, summary: "Detected Upwork apply page." };
+  if (isUpworkApplyUrl(snapshot.url)) {
+    return { state: "apply_page_loaded", source: "url", matchedText: snapshot.url, summary: "Detected Upwork apply page." };
   }
   if (action.actionType === "open_job" || snapshot.url.includes("/jobs/")) {
     return { state: "job_page_loaded", source: snapshot.url.includes("/jobs/") ? "url" : "action_type", matchedText: snapshot.url.includes("/jobs/") ? snapshot.url : action.actionType, summary: "Detected Upwork job detail page." };
@@ -2723,7 +2727,11 @@ async function inspectWithBrowser(
         staleWorkTabsIgnored: 0,
       }
       : await cleanStaleWorkTabs({ context: sessionHandle.context, selectedPage: page, targetUrl: url, protectedApplyUrls });
-    if (page && (!selectedPage.reusedExistingPage || !urlsReferToSameUpworkJob(page.url(), url))) {
+    if (page && (
+      !selectedPage.reusedExistingPage ||
+      !urlsReferToSameUpworkJob(page.url(), url) ||
+      (action.actionType === "open_apply_page" && !isUpworkApplyUrl(page.url()))
+    )) {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
     }
     const unavailableDetection: BrowserStateDetection = {
