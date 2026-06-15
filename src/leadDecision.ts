@@ -122,12 +122,26 @@ function hasVeryWeakClientHistory(job: ScoredJob): boolean {
   return job.clientSpend <= 0 && job.clientTotalHires <= 0 && job.clientFeedbackCount <= 0;
 }
 
+function hasExplicitPoorClientSignal(job: ScoredJob): boolean {
+  const risks = job.scoreBreakdown?.clientQualityScore?.risks.map((risk) => risk.toLowerCase()) ?? [];
+  return (
+    (job.clientRating > 0 && job.clientRating < 4.2) ||
+    (job.clientHireRate > 0 && job.clientHireRate < 35) ||
+    risks.some((risk) => risk.includes("low client rating") || risk.includes("low hire rate"))
+  );
+}
+
+function hasMissingOnlyClientHistory(job: ScoredJob): boolean {
+  return hasVeryWeakClientHistory(job) && job.clientRating <= 0 && job.clientHireRate <= 0 && !hasExplicitPoorClientSignal(job);
+}
+
 export function decideLeadHandling(job: ScoredJob, intelligence?: JobIntelligence | null): LeadDecisionResult {
   const eligibility = evaluatePlatformEligibility(intelligence);
   const watchOuts = watchOutsForLead(job, intelligence);
   const strongSignals = hasStrongDtcSignals(job, intelligence);
   const scopeClear = hasScopeClarity(job, intelligence);
   const clientQuality = job.scoreBreakdown?.clientQualityScore?.score ?? 50;
+  const missingOnlyClientHistory = hasMissingOnlyClientHistory(job);
   const connectsStrategy = job.applicationDraft?.connectsStrategy ?? job.scoreBreakdown?.connectsStrategy;
   const connectsRequiredUnknown = hasUnknownRequiredConnects(connectsStrategy);
   const platformEligible = eligibility.platformEligibility === "eligible";
@@ -236,7 +250,10 @@ export function decideLeadHandling(job: ScoredJob, intelligence?: JobIntelligenc
     };
   }
 
-  if ((clientQuality < 35 || hasVeryWeakClientHistory(job)) && job.score < 88) {
+  const weakClientQualityHardBlock =
+    (clientQuality < 35 && !missingOnlyClientHistory) ||
+    (hasVeryWeakClientHistory(job) && !missingOnlyClientHistory);
+  if (weakClientQualityHardBlock && job.score < 88) {
     return {
       decision: "skip",
       reason: "Client quality signals are too weak for Slack lead review.",
