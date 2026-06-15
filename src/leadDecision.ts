@@ -1,3 +1,4 @@
+import { hasUnknownRequiredConnects } from "./connectsStrategy";
 import { evaluatePlatformEligibility, type PlatformEligibility } from "./platformEligibility";
 import type { JobIntelligence, ScoredJob } from "./types";
 
@@ -128,6 +129,7 @@ export function decideLeadHandling(job: ScoredJob, intelligence?: JobIntelligenc
   const scopeClear = hasScopeClarity(job, intelligence);
   const clientQuality = job.scoreBreakdown?.clientQualityScore?.score ?? 50;
   const connectsStrategy = job.applicationDraft?.connectsStrategy ?? job.scoreBreakdown?.connectsStrategy;
+  const connectsRequiredUnknown = hasUnknownRequiredConnects(connectsStrategy);
   const platformEligible = eligibility.platformEligibility === "eligible";
   const weakBudget = isBudgetTooWeak(job);
   const stale = isStale(job);
@@ -221,7 +223,7 @@ export function decideLeadHandling(job: ScoredJob, intelligence?: JobIntelligenc
     };
   }
 
-  if (connectsStrategy?.decision === "skip") {
+  if (connectsStrategy?.decision === "skip" && !connectsRequiredUnknown) {
     return {
       decision: "skip",
       reason: "Connects strategy says expected value is too weak.",
@@ -272,7 +274,7 @@ export function decideLeadHandling(job: ScoredJob, intelligence?: JobIntelligenc
     };
   }
 
-  if (connectsStrategy?.decision === "manual_review") {
+  if (connectsStrategy?.decision === "manual_review" && !connectsRequiredUnknown) {
     return {
       decision: "manual_review",
       reason: "Connects spend needs manual review before applying.",
