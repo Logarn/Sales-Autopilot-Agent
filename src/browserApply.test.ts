@@ -56,7 +56,7 @@ async function runTests(): Promise<void> {
   const { buildBrowserApplyPlan } = require("./browserApply") as {
     buildBrowserApplyPlan: (jobId: string) => { plan: any; valid: boolean; issues: Array<{ severity: string; code: string; message: string }> };
   };
-  const { autoPrepareDraftForThread, autoQueuePrepareDraft, buildCaptureCompletionStatus, decideAutoPrepareDraft, detectStateWithDiagnostics, getActionUrl, isCaptureBlockedState, postDiscoveryCapturePacket, postPrepareDraftStatus, postV3CapturePacketToThread, selectPageForBrowserAction, settlePageAndDetect, verifyApplyPreparationOnPage } = require("./browserWorker") as {
+  const { autoPrepareDraftForThread, autoQueuePrepareDraft, buildCaptureCompletionStatus, decideAutoPrepareDraft, detectStateWithDiagnostics, getActionUrl, isCaptureBlockedState, postDiscoveryCapturePacket, postPrepareDraftStatus, postV3CapturePacketToThread, selectPageForBrowserAction, settlePageAndDetect, verifyApplyPageConnects, verifyApplyPreparationOnPage } = require("./browserWorker") as {
     autoPrepareDraftForThread: (job: any, thread: { channelId: string; messageTs: string; threadTs: string }, options?: any) => { shouldQueue: boolean; category: string; note: string; actionId?: number; duplicate?: boolean };
     autoQueuePrepareDraft: (job: any, options?: any, thread?: { channelId: string; messageTs: string; threadTs: string } | null) => { shouldQueue: boolean; category: string; note: string; actionId?: number; duplicate?: boolean; duplicateStatus?: string | null };
     buildCaptureCompletionStatus: (input: { hasThreadContext: boolean; packetPosted: boolean; discoverySlackStatus?: "not_discovery" | "missing_channel" | "post_failed" | "posted" }) => string;
@@ -79,6 +79,7 @@ async function runTests(): Promise<void> {
     postV3CapturePacketToThread: (job: any, thread: { channelId: string; messageTs: string; threadTs: string }, context: any, postThreadMessage?: (params: any) => Promise<boolean>) => Promise<"posted" | "skipped" | "failed">;
     selectPageForBrowserAction: (context: { pages?: () => Array<{ url: () => string }>; newPage: () => Promise<any> }, targetUrl: string, options?: { protectedApplyUrls?: string[] }) => Promise<{ page: any; reusedExistingPage: boolean; reason: string }>;
     settlePageAndDetect: (page: any, action: any) => Promise<{ snapshot: any; bodyText: string; detection: { state: string; source: string; matchedText?: string }; samples: Array<any> }>;
+    verifyApplyPageConnects: (plan: any, bodyText: string) => Array<{ severity: string; code: string; message: string }>;
     verifyApplyPreparationOnPage: (input: { page: any; plan: any; fields: { attemptedFields: string[]; skippedFields: string[]; manualFields: string[] }; bodyText: string }) => Promise<Array<{ field: string; status: string; detail: string }>>;
   };
   const { buildPrepareDraftQueueReply } = require("./slackSocket") as {
@@ -1094,6 +1095,40 @@ async function runTests(): Promise<void> {
       connects: { ...beautyPlanResult.plan.connects, required: 8, boost: 0, total: 8 },
       connectsStrategy: { ...beautyPlanResult.plan.connectsStrategy, decision: "safe_apply", sourceBackedConnects: { requiredConnects: 8, boostConnects: null, totalConnects: null, confidence: "high", sourceText: "Required for proposal: 8 Connects", sourceLocation: "line 1", extractionMethod: "deterministic_visible_text" } },
     };
+    const unknownOnlySkipPlan = {
+      ...verificationPlan,
+      connects: { ...verificationPlan.connects, required: null, boost: null, total: null, approvalRequired: true },
+      connectsStrategy: {
+        ...verificationPlan.connectsStrategy,
+        decision: "skip",
+        requiredConnects: null,
+        suggestedBoostConnects: 0,
+        totalConnects: null,
+        expectedValueScore: 21,
+        sourceBackedConnects: {
+          requiredConnects: null,
+          boostConnects: null,
+          totalConnects: null,
+          confidence: "unknown",
+          sourceText: null,
+          sourceLocation: null,
+          extractionMethod: "not_found",
+        },
+        risks: [
+          "Required Connects are unknown from visible source text.",
+          "Expected value is too weak to spend Connects without a source-backed required cost.",
+        ],
+      },
+      validationIssues: [
+        { severity: "warning", code: "required_connects_unknown_apply_page_verification", message: "Required Connects are not source-backed yet." },
+        { severity: "warning", code: "connects_apply_page_verification_required", message: "Verify on apply page." },
+      ],
+    };
+    const unknownOnlyConnectsIssues = verifyApplyPageConnects(unknownOnlySkipPlan, "Required for proposal: 8 Connects\nSend for 8 Connects");
+    assert(unknownOnlyConnectsIssues.length === 0, "Once bottom-of-page Connects are readable, unknown-only Connects skip should clear");
+    assert(unknownOnlySkipPlan.connects.required === 8, "Verified required Connects should be copied into the plan");
+    assert(unknownOnlySkipPlan.connectsStrategy.decision === "safe_apply", "Unknown-only Connects skip should become safe prep after verification");
+
     const emptyCoverVerification = await verifyApplyPreparationOnPage({
       page: fakeApplyPage({ visibleText: "Required for proposal: 8 Connects\nSend for 8 Connects\nAdd a portfolio project\nAdd a certificate", inputValues: ["", "$35"], checkedLabels: [], fileNames: [] }),
       plan: verificationPlan,
@@ -1685,6 +1720,57 @@ async function runTests(): Promise<void> {
     assert(!lowScoreDecision.shouldQueue, "Low-score job should not auto-queue");
     assert(lowScoreDecision.category === "skipped_manual_override_available", "Low-score job should allow manual override");
     assert(lowScoreDecision.note.includes("You can still reply `prepare draft`"), "Low-score note should allow manual override");
+
+    const unknownConnectsAutoDecision = decideAutoPrepareDraft(
+      {
+        ...beautyJob,
+        connectsCost: 0,
+        connects: {
+          requiredConnects: null,
+          boostConnects: null,
+          totalConnects: null,
+          confidence: "unknown",
+          sourceText: null,
+          sourceLocation: null,
+          extractionMethod: "not_found",
+        },
+        applicationDraft: {
+          ...beautyJob.applicationDraft,
+          suggestedConnects: 0,
+          suggestedBoostConnects: 0,
+          connectsStrategy: {
+            ...beautyJob.applicationDraft.connectsStrategy,
+            decision: "skip",
+            requiredConnects: null,
+            suggestedBoostConnects: 0,
+            totalConnects: null,
+            expectedValueScore: 21,
+            sourceBackedConnects: {
+              requiredConnects: null,
+              boostConnects: null,
+              totalConnects: null,
+              confidence: "unknown",
+              sourceText: null,
+              sourceLocation: null,
+              extractionMethod: "not_found",
+            },
+            risks: [
+              "Required Connects are unknown from visible source text.",
+              "Expected value is too weak to spend Connects without a source-backed required cost.",
+            ],
+          },
+        },
+      },
+      {
+        enabled: true,
+        minScore: 80,
+        maxConnects: 30,
+        requireBrowserHealthy: true,
+        sessionStatus: { state: "healthy", updatedAt: new Date().toISOString(), challengeEvents: [], blocked: false, alertCooldownRemainingMs: 0 },
+      },
+    );
+    assert(unknownConnectsAutoDecision.shouldQueue, "Unknown Connects alone must route to apply-page verification instead of skipping auto-prep");
+    assert(unknownConnectsAutoDecision.category === "eligible_auto_prepare", "Unknown Connects should still be eligible for prep-only verification");
 
     const highConnectsDecision = decideAutoPrepareDraft(
       { ...beautyJob, applicationDraft: { ...beautyJob.applicationDraft, suggestedConnects: 20, suggestedBoostConnects: 20 } },

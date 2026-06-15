@@ -20,6 +20,10 @@ export interface VisibleBoostDecision {
   skippedReason?: string;
 }
 
+export function hasUnknownRequiredConnects(strategy?: Pick<ConnectsStrategySnapshot, "requiredConnects" | "sourceBackedConnects"> | null): boolean {
+  return strategy?.sourceBackedConnects?.requiredConnects === null || strategy?.requiredConnects === null;
+}
+
 function parseBudgetMax(value: string): number | null {
   const values = value.match(/\d+(?:,\d{3})*(?:\.\d+)?/g)?.map((item) => Number(item.replace(/,/g, ""))) ?? [];
   if (values.length === 0) return null;

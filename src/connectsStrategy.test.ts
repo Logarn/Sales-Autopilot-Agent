@@ -93,6 +93,19 @@ assert(
   unknownRequired.scoreBreakdown.connectsStrategy?.risks.some((risk) => risk.includes("unknown from visible source text")),
   "Unknown required Connects should be a fail-closed risk",
 );
+unknownRequired.applicationDraft = buildApplicationDraft(unknownRequired);
+unknownRequired.applicationDraft.connectsStrategy = {
+  ...unknownRequired.applicationDraft.connectsStrategy!,
+  decision: "skip",
+  expectedValueScore: 21,
+  risks: [
+    "Required Connects are unknown from visible source text.",
+    "Expected value is too weak to spend Connects without a source-backed required cost.",
+  ],
+};
+const unknownConnectsLeadDecision = decideLeadHandling(unknownRequired, klaviyoIntel);
+assert.notEqual(unknownConnectsLeadDecision.decision, "skip", "Unknown required Connects alone should not skip an otherwise viable lead");
+assert.equal(unknownConnectsLeadDecision.shouldPostToSlack, true, "Unknown Connects should surface for apply-page verification instead of hiding the lead");
 
 const highRequired = scoreJob(job({
   connectsCost: 32,

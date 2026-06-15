@@ -65,7 +65,7 @@ import {
   ScoredJob,
 } from "./types";
 import { extractConnectsFromVisibleText } from "./connectsExtraction";
-import { chooseVisibleBoost, extractVisibleBoostBids, type VisibleBoostBid } from "./connectsStrategy";
+import { chooseVisibleBoost, extractVisibleBoostBids, hasUnknownRequiredConnects, type VisibleBoostBid } from "./connectsStrategy";
 import { guardedClick } from "./browserSafetyGuard";
 import { getSlackLeadPostingDecision, SlackPacketV3Context, writeV3CapturePacketWithLlm } from "./slackPacketV3";
 import { evaluatePlatformEligibility } from "./platformEligibility";
@@ -1533,7 +1533,8 @@ export function decideAutoPrepareDraft(
     };
   }
   const connectsStrategy = draft.connectsStrategy ?? job.scoreBreakdown.connectsStrategy;
-  if (connectsStrategy?.decision === "skip") {
+  const connectsRequiredUnknown = hasUnknownRequiredConnects(connectsStrategy);
+  if (connectsStrategy?.decision === "skip" && !connectsRequiredUnknown) {
     return {
       shouldQueue: false,
       category: "blocked_no_manual_override",
@@ -1541,7 +1542,7 @@ export function decideAutoPrepareDraft(
       note: "Not auto-preparing because the Connects strategy says expected value is too weak. Do not spend Connects on this lead without explicit review.",
     };
   }
-  if (connectsStrategy?.decision === "manual_review") {
+  if (connectsStrategy?.decision === "manual_review" && !connectsRequiredUnknown) {
     return {
       shouldQueue: false,
       category: "skipped_manual_override_available",
@@ -1918,8 +1919,9 @@ function removeUnknownConnectsRisks(risks: string[]): string[] {
   return risks.filter((risk) => !/required connects are unknown|without a source-backed required cost|connects total is unknown/i.test(risk));
 }
 
-function verifyApplyPageConnects(plan: BrowserApplyFillPlan, bodyText: string): BrowserApplyValidationIssue[] {
+export function verifyApplyPageConnects(plan: BrowserApplyFillPlan, bodyText: string): BrowserApplyValidationIssue[] {
   const issues = plan.validationIssues;
+  const startedWithUnknownRequiredConnects = hasUnknownRequiredConnects(plan.connectsStrategy);
   const extracted = extractConnectsFromVisibleText(bodyText);
   if (extracted.requiredConnects === null) {
     const issue = {
@@ -2006,7 +2008,10 @@ function verifyApplyPageConnects(plan: BrowserApplyFillPlan, bodyText: string): 
     issues.push(issue);
     return [issue];
   }
-  if (plan.connectsStrategy.decision === "manual_review" && plan.connectsStrategy.risks.length === 0 && plan.connectsStrategy.expectedValueScore >= 68) {
+  if (
+    plan.connectsStrategy.risks.length === 0 &&
+    (startedWithUnknownRequiredConnects || plan.connectsStrategy.expectedValueScore >= 68)
+  ) {
     plan.connectsStrategy.decision = "safe_apply";
   } else if (plan.connectsStrategy.decision !== "safe_apply") {
     const issue = {
