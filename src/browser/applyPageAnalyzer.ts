@@ -284,8 +284,13 @@ function analyzeConnects(snapshot: ApplyPageSnapshot): ApplyPageConnectsAnalysis
 function analyzeBoost(snapshot: ApplyPageSnapshot, plan?: BrowserApplyFillPlan | null): ApplyPageBoostAnalysis {
   const text = snapshot.visibleText;
   const table = extractVisibleBoostBids(text);
-  const boostFields = snapshot.fieldValues.filter((field) => /\b(?:boost|bid to boost|top bid|connects)\b/i.test(fieldDescriptor(field)));
-  const selectedValue = boostFields.map((field) => parseNumber(field.value)).find((value): value is number => value !== null && value > 0) ?? null;
+  const plannedBoost = plan?.connects.boost ?? 0;
+  const boostFields = snapshot.fieldValues
+    .filter(isUserTextField)
+    .filter((field) => /\b(?:boost|bid to boost|top bid|connects)\b/i.test(fieldDescriptor(field)));
+  const selectedValue = plannedBoost > 0
+    ? boostFields.map((field) => parseNumber(field.value)).find((value): value is number => value !== null && value > 0) ?? null
+    : null;
   const visible = table.length > 0 || boostFields.length > 0 || /\b(?:boost your proposal|bid to boost|top\s+\d|place bid)\b/i.test(text);
   if (!visible) {
     return { visible: false, selectedValue: null, table, state: "not_visible", detail: "Boost controls/table were not detected." };
@@ -296,7 +301,7 @@ function analyzeBoost(snapshot: ApplyPageSnapshot, plan?: BrowserApplyFillPlan |
   if (selectedValue !== null) {
     return { visible: true, selectedValue, table, state: "visible_set", detail: `Boost field contains ${selectedValue}.` };
   }
-  if ((plan?.connects.boost ?? 0) > 0) {
+  if (plannedBoost > 0) {
     return { visible: true, selectedValue: null, table, state: "visible_unset", detail: "Boost was planned but no selected boost value was detected." };
   }
   return { visible: true, selectedValue: null, table, state: table.length > 0 ? "visible_table_only" : "visible_unset", detail: table.length > 0 ? "Boost table is visible; no boost is selected." : "Boost controls are visible; no boost is selected." };

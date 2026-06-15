@@ -150,6 +150,20 @@ const selectedBoost = analyzeApplyPageSnapshot(snapshot({
 assert.equal(selectedBoost.boost.state, "visible_set");
 assert.equal(selectedBoost.boost.selectedValue, 12);
 
+const unsetBoostWithAmbientConnects = analyzeApplyPageSnapshot(snapshot({
+  visibleText: "Required for proposal: 9 Connects\nBoost your proposal\n#4 bid 25 Connects\nSend for 9 Connects",
+  fieldValues: [
+    { kind: "textarea", inputType: null, label: "Cover letter", id: null, name: null, ariaLabel: null, placeholder: null, dataTest: null, value: filledPlan.coverLetter },
+    { kind: "input", inputType: "text", label: "Bid", id: "charged-amount-id", name: null, ariaLabel: null, placeholder: "$0.00", dataTest: "currency-input", value: "$10.00" },
+    { kind: "input", inputType: "radio", label: "As a freelancer (532 Connects available.)", id: null, name: "contractor-selector", ariaLabel: null, placeholder: null, dataTest: null, value: "1828757710371885667" },
+    { kind: "input", inputType: "number", label: "", id: null, name: null, ariaLabel: null, placeholder: "Connects", dataTest: null, value: "25" },
+  ],
+  actionLabels: ["Send for 9 Connects"],
+}), plan({ connects: { ...filledPlan.connects, required: 9, boost: 0, total: 9 }, rate: "$10.82/hr" }));
+assert.equal(unsetBoostWithAmbientConnects.boost.selectedValue, null);
+assert.equal(unsetBoostWithAmbientConnects.boost.state, "visible_table_only");
+assert(!unsetBoostWithAmbientConnects.blockers.includes("boost_over_cap"), "Ambient Connects/profile values must not be treated as selected boost.");
+
 const unknownPage = analyzeApplyPageSnapshot(snapshot({
   url: "https://www.upwork.com/nx/find-work/best-matches",
   title: "Best Matches",
