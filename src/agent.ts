@@ -517,6 +517,7 @@ export function buildApplicationDraft(job: ScoredJob, options: BuildApplicationD
     proofPoints,
     portfolioItems,
     skill: proposalCopywritingSkill,
+    soulGuidance,
   });
   const proposal = cleanProposal(
     copywritingDraft.proposalText,
@@ -533,6 +534,8 @@ export function buildApplicationDraft(job: ScoredJob, options: BuildApplicationD
     copyStrategyCreated: Boolean(copywritingDraft.copyStrategy.one_sentence_sales_argument),
     finalSubmitManual: true,
     proofVerificationState: copywritingDraft.copyStrategy.proof_verification_state,
+    screeningAnswers: copywritingDraft.screeningAnswers,
+    soulLoaded: soulGuidance.length > 0,
   });
   const proposalQuality = critiqueProposal(finalProposal, job, profile);
   const jobIntelligence = buildDeterministicJobIntelligence(job, finalProposal);

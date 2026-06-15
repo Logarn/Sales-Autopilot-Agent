@@ -1,4 +1,5 @@
 import { loadRuntimeSkill } from "../skillRuntime";
+import { buildSoulRuntimeGuidance } from "../soul";
 import {
   BrandFactPack,
   FreelancerProfile,
@@ -81,13 +82,42 @@ export interface DraftQualityGateIssue {
   evidence?: string;
 }
 
+export interface ProposalScorecardDimension {
+  dimension: string;
+  weight: number;
+  score: number;
+  passed: boolean;
+  hardFail: boolean;
+  message: string;
+}
+
+export interface ProposalScorecardResult {
+  score: number;
+  ready: boolean;
+  wordCount: number;
+  operatingBand: {
+    min: number;
+    max: number;
+    actual: number;
+  };
+  dimensions: ProposalScorecardDimension[];
+  hardFailures: string[];
+  feedbackMessages: string[];
+  jobSpecificSignalCount: number;
+  proofCount: number;
+  screeningAnswerCount: number;
+  soulLoaded: boolean;
+}
+
 export interface DraftQualityGateResult {
   ready: boolean;
   skillLoaded: boolean;
+  soulLoaded?: boolean;
   fullJobDescriptionRead: boolean;
   copyStrategyCreated: boolean;
   finalSubmitManual: boolean;
   issues: DraftQualityGateIssue[];
+  scorecard?: ProposalScorecardResult;
 }
 
 export interface CopywritingDraftInput {
@@ -98,6 +128,7 @@ export interface CopywritingDraftInput {
   proofPoints: string[];
   portfolioItems: PortfolioItem[];
   skill: CopywritingSkillRuntime;
+  soulGuidance?: string[];
 }
 
 export interface CopywritingDraftResult {
@@ -496,33 +527,48 @@ function requestedToolSentence(strategy: CopyStrategy): string | null {
 function conciseHook(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
   const opener = "Steve here - how is your day going?";
+  const deliverableSpecifics = strategy.requested_deliverables.slice(0, 2).join(" and ");
   if (strategy.category === "gardening" && tools.length > 0) {
-    return `${opener}\n\nI would not treat this like "set up more emails." The customer has seasonal logic first: what they are planting, what they are worried about, and when ${tools[0]} should help them buy or replenish next.`;
+    return `${opener} I would not treat seasonal replenishment and lifecycle care like "set up more emails." The customer has seasonal logic first: what they are planting, what they are worried about, and when ${tools[0]} should help them buy or replenish next.`;
   }
   if (strategy.category === "email_design") {
-    return `${opener}\n\nI would not treat this like "make the emails prettier." The reader needs the offer to be obvious before they have a chance to drift.`;
+    return `${opener} I would not treat email design templates like "make the emails prettier." The reader needs the offer to be obvious before they have a chance to drift.`;
   }
   if (tools.length >= 3 && /engagement|conversion/i.test(strategy.client_commercial_pain)) {
-    return `${opener}\n\nI would not treat this like "make some ecommerce emails." The actual win is cleaning up the customer path: who gets what message, when they get it, and what they should do next across ${tools.slice(0, 3).join(", ")}.`;
+    return `${opener} I would not treat the customer path across ${tools.slice(0, 3).join(", ")} like "make some ecommerce emails." The actual win is who gets what message, when they get it, and what they should do next.`;
   }
   if (tools.length >= 2) {
-    return `${opener}\n\nI would not make the tools the strategy here. The strategy is the customer moment: right timing, right message, and a next step that makes sense across ${tools.join(" and ")}.`;
+    return `${opener} I would not make the customer moment in ${tools.join(" and ")} a tool-first strategy. The strategy is right timing, right message, and a next step that makes sense.`;
   }
   if (tools.length === 1) {
-    return `${opener}\n\nThe customer needs a clearer reason to take the next step. ${tools[0]} is just the delivery system; the real work is making the timing useful instead of noisy.`;
+    return `${opener} The customer needs a clearer reason to take the next step, so I would use ${tools[0]} around ${deliverableSpecifics || strategy.category}. The tool is just the delivery system; the real work is making the timing useful instead of noisy.`;
   }
-  return `${opener}\n\nI would start with the customer path, not the task list. The customer needs a clearer reason to trust, click, buy, or return, and ${strategy.client_commercial_pain}.`;
+  return `${opener} I would start with ${strategy.category} and ${deliverableSpecifics || "the customer path"}, not the task list. The customer needs a clearer reason to trust, click, buy, or return, and ${strategy.client_commercial_pain}.`;
 }
 
 function oneStepSolution(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
   if (strategy.category === "email_design") {
-    return "I would start with a tight design/validation slice: offer hierarchy, mobile readability, product path, and CTA visibility on the priority templates. Pretty is nice. Clear is what gets paid.";
+    return "I would start with offer hierarchy, mobile readability, product path, and CTA visibility on the priority templates. Pretty is nice. Clear is what gets paid.";
   }
   if (tools.length >= 3) {
-    return "I would start with a tight audit/fix pass: active flows, subscriber/list logic, campaign cadence, and reporting. Then I would rank the first three fixes by likely lift to engagement and conversion, not by how tidy they look in a checklist.";
+    return "I would start with active flows, subscriber/list logic, campaign cadence, and reporting. Then I would rank the first three fixes by likely lift to engagement and conversion, not by how tidy they look in a checklist.";
   }
   return `I would start with a tight diagnostic pass: ${strategy.repeat_purchase_or_conversion_moment}. Then I would turn the clearest leak into the first practical fix.`;
+}
+
+function microMilestoneLine(strategy: CopyStrategy): string {
+  const tools = requestedTools(strategy);
+  if (strategy.category === "email_design") {
+    return "First 3-5 day slice: tighten the priority template path. Done = the offer, hierarchy, product path, and CTA are clear on mobile before expanding the set.";
+  }
+  if (tools.length >= 3) {
+    return "First 3-5 day slice: audit the active flows/campaigns and list logic. Done = the top three fixes are ranked by likely engagement/conversion lift with the first fix ready to implement.";
+  }
+  if (tools.length >= 1) {
+    return `First 3-5 day slice: audit the highest-leverage customer moment in ${tools[0]}. Done = one practical fix is mapped with the trigger, segment, message angle, and measurement check.`;
+  }
+  return "First 3-5 day slice: diagnose the highest-leverage customer moment. Done = one practical fix is mapped with the trigger, message angle, and measurement check.";
 }
 
 function singleProofPoint(proofPoints: string[], portfolioItems: PortfolioItem[]): string {
@@ -549,23 +595,23 @@ function singleProofPoint(proofPoints: string[], portfolioItems: PortfolioItem[]
 function logisticsLine(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
   if (strategy.category === "email_design") {
-    return "I can keep this async-friendly, work from the existing template examples, and show the before/after logic before expanding the set.";
+    return "I can keep this async-friendly and show the before/after logic before expanding the set.";
   }
   if (tools.length >= 3) {
-    return "I can keep this async-friendly, start with the audit/fix pass, and show the performance logic before any bigger rebuild.";
+    return "I can keep this async-friendly and show the performance logic before any bigger rebuild.";
   }
-  return "I can start small, keep the first scope tied to the highest-leverage fix, and work from the stack/details already in the brief.";
+  return "I can start small and keep the first scope tied to the highest-leverage fix already implied by the brief.";
 }
 
 function ctaLine(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
   if (strategy.category === "email_design") {
-    return "If it makes sense, send me the priority templates and I will point to the first fixes I would make.";
+    return "Would you prefer a quick call, or should I send the first async template outline?";
   }
   if (tools.length >= 3) {
-    return "If it makes sense, send me the current flow/campaign setup and I will map the first fixes I would make.";
+    return "Would you prefer a quick call, or should I send the first async audit outline from the current setup?";
   }
-  return "If it makes sense, send me the current setup and I will point to the first fix I would prioritize.";
+  return "Would you prefer a quick call, or should I send the first async outline from the current setup?";
 }
 
 export function draftCoverLetterFromCopyStrategy(input: {
@@ -581,9 +627,9 @@ export function draftCoverLetterFromCopyStrategy(input: {
     "",
     singleProofPoint(input.proofPoints, input.portfolioItems),
     "",
-    logisticsLine(strategy),
+    microMilestoneLine(strategy),
     "",
-    ctaLine(strategy),
+    `${logisticsLine(strategy)} ${ctaLine(strategy)}`,
   ].filter((line) => line !== null).join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
@@ -624,7 +670,293 @@ function addIssue(issues: DraftQualityGateIssue[], issue: DraftQualityGateIssue)
 }
 
 function hasCompleteCta(text: string): boolean {
-  return /\b(if it makes sense|if useful|happy to|send me|share|we can start|walk me through|take a quick look|choose a 10-minute call|2-slide plan)\b/i.test(text) && /[.!?]$/.test(text.trim());
+  return /\b(if it makes sense|if useful|happy to|send me|share|we can start|walk me through|take a quick look|choose a 10-minute call|2-slide plan|would you prefer|async (?:audit |template |)?outline|quick call)\b/i.test(text) && /[.!?]$/.test(text.trim());
+}
+
+function wordCount(text: string): number {
+  return text.trim().match(/\b[\w'-]+\b/g)?.length ?? 0;
+}
+
+function paragraphCount(text: string): number {
+  return text.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean).length;
+}
+
+function firstTwoSentenceWindow(text: string): string {
+  const sentences = text
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(/(?<=[.!?])\s+/)
+    .filter(Boolean);
+  return sentences.slice(0, 2).join(" ").slice(0, 420);
+}
+
+function scorecardJobSignals(job: JobPosting, copyStrategy?: CopyStrategy | null): string[] {
+  const source = sourceText(job).toLowerCase();
+  const toolSignals = [
+    "Klaviyo",
+    "Mailchimp",
+    "Omnisend",
+    "Shopify",
+    "Figma",
+    "HubSpot",
+    "Brevo",
+    "Postscript",
+    "Attentive",
+  ].filter((signal) => source.includes(signal.toLowerCase()));
+  const scopeSignals = [
+    "flow",
+    "flows",
+    "automation",
+    "campaign",
+    "campaigns",
+    "subscriber",
+    "list",
+    "engagement",
+    "conversion",
+    "retention",
+    "lifecycle",
+    "audit",
+    "design",
+    "template",
+    "deliverability",
+    "segmentation",
+    "replenishment",
+    "post-purchase",
+    "welcome",
+  ].filter((signal) => source.includes(signal.toLowerCase()));
+  const strategySignals = [
+    copyStrategy?.category,
+    ...(copyStrategy?.requested_tools ?? []),
+    ...(copyStrategy?.requested_deliverables ?? []),
+  ];
+  return unique([...toolSignals, ...scopeSignals, ...strategySignals])
+    .filter((signal) => signal.length > 2 && !/unknown/i.test(signal))
+    .slice(0, 18);
+}
+
+function countJobSpecificSignals(text: string, job: JobPosting, copyStrategy?: CopyStrategy | null): number {
+  const lower = text.toLowerCase();
+  return scorecardJobSignals(job, copyStrategy).filter((signal) => lower.includes(signal.toLowerCase())).length;
+}
+
+function proofMentionCount(text: string): number {
+  const proofParagraphs = text.split(/\n{2,}/).filter((paragraph) => /\bfor proof\b|\bone matched artifact\b|\bcase study\b|\bscreenshot\b|\bloom\b/i.test(paragraph));
+  return proofParagraphs.length;
+}
+
+function hasMicroMilestone(text: string): boolean {
+  return /\bDone\s*=/i.test(text) && /\b(?:first|3-5|three|five|slice|milestone|sprint|audit|diagnostic|fix)\b/i.test(text);
+}
+
+function hasBinaryOrScopeCta(text: string): boolean {
+  const tail = text.trim().slice(-280);
+  if (!/[?]$/.test(tail.trim())) return false;
+  if (/\b(?:or|option a|option b|prefer|rather)\b/i.test(tail)) return true;
+  return /\b(?:what|which|where|when|how)\b/i.test(tail) && /\b(?:scope|priority|setup|template|audit|outline|call|plan|fix)\b/i.test(tail);
+}
+
+function screeningQuestionsLikelyRequired(job: JobPosting): boolean {
+  const text = sourceText(job);
+  return /\b(?:screening questions?|application questions?|answer(?: the)? questions?|when applying|to apply|include in your proposal|please answer)\b/i.test(text);
+}
+
+function hasWeakScreeningAnswer(answer: string): boolean {
+  return answer.split(/\s+/).filter(Boolean).length < 8 ||
+    /\b(?:yes|no|n\/a|sure|happy to help|i can help|great question)\b\.?$/i.test(answer.trim()) ||
+    /\b(?:tailored to your needs|leverage|extensive experience|passionate)\b/i.test(answer);
+}
+
+function usesGenericAiCliches(text: string): boolean {
+  return /\b(?:I am writing to express|tailored to your needs|leverage my expertise|extensive experience|passionate about|proven track record|take your business to the next level)\b/i.test(text);
+}
+
+function hasUnsupportedClaim(text: string, proofState?: ProofVerificationState): boolean {
+  if (/\bguarantee(?:d)?\b|\bwill definitely\b|\b100%\b/i.test(text)) return true;
+  return /\b(?:attached|uploaded|selected portfolio|verified proof|included the file)\b/i.test(text) && proofState !== "verified";
+}
+
+function scorecardFeedback(code: string, detail?: string): string {
+  switch (code) {
+    case "opener_specificity":
+      return "Blocked: opening lines are generic. Mention two concrete details from the job post in the first two sentences.";
+    case "proof_relevance":
+      return detail === "proof_dump"
+        ? "Revise: too many proof items. Keep one artifact that best matches the client's problem."
+        : "Blocked: no proof artifact or relevant example. Add exactly one matched case, screenshot, Loom, or portfolio item.";
+    case "micro_milestone":
+      return "Blocked: proposal lacks a clear first slice. Add one 3-5 day micro-milestone with Done = ....";
+    case "screening_answers":
+      return "Blocked: client questions are incomplete or vague. Answer directly with evidence before revising the body.";
+    case "tone_humanity":
+      return "Revise: draft sounds templated. Replace generic phrases with concrete specifics, proof, and client-language outcomes.";
+    case "cta_quality":
+      return "Revise: close is passive. End with one low-friction choice such as quick call or async outline?";
+    case "readability":
+      return "Revise: proposal is not scannable. Cut resume detail, keep one proof, and shorten to the operating band.";
+    case "honesty":
+      return "Blocked: this draft claims research or results that are not evidenced. Remove or restate honestly.";
+    case "soul_loaded":
+      return "Blocked: soul.md was not loaded before copywriting. Regenerate with soul.md invoked.";
+    default:
+      return "Revise: proposal scorecard found a quality issue.";
+  }
+}
+
+function scorecardDimension(input: {
+  dimension: string;
+  weight: number;
+  passed: boolean;
+  hardFail: boolean;
+  message: string;
+  partial?: boolean;
+}): ProposalScorecardDimension {
+  return {
+    dimension: input.dimension,
+    weight: input.weight,
+    score: input.passed ? input.weight : input.partial ? Math.round(input.weight * 0.55) : 0,
+    passed: input.passed,
+    hardFail: input.hardFail && !input.passed,
+    message: input.message,
+  };
+}
+
+export function evaluateProposalScorecard(input: {
+  proposalText: string;
+  job: JobPosting;
+  copyStrategy?: CopyStrategy | null;
+  proofVerificationState?: ProofVerificationState;
+  screeningAnswers?: string[];
+  soulLoaded?: boolean;
+}): ProposalScorecardResult {
+  const text = input.proposalText.trim();
+  const words = wordCount(text);
+  const openingSignalCount = countJobSpecificSignals(firstTwoSentenceWindow(text), input.job, input.copyStrategy);
+  const totalSignalCount = countJobSpecificSignals(text, input.job, input.copyStrategy);
+  const proofCount = proofMentionCount(text);
+  const screeningAnswers = input.screeningAnswers ?? [];
+  const screeningRequired = screeningQuestionsLikelyRequired(input.job);
+  const screeningPass = screeningRequired
+    ? screeningAnswers.length > 0 && !screeningAnswers.some(hasWeakScreeningAnswer)
+    : !screeningAnswers.some(hasWeakScreeningAnswer);
+  const paragraphs = paragraphCount(text);
+  const bullets = (text.match(/^\s*(?:[-*]|\d+\.)\s+/gm) ?? []).length;
+  const lengthInBand = words >= 150 && words <= 220;
+  const readable = paragraphs >= 2 && paragraphs <= 5 && bullets <= 2 && words >= 60 && words <= 320;
+  const customerOrGoal = /\b(?:customer|buyer|reader|shopper|subscriber|client|conversion|engagement|revenue|retention|trust|friction|repeat|replenishment|deliverability)\b/i.test(text);
+  const proofPass = proofCount === 1 && input.proofVerificationState !== "unavailable" && input.proofVerificationState !== "do_not_claim";
+  const soulLoaded = input.soulLoaded === true;
+  const tonePass = soulLoaded && /^steve here\b/i.test(text) && /\bI would\b/i.test(text) && !usesGenericAiCliches(text);
+  const ctaPass = hasBinaryOrScopeCta(text);
+  const honestyPass = !hasUnsupportedClaim(text, input.proofVerificationState) && !/\b(?:invented|fake|guaranteed results)\b/i.test(text);
+
+  const dimensions = [
+    scorecardDimension({
+      dimension: "Opener specificity",
+      weight: 15,
+      passed: openingSignalCount >= 2,
+      hardFail: true,
+      partial: openingSignalCount === 1,
+      message: `${openingSignalCount} job-specific signal(s) found in the first two sentences.`,
+    }),
+    scorecardDimension({
+      dimension: "Client-goal understanding",
+      weight: 15,
+      passed: customerOrGoal && totalSignalCount >= 2,
+      hardFail: true,
+      partial: customerOrGoal || totalSignalCount >= 2,
+      message: customerOrGoal ? "Draft names the client/customer outcome or risk." : "Draft does not clearly restate the client goal or risk.",
+    }),
+    scorecardDimension({
+      dimension: "Proof relevance",
+      weight: 15,
+      passed: proofPass,
+      hardFail: true,
+      partial: proofCount > 0,
+      message: `${proofCount} proof block(s) found; expected exactly one relevant proof artifact or example.`,
+    }),
+    scorecardDimension({
+      dimension: "Micro-milestone clarity",
+      weight: 15,
+      passed: hasMicroMilestone(text),
+      hardFail: true,
+      message: "Draft must include one 3-5 day first slice with Done = acceptance criteria.",
+    }),
+    scorecardDimension({
+      dimension: "Screening-answer quality",
+      weight: 10,
+      passed: screeningPass,
+      hardFail: screeningRequired,
+      partial: screeningAnswers.length > 0,
+      message: screeningRequired ? `${screeningAnswers.length} screening answer(s) for likely required questions.` : "No required screening questions detected, or answers are concrete enough.",
+    }),
+    scorecardDimension({
+      dimension: "Tone / humanity",
+      weight: 10,
+      passed: tonePass,
+      hardFail: true,
+      partial: /^steve here\b/i.test(text) || /\bI would\b/i.test(text),
+      message: soulLoaded ? "soul.md loaded and draft uses first-person human voice." : "soul.md was not loaded for copywriting.",
+    }),
+    scorecardDimension({
+      dimension: "Logistics",
+      weight: 5,
+      passed: /\b(?:async-friendly|available|start|today|tomorrow|this week|turnaround|overlap|3-5 day|first scope)\b/i.test(text),
+      hardFail: false,
+      message: "Draft should remove operational friction with timeline, availability, or async workflow.",
+    }),
+    scorecardDimension({
+      dimension: "CTA quality",
+      weight: 5,
+      passed: ctaPass,
+      hardFail: true,
+      message: "Draft must end with a binary or direct scope-tied question.",
+    }),
+    scorecardDimension({
+      dimension: "Readability",
+      weight: 5,
+      passed: readable && lengthInBand,
+      hardFail: !readable,
+      partial: readable,
+      message: `${words} words across ${paragraphs} paragraph(s); default operating band is 150-220 words.`,
+    }),
+    scorecardDimension({
+      dimension: "Honesty / risk control",
+      weight: 5,
+      passed: honestyPass,
+      hardFail: true,
+      message: honestyPass ? "No unsupported proof, research, submit, or guarantee claim detected." : "Draft contains an unsupported or unsafe claim.",
+    }),
+  ];
+
+  const score = dimensions.reduce((sum, dimension) => sum + dimension.score, 0);
+  const hardFailures = dimensions.filter((dimension) => dimension.hardFail).map((dimension) => dimension.dimension);
+  const feedbackMessages = dimensions
+    .filter((dimension) => !dimension.passed)
+    .map((dimension) => {
+      if (dimension.dimension === "Opener specificity") return scorecardFeedback("opener_specificity");
+      if (dimension.dimension === "Proof relevance") return scorecardFeedback("proof_relevance", proofCount > 1 ? "proof_dump" : undefined);
+      if (dimension.dimension === "Micro-milestone clarity") return scorecardFeedback("micro_milestone");
+      if (dimension.dimension === "Screening-answer quality") return scorecardFeedback("screening_answers");
+      if (dimension.dimension === "Tone / humanity") return soulLoaded ? scorecardFeedback("tone_humanity") : scorecardFeedback("soul_loaded");
+      if (dimension.dimension === "CTA quality") return scorecardFeedback("cta_quality");
+      if (dimension.dimension === "Readability") return scorecardFeedback("readability");
+      if (dimension.dimension === "Honesty / risk control") return scorecardFeedback("honesty");
+      return scorecardFeedback("default");
+    });
+
+  return {
+    score,
+    ready: score >= 85 && hardFailures.length === 0,
+    wordCount: words,
+    operatingBand: { min: 150, max: 220, actual: words },
+    dimensions,
+    hardFailures,
+    feedbackMessages: unique(feedbackMessages),
+    jobSpecificSignalCount: openingSignalCount,
+    proofCount,
+    screeningAnswerCount: screeningAnswers.length,
+    soulLoaded,
+  };
 }
 
 function endsMidThought(text: string): boolean {
@@ -644,10 +976,43 @@ export function evaluateDraftQualityGate(input: {
   copyStrategyCreated: boolean;
   finalSubmitManual?: boolean;
   proofVerificationState?: ProofVerificationState;
+  screeningAnswers?: string[];
+  soulLoaded?: boolean;
 }): DraftQualityGateResult {
   const text = input.proposalText.trim();
   const lower = text.toLowerCase();
   const issues: DraftQualityGateIssue[] = [];
+  const scorecard = evaluateProposalScorecard({
+    proposalText: text,
+    job: input.job,
+    copyStrategy: input.copyStrategy,
+    proofVerificationState: input.proofVerificationState,
+    screeningAnswers: input.screeningAnswers,
+    soulLoaded: input.soulLoaded,
+  });
+  if (!scorecard.soulLoaded) {
+    addIssue(issues, { code: "soul_md_not_loaded", severity: "critical", message: "soul.md must be loaded before writing proposal copy." });
+  }
+  if (scorecard.jobSpecificSignalCount < 2) {
+    addIssue(issues, { code: "missing_two_line_specificity", severity: "critical", message: "First two sentences must contain at least two concrete details from the job post." });
+  }
+  if (scorecard.proofCount !== 1 || input.proofVerificationState === "unavailable" || input.proofVerificationState === "do_not_claim") {
+    addIssue(issues, { code: "proof_count_not_one", severity: "critical", message: "Proposal must use exactly one relevant proof artifact or example." });
+  }
+  if (!hasMicroMilestone(text)) {
+    addIssue(issues, { code: "missing_micro_milestone_done_criteria", severity: "critical", message: "Proposal must include one first slice with explicit Done = acceptance criteria." });
+  }
+  if (!hasBinaryOrScopeCta(text)) {
+    addIssue(issues, { code: "missing_choice_based_cta", severity: "critical", message: "Proposal must end with a binary or scope-tied CTA question." });
+  }
+  if (!scorecard.ready) {
+    addIssue(issues, {
+      code: "proposal_scorecard_not_ready",
+      severity: scorecard.hardFailures.length ? "critical" : "warning",
+      message: `Proposal scorecard is ${scorecard.score}/100; ready requires 85+ with no hard failures.`,
+      evidence: scorecard.feedbackMessages.slice(0, 3).join(" | "),
+    });
+  }
   if (!input.job.description.trim()) {
     addIssue(issues, { code: "missing_job_description", severity: "critical", message: "Full job description is required before drafting or browser fill." });
   }
@@ -752,10 +1117,12 @@ export function evaluateDraftQualityGate(input: {
   return {
     ready: !issues.some((issue) => issue.severity === "critical"),
     skillLoaded: input.skillLoaded,
+    soulLoaded: scorecard.soulLoaded,
     fullJobDescriptionRead: input.fullJobDescriptionRead,
     copyStrategyCreated: input.copyStrategyCreated,
     finalSubmitManual: input.finalSubmitManual !== false,
     issues,
+    scorecard,
   };
 }
 
@@ -765,6 +1132,10 @@ export function buildCopywritingDraft(input: CopywritingDraftInput): Copywriting
   }
   if (input.skill.name !== "proposal-copywriting" || !input.skill.markdown.includes("# Proposal Copywriting Skill")) {
     throw new Error("proposal-copywriting skill must be loaded before draft generation.");
+  }
+  const soulGuidance = input.soulGuidance?.length ? input.soulGuidance : buildSoulRuntimeGuidance("proposal_copywriting_skill");
+  if (soulGuidance.length === 0) {
+    throw new Error("soul.md must be loaded before proposal copywriting.");
   }
   const understanding = buildJobUnderstanding(input.job, input.intelligence);
   const category = categoryFor(input.job, input.intelligence);
@@ -800,6 +1171,8 @@ export function buildCopywritingDraft(input: CopywritingDraftInput): Copywriting
     copyStrategyCreated: Boolean(copyStrategy.one_sentence_sales_argument),
     finalSubmitManual: true,
     proofVerificationState: copyStrategy.proof_verification_state,
+    screeningAnswers,
+    soulLoaded: soulGuidance.length > 0,
   });
   return {
     jobUnderstanding: understanding,
