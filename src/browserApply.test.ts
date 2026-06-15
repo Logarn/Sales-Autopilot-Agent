@@ -201,8 +201,9 @@ async function runTests(): Promise<void> {
       url: () => input.url ?? "https://www.upwork.com/ab/proposals/job/~beautyjob123456/apply/",
       locator: () => ({ first: () => ({ textContent: async () => input.visibleText ?? "" }) }),
       evaluate: async (fn: () => unknown) => {
-        const holder = globalThis as unknown as { document?: unknown };
+        const holder = globalThis as unknown as { document?: unknown; scrollTo?: (x: number, y: number) => void };
         const previousDocument = holder.document;
+        const previousScrollTo = holder.scrollTo;
         const inputElements = input.fields
           ? input.fields.map(makeElement)
           : (input.inputValues ?? []).map((value) => makeElement({
@@ -234,10 +235,12 @@ async function runTests(): Promise<void> {
           body: { innerText: input.visibleText ?? "" },
           querySelectorAll: () => [...inputElements, ...checkedElements, ...fileElements],
         };
+        holder.scrollTo = () => undefined;
         try {
           return fn();
         } finally {
           holder.document = previousDocument;
+          holder.scrollTo = previousScrollTo;
         }
       },
     };
@@ -348,6 +351,19 @@ async function runTests(): Promise<void> {
     assert(
       unknownConnectsPlan.plan.manualFields.includes("connects"),
       "Unknown Connects should remain a manual/review field until verified on the apply page",
+    );
+
+    unknownConnectsJob.applicationDraft.connectsStrategy = {
+      ...unknownConnectsJob.applicationDraft.connectsStrategy,
+      decision: "skip",
+      expectedValueScore: 21,
+      risks: ["Required Connects are unknown from visible source text.", "Expected value is too weak to spend Connects without a source-backed required cost."],
+    };
+    const unknownConnectsSkipPlan = buildBrowserApplyPlan(unknownConnectsJob.id);
+    assert(unknownConnectsSkipPlan.valid, "Unknown Connects with a skip decision should still allow opening the apply page for bottom-of-page verification");
+    assert(
+      unknownConnectsSkipPlan.issues.some((issue) => issue.code === "connects_apply_page_verification_required" && issue.severity === "warning"),
+      "Unknown Connects skip decision should be represented as an apply-page verification warning",
     );
 
     upsertSlackThreadState({

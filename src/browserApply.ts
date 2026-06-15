@@ -630,7 +630,7 @@ export function buildBrowserApplyPlan(jobId: string, options: BrowserApplyPlanOp
     risks: [...baseConnectsStrategy.risks],
   };
   const sourceRequired = connectsStrategy.sourceBackedConnects?.requiredConnects ?? connects.required;
-  const applyPageVerificationOnly = sourceRequired === null && connectsStrategy.decision === "manual_review";
+  const applyPageVerificationOnly = sourceRequired === null && connectsStrategy.decision !== "safe_apply";
   if (connectsStrategy.decision !== "safe_apply" && !applyPageVerificationOnly) {
     issues.push(issue("error", "connects_manual_review_required", "Connects strategy requires human review before autonomous browser preparation."));
   } else if (applyPageVerificationOnly) {
