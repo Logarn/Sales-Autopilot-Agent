@@ -26,6 +26,8 @@ export interface ApplyPageSnapshot {
   fieldValues: ApplyPageFieldSnapshot[];
   checkedLabels: string[];
   fileNames: string[];
+  attachmentRows: string[];
+  selectedHighlightLabels: string[];
   actionLabels: string[];
   title?: string;
 }
@@ -137,6 +139,21 @@ function containsExpected(values: string[], expected: string): boolean {
   const needle = significantExpectedText(expected);
   if (!needle) return false;
   return values.some((value) => normalizeText(value).includes(needle));
+}
+
+function highlightAliases(highlight: string): string[] {
+  const aliases = [highlight];
+  const withoutSlashSuffix = highlight.replace(/\s*\/\s*[^/]+$/, "").trim();
+  if (withoutSlashSuffix && withoutSlashSuffix !== highlight) aliases.push(withoutSlashSuffix);
+  if (/truly beauty/i.test(highlight)) aliases.push("From $250k to $1.2 Million In 12 Months");
+  if (/design case studies/i.test(highlight)) aliases.push("Steve's Design Case Studies");
+  if (/fly boutique/i.test(highlight)) aliases.push("The Fly Boutique");
+  if (/lifely/i.test(highlight)) aliases.push("How Lifely Transformed Their Retention Marketing");
+  return Array.from(new Set(aliases.filter(Boolean)));
+}
+
+function containsExpectedHighlight(values: string[], expected: string): boolean {
+  return highlightAliases(expected).some((alias) => containsExpected(values, alias));
 }
 
 function bestValue(values: string[]): string | null {
@@ -309,29 +326,31 @@ function analyzeBoost(snapshot: ApplyPageSnapshot, plan?: BrowserApplyFillPlan |
 
 function analyzeAttachments(snapshot: ApplyPageSnapshot, plan?: BrowserApplyFillPlan | null): ApplyPageFieldState {
   const expectedNames = (plan?.attachments ?? []).map((attachment) => path.basename(attachment.filePath));
-  const visible = snapshot.fileNames.length > 0 || /\b(?:attachments?|upload|attach file|drag and drop)\b/i.test(snapshot.visibleText);
+  const visible = snapshot.attachmentRows.length > 0 || snapshot.fileNames.length > 0 || /\b(?:attachments?|upload|attach file|drag and drop)\b/i.test(snapshot.visibleText);
   if (expectedNames.length === 0) {
     return { state: visible ? "not_required" : "not_required", visible, filled: false, detail: visible ? "Attachment section is visible; no files were planned." : "No attachment section or planned files detected." };
   }
-  const verified = expectedNames.filter((name) => containsExpected([...snapshot.fileNames, snapshot.visibleText], name));
-  if (verified.length === expectedNames.length) {
+  const attachmentEvidence = snapshot.attachmentRows.length > 0 ? snapshot.attachmentRows : snapshot.fileNames;
+  const verified = expectedNames.filter((name) => attachmentEvidence.filter((value) => containsExpected([value], name)).length === 1);
+  if (verified.length === expectedNames.length && attachmentEvidence.length === expectedNames.length) {
     return { state: "visible_filled", visible: true, filled: true, valuePreview: verified.join(", "), detail: `Verified attached files: ${verified.join(", ")}.` };
   }
   return {
     state: visible ? "visible_requires_input" : "not_visible",
     visible,
     filled: false,
-    detail: visible ? `Attachment section visible; expected files not fully verified: ${expectedNames.join(", ")}.` : `Attachment section was not detected. Expected files: ${expectedNames.join(", ")}.`,
+    detail: visible ? `Attachment rows need QA. Expected exactly once: ${expectedNames.join(", ")}. Actual: ${attachmentEvidence.join(", ") || "none"}.` : `Attachment section was not detected. Expected files: ${expectedNames.join(", ")}.`,
   };
 }
 
 function analyzePortfolioHighlights(snapshot: ApplyPageSnapshot, plan?: BrowserApplyFillPlan | null): ApplyPageFieldState {
   const expected = plan?.highlights ?? [];
-  const visible = snapshot.checkedLabels.length > 0 || /\b(?:portfolio project|profile highlight|certificates?|work samples?|add portfolio)\b/i.test(snapshot.visibleText);
+  const selectedEvidence = [...snapshot.checkedLabels, ...snapshot.selectedHighlightLabels];
+  const visible = selectedEvidence.length > 0 || /\b(?:portfolio project|profile highlight|certificates?|work samples?|add portfolio)\b/i.test(snapshot.visibleText);
   if (expected.length === 0) {
     return { state: visible ? "not_required" : "not_required", visible, filled: false, detail: visible ? "Portfolio/profile section is visible; no highlights were planned." : "No portfolio/profile highlight section or planned highlights detected." };
   }
-  const verified = expected.filter((highlight) => containsExpected([...snapshot.checkedLabels, snapshot.visibleText], highlight));
+  const verified = expected.filter((highlight) => containsExpectedHighlight(selectedEvidence, highlight));
   if (verified.length === expected.length) {
     return { state: "visible_filled", visible: true, filled: true, valuePreview: verified.join(", "), detail: `Verified selected portfolio/profile proof: ${verified.join(", ")}.` };
   }

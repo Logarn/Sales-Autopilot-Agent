@@ -225,6 +225,9 @@ const noisyCapturedJob = scored({
 });
 const noisyDraft = buildApplicationDraft(noisyCapturedJob);
 assert(!/10\.00|fixed-priceintermediate|upwork\.com|Screenshot\s*\d+|general retention portfolio/i.test(noisyDraft.proposalText), `Noisy captured proposal should not leak parsed page noise or vague proof references:\n${noisyDraft.proposalText}`);
+assert(/^Steve here\b/i.test(noisyDraft.proposalText), `Noisy captured proposal should keep the required human opener:\n${noisyDraft.proposalText}`);
+assert(/how is your day going\?/i.test(noisyDraft.proposalText), `Noisy captured proposal should use the soul opener instead of sterile template copy:\n${noisyDraft.proposalText}`);
+assert(!/commercially pointed|Two customer-lifecycle details stood out/i.test(noisyDraft.proposalText), `Noisy captured proposal should not use the old sterile template voice:\n${noisyDraft.proposalText}`);
 assert(/klaviyo/i.test(noisyDraft.proposalText), `Noisy captured proposal should mention the requested Klaviyo scope:\n${noisyDraft.proposalText}`);
 assert(/mailchimp/i.test(noisyDraft.proposalText), `Noisy captured proposal should mention the requested Mailchimp scope:\n${noisyDraft.proposalText}`);
 assert(/omnisend/i.test(noisyDraft.proposalText), `Noisy captured proposal should mention the requested Omnisend scope:\n${noisyDraft.proposalText}`);
@@ -239,6 +242,11 @@ assert(evaluateDraftQualityGate({
   job: noisyCapturedJob,
   proposalText: "Steve here,\n\nThe opportunity here is conversion can leak when campaigns and flows are not tied to customer moments.\n\nThe customer is deciding whether the offer, timing, and next step feel relevant enough to act on.\n\nIf it makes sense, we can start with the first few customer moments you want the work to improve.",
 }).issues.some((issue) => issue.code === "missing_requested_platform_specificity"), "Drafts must fail when they omit explicitly requested Klaviyo/Mailchimp/Omnisend platform scope.");
+assert(evaluateDraftQualityGate({
+  ...gateBase,
+  job: noisyCapturedJob,
+  proposalText: "Two customer-lifecycle details stood out: you want engagement/conversion improved through subscriber lists and campaign performance insights, across Klaviyo, Mailchimp, Omnisend.\n\nI would start with a commercially pointed 3-5 day audit/fix slice.\n\nIf it makes sense, send me the current flow/campaign setup and I will map the first fixes I would make.",
+}).issues.some((issue) => issue.code === "sterile_template_voice"), "Old sterile proposal template voice should fail quality gate.");
 
 beauty.applicationDraft = beautyDraft;
 markJobSeen(beauty, true);
