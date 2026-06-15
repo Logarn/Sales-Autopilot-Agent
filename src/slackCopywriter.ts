@@ -114,6 +114,8 @@ function violatesProofWording(text: string, deterministicText: string): boolean 
   if (/Proof I used/i.test(text)) return true;
   if (/Proof planned/i.test(deterministicText) && !/Proof planned/i.test(text)) return true;
   if (/Proof verified/i.test(deterministicText) && !/Proof verified/i.test(text)) return true;
+  if (/Proof files:/i.test(deterministicText) && !/Proof files:/i.test(text)) return true;
+  if (/Portfolio highlights:/i.test(deterministicText) && !/Portfolio highlights:/i.test(text)) return true;
   return false;
 }
 
@@ -313,7 +315,7 @@ export async function rewriteSlackCopyWithKimi(
             "Never claim final submit happened or will happen. Final submit always remains manual.",
             "Never bypass CAPTCHA, security, login, passkey, or 2FA checks.",
             "Never claim files, proof, portfolio, browser fill, Connects, or boost were verified unless deterministic text/context says so.",
-            "Use Proof planned until verification is explicit. Use Proof verified only when the deterministic text already says Proof verified. Never say Proof I used.",
+            "Preserve the deterministic Proof files and Portfolio highlights status labels. Do not invent Proof planned or Proof verified unless the deterministic text already says it. Never say Proof I used.",
             "If preservePhrases are provided, include each phrase exactly as written.",
             "Return JSON only: {\"text\":\"...\"}.",
             buildSoulPromptSection(`slack_copy:${request.path}`),

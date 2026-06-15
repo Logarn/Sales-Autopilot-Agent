@@ -4,7 +4,7 @@ import {
   applyProofPlanOverridesToSelection,
   reviseProofPlanOverrides,
 } from "./proofPlanOverrides";
-import { selectPortfolioAssetsForJob } from "./skills/portfolioSelectionSkill";
+import { MAX_UPWORK_PORTFOLIO_SELECTIONS, selectPortfolioAssetsForJob } from "./skills/portfolioSelectionSkill";
 import type { JobPosting } from "./types";
 
 function createJob(overrides: Partial<JobPosting> = {}): JobPosting {
@@ -41,6 +41,7 @@ function hasPortfolio(selection: ReturnType<typeof selectPortfolioAssetsForJob>,
 const beautySelection = selectPortfolioAssetsForJob(createJob());
 assert(!hasAsset(beautySelection, "truly-beauty-case-study"), "Beauty base plan should not attach Truly when the Upwork portfolio item is selected.");
 assert(hasPortfolio(beautySelection, "Truly Beauty"), "Beauty base plan should select Truly Upwork portfolio item.");
+assert.equal(beautySelection.selectedUpworkPortfolioItems.length, MAX_UPWORK_PORTFOLIO_SELECTIONS, "Beauty base plan should fill the four available Upwork portfolio slots.");
 
 const swap = reviseProofPlanOverrides(
   EMPTY_PROOF_PLAN_OVERRIDES,
@@ -104,5 +105,6 @@ const portfolioOnly = reviseProofPlanOverrides(
 const portfolioOnlySelection = applyProofPlanOverridesToSelection(beautySelection, portfolioOnly.overrides);
 assert.equal(portfolioOnlySelection.autoAttachAssets.length, 0, "Portfolio-only command should remove file attachments.");
 assert(hasPortfolio(portfolioOnlySelection, "Truly Beauty"), "Portfolio-only command should keep the strongest Upwork portfolio selection.");
+assert.equal(portfolioOnlySelection.selectedUpworkPortfolioItems.length, MAX_UPWORK_PORTFOLIO_SELECTIONS, "Portfolio-only command should keep four Upwork portfolio selections when available.");
 
 console.log("proof plan override tests passed");
