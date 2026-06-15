@@ -2157,8 +2157,18 @@ function assertSubmitGuard(plan: BrowserApplyFillPlan | null): asserts plan is B
   }
 }
 
-function getRequiredSkippedFields(fields: Pick<ApplyPreparationDiagnostics, "skippedFields">): string[] {
-  return fields.skippedFields.filter((field) => ["coverLetter", "rate", "connectsBoost"].includes(field));
+function verificationFieldForSkippedField(field: string): string {
+  if (field === "connectsBoost") return "boostConnects";
+  return field;
+}
+
+export function getRequiredSkippedFields(fields: Pick<ApplyPreparationDiagnostics, "skippedFields"> & Partial<Pick<ApplyPreparationDiagnostics, "fieldVerification">>): string[] {
+  return fields.skippedFields
+    .filter((field) => ["coverLetter", "rate", "connectsBoost"].includes(field))
+    .filter((field) => {
+      const verified = getVerification(fields.fieldVerification ?? [], verificationFieldForSkippedField(field));
+      return verified?.status !== "verified" && verified?.status !== "skipped_by_strategy";
+    });
 }
 
 function removeConnectsVerificationIssues(issues: BrowserApplyValidationIssue[]): void {

@@ -56,13 +56,14 @@ async function runTests(): Promise<void> {
   const { buildBrowserApplyPlan } = require("./browserApply") as {
     buildBrowserApplyPlan: (jobId: string) => { plan: any; valid: boolean; issues: Array<{ severity: string; code: string; message: string }> };
   };
-  const { autoPrepareDraftForThread, autoQueuePrepareDraft, buildCaptureCompletionStatus, decideAutoPrepareDraft, detectStateWithDiagnostics, getActionUrl, isCaptureBlockedState, postDiscoveryCapturePacket, postPrepareDraftStatus, postV3CapturePacketToThread, selectPageForBrowserAction, settlePageAndDetect, verifyApplyPageConnects, verifyApplyPreparationOnPage } = require("./browserWorker") as {
+  const { autoPrepareDraftForThread, autoQueuePrepareDraft, buildCaptureCompletionStatus, decideAutoPrepareDraft, detectStateWithDiagnostics, getActionUrl, getRequiredSkippedFields, isCaptureBlockedState, postDiscoveryCapturePacket, postPrepareDraftStatus, postV3CapturePacketToThread, selectPageForBrowserAction, settlePageAndDetect, verifyApplyPageConnects, verifyApplyPreparationOnPage } = require("./browserWorker") as {
     autoPrepareDraftForThread: (job: any, thread: { channelId: string; messageTs: string; threadTs: string }, options?: any) => { shouldQueue: boolean; category: string; note: string; actionId?: number; duplicate?: boolean };
     autoQueuePrepareDraft: (job: any, options?: any, thread?: { channelId: string; messageTs: string; threadTs: string } | null) => { shouldQueue: boolean; category: string; note: string; actionId?: number; duplicate?: boolean; duplicateStatus?: string | null };
     buildCaptureCompletionStatus: (input: { hasThreadContext: boolean; packetPosted: boolean; discoverySlackStatus?: "not_discovery" | "missing_channel" | "post_failed" | "posted" }) => string;
     decideAutoPrepareDraft: (job: any, options?: any) => { shouldQueue: boolean; category: string; note: string; reason: string };
     detectStateWithDiagnostics: (snapshot: { url: string; title: string; textExcerpt: string }, action: any) => { state: string; source: string; matchedText?: string; summary: string };
     getActionUrl: (action: any) => string | null;
+    getRequiredSkippedFields: (fields: { skippedFields: string[]; fieldVerification?: Array<{ field: string; status: string; detail: string }> }) => string[];
     isCaptureBlockedState: (state: string) => boolean;
     postDiscoveryCapturePacket: (input: any, deps?: {
       postChannelMessage?: (params: any) => Promise<{ ok: boolean; ts?: string; channel?: string }>;
@@ -1163,6 +1164,20 @@ async function runTests(): Promise<void> {
     assert(unknownOnlyConnectsIssues.length === 0, "Once bottom-of-page Connects are readable, unknown-only Connects skip should clear");
     assert(unknownOnlySkipPlan.connects.required === 8, "Verified required Connects should be copied into the plan");
     assert(unknownOnlySkipPlan.connectsStrategy.decision === "safe_apply", "Unknown-only Connects skip should become safe prep after verification");
+    assert(
+      getRequiredSkippedFields({
+        skippedFields: ["rate"],
+        fieldVerification: [{ field: "rate", status: "verified", detail: "Fixed-price bid field is present." }],
+      }).length === 0,
+      "Skipped rate fill should not block when fixed-price rate readback verified.",
+    );
+    assert(
+      getRequiredSkippedFields({
+        skippedFields: ["rate"],
+        fieldVerification: [{ field: "rate", status: "attempted_unverified", detail: "Rate did not verify." }],
+      }).includes("rate"),
+      "Skipped rate fill should still block when rate readback did not verify.",
+    );
 
     const fixedPriceVerification = await verifyApplyPreparationOnPage({
       page: fakeApplyPage({
