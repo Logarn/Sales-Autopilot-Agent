@@ -225,7 +225,18 @@ const noisyCapturedJob = scored({
 });
 const noisyDraft = buildApplicationDraft(noisyCapturedJob);
 assert(!/10\.00|fixed-priceintermediate|upwork\.com|Screenshot\s*\d+|general retention portfolio/i.test(noisyDraft.proposalText), `Noisy captured proposal should not leak parsed page noise or vague proof references:\n${noisyDraft.proposalText}`);
+assert(/klaviyo/i.test(noisyDraft.proposalText), `Noisy captured proposal should mention the requested Klaviyo scope:\n${noisyDraft.proposalText}`);
+assert(/mailchimp/i.test(noisyDraft.proposalText), `Noisy captured proposal should mention the requested Mailchimp scope:\n${noisyDraft.proposalText}`);
+assert(/omnisend/i.test(noisyDraft.proposalText), `Noisy captured proposal should mention the requested Omnisend scope:\n${noisyDraft.proposalText}`);
+assert(/engagement/i.test(noisyDraft.proposalText), `Noisy captured proposal should mention the requested engagement goal:\n${noisyDraft.proposalText}`);
+assert(!/design case studies|figma|visual hierarchy/i.test(noisyDraft.proposalText), `Lifecycle/platform email proposal should not drift into design-proof copy:\n${noisyDraft.proposalText}`);
 assert(noisyDraft.draftQualityGate.ready, `Noisy captured proposal should pass after removing parsed page noise. Issues: ${JSON.stringify(noisyDraft.draftQualityGate.issues)}`);
+
+assert(evaluateDraftQualityGate({
+  ...gateBase,
+  job: noisyCapturedJob,
+  proposalText: "Steve here,\n\nThe opportunity here is conversion can leak when campaigns and flows are not tied to customer moments.\n\nThe customer is deciding whether the offer, timing, and next step feel relevant enough to act on.\n\nIf it makes sense, we can start with the first few customer moments you want the work to improve.",
+}).issues.some((issue) => issue.code === "missing_requested_platform_specificity"), "Drafts must fail when they omit explicitly requested Klaviyo/Mailchimp/Omnisend platform scope.");
 
 beauty.applicationDraft = beautyDraft;
 markJobSeen(beauty, true);
