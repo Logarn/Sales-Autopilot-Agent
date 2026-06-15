@@ -1398,7 +1398,7 @@ async function runTests(): Promise<void> {
           completeJson: async (request: any) => {
             kimiQaRequests.push(request);
             const payload = JSON.parse(request.messages[1].content);
-            return { ok: true, data: { text: `Kimi QA:\n${payload.deterministicText}` } };
+            return { ok: true, data: { text: `Kimi QA:\n${payload.deterministicText}\nFinal submit remains manual.` } };
           },
         },
         postThreadMessage: async (payload) => {

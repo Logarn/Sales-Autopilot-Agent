@@ -961,7 +961,8 @@ async function runTests(): Promise<void> {
 	    url: "https://www.upwork.com/?__cf_chl_tk=test",
 	    reason: "captcha_or_security_challenge",
 	  });
-	  assert.match(blockedCopy, /Upwork checked one application page\. I paused that one safely/i, "Normal blocker copy should use natural recovery language.");
+	  assert.match(blockedCopy, /Browser attention needed/i, "Normal blocker copy should avoid the old spammy browser-check headline.");
+	  assert.match(blockedCopy, /paused safely/i, "Normal blocker copy should say the action paused safely.");
 	  assert.match(blockedCopy, /Clear the remote Chrome check, then reply .retry./i, "Normal blocker copy should give Steve the retry path.");
 	  assert.doesNotMatch(blockedCopy, /manual_attention_required|browserSessionState|raw action id/i, "Normal blocker copy should hide raw internals.");
 

@@ -29,6 +29,7 @@ export interface SlackPromiseNotificationPlan {
   workflowState: SlackWorkflowStateName;
   stateKey: string;
   text: string;
+  soulComposed?: boolean;
   promiseStatus: "fulfilled" | "blocked";
   blocker?: string | null;
 }
@@ -37,6 +38,7 @@ export interface SlackThreadPostTarget {
   channel: string;
   threadTs: string;
   text: string;
+  soulComposed?: boolean;
 }
 
 function cleanLine(value: string | null | undefined): string | null {
@@ -176,6 +178,7 @@ export async function postSlackPromiseNotification(input: {
       channel: input.channelId,
       threadTs: input.threadTs,
       text: input.plan.text,
+      soulComposed: input.plan.soulComposed,
     });
     status = posted ? "posted" : "failed";
     return { status, posted, duplicate: false };

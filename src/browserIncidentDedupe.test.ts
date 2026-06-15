@@ -124,6 +124,9 @@ async function run(): Promise<void> {
       now: new Date("2026-06-10T00:00:00.000Z"),
     });
     assert.equal(getQueuedSlackMessages().length, 1, "first browser-check incident should create one main Slack alert attempt");
+    const firstPayload = JSON.parse(getQueuedSlackMessages()[0]?.payload ?? "{}") as { text?: string };
+    assert.doesNotMatch(firstPayload.text ?? "", /^Upwork needs a browser check$/i, "main browser-check alert should not use the old spammy hardcoded title.");
+    assert.match(firstPayload.text ?? "", /paused safely|Final submit remains manual/i, "main browser-check alert should use the clean copywriter fallback when LLM is unavailable.");
     assert.equal(first.manualAttentionIncidents?.find((item) => item.status === "active")?.repeatCount, 1);
 
     const repeated = await recordBrowserManualAttention({
@@ -199,7 +202,7 @@ async function run(): Promise<void> {
       reason: "captcha_or_security_challenge",
       now: new Date("2026-06-10T00:03:00.000Z"),
     });
-    assert.equal(getQueuedSlackMessages().length, 2, "different job/apply URL can create a separate browser-check alert");
+    assert.equal(getQueuedSlackMessages().length, 1, "unresolved Upwork browser-check alerts should be global and not spam per action/job");
 
     markBrowserChallengeResolved(11);
     await recordBrowserManualAttention({
@@ -210,7 +213,7 @@ async function run(): Promise<void> {
       reason: "captcha_or_security_challenge",
       now: new Date("2026-06-10T00:04:00.000Z"),
     });
-    assert.equal(getQueuedSlackMessages().length, 3, "resolved then reblocked browser-check incident can alert again");
+    assert.equal(getQueuedSlackMessages().length, 2, "resolved then reblocked browser-check incident can alert again");
 
     clearBrowserManualAttention();
   } finally {

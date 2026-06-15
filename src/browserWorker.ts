@@ -1253,19 +1253,12 @@ export async function postPrepareDraftStatus(
     }
   }
   const deterministicText = buildPrepareDraftStatusMessage(input);
-  const criticalHandoffPhrases = deterministicText
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) =>
-      line === "✅ *Ready for QA*" ||
-      line.startsWith("⚠️ *") ||
-      line.startsWith("• *") ||
-      line.includes("remote Chrome") ||
-      line.includes("VNC") ||
-      line.includes("Nothing submitted: I did not click the final Upwork submit button.") ||
-      line.includes("You can correct proof here in Slack") ||
-      line.includes("manually click *")
-    );
+  const safetyPhrases = [
+    "Final submit remains manual.",
+    "• *Final submit:* untouched — nothing submitted",
+    ...(deterministicText.includes("Proof planned") ? ["Proof planned"] : []),
+    ...(deterministicText.includes("Proof verified") ? ["Proof verified"] : []),
+  ];
   const copy = await rewriteSlackCopyWithKimi({
     path: "qa_handoff",
     deterministicText,
@@ -1283,14 +1276,7 @@ export async function postPrepareDraftStatus(
       connectsVerified: input.diagnostics.requiredConnects !== null,
       boostVerified: Boolean(input.diagnostics.boostConnects && input.diagnostics.boostConnects > 0),
     },
-    preservePhrases: [
-      ...criticalHandoffPhrases,
-      "Nothing submitted: I did not click the final Upwork submit button.",
-      "• *Final submit:* untouched — nothing submitted",
-      ...(deterministicText.includes("Proof planned") ? ["Proof planned"] : []),
-      ...(deterministicText.includes("Proof verified") ? ["Proof verified"] : []),
-      ...(deterministicText.includes("reply “retry”") ? ["reply “retry”"] : []),
-    ],
+    preservePhrases: safetyPhrases,
   }, deps.copyProvider);
   const text = copy.text;
   if (input.thread) {
@@ -1349,6 +1335,7 @@ function promiseNotificationForPrepareDraftStatus(input: {
       (input.diagnostics.validationIssues ?? []).map((issue) => issue.code).join(","),
     ]),
     text: input.text,
+    soulComposed: true,
     promiseStatus: isReady ? "fulfilled" : "blocked",
     blocker,
   };
