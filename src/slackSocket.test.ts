@@ -1137,7 +1137,7 @@ async function runTests(): Promise<void> {
     assert(listApplicationAssets(prepareJob.id).some((asset) => asset.originalName === "design-case-studies-steve-logarn.pdf" && asset.source === "slack" && asset.attachPolicy === "manual_review"), "Slack proof file should be registered to the application for manual review.");
     const planAfterSlackFiles = buildBrowserApplyPlan(prepareJob.id).plan;
     assert(!planAfterSlackFiles.attachments.some((attachment: { filePath: string }) => attachment.filePath.includes("slack-intake") && attachment.filePath.endsWith("truly-beauty-case-study.pdf")), "Matching Slack proof upload should not become an attachable browser-prep file without review.");
-    assert(planAfterSlackFiles.missingLocalAssets.includes("profile/attachments/truly-beauty-case-study.pdf"), "Matching Slack proof upload should not resolve the missing reusable proof file.");
+    assert(!planAfterSlackFiles.missingLocalAssets.includes("profile/attachments/truly-beauty-case-study.pdf"), "Portfolio-selected proof should not require the same reusable proof file.");
 
     const directDraftPreview = buildDraftPreviewFromSlackThread({ channelId: "C123", threadTs: "111.222" });
     assert(directDraftPreview.ok, "Draft preview helper should return the stored proposal without queuing browser work.");
@@ -1419,7 +1419,7 @@ async function runTests(): Promise<void> {
     assert(proofOverrides?.includeAssetIds.includes("steve-intro-pdf"), "Proof override should include intro PDF.");
     assert(proofOverrides?.excludeAssetIds.includes("truly-beauty-case-study"), "Proof override should remove Truly attachment.");
     const planAfterProofRevision = buildBrowserApplyPlan(prepareJob.id).plan;
-    assert(planAfterProofRevision.attachments.some((attachment: { filePath: string }) => attachment.filePath === "profile/attachments/fly-boutique-case-study.pdf"), "Revised proof plan should attach Fly Boutique.");
+    assert(!planAfterProofRevision.attachments.some((attachment: { filePath: string }) => attachment.filePath === "profile/attachments/fly-boutique-case-study.pdf"), "Revised proof plan should not attach Fly when the Upwork portfolio item is selected.");
     assert(planAfterProofRevision.attachments.some((attachment: { filePath: string }) => attachment.filePath === "profile/attachments/steve-logarn-intro.pdf"), "Revised proof plan should attach intro PDF.");
     assert(!planAfterProofRevision.attachments.some((attachment: { filePath: string }) => attachment.filePath.includes("truly-beauty")), "Revised proof plan should remove Truly attachment.");
     assert(planAfterProofRevision.highlights.some((label: string) => label.includes("The Fly Boutique")), "Revised proof plan should select the Fly Boutique Upwork portfolio label.");

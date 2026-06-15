@@ -183,8 +183,10 @@ async function runTests(): Promise<void> {
     });
 
     const planResult = buildBrowserApplyPlan(storedJob.id);
-    assert(!planResult.valid, "apply plan should block dry-run verification when a selected attachment is unavailable");
-    assert(planResult.issues.some((issue: any) => issue.code === "required_attachment_missing_locally"), "missing selected attachment should be a blocking apply-plan issue");
+    assert(planResult.valid, "apply plan should stay valid when proof is represented by an Upwork portfolio item instead of a missing file attachment");
+    assert(!planResult.issues.some((issue: any) => issue.code === "required_attachment_missing_locally"), "portfolio-backed proof should not create a missing attachment blocker");
+    assert(planResult.plan.highlights.some((label: string) => label.includes("Truly Beauty")), "apply plan should preserve the selected Truly Beauty Upwork portfolio highlight");
+    assert(planResult.plan.attachments.length === 0, "apply plan should not duplicate a portfolio proof as a file attachment");
     assert(planResult.plan.stopBeforeSubmit === true, "apply plan must include stopBeforeSubmit=true");
     assert(planResult.plan.screeningAnswers.length > 0, "apply plan should persist structured screening answers across the browser queue boundary");
     assert(planResult.plan.connectsStrategy.decision === "safe_apply", "apply plan should preserve the safe Connects strategy after reload");
@@ -193,7 +195,7 @@ async function runTests(): Promise<void> {
     const diagnostics = JSON.parse(readFileSync(diagnosticsPath, "utf8"));
     assert(diagnostics.final_submit_blocked !== false, "final_submit_blocked should remain true in diagnostics");
     assert(diagnostics.connectsDecision === "safe_apply", "diagnostics should report the persisted safe Connects decision");
-    assert(diagnostics.validationIssues.some((issue: any) => issue.code === "required_attachment_missing_locally"), "diagnostics should report unavailable attachment blocker");
+    assert(!diagnostics.validationIssues.some((issue: any) => issue.code === "required_attachment_missing_locally"), "diagnostics should not report an attachment blocker for portfolio-backed proof");
 
     console.log(JSON.stringify({
       captureQueued: queuedCapture,

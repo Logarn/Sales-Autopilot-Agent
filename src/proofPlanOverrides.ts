@@ -320,6 +320,18 @@ function uniqueAssets(items: PortfolioAsset[]): PortfolioAsset[] {
   return output;
 }
 
+function assetIdsForPortfolioItems(items: Array<{ id: string }>): Set<string> {
+  const portfolioItemIds = new Set(items.map((item) => item.id));
+  const assetIds = new Set<string>();
+  for (const alias of PROOF_ALIASES) {
+    if (!alias.portfolioItemIds.some((itemId) => portfolioItemIds.has(itemId))) continue;
+    for (const assetId of alias.assetIds) {
+      assetIds.add(assetId);
+    }
+  }
+  return assetIds;
+}
+
 export function applyProofPlanOverridesToSelection(
   selection: PortfolioSelectionResult,
   overrides: ProofPlanOverrideState,
@@ -362,6 +374,9 @@ export function applyProofPlanOverridesToSelection(
       selectedUpworkPortfolioItems.push(item);
     }
   }
+  selectedUpworkPortfolioItems = Array.from(new Map(selectedUpworkPortfolioItems.map((item) => [item.id, item])).values());
+  const portfolioBackedAssetIds = assetIdsForPortfolioItems(selectedUpworkPortfolioItems);
+  autoAttachAssets = autoAttachAssets.filter((asset) => !portfolioBackedAssetIds.has(asset.id));
 
   let selectedProof = selection.selectedProof.filter((proof) => !excludedProofIds.has(proof.id));
   for (const proofId of normalized.includeProofIds) {
@@ -378,7 +393,7 @@ export function applyProofPlanOverridesToSelection(
     autoAttachAssets: uniqueAssets(autoAttachAssets).slice(0, normalized.attachAllRelevantScreenshots ? 3 : 3),
     recommendOnlyAssets: selection.recommendOnlyAssets.filter((asset) => !excludedAssetIds.has(asset.id)),
     mentionOnlyProof,
-    selectedUpworkPortfolioItems: Array.from(new Map(selectedUpworkPortfolioItems.map((item) => [item.id, item])).values()).slice(0, 2),
+    selectedUpworkPortfolioItems: selectedUpworkPortfolioItems.slice(0, 2),
   };
 }
 

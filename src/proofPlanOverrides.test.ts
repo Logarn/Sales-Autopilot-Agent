@@ -39,7 +39,7 @@ function hasPortfolio(selection: ReturnType<typeof selectPortfolioAssetsForJob>,
 }
 
 const beautySelection = selectPortfolioAssetsForJob(createJob());
-assert(hasAsset(beautySelection, "truly-beauty-case-study"), "Beauty base plan should select Truly attachment.");
+assert(!hasAsset(beautySelection, "truly-beauty-case-study"), "Beauty base plan should not attach Truly when the Upwork portfolio item is selected.");
 assert(hasPortfolio(beautySelection, "Truly Beauty"), "Beauty base plan should select Truly Upwork portfolio item.");
 
 const swap = reviseProofPlanOverrides(
@@ -52,7 +52,7 @@ assert(swap.overrides.includeAssetIds.includes("fly-boutique-case-study"), "Swap
 assert(swap.overrides.includeAssetIds.includes("steve-intro-pdf"), "Swap should include intro PDF.");
 assert(swap.overrides.excludeAssetIds.includes("truly-beauty-case-study"), "Swap should exclude Truly file.");
 const swappedSelection = applyProofPlanOverridesToSelection(beautySelection, swap.overrides);
-assert(hasAsset(swappedSelection, "fly-boutique-case-study"), "Swapped plan should attach Fly.");
+assert(!hasAsset(swappedSelection, "fly-boutique-case-study"), "Swapped plan should not attach Fly when the Upwork portfolio item is selected.");
 assert(hasAsset(swappedSelection, "steve-intro-pdf"), "Swapped plan should attach intro PDF.");
 assert(!hasAsset(swappedSelection, "truly-beauty-case-study"), "Swapped plan should remove Truly.");
 assert(hasPortfolio(swappedSelection, "The Fly Boutique"), "Swapped plan should select Fly Upwork portfolio item.");
@@ -63,14 +63,15 @@ const implicitInstead = reviseProofPlanOverrides(
   new Date("2026-06-05T00:00:30Z"),
 );
 const implicitInsteadSelection = applyProofPlanOverridesToSelection(beautySelection, implicitInstead.overrides);
-assert(hasAsset(implicitInsteadSelection, "fly-boutique-case-study"), "Implicit instead command should attach Fly.");
+assert(!hasAsset(implicitInsteadSelection, "fly-boutique-case-study"), "Implicit instead command should use Fly portfolio instead of attaching the same file.");
 assert(!hasAsset(implicitInsteadSelection, "truly-beauty-case-study"), "Implicit instead command should remove the default Truly attachment.");
 assert(hasPortfolio(implicitInsteadSelection, "The Fly Boutique"), "Implicit instead command should select Fly portfolio proof.");
 assert(!hasPortfolio(implicitInsteadSelection, "Truly Beauty"), "Implicit instead command should remove the default Truly portfolio proof.");
 
 const addDesign = reviseProofPlanOverrides(swap.overrides, "Attach the Design Case Studies too.", new Date("2026-06-05T00:01:00Z"));
 const withDesign = applyProofPlanOverridesToSelection(beautySelection, addDesign.overrides);
-assert(hasAsset(withDesign, "design-case-studies"), "Attach-too command should add Design Case Studies.");
+assert(!hasAsset(withDesign, "design-case-studies"), "Attach-too command should not duplicate Design Case Studies when portfolio proof is selected.");
+assert(hasPortfolio(withDesign, "Design Case Studies"), "Attach-too command should add Design Case Studies as an Upwork portfolio item.");
 assert(withDesign.autoAttachAssets.length <= 3, "Proof plan should still cap files at strongest one to three.");
 
 const removeIntro = reviseProofPlanOverrides(addDesign.overrides, "Remove the intro PDF.", new Date("2026-06-05T00:02:00Z"));
@@ -83,8 +84,10 @@ const trulyLifely = reviseProofPlanOverrides(
   new Date("2026-06-05T00:03:00Z"),
 );
 const trulyLifelySelection = applyProofPlanOverridesToSelection(beautySelection, trulyLifely.overrides);
-assert(hasAsset(trulyLifelySelection, "truly-beauty-case-study"), "Plus command should include Truly.");
-assert(hasAsset(trulyLifelySelection, "lifely-case-study"), "Plus command should include Lifely.");
+assert(!hasAsset(trulyLifelySelection, "truly-beauty-case-study"), "Plus command should not duplicate Truly portfolio proof as a file.");
+assert(!hasAsset(trulyLifelySelection, "lifely-case-study"), "Plus command should not duplicate Lifely portfolio proof as a file.");
+assert(hasPortfolio(trulyLifelySelection, "Truly Beauty"), "Plus command should include Truly portfolio proof.");
+assert(hasPortfolio(trulyLifelySelection, "Lifely"), "Plus command should include Lifely portfolio proof.");
 
 const noScreenshots = reviseProofPlanOverrides(
   EMPTY_PROOF_PLAN_OVERRIDES,
