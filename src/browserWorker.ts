@@ -2181,12 +2181,13 @@ async function openDialogHasSelectedHighlight(page: PlaywrightPageLike, highligh
     const normalizedAliases = Array.isArray(aliases) ? aliases.map(normalize).filter(Boolean) : [];
     const dialog = document.querySelector("[role='dialog']");
     if (!dialog || normalizedAliases.length === 0) return false;
+    const activePane = dialog.querySelector(".air3-tab-pane.is-active, [role='tabpanel'].is-active") ?? dialog;
     const selectedButtons = Array.from(dialog.querySelectorAll("button"))
       .filter((button) => /^selected$/i.test(normalize(button.textContent ?? "")));
     return selectedButtons.some((button) => {
       let node: Element | null = button.parentElement;
       let depth = 0;
-      while (node && node !== dialog && depth < 12) {
+      while (node && node !== dialog && node !== activePane && depth < 12) {
         const text = normalize(node.textContent ?? "");
         if (normalizedAliases.some((alias) => text.includes(alias))) return true;
         node = node.parentElement;
@@ -2204,6 +2205,7 @@ async function clickHighlightInOpenDialogWithDom(page: PlaywrightPageLike, highl
     const normalizedAliases = Array.isArray(aliases) ? aliases.map(normalize).filter(Boolean) : [];
     const dialog = document.querySelector("[role='dialog']");
     if (!dialog || normalizedAliases.length === 0) return false;
+    const activePane = dialog.querySelector(".air3-tab-pane.is-active, [role='tabpanel'].is-active") ?? dialog;
     const isVisibleButton = (button: HTMLButtonElement): boolean => {
       const style = window.getComputedStyle(button);
       return style.visibility !== "hidden" &&
@@ -2216,7 +2218,7 @@ async function clickHighlightInOpenDialogWithDom(page: PlaywrightPageLike, highl
       .find((button) => {
         let node: Element | null = button.parentElement;
         let depth = 0;
-        while (node && node !== dialog && depth < 12) {
+        while (node && node !== dialog && node !== activePane && depth < 12) {
           const text = normalize(node.textContent ?? "");
           if (normalizedAliases.some((alias) => text.includes(alias))) return true;
           node = node.parentElement;
