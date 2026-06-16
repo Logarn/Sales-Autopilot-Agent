@@ -249,7 +249,9 @@ async function run(): Promise<void> {
     const kimiResult = await kimiProvider.completeJson<{ ok: boolean; source: string }>({ messages: [{ role: "user", content: "hi" }] });
     assert.equal(kimiResult.ok, true);
     assert.equal(kimiResult.data?.source, "message-content");
-    assert.equal((requestBodies[0].messages as Array<{ content: string }>)[0].content.includes("/no_think"), true);
+    assert.deepEqual(requestBodies[0].thinking, { type: "disabled" });
+    assert.equal(requestBodies[0].temperature, 0.6);
+    assert.equal((requestBodies[0].messages as Array<{ content: string }>)[0].content.includes("/no_think"), false);
 
     requestBodies = [];
     globalThis.fetch = async (_input, init) => {
