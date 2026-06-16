@@ -190,6 +190,7 @@ function sanitizeProposalText(text: string, job: JobPosting): string {
   }
   cleaned = cleaned
     .split(/\n\s*(?:Rationale|Why this works|Explanation|Notes)\s*:/i)[0]
+    .replace(/(^|\n\n)\s*Proof\s*:\s*/i, "$1For proof, I would use one matched artifact: ")
     .trim();
   if (requiredPrefix && !cleaned.toLowerCase().startsWith(requiredPrefix.toLowerCase())) {
     cleaned = `${requiredPrefix}\n\n${cleaned}`;
@@ -363,9 +364,11 @@ export async function rewriteProposalCoverLetterWithKimi(
           "Use the Upwork Proposal Operating System:",
           "- 150-220 words unless a required opening phrase forces a little extra room.",
           "- First two meaningful lines must prove the job was read with at least two job-specific details from the post.",
+          "- The sentence immediately after Steve's opener must include at least two exact job/scope terms, such as branding/logo design, conversion optimization, Shopify, Figma, Klaviyo, flows, or the named brand/site.",
           "- Lead with the client's commercial/customer problem, not Steve's biography.",
           "- Include one low-risk 3-5 day micro-milestone and the literal text `Done = ...`.",
           "- Include exactly one proof artifact or case study mention, with exactly one metric or quantified result.",
+          "- The proof paragraph must begin with the exact phrase `For proof, I would use one matched artifact:` and must name exactly one artifact.",
           "- Include one logistics sentence about start/async/timing/rate scope.",
           "- End with one choice-based CTA, such as quick call or async outline.",
           "- Preserve required application opening phrases exactly when present.",
@@ -430,6 +433,7 @@ export async function rewriteProposalCoverLetterWithKimi(
             "No analysis, no checklist, no explanation, no rationale, no markdown fence.",
             "Return JSON only. The proposalText string must begin directly with: Steve here - how is your day going?",
             "Keep it 150-220 words, include one 3-5 day `Done = ...` milestone, one proof, logistics, and a choice-based CTA.",
+            "The sentence after Steve's opener must include at least two exact job/scope terms. The proof paragraph must begin: For proof, I would use one matched artifact:",
           ].join("\n"),
         },
         {
