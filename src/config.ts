@@ -176,6 +176,12 @@ export const SLACK_COPY_MODEL = process.env.SLACK_COPY_MODEL ?? (SLACK_COPY_PROV
 export const SLACK_COPY_TEMPERATURE = Number.isFinite(Number.parseFloat(process.env.SLACK_COPY_TEMPERATURE ?? ""))
   ? Number.parseFloat(process.env.SLACK_COPY_TEMPERATURE ?? "")
   : 0.25;
+export const PROPOSAL_COPY_LLM_ENABLED = parseBoolean(process.env.PROPOSAL_COPY_LLM_ENABLED, true);
+export const PROPOSAL_COPY_PROVIDER = process.env.PROPOSAL_COPY_PROVIDER ?? "kimi";
+export const PROPOSAL_COPY_MODEL = process.env.PROPOSAL_COPY_MODEL ?? (PROPOSAL_COPY_PROVIDER.toLowerCase() === "kimi" || PROPOSAL_COPY_PROVIDER.toLowerCase() === "moonshot" ? MOONSHOT_MODEL : LLM_MODEL);
+export const PROPOSAL_COPY_TEMPERATURE = Number.isFinite(Number.parseFloat(process.env.PROPOSAL_COPY_TEMPERATURE ?? ""))
+  ? Number.parseFloat(process.env.PROPOSAL_COPY_TEMPERATURE ?? "")
+  : 0.35;
 export const BROWSER_WORKER_ENABLED = parseBoolean(process.env.BROWSER_WORKER_ENABLED, false);
 export const BROWSER_HEADLESS = parseBoolean(process.env.BROWSER_HEADLESS, true);
 export const BROWSER_SESSION_MODE = process.env.BROWSER_SESSION_MODE === "cdp" ? "cdp" : "launch";

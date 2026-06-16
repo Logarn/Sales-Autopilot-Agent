@@ -1,0 +1,127 @@
+import assert from "node:assert/strict";
+import { buildApplicationDraft, buildApplicationDraftWithResearch } from "./agent";
+import { scoreJob } from "./filter";
+import {
+  rewriteProposalCoverLetterWithKimi,
+  type ProposalCoverLetterClient,
+} from "./proposalCoverLetterComposer";
+import type { JobPosting } from "./types";
+import type { LlmJsonRequest, LlmJsonResult } from "./llm/provider";
+
+function job(partial: Partial<JobPosting> = {}): JobPosting {
+  return {
+    id: "proposal-kimi-cover-letter",
+    title: "Shopify Klaviyo retention flow audit for skincare brand",
+    url: "https://www.upwork.com/jobs/~123456789012345678",
+    description: [
+      "We run a Shopify skincare brand and need a Klaviyo retention expert to audit weak welcome, abandoned cart, post-purchase, and win-back flows.",
+      "The goal is to improve repeat purchase, increase email revenue, and make the messaging feel more like a helpful founder than a generic marketing department.",
+      "Please include relevant proof and explain your first step.",
+    ].join(" "),
+    postedAt: new Date().toISOString(),
+    budget: "$500 fixed",
+    clientCountry: "United States",
+    clientRating: 5,
+    clientSpend: 18000,
+    clientHireRate: 90,
+    clientTotalHires: 8,
+    clientFeedbackCount: 6,
+    category: "Email Marketing",
+    experienceLevel: "Expert",
+    connectsCost: 9,
+    skills: ["Shopify", "Klaviyo", "Email Marketing", "Retention Marketing"],
+    sourceQuery: "test",
+    proposalCount: 8,
+    competitionLevel: "low",
+    ...partial,
+  };
+}
+
+class FakeProposalProvider implements ProposalCoverLetterClient {
+  requests: LlmJsonRequest[] = [];
+
+  constructor(private readonly payload: Record<string, unknown>, private readonly available = true) {}
+
+  isAvailable(): boolean {
+    return this.available;
+  }
+
+  async completeJson<T>(request: LlmJsonRequest): Promise<LlmJsonResult<T>> {
+    this.requests.push(request);
+    return { ok: true, data: this.payload as T };
+  }
+}
+
+const scored = scoreJob(job());
+const deterministicDraft = buildApplicationDraft(scored);
+const conversionProposal = [
+  "Steve here - how is your day going?",
+  "",
+  "Your buyers need the skincare routine to feel easy after the first order, and the Shopify/Klaviyo flows you named are where that trust either compounds or leaks. I would start with a 3-5 day flow audit focused on welcome, abandoned cart, post-purchase, and win-back logic.",
+  "",
+  "Done = the two biggest repeat-purchase leaks are ranked, one high-leverage sequence is rewritten in founder voice, and the test plan is tied to email revenue instead of vanity opens.",
+  "",
+  "For one proof point, I would use the Truly Beauty case study: a zero-party data engine helped lift revenue per subscriber 2.5x within two months.",
+  "",
+  "I can keep the first scope async-friendly and start with the flow logic before touching a wider calendar. Would you prefer a quick call or an async first-pass audit outline?",
+].join("\n");
+
+async function run(): Promise<void> {
+  const provider = new FakeProposalProvider({ proposalText: conversionProposal, rationale: "uses retention OS" });
+  const rewrite = await rewriteProposalCoverLetterWithKimi({
+    job: scored,
+    deterministicDraft,
+    copyStrategy: deterministicDraft.copyStrategy,
+    brandFactPack: deterministicDraft.brandFactPack,
+    proofStrategy: deterministicDraft.proofStrategy,
+    selectedPortfolioItems: deterministicDraft.selectedPortfolioItems,
+  }, provider);
+
+  assert.equal(rewrite.usedLlm, true, JSON.stringify(rewrite, null, 2));
+  assert.match(rewrite.proposalText, /^Steve here - how is your day going\?/);
+  assert.match(rewrite.proposalText, /\bDone\s*=/);
+  assert.match(rewrite.proposalText, /2\.5x within two months/);
+  assert.match(rewrite.proposalText, /quick call or an async first-pass audit outline\?$/);
+  assert.equal(provider.requests.length, 1);
+  const prompt = provider.requests.flatMap((request) => request.messages.map((message) => message.content)).join("\n");
+  assert.match(prompt, /Operating constitution from soul\.md/i, "Proposal copy prompt should include soul.md.");
+  assert.match(prompt, /Upwork Proposal Operating System for Retention Marketing/i, "Prompt should include the retention copy OS.");
+  assert.match(prompt, /exactly one proof artifact/i, "Prompt should enforce one proof artifact.");
+  assert.match(prompt, /Steve here - how is your day going\?/i, "Prompt should preserve Steve's voice opener.");
+
+  const researchedDraft = await buildApplicationDraftWithResearch(scored, { proposalCopyProvider: new FakeProposalProvider({ proposalText: conversionProposal }) });
+  assert.equal(researchedDraft.proposalText, conversionProposal);
+  assert.equal(researchedDraft.structuredProposal?.browserFillNotes.approvedText, conversionProposal);
+  assert(researchedDraft.skillUseTrace?.invocationOrder.some((item: string) => item === "cover_letter_drafting:proposal-copy-kimi-conversion-os"), "Async draft should record the Kimi conversion cover-letter pass.");
+  assert.equal(researchedDraft.draftQualityGate?.ready, true);
+
+  const badProvider = new FakeProposalProvider({ proposalText: "Hi, I am excited to apply. I can help." });
+  const fallback = await rewriteProposalCoverLetterWithKimi({
+    job: scored,
+    deterministicDraft,
+    copyStrategy: deterministicDraft.copyStrategy,
+    brandFactPack: deterministicDraft.brandFactPack,
+    proofStrategy: deterministicDraft.proofStrategy,
+  }, badProvider);
+  assert.equal(fallback.usedLlm, false);
+  assert.equal(fallback.proposalText, deterministicDraft.proposalText);
+  assert.match(fallback.reason ?? "", /word count|missing|generic|proof/i);
+
+  const unavailable = await rewriteProposalCoverLetterWithKimi({
+    job: scored,
+    deterministicDraft,
+    copyStrategy: deterministicDraft.copyStrategy,
+    brandFactPack: deterministicDraft.brandFactPack,
+    proofStrategy: deterministicDraft.proofStrategy,
+  }, new FakeProposalProvider({}, false));
+  assert.equal(unavailable.usedLlm, false);
+  assert.match(unavailable.reason ?? "", /unavailable/);
+
+  console.log("proposal cover letter composer tests passed");
+}
+
+run().catch((error) => {
+  console.error("proposal cover letter composer tests failed:");
+  console.error(error);
+  process.exit(1);
+});
