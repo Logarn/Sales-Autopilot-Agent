@@ -2138,6 +2138,13 @@ function highlightAliases(highlight: string): string[] {
 
 async function trySelectHighlightsFromOpenDialog(page: PlaywrightPageLike, highlights: string[]): Promise<number> {
   if (!await waitForHighlightDialogReady(page)) return 0;
+  const requiredHighlightCount = Math.min(4, highlights.length);
+  if (requiredHighlightCount > 0 && await readSelectedHighlightCountInOpenDialog(page) < requiredHighlightCount) {
+    const domSelected = await clickMatchingHighlightsInOpenDialogWithDom(page, highlights);
+    if (domSelected > 0) {
+      await page.waitForTimeout?.(750).catch(() => undefined);
+    }
+  }
   let selected = 0;
   for (const highlight of highlights) {
     if (await openDialogHasSelectedHighlight(page, highlight)) {
@@ -2147,6 +2154,63 @@ async function trySelectHighlightsFromOpenDialog(page: PlaywrightPageLike, highl
     if (await tryTrustedSelectHighlightFromOpenDialog(page, highlight) && await openDialogHasSelectedHighlight(page, highlight)) selected += 1;
   }
   return selected;
+}
+
+async function clickMatchingHighlightsInOpenDialogWithDom(page: PlaywrightPageLike, highlights: string[]): Promise<number> {
+  if (!page.evaluate || highlights.length === 0) return 0;
+  return page.evaluate((aliasesByHighlight = []) => {
+    const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
+    const normalizedAliasGroups = Array.isArray(aliasesByHighlight)
+      ? aliasesByHighlight
+        .map((aliases) => Array.isArray(aliases) ? aliases.map((alias) => normalize(String(alias))).filter(Boolean) : [])
+        .filter((aliases) => aliases.length > 0)
+      : [];
+    if (normalizedAliasGroups.length === 0) return 0;
+    const isVisible = (element: Element): boolean => {
+      const htmlElement = element as HTMLElement;
+      const rect = htmlElement.getBoundingClientRect();
+      const style = window.getComputedStyle(htmlElement);
+      return rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden";
+    };
+    const dialogs = Array.from(document.querySelectorAll("[role='dialog']")).filter(isVisible);
+    const dialog = dialogs[dialogs.length - 1] ?? null;
+    if (!dialog) return 0;
+    const activePane = dialog.querySelector(".air3-tab-pane.is-active, [role='tabpanel'].is-active") ?? dialog;
+    const rowMatchesAliases = (button: HTMLButtonElement, aliases: string[]): boolean => {
+      let node: Element | null = button.parentElement;
+      let depth = 0;
+      while (node && node !== dialog && depth < 12) {
+        if (node === activePane || node.getAttribute("role") === "tabpanel" || node.classList.contains("air3-tab-pane")) return false;
+        const text = normalize(node.textContent ?? "");
+        if (aliases.some((alias) => text.includes(alias))) return true;
+        node = node.parentElement;
+        depth += 1;
+      }
+      return false;
+    };
+    const selectedButtons = () => Array.from(dialog.querySelectorAll("button"))
+      .filter((button): button is HTMLButtonElement => /^selected$/i.test(normalize(button.textContent ?? "")) && isVisible(button));
+    const selectButtons = () => Array.from(dialog.querySelectorAll("button"))
+      .filter((button): button is HTMLButtonElement => /^select highlight$/i.test(normalize(button.textContent ?? "")) && !(button as HTMLButtonElement).disabled && isVisible(button));
+    let matched = 0;
+    for (const aliases of normalizedAliasGroups) {
+      if (selectedButtons().some((button) => rowMatchesAliases(button, aliases))) {
+        matched += 1;
+        continue;
+      }
+      const button = selectButtons().find((candidate) => rowMatchesAliases(candidate, aliases));
+      if (!button) continue;
+      button.scrollIntoView({ block: "center", inline: "nearest" });
+      button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+      button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+      matched += 1;
+    }
+    return matched;
+  }, highlights.map(highlightAliases)).catch(() => 0);
 }
 
 async function pageHasCommittedHighlights(page: PlaywrightPageLike, highlights: string[]): Promise<boolean> {
