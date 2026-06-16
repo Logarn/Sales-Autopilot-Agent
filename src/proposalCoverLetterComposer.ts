@@ -38,6 +38,11 @@ export interface ProposalCoverLetterRewriteResult {
 
 interface ProposalCoverLetterPayload {
   proposalText?: unknown;
+  proposal_text?: unknown;
+  coverLetter?: unknown;
+  cover_letter?: unknown;
+  text?: unknown;
+  body?: unknown;
   rationale?: unknown;
 }
 
@@ -174,6 +179,16 @@ function sanitizeProposalText(text: string, job: JobPosting): string {
   return cleaned.trim();
 }
 
+function extractProposalText(payload: ProposalCoverLetterPayload | undefined): string {
+  const value = payload?.proposalText ??
+    payload?.proposal_text ??
+    payload?.coverLetter ??
+    payload?.cover_letter ??
+    payload?.text ??
+    payload?.body;
+  return typeof value === "string" ? value : "";
+}
+
 function validateRewrite(text: string, input: ProposalCoverLetterRewriteInput): string | null {
   if (!text.trim()) return "empty proposal";
   const words = wordCount(text);
@@ -302,7 +317,7 @@ export async function rewriteProposalCoverLetterWithKimi(
   if (!response.ok) {
     return fallback(response.error ?? response.skippedReason ?? "proposal copy rewrite failed");
   }
-  const raw = typeof response.data?.proposalText === "string" ? response.data.proposalText : "";
+  const raw = extractProposalText(response.data);
   const proposalText = sanitizeProposalText(raw, input.job);
   const validationError = validateRewrite(proposalText, input);
   if (validationError) {
