@@ -63,9 +63,9 @@ const conversionProposal = [
   "",
   "Your buyers need the skincare routine to feel easy after the first order, and the Shopify/Klaviyo flows you named are where that trust either compounds or leaks. I would start with a 3-5 day flow audit focused on welcome, abandoned cart, post-purchase, and win-back logic.",
   "",
-  "Done = the two biggest repeat-purchase leaks are ranked, one high-leverage sequence is rewritten in founder voice, and the test plan is tied to email revenue instead of vanity opens.",
+  "Done = the two biggest repeat-purchase leaks are ranked, one high-leverage sequence is rewritten in founder voice, and the test plan is tied to lifting email revenue instead of vanity opens.",
   "",
-  "For one proof point, I would use the Truly Beauty case study: a zero-party data engine helped lift revenue per subscriber 2.5x within two months.",
+  "For proof, I would use one matched artifact: the Truly Beauty case study - a zero-party data engine helped lift revenue per subscriber 2.5x within two months.",
   "",
   "I can keep the first scope async-friendly and start with the flow logic before touching a wider calendar. Would you prefer a quick call or an async first-pass audit outline?",
 ].join("\n");
@@ -92,6 +92,10 @@ async function run(): Promise<void> {
   const prompt = provider.requests.flatMap((request) => request.messages.map((message) => message.content)).join("\n");
   assert.match(prompt, /Operating constitution from soul\.md/i, "Proposal copy prompt should include soul.md.");
   assert.match(prompt, /Upwork Proposal Operating System for Retention Marketing/i, "Prompt should include the retention copy OS.");
+  assert.match(prompt, /Cold Outbound Handbook logic/i, "Prompt should include the Cold Outbound Handbook layer.");
+  assert.match(prompt, /Pain sniff first/i, "Prompt should require pain sniffing.");
+  assert.match(prompt, /profit center/i, "Prompt should frame Steve as a profit center, not a CV.");
+  assert.match(prompt, /Claim -> Warrant -> Evidence -> Impact/i, "Prompt should strengthen the proposal argument before writing.");
   assert.match(prompt, /exactly one proof artifact/i, "Prompt should enforce one proof artifact.");
   assert.match(prompt, /Steve here - how is your day going\?/i, "Prompt should preserve Steve's voice opener.");
   assert.doesNotMatch(prompt, /"proposalText"\s*:\s*"\.\.\."/i, "Prompt should not teach Kimi to return a placeholder proposalText.");
@@ -120,7 +124,7 @@ async function run(): Promise<void> {
   const brandDesignProposal = [
     "Steve here - how is your day going?",
     "",
-    "Your Shopify store already has traction, but the branding/logo brief says the first leak is trust and product-path clarity, not another generic ecommerce checklist. I would start with a 3-5 day brand/conversion diagnostic across the homepage, PDP path, logo/identity fit, and offer hierarchy.",
+    "Your Shopify store already has traction, but the branding/logo brief says the first leak is trust and product-path clarity, not another generic ecommerce checklist. I would start with a 3-5 day brand/conversion diagnostic that can recover trust and conversion leakage across the homepage, PDP path, logo/identity fit, and offer hierarchy.",
     "",
     "Done = the identity risks, buying-path friction, and first design direction are mapped clearly enough to approve before a full redesign expands.",
     "",
@@ -234,6 +238,21 @@ async function run(): Promise<void> {
   }));
   assert.equal(wrongDesignProof.usedLlm, false, "Brand design rewrite should reject Hangaritas/Klaviyo proof drift.");
   assert.match(wrongDesignProof.reason ?? "", /wrong retention proof/i);
+
+  const formulaicBridge = await rewriteProposalCoverLetterWithKimi({
+    job: scored,
+    deterministicDraft,
+    copyStrategy: deterministicDraft.copyStrategy,
+    brandFactPack: deterministicDraft.brandFactPack,
+    proofStrategy: deterministicDraft.proofStrategy,
+  }, new FakeProposalProvider({
+    proposalText: conversionProposal.replace(
+      "Your buyers need the skincare routine to feel easy after the first order, and the Shopify/Klaviyo flows you named are where that trust either compounds or leaks.",
+      "The customer problem is weak lifecycle revenue and Shopify/Klaviyo flow leakage.",
+    ),
+  }));
+  assert.equal(formulaicBridge.usedLlm, false, "Formulaic customer-problem bridge should be rejected.");
+  assert.match(formulaicBridge.reason ?? "", /formulaic customer-problem bridge/i);
 
   const badProvider = new FakeProposalProvider({ proposalText: "Hi, I am excited to apply. I can help." });
   const fallback = await rewriteProposalCoverLetterWithKimi({

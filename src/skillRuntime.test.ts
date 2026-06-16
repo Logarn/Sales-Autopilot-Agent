@@ -272,6 +272,8 @@ assert(!/10\.00|fixed-priceintermediate|upwork\.com|Screenshot\s*\d+|general ret
 assert(/^Steve here\b/i.test(noisyDraft.proposalText), `Noisy captured proposal should keep the required human opener:\n${noisyDraft.proposalText}`);
 assert(/how is your day going\?/i.test(noisyDraft.proposalText), `Noisy captured proposal should use the soul opener instead of sterile template copy:\n${noisyDraft.proposalText}`);
 assert(!/commercially pointed|Two customer-lifecycle details stood out/i.test(noisyDraft.proposalText), `Noisy captured proposal should not use the old sterile template voice:\n${noisyDraft.proposalText}`);
+assert(!/The customer problem is/i.test(noisyDraft.proposalText), `Noisy captured proposal should not use formulaic customer-problem bridge copy:\n${noisyDraft.proposalText}`);
+assert(/\b(?:money|revenue|conversion|engagement|leak|profit|trust)\b/i.test(noisyDraft.proposalText), `Noisy captured proposal should make a cold-outbound style commercial argument:\n${noisyDraft.proposalText}`);
 assert(/klaviyo/i.test(noisyDraft.proposalText), `Noisy captured proposal should mention the requested Klaviyo scope:\n${noisyDraft.proposalText}`);
 assert(/mailchimp/i.test(noisyDraft.proposalText), `Noisy captured proposal should mention the requested Mailchimp scope:\n${noisyDraft.proposalText}`);
 assert(/omnisend/i.test(noisyDraft.proposalText), `Noisy captured proposal should mention the requested Omnisend scope:\n${noisyDraft.proposalText}`);
@@ -291,6 +293,26 @@ assert(evaluateDraftQualityGate({
   job: noisyCapturedJob,
   proposalText: "Two customer-lifecycle details stood out: you want engagement/conversion improved through subscriber lists and campaign performance insights, across Klaviyo, Mailchimp, Omnisend.\n\nI would start with a commercially pointed 3-5 day audit/fix slice.\n\nIf it makes sense, send me the current flow/campaign setup and I will map the first fixes I would make.",
 }).issues.some((issue) => issue.code === "sterile_template_voice"), "Old sterile proposal template voice should fail quality gate.");
+assert(evaluateDraftQualityGate({
+  ...gateBase,
+  job: noisyCapturedJob,
+  proposalText: `${beautyDraft.proposalText}\n\nThe customer problem is engagement and conversion leaking across ecommerce moments.`,
+}).issues.some((issue) => issue.code === "formulaic_customer_problem_bridge"), "Formulaic customer-problem bridge should fail quality gate.");
+assert(evaluateDraftQualityGate({
+  ...gateBase,
+  job: noisyCapturedJob,
+  proposalText: [
+    "Steve here - how is your day going?",
+    "",
+    "Klaviyo, Mailchimp, and Omnisend are in scope, and the work includes ecommerce flows, subscriber lists, templates, and reporting.",
+    "",
+    "Done = a 3-5 day audit maps the current setup, documents the next step, and produces a clean implementation checklist.",
+    "",
+    "For proof, I would use one matched artifact: Hangaritas - £21,681.29 attributed email revenue, up 173% vs previous period.",
+    "",
+    "I can keep this async-friendly this week. Would you prefer a quick call or an async outline?",
+  ].join("\n"),
+}).issues.some((issue) => issue.code === "missing_outbound_sales_argument"), "Drafts must fail when they list scope but do not make a commercial outbound argument.");
 
 const retentionJobWithDesignSkillNoise = scored({
   title: "Klaviyo Marketing and Retention Specialist",
