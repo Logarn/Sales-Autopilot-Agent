@@ -195,7 +195,26 @@ function sanitizeProposalText(text: string, job: JobPosting): string {
   if (requiredPrefix && !cleaned.toLowerCase().startsWith(requiredPrefix.toLowerCase())) {
     cleaned = `${requiredPrefix}\n\n${cleaned}`;
   }
-  return cleaned.trim();
+  return ensureCustomerLogicBeforeTools(cleaned.trim(), job);
+}
+
+function firstIndexOfAny(text: string, patterns: RegExp[]): number {
+  return patterns
+    .map((pattern) => text.search(pattern))
+    .filter((index) => index >= 0)
+    .sort((a, b) => a - b)[0] ?? -1;
+}
+
+function ensureCustomerLogicBeforeTools(text: string, job: JobPosting): string {
+  const lower = text.toLowerCase();
+  const toolIndex = firstIndexOfAny(lower, [/\bklaviyo\b/, /\bmailchimp\b/, /\bomnisend\b/, /\bbrevo\b/, /\bfigma\b/, /\bflows?\b/, /\bautomations?\b/, /\bcrm\b/, /\btemplates?\b/]);
+  const customerIndex = firstIndexOfAny(lower, [/\bcustomer\b/, /\bbuyer\b/, /\bshopper\b/, /\boffer\b/, /\btrust\b/, /\broutine\b/, /\bhierarchy\b/]);
+  if (toolIndex < 0 || (customerIndex >= 0 && customerIndex < toolIndex)) return text;
+  const source = jobSource(job).toLowerCase();
+  const platforms = ["klaviyo", "mailchimp", "omnisend", "brevo"].filter((tool) => source.includes(tool));
+  const platformPhrase = platforms.length ? ` before the ${platforms.join(", ")} execution` : " before platform execution";
+  const bridge = `The customer problem is engagement and conversion leaking across ecommerce moments${platformPhrase}.`;
+  return text.replace(/(Steve here\s*-\s*how is your day going\?)(\s*)/i, `$1 ${bridge} `).trim();
 }
 
 const proposalTextKeys = [
