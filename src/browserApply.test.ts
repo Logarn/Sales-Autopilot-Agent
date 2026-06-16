@@ -2171,12 +2171,19 @@ async function runTests(): Promise<void> {
     let connectOverCdpCalled = false;
     let connectOverCdpArgCount = 0;
     let newContextCalled = false;
+    let cdpDisconnectCalled = false;
+    let cdpCloseCalled = false;
     const cdpSession = await acquireBrowserSession(
       {
         connectOverCDP: async (...args: unknown[]) => {
           connectOverCdpCalled = true;
           connectOverCdpArgCount = args.length;
-          return { contexts: () => [cdpContext], newContext: async () => { newContextCalled = true; throw new Error("new context should not be used in cdp mode"); }, close: async () => undefined };
+          return {
+            contexts: () => [cdpContext],
+            newContext: async () => { newContextCalled = true; throw new Error("new context should not be used in cdp mode"); },
+            disconnect: async () => { cdpDisconnectCalled = true; },
+            close: async () => { cdpCloseCalled = true; },
+          };
         },
         launchPersistentContext: async () => {
           throw new Error("launch path should not be used in cdp mode");
@@ -2194,6 +2201,9 @@ async function runTests(): Promise<void> {
     assert(connectOverCdpArgCount === 1, "CDP mode should not pass context/download options to connectOverCDP");
     assert(!newContextCalled, "CDP mode should reuse the existing default context instead of creating a new one");
     assert(cdpSession.mode === "cdp", "CDP mode should preserve cdp connection mode");
+    await cdpSession.close();
+    assert(cdpDisconnectCalled, "CDP close should disconnect Playwright from the visible browser");
+    assert(!cdpCloseCalled, "CDP close must not close the visible browser or prepared application tabs");
 
     let launchPersistentCalled = false;
     const launchContext = { newPage: async () => ({}), close: async () => undefined };

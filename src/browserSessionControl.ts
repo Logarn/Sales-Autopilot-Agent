@@ -63,6 +63,7 @@ export interface PlaywrightContextLike {
 export interface PlaywrightBrowserLike {
   contexts(): PlaywrightContextLike[];
   close(): Promise<unknown>;
+  disconnect?(): Promise<unknown> | unknown;
 }
 
 export interface PlaywrightChromiumLike {
@@ -300,7 +301,11 @@ export async function acquireBrowserSession(
       mode: "cdp",
       context,
       close: async () => {
-        // Disconnect Playwright's CDP transport without launching or owning the visible Chrome process.
+        // Disconnect Playwright's CDP transport without closing the visible Chrome process or its tabs.
+        if (typeof browser.disconnect === "function") {
+          await browser.disconnect();
+          return;
+        }
         await browser.close();
       },
     };
