@@ -2169,7 +2169,7 @@ async function readSelectedHighlightCountInOpenDialog(page: PlaywrightPageLike):
   return page.evaluate(() => {
     const dialog = document.querySelector("[role='dialog']");
     const text = (dialog?.textContent ?? "").replace(/\s+/g, " ").trim();
-    const match = text.match(/highlights\s*\(\s*(\d+)\s*[/]\s*4\s*\)/i);
+    const match = text.match(/(?:highlights\s*\(\s*|add\s+)(\d+)\s*[/]\s*4\s*\)?/i);
     return match ? Number.parseInt(match[1], 10) : 0;
   }).catch(() => 0);
 }
@@ -2181,11 +2181,55 @@ async function openDialogHasSelectedHighlight(page: PlaywrightPageLike, highligh
     const normalizedAliases = Array.isArray(aliases) ? aliases.map(normalize).filter(Boolean) : [];
     const dialog = document.querySelector("[role='dialog']");
     if (!dialog || normalizedAliases.length === 0) return false;
-    const text = normalize(dialog.textContent ?? "");
-    const selectedStart = text.search(/highlights\s*\(\s*\d+\s*[/]\s*4\s*\)/i);
-    if (selectedStart < 0) return false;
-    const selectedText = text.slice(selectedStart);
-    return normalizedAliases.some((alias) => selectedText.includes(alias));
+    const selectedButtons = Array.from(dialog.querySelectorAll("button"))
+      .filter((button) => /^selected$/i.test(normalize(button.textContent ?? "")));
+    return selectedButtons.some((button) => {
+      let node: Element | null = button.parentElement;
+      let depth = 0;
+      while (node && node !== dialog && depth < 12) {
+        const text = normalize(node.textContent ?? "");
+        if (normalizedAliases.some((alias) => text.includes(alias))) return true;
+        node = node.parentElement;
+        depth += 1;
+      }
+      return false;
+    });
+  }, highlightAliases(highlight)).catch(() => false);
+}
+
+async function clickHighlightInOpenDialogWithDom(page: PlaywrightPageLike, highlight: string): Promise<boolean> {
+  if (!page.evaluate) return false;
+  return page.evaluate((aliases = []) => {
+    const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
+    const normalizedAliases = Array.isArray(aliases) ? aliases.map(normalize).filter(Boolean) : [];
+    const dialog = document.querySelector("[role='dialog']");
+    if (!dialog || normalizedAliases.length === 0) return false;
+    const isVisibleButton = (button: HTMLButtonElement): boolean => {
+      const style = window.getComputedStyle(button);
+      return style.visibility !== "hidden" &&
+        style.display !== "none" &&
+        button.getClientRects().length > 0 &&
+        Boolean(button.offsetWidth || button.offsetHeight);
+    };
+    const matchingButton = Array.from(dialog.querySelectorAll("button"))
+      .filter((button): button is HTMLButtonElement => /^select highlight$/i.test(normalize(button.textContent ?? "")) && !button.disabled && isVisibleButton(button as HTMLButtonElement))
+      .find((button) => {
+        let node: Element | null = button.parentElement;
+        let depth = 0;
+        while (node && node !== dialog && depth < 12) {
+          const text = normalize(node.textContent ?? "");
+          if (normalizedAliases.some((alias) => text.includes(alias))) return true;
+          node = node.parentElement;
+          depth += 1;
+        }
+        return false;
+      });
+    if (!matchingButton) return false;
+    matchingButton.scrollIntoView({ block: "center", inline: "nearest" });
+    matchingButton.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+    matchingButton.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+    matchingButton.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    return true;
   }, highlightAliases(highlight)).catch(() => false);
 }
 
@@ -2237,18 +2281,25 @@ async function tryTrustedSelectHighlightFromOpenDialog(page: PlaywrightPageLike,
   if (await openDialogHasSelectedHighlight(page, highlight)) return true;
   const selectedBefore = await readSelectedHighlightCountInOpenDialog(page);
   const buttonIndex = await findHighlightButtonIndexInOpenDialog(page, highlight);
-  if (buttonIndex < 0 || typeof page.locator("[role='dialog'] button").nth !== "function") return false;
-  const button = page.locator("[role='dialog'] button").nth!(buttonIndex);
-  try {
-    await button.scrollIntoViewIfNeeded?.({ timeout: 1500 }).catch(() => undefined);
-    if (typeof button.click !== "function") return false;
-    await guardedClick(button as PlaywrightLocatorLike & { click(options?: { timeout?: number }): Promise<unknown> }, { selector: "[role='dialog'] button", label: `Select highlight: ${highlight}` }, { timeout: 2500 });
+  if (buttonIndex >= 0 && typeof page.locator("[role='dialog'] button").nth === "function") {
+    const button = page.locator("[role='dialog'] button").nth!(buttonIndex);
+    try {
+      await button.scrollIntoViewIfNeeded?.({ timeout: 1500 }).catch(() => undefined);
+      if (typeof button.click === "function") {
+        await guardedClick(button as PlaywrightLocatorLike & { click(options?: { timeout?: number }): Promise<unknown> }, { selector: "[role='dialog'] button", label: `Select highlight: ${highlight}` }, { timeout: 2500 });
+      }
+    } catch {
+      // Fall through to the DOM event path below.
+    }
     await page.waitForTimeout?.(650).catch(() => undefined);
-    return await openDialogHasSelectedHighlight(page, highlight) ||
-      await readSelectedHighlightCountInOpenDialog(page) > selectedBefore;
-  } catch {
-    return false;
+    if (await openDialogHasSelectedHighlight(page, highlight) || await readSelectedHighlightCountInOpenDialog(page) > selectedBefore) {
+      return true;
+    }
   }
+  if (!await clickHighlightInOpenDialogWithDom(page, highlight)) return false;
+  await page.waitForTimeout?.(650).catch(() => undefined);
+  return await openDialogHasSelectedHighlight(page, highlight) ||
+    await readSelectedHighlightCountInOpenDialog(page) > selectedBefore;
 }
 
 async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHighlights: string[] = []): Promise<boolean> {

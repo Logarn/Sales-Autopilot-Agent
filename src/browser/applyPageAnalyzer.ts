@@ -271,6 +271,9 @@ function analyzeScreening(snapshot: ApplyPageSnapshot, plan?: BrowserApplyFillPl
   if (planned.length === 0 && !visible) {
     return { visible: false, questionCount: 0, answeredCount: 0, state: "not_required", detail: "No screening questions were detected or planned." };
   }
+  if (planned.length > 0 && !visible) {
+    return { visible: false, questionCount: 0, answeredCount: 0, state: "not_required", detail: "No screening question fields are visible on this apply page." };
+  }
   const answers = planned.length > 0
     ? planned.filter((answer, index) => containsExpected(screeningValuesForAnswer(snapshot, bestCoverLetterValue(snapshot, plan?.coverLetter) ?? "", index), answer)).length
     : questionLikeFields.filter((field) => field.value.trim()).length;
@@ -416,7 +419,7 @@ export function analyzeApplyPageSnapshot(snapshot: ApplyPageSnapshot, plan?: Bro
     if (!connects.visible) blockers.push("required_connects_unreadable");
     if (!finalSubmit.visible) blockers.push("final_submit_control_not_detected");
     if (plan?.coverLetter.trim() && coverLetter.state !== "visible_filled") blockers.push("cover_letter_not_verified");
-    if (plan?.screeningAnswers.length && screening.answeredCount < plan.screeningAnswers.length) blockers.push("screening_answers_not_verified");
+    if (plan?.screeningAnswers.length && screening.visible && screening.answeredCount < plan.screeningAnswers.length) blockers.push("screening_answers_not_verified");
     if (plan?.rate.trim() && rate.state !== "visible_filled") blockers.push("rate_not_verified");
     if ((plan?.attachments.length ?? 0) > 0 && attachments.state !== "visible_filled") warnings.push("attachments_not_verified");
     if ((plan?.highlights.length ?? 0) > 0 && portfolioHighlights.state !== "visible_filled") warnings.push("portfolio_highlights_not_verified");
