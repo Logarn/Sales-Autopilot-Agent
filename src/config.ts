@@ -114,10 +114,10 @@ export const MIN_SCORE_TO_NOTIFY = parseInteger(process.env.MIN_SCORE_TO_NOTIFY,
 export const MIN_SCORE_HIGH = parseInteger(process.env.MIN_SCORE_HIGH, 8);
 export const MAX_DESCRIPTION_LENGTH = parseInteger(process.env.MAX_DESCRIPTION_LENGTH, 300);
 export const ENABLE_LOW_MATCH_DIGEST = parseBoolean(process.env.ENABLE_LOW_MATCH_DIGEST, false);
-export const LLM_PROVIDER = process.env.LLM_PROVIDER ?? "openai-compatible";
+export const LLM_PROVIDER = process.env.LLM_PROVIDER ?? (process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY ? "kimi" : "openai-compatible");
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 export const LLM_API_KEY = process.env.LLM_API_KEY ?? OPENAI_API_KEY;
-export const LLM_MODEL = process.env.LLM_MODEL ?? "gpt-4o-mini";
+export const LLM_MODEL = process.env.LLM_MODEL ?? (process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY ? (process.env.MOONSHOT_MODEL ?? process.env.KIMI_MODEL ?? "kimi-k2.6") : "gpt-4o-mini");
 export const LLM_BASE_URL = process.env.LLM_BASE_URL ?? "https://api.openai.com/v1";
 export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
 export const OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
@@ -146,8 +146,14 @@ export const MEMORI_API_KEY = process.env.MEMORI_API_KEY ?? "";
 export const MEMORI_API_URL = process.env.MEMORI_API_URL ?? "https://api.memorilabs.ai";
 export const MEMORI_REQUEST_TIMEOUT_MS = Math.max(1000, parseInteger(process.env.MEMORI_REQUEST_TIMEOUT_MS, 10_000));
 export const JOB_INTELLIGENCE_ENABLED = parseBoolean(process.env.JOB_INTELLIGENCE_ENABLED, false);
-export const JOB_INTELLIGENCE_PROVIDER = process.env.JOB_INTELLIGENCE_PROVIDER ?? (XAI_API_KEY ? "xai" : LLM_PROVIDER);
-export const JOB_INTELLIGENCE_MODEL = process.env.JOB_INTELLIGENCE_MODEL ?? (JOB_INTELLIGENCE_PROVIDER.toLowerCase() === "xai" || JOB_INTELLIGENCE_PROVIDER.toLowerCase() === "grok" ? XAI_MODEL : LLM_MODEL);
+export const JOB_INTELLIGENCE_PROVIDER = process.env.JOB_INTELLIGENCE_PROVIDER ?? (MOONSHOT_API_KEY ? "kimi" : XAI_API_KEY ? "xai" : LLM_PROVIDER);
+export const JOB_INTELLIGENCE_MODEL = process.env.JOB_INTELLIGENCE_MODEL ?? (
+  JOB_INTELLIGENCE_PROVIDER.toLowerCase() === "xai" || JOB_INTELLIGENCE_PROVIDER.toLowerCase() === "grok"
+    ? XAI_MODEL
+    : JOB_INTELLIGENCE_PROVIDER.toLowerCase() === "kimi" || JOB_INTELLIGENCE_PROVIDER.toLowerCase() === "moonshot"
+      ? MOONSHOT_MODEL
+      : LLM_MODEL
+);
 export const JOB_INTELLIGENCE_TEMPERATURE = Number.isFinite(Number.parseFloat(process.env.JOB_INTELLIGENCE_TEMPERATURE ?? ""))
   ? Number.parseFloat(process.env.JOB_INTELLIGENCE_TEMPERATURE ?? "")
   : 0;
