@@ -231,10 +231,11 @@ function categoryFor(job: JobPosting, intelligence: JobIntelligence): string {
   const lifecycleScope = hasLifecycleEmailPlatformScope(text);
   const strongPrimaryDesignScope = isStrongDesignScope(primaryText);
   if (/garden|plant|lawn|seed|nursery|horticulture/.test(text)) return "gardening";
+  if (strongPrimaryDesignScope) return "email_design";
   if (/beauty|skincare|cosmetic|skin care|makeup/.test(text)) return "beauty";
   if (/fashion|apparel|clothing|boutique|jewelry/.test(text)) return "fashion";
   if (lifecycleScope && !strongPrimaryDesignScope) return "dtc ecommerce";
-  if (strongPrimaryDesignScope || (!lifecycleScope && isStrongDesignScope(text))) return "email_design";
+  if (!lifecycleScope && isStrongDesignScope(text)) return "email_design";
   if (/\b(?:klaviyo|mailchimp|omnisend|ecommerce|e-commerce|customer retention|retention|email campaign|email marketing|flows?)\b/.test(text)) return "dtc ecommerce";
   if (/saas|b2b|software|crm implementation|sales pipeline/.test(text)) return "b2b_saas";
   if (intelligence.ecommerceVertical && intelligence.ecommerceVertical !== "unknown") return intelligence.ecommerceVertical;
@@ -588,7 +589,7 @@ function conciseHook(strategy: CopyStrategy): string {
   }
   if (strategy.category === "email_design") {
     const platformDetail = requestedTools(strategy).length ? ` across ${requestedTools(strategy).slice(0, 2).join(" + ")}` : "";
-    return `${opener} Two things stood out: offer hierarchy/mobile CTA clarity and ${specificTwo}${platformDetail}. I would treat this as an offer-clarity problem first, not a prettier-template pass.`;
+    return `${opener} Two things stood out: offer hierarchy/mobile CTA clarity and ${specificTwo}${platformDetail}. The reader needs the offer, product path, and CTA to make sense in seconds, so I would treat this as an offer-clarity problem first, not a prettier-template pass.`;
   }
   return `${opener} Two things stood out: customer lifecycle/commercial pain and ${specificOne} around ${specificTwo}. That makes this a ${laneLabel(strategy.retention_lane)} problem first, because ${strategy.client_commercial_pain}.`;
 }
