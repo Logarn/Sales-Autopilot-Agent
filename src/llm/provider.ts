@@ -241,12 +241,13 @@ function safeErrorMessage(error: unknown, config: LlmProviderConfig): string {
     .replace(/[A-Za-z0-9_-]{24,}/g, "[redacted-token]");
 }
 
-function shouldDisableQwenThinking(config: LlmProviderConfig): boolean {
-  return config.provider === "lmstudio" && /qwen/i.test(config.model);
+function shouldDisableProviderThinking(config: LlmProviderConfig): boolean {
+  return (config.provider === "lmstudio" && /qwen/i.test(config.model)) ||
+    config.provider === "moonshot";
 }
 
 function messagesForProvider(messages: LlmChatMessage[], config: LlmProviderConfig): LlmChatMessage[] {
-  if (!shouldDisableQwenThinking(config) || messages.some((message) => message.content.includes("/no_think"))) {
+  if (!shouldDisableProviderThinking(config) || messages.some((message) => message.content.includes("/no_think"))) {
     return messages;
   }
 

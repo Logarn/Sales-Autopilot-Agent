@@ -92,6 +92,7 @@ async function run(): Promise<void> {
   assert.match(prompt, /Steve here - how is your day going\?/i, "Prompt should preserve Steve's voice opener.");
   assert.doesNotMatch(prompt, /"proposalText"\s*:\s*"\.\.\."/i, "Prompt should not teach Kimi to return a placeholder proposalText.");
   assert.match(prompt, /full finished cover letter/i, "Prompt should ask for the full finished cover letter.");
+  assert.match(prompt, /Do not include private reasoning/i, "Prompt should block Kimi reasoning inside proposalText.");
 
   const researchedDraft = await buildApplicationDraftWithResearch(scored, { proposalCopyProvider: new FakeProposalProvider({ proposalText: conversionProposal }) });
   assert.equal(researchedDraft.proposalText, conversionProposal);
