@@ -336,6 +336,7 @@ export async function rewriteProposalCoverLetterWithKimi(
     temperature: PROPOSAL_COPY_TEMPERATURE,
     maxTokens: 1300,
     timeoutMs: PROPOSAL_COPY_REQUEST_TIMEOUT_MS,
+    plainTextFallbackKey: "proposalText",
     messages: [
       {
         role: "system",

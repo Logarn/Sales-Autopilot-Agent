@@ -280,6 +280,20 @@ async function run(): Promise<void> {
     const offline = await provider.completeJson({ messages: [{ role: "user", content: "hi" }] });
     assert.equal(offline.ok, false);
 
+    const plainProposal = [
+      "Steve here - how is your day going?",
+      "Your Shopify store already has traction, and the branding brief points to trust, offer clarity, and product-path friction.",
+      "I would start with a 3-5 day diagnostic. Done = identity risks, buying path friction, and first design direction mapped.",
+      "Would you prefer a quick call or an async outline?",
+    ].join("\n\n");
+    globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: plainProposal } }] }), { status: 200 });
+    const plainTextFallback = await provider.completeJson<{ proposalText: string }>({
+      messages: [{ role: "user", content: "hi" }],
+      plainTextFallbackKey: "proposalText",
+    });
+    assert.equal(plainTextFallback.ok, true);
+    assert.equal(plainTextFallback.data?.proposalText, plainProposal);
+
     globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: "not-json" } }] }), { status: 200 });
     const invalid = await provider.completeJson({ messages: [{ role: "user", content: "hi" }] });
     assert.equal(invalid.ok, false);
