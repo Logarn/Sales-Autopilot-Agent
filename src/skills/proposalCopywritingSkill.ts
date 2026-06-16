@@ -201,6 +201,7 @@ function isUsefulBrandDomain(value: string): boolean {
   const domain = cleanCandidateDomain(value);
   if (!domain || !domain.includes(".")) return false;
   if (/upwork\.com$/i.test(domain)) return false;
+  if (/^(?:company\.more|client\.more|profile\.more|www\.company\.more)$/i.test(domain)) return false;
   if (/\b(?:fixed-price|intermediate|proposals|connects|tooltip|posted|worldwide|hour|hr)\b/i.test(domain)) return false;
   const parts = domain.split(".");
   const tld = parts[parts.length - 1] ?? "";
@@ -433,7 +434,9 @@ export function buildCopyStrategy(input: {
 }): CopyStrategy {
   const category = categoryFor(input.job, input.intelligence);
   const brandName = input.brandFactPack.brandName !== "unknown" ? input.brandFactPack.brandName : visibleBrandName(input.job);
-  const brandUrl = input.brandFactPack.websiteUrls[0] ?? visibleBrandUrl(input.job);
+  const visibleUrl = visibleBrandUrl(input.job);
+  const researchUrl = input.brandFactPack.websiteUrls.find(isUsefulBrandDomain) ?? "";
+  const brandUrl = visibleUrl || researchUrl;
   const mechanism = mechanismFor(input.job, category, input.intelligence.primaryPlatform);
   const proofState = proofVerificationState(input.proofPoints, input.portfolioItems);
   const customerInsight = input.brandFactPack.confidence !== "unavailable" && input.brandFactPack.targetCustomerIcp

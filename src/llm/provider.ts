@@ -46,6 +46,7 @@ export interface LlmJsonRequest {
   messages: LlmChatMessage[];
   temperature?: number;
   maxTokens?: number;
+  timeoutMs?: number;
 }
 
 export interface LlmJsonResult<T> {
@@ -300,7 +301,7 @@ export class OpenAiCompatibleProvider {
 
     const send = async (includeResponseFormat: boolean): Promise<ChatCompletionAttempt> => {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), LLM_REQUEST_TIMEOUT_MS);
+      const timeout = setTimeout(() => controller.abort(), request.timeoutMs ?? LLM_REQUEST_TIMEOUT_MS);
       const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
