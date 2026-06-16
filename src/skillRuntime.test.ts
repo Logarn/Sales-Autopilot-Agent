@@ -185,6 +185,22 @@ const hierarchyIndex = indexOfRequired(designProposal, /hierarchy|conversion/, "
 const designToolIndex = designProposal.indexOf("figma") >= 0 ? designProposal.indexOf("figma") : designProposal.indexOf("klaviyo");
 assert(designToolIndex === -1 || hierarchyIndex < designToolIndex, "Email design proposal should use hierarchy/conversion logic before design-tool claims.");
 
+const agencyDesign = scored({
+  title: "Head Designer, Email Marketing Agency",
+  description: [
+    "I'm looking for an email marketing designer experienced with Klaviyo or Omnisend.",
+    "The work is high-level, universal design templates reused across brands in the fashion, beauty and wellness, and CPG spaces.",
+    "Requirements include Figma and a working understanding of Klaviyo design constraints, including native body text rather than relying only on Figma slices.",
+  ].join(" "),
+  category: "Email Marketing",
+  skills: ["Klaviyo", "Omnisend", "Figma", "Fashion & Beauty", "Email Design"],
+});
+const agencyDesignDraft = buildApplicationDraft(agencyDesign);
+assert.equal(agencyDesignDraft.brandFactPack.productCategory, "email design", "Explicit design roles should keep email-design brand fact logic even when vertical keywords are present.");
+assert(/hierarchy|mobile|template|figma|design/i.test(agencyDesignDraft.proposalText), `Agency design proposal should be design-specific:\n${agencyDesignDraft.proposalText}`);
+assert(!/first result|routine formation|replenishment window|next-best product education/i.test(agencyDesignDraft.proposalText), `Agency design proposal should not drift into beauty retention lifecycle copy:\n${agencyDesignDraft.proposalText}`);
+assert(agencyDesignDraft.draftQualityGate.ready, `Agency design proposal should pass the draft gate. Issues: ${JSON.stringify(agencyDesignDraft.draftQualityGate.issues)}`);
+
 const gateBase = {
   job: beauty,
   copyStrategy: beautyDraft.copyStrategy,
