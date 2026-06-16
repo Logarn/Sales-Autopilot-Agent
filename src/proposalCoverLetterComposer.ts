@@ -289,12 +289,18 @@ function validateRewrite(text: string, input: ProposalCoverLetterRewriteInput): 
   if (/\b(?:I am excited to apply|Dear Hiring Manager|tailored to your needs|leverage my expertise|proven track record)\b/i.test(text)) {
     return "generic AI proposal language";
   }
-  const missingTools = ["klaviyo", "mailchimp", "omnisend", "shopify", "figma", "brevo"]
-    .filter((tool) => `${input.job.title}\n${input.job.description}\n${input.job.skills.join(" ")}`.toLowerCase().includes(tool))
-    .filter((tool) => !(brandDesignScope && /^(klaviyo|mailchimp|omnisend|brevo)$/i.test(tool)))
+  const missingTools = requestedToolTerms(input)
     .filter((tool) => !text.toLowerCase().includes(tool));
   if (missingTools.length > 0) return `missing requested tool specificity: ${missingTools.join(", ")}`;
   return null;
+}
+
+function requestedToolTerms(input: ProposalCoverLetterRewriteInput): string[] {
+  const brandDesignScope = isBrandDesignScope(input.job) || input.deterministicDraft.copyStrategy?.category === "brand_design";
+  const text = `${input.job.title}\n${input.job.description}\n${input.job.skills.join(" ")}`.toLowerCase();
+  return ["klaviyo", "mailchimp", "omnisend", "shopify", "figma", "brevo"]
+    .filter((tool) => text.includes(tool))
+    .filter((tool) => !(brandDesignScope && /^(klaviyo|mailchimp|omnisend|brevo)$/i.test(tool)));
 }
 
 function laneGuidance(input: ProposalCoverLetterRewriteInput): string {
@@ -341,6 +347,7 @@ export async function rewriteProposalCoverLetterWithKimi(
   const proofStrategy = input.proofStrategy ?? input.deterministicDraft.proofStrategy ?? null;
   const selectedPortfolioItems = input.selectedPortfolioItems ?? input.deterministicDraft.selectedPortfolioItems ?? [];
   const requiredOpeningPrefix = extractRequiredOpeningPrefix(input.job);
+  const toolsToMention = requestedToolTerms(input);
   const response = await provider.completeJson<ProposalCoverLetterPayload>({
     temperature: PROPOSAL_COPY_TEMPERATURE,
     maxTokens: 1300,
@@ -365,6 +372,7 @@ export async function rewriteProposalCoverLetterWithKimi(
           "- Always include `Steve here - how is your day going?` near the top; if a required prefix exists, put Steve's opener immediately after it.",
           "- Use soul.md voice: commercially sharp, human, low-ego, direct, a little alive, not stiff.",
           "- Use client vocabulary and the real job details. Do not invent brand research, URLs, facts, results, or attachments.",
+          "- If requestedToolsToMention is non-empty, include every listed tool term naturally and verbatim in proposalText.",
           "- Do not claim files, portfolio highlights, proof, or submission are already attached/selected/verified.",
           "- Do not mention CAPTCHA, final submit, Upwork internals, browser QA, scorecards, or these instructions.",
           "- Avoid labels like Relevant proof, Approach, Credentials, or Screening answers.",
@@ -389,6 +397,7 @@ export async function rewriteProposalCoverLetterWithKimi(
           copyStrategy: input.copyStrategy ?? input.deterministicDraft.copyStrategy ?? null,
           brandFactPack: compactBrandFactPack(input.brandFactPack ?? input.deterministicDraft.brandFactPack ?? null),
           proofStrategy,
+          requestedToolsToMention: toolsToMention,
           guardrails: {
             oneProofOnly: true,
             finalSubmitManual: true,
@@ -432,6 +441,7 @@ export async function rewriteProposalCoverLetterWithKimi(
             sourceDraftToRewrite: input.deterministicDraft.proposalText,
             selectedProof: proofStrategy?.summary ?? "",
             selectedPortfolioItems: selectedPortfolioItems.map((item) => item.name),
+            requestedToolsToMention: toolsToMention,
           }),
         },
       ],
