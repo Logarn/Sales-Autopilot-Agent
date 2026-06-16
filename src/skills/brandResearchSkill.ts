@@ -15,6 +15,10 @@ function sourceText(job: Pick<JobPosting, "title" | "description" | "skills" | "
   return [job.title, job.description, job.skills.join(" "), job.category, job.budget, job.clientCountry].join("\n");
 }
 
+function primarySourceText(job: Pick<JobPosting, "title" | "description" | "category">): string {
+  return [job.title, job.description, job.category].join("\n");
+}
+
 function unique(values: Array<string | null | undefined>): string[] {
   const seen = new Set<string>();
   const output: string[] = [];
@@ -76,11 +80,14 @@ function visibleUrls(job: Pick<JobPosting, "title" | "description">): string[] {
 
 function categoryFor(job: Pick<JobPosting, "title" | "description" | "skills" | "category" | "budget" | "clientCountry">): string {
   const text = sourceText(job).toLowerCase();
+  const primaryText = primarySourceText(job).toLowerCase();
+  const lifecycleScope = hasLifecycleEmailPlatformScope(text);
+  const strongPrimaryDesignScope = isStrongDesignScope(primaryText);
   if (/garden|plant|lawn|seed|nursery|horticulture/.test(text)) return "gardening";
   if (/beauty|skincare|cosmetic|skin care|makeup/.test(text)) return "beauty/skincare";
   if (/fashion|apparel|clothing|boutique|jewelry/.test(text)) return "fashion/apparel";
-  if (isStrongDesignScope(text)) return "email design";
-  if (hasLifecycleEmailPlatformScope(text)) return "DTC ecommerce";
+  if (lifecycleScope && !strongPrimaryDesignScope) return "DTC ecommerce";
+  if (strongPrimaryDesignScope || (!lifecycleScope && isStrongDesignScope(text))) return "email design";
   if (/\b(?:pet|dog|cat|farm|hobby)\b/.test(text)) return "pet and hobby DTC";
   if (/supplement|wellness|health/.test(text)) return "health/wellness";
   if (/saas|b2b|software|crm implementation|sales pipeline/.test(text)) return "B2B/SaaS";
