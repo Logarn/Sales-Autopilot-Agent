@@ -165,6 +165,11 @@ function hasChoiceCta(text: string): boolean {
   return /\?$/.test(tail) && /\b(?:or|prefer|rather|option a|option b|call|async|outline|plan|audit)\b/i.test(tail);
 }
 
+function hasOutboundSalesArgument(text: string): boolean {
+  return /\b(?:make|save|lift|increase|recover|protect|reduce|unlock|turn)\b[^.\n]{0,90}\b(?:money|revenue|conversion|conversions|repeat purchase|retention|engagement|trust|time|friction|leak|leaks|pipeline|profit|profitability|roi)\b/i.test(text) ||
+    /\b(?:money|revenue|conversion|conversions|repeat purchase|retention|engagement|trust|time|friction|leak|leaks|pipeline|profit|profitability|roi)\b[^.\n]{0,90}\b(?:make|save|lift|increase|recover|protect|reduce|unlock|turn|compound)\b/i.test(text);
+}
+
 function hasUnsafeClaim(text: string): boolean {
   return /\b(?:submitted|final submit|click submit|bypass|captcha|2fa|security check|guarantee(?:d)?)\b/i.test(text);
 }
@@ -213,7 +218,7 @@ function ensureCustomerLogicBeforeTools(text: string, job: JobPosting): string {
   const source = jobSource(job).toLowerCase();
   const platforms = ["klaviyo", "mailchimp", "omnisend", "brevo"].filter((tool) => source.includes(tool));
   const platformPhrase = platforms.length ? ` before the ${platforms.join(", ")} execution` : " before platform execution";
-  const bridge = `The customer problem is engagement and conversion leaking across ecommerce moments${platformPhrase}.`;
+  const bridge = `The buyer moment is the useful signal here: engagement and conversion are leaking across ecommerce moments${platformPhrase}.`;
   return text.replace(/(Steve here\s*-\s*how is your day going\?)(\s*)/i, `$1 ${bridge} `).trim();
 }
 
@@ -303,6 +308,9 @@ function validateRewrite(text: string, input: ProposalCoverLetterRewriteInput): 
   if (!hasMetric(text) && !(brandDesignScope && hasDesignPortfolioProof(text))) return "missing proof metric";
   if (!hasChoiceCta(text)) return "missing choice-based CTA";
   if (proofBlockCount(text) !== 1) return "proof count is not exactly one";
+  if (!/For proof, I would use one matched artifact:/i.test(text)) return "proof paragraph missing exact one-artifact phrase";
+  if (!hasOutboundSalesArgument(text)) return "missing outbound sales argument";
+  if (/\bThe customer problem is\b/i.test(text)) return "formulaic customer-problem bridge";
   if (brandDesignScope && hasWrongRetentionProofForDesign(text)) return "wrong retention proof for brand/design scope";
   if (hasUnsafeClaim(text)) return "unsafe submit/security/guarantee claim";
   if (hasScaffoldLabel(text)) return "internal scaffold label";
@@ -379,13 +387,21 @@ export async function rewriteProposalCoverLetterWithKimi(
         content: [
           "You write Upwork cover letters for Steve Logarn, a conversion-led ecommerce operator across retention/lifecycle, Shopify/Klaviyo, and brand/design clarity work.",
           "This is not a classic cover letter. Write a tiny diagnosis-led sales memo that earns a reply.",
+          "Use the Cold Outbound Handbook logic as an operating layer:",
+          "- Pain sniff first: write to the person currently feeling the pain the job post reveals.",
+          "- Frame Steve as a profit center, not a CV. The proposal should make a clear argument that the first step can make money, save money, save time, or make the client/operator's life easier.",
+          "- Build the argument internally as Claim -> Warrant -> Evidence -> Impact, but output only natural copy.",
+          "- Personalization means a 1:1 pain signal from the job, not flattery or fake research.",
+          "- Sound like a real note from a sharp operator: casual enough to be human, polished enough to trust, never faux-casual.",
+          "- Use the client's jargon naturally. Normalize awkward company/tool wording so it sounds human.",
           laneGuidance(input),
           "Use the Upwork Proposal Operating System:",
-          "- 150-220 words unless a required opening phrase forces a little extra room.",
+          "- 150-205 words unless a required opening phrase forces a little extra room. Never exceed 220.",
           "- First two meaningful lines must prove the job was read with at least two job-specific details from the post.",
           "- The sentence immediately after Steve's opener must include at least two exact job/scope terms, such as branding/logo design, conversion optimization, Shopify, Figma, Klaviyo, flows, or the named brand/site.",
           "- In retention/email jobs, name the customer/commercial logic before any platform or flow/tool list. Do not put Klaviyo, Mailchimp, Omnisend, flows, automations, CRM, templates, or Figma before words like customer, buyer, offer, trust, routine, or hierarchy.",
           "- Lead with the client's commercial/customer problem, not Steve's biography.",
+          "- Do not use the phrase `The customer problem is`. It sounds like a template.",
           "- Include one low-risk 3-5 day micro-milestone and the literal text `Done = ...`.",
           "- Include exactly one proof artifact or case study mention, with exactly one metric or quantified result.",
           "- The proof paragraph must begin with the exact phrase `For proof, I would use one matched artifact:` and must name exactly one artifact.",
@@ -452,9 +468,11 @@ export async function rewriteProposalCoverLetterWithKimi(
             "You output only the final Upwork cover letter for Steve Logarn.",
             "No analysis, no checklist, no explanation, no rationale, no markdown fence.",
             "Return JSON only. The proposalText string must begin directly with: Steve here - how is your day going?",
-            "Keep it 150-220 words, include one 3-5 day `Done = ...` milestone, one proof, logistics, and a choice-based CTA.",
+            "Keep it 150-205 words when possible and never over 220. Include one 3-5 day `Done = ...` milestone, one proof, logistics, and a choice-based CTA.",
+            "Use cold outbound logic: one 1:1 pain signal, one profit-center claim, evidence, impact, then a low-friction ask.",
             "The sentence after Steve's opener must include at least two exact job/scope terms. The proof paragraph must begin: For proof, I would use one matched artifact:",
             "For retention/email jobs, customer/commercial logic must appear before any platform, flow, automation, CRM, template, or Figma reference.",
+            "Do not use the phrase `The customer problem is`.",
           ].join("\n"),
         },
         {

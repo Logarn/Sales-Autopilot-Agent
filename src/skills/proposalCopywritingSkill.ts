@@ -639,36 +639,39 @@ function conciseHook(strategy: CopyStrategy): string {
   const context = brandContext(strategy);
   const contextPrefix = context !== "the account" ? `${context}: ` : "";
   if (isSetupConfigurationScope(strategy)) {
-    return `${opener} Two things stood out: ${context} needs Brevo account setup and ${specificTwo}. I would treat this as customer-data risk first: sender reputation, contact import/cleanup, segmentation, automations, and transactional API separation all need to be clean before volume ramps.`;
+    return `${opener} Quick read: customer-data risk is the money leak before volume ever ramps; ${context} needs Brevo account setup and ${specificTwo}. Sender reputation, contact import/cleanup, segmentation, automations, and transactional API separation all need to be clean before the channel can safely make money.`;
   }
   if (strategy.category === "gardening" && tools.length > 0) {
-    return `${opener} ${contextPrefix}two things stood out: seasonal replenishment and ${specificOne}. I would start with planting timing, care anxiety, and what the customer needs next before building more emails.`;
+    return `${opener} ${contextPrefix}quick read: seasonal replenishment and ${specificOne} are only useful if they meet the customer at the right planting/care moment. The first move can lift revenue by reducing care anxiety and making the next purchase feel obvious before building more emails.`;
   }
   if (strategy.category === "brand_design") {
-    return `${opener} ${contextPrefix}two things stood out: the store already has commercial traction and the brief is asking for branding/logo work that can carry more trust. I would treat this as a brand-conversion problem first: identity, offer hierarchy, product path, and the first impression need to make the store feel easier to believe and buy from.`;
+    return `${opener} ${contextPrefix}quick read: the store already has commercial traction, but the branding/logo work has to carry more trust before shoppers buy. The first move can lift conversion by fixing identity, offer hierarchy, product path, and first-impression credibility.`;
   }
   if (strategy.category === "email_design") {
     const platformDetail = requestedTools(strategy).length ? ` across ${requestedTools(strategy).slice(0, 2).join(" + ")}` : "";
-    return `${opener} ${contextPrefix}two things stood out: offer hierarchy/mobile CTA clarity and ${specificTwo}${platformDetail}. The reader needs the offer, product path, and CTA to make sense in seconds, so I would treat this as an offer-clarity problem first, not a prettier-template pass.`;
+    return `${opener} ${contextPrefix}quick read: offer hierarchy/mobile CTA clarity and ${specificTwo}${platformDetail} are where the reader either clicks or drifts. The first move can lift conversion by making the offer, product path, and CTA make sense in seconds, not from a prettier-template pass.`;
   }
-  return `${opener} ${contextPrefix}two things stood out: customer lifecycle/commercial pain and ${specificOne} around ${specificTwo}. That makes this a ${laneLabel(strategy.retention_lane)} problem first, because ${strategy.client_commercial_pain}.`;
+  if (tools.length >= 3) {
+    return `${opener} Quick read: customer engagement and conversion are leaking across ${tools.slice(0, 3).join(", ")} and ${specificTwo}. The first move can recover revenue by tying flows, campaigns, subscriber logic, and reporting to the buyer moments where someone is actually ready to act.`;
+  }
+  return `${opener} ${contextPrefix}quick read: the customer/revenue leak comes first; ${specificTwo} and ${specificOne} only matter if they recover revenue or conversion. This looks like a ${laneLabel(strategy.retention_lane)} problem first, because ${strategy.client_commercial_pain}.`;
 }
 
 function oneStepSolution(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
   if (isSetupConfigurationScope(strategy)) {
-    return "I would start by mapping the setup risks: sender reputation warmup, contact import/cleanup, list and segment architecture, automation logic, newsletter targeting, and the transactional API boundary.";
+    return "The useful first move is mapping the setup risks: sender reputation warmup, contact import/cleanup, list and segment architecture, automation logic, newsletter targeting, and the transactional API boundary.";
   }
   if (strategy.category === "brand_design") {
-    return "I would start by looking at the homepage/PDP path, logo and identity fit, offer clarity, category navigation, and the trust cues that should support a cleaner buying decision.";
+    return "The useful first move is looking at the homepage/PDP path, logo and identity fit, offer clarity, category navigation, and the trust cues that should support a cleaner buying decision.";
   }
   if (strategy.category === "email_design") {
-    return "I would start by checking offer hierarchy, mobile readability, product path, and CTA visibility on the priority templates.";
+    return "The useful first move is checking offer hierarchy, mobile readability, product path, and CTA visibility on the priority templates.";
   }
   if (tools.length >= 3) {
-    return "I would start with active flows, subscriber/list logic, campaign cadence, and reporting, then rank the first fixes by likely lift.";
+    return "The useful first move is active flows, subscriber/list logic, campaign cadence, and reporting, then ranking the first fixes by likely lift.";
   }
-  return `I would start with a tight diagnostic pass around ${strategy.repeat_purchase_or_conversion_moment}, then turn the clearest leak into the first practical fix.`;
+  return `The useful first move is a tight diagnostic pass around ${strategy.repeat_purchase_or_conversion_moment}, then turning the clearest leak into the first practical fix.`;
 }
 
 function microMilestoneLine(strategy: CopyStrategy): string {
@@ -699,17 +702,17 @@ function singleProofPoint(proofPoints: string[], portfolioItems: PortfolioItem[]
   if (selectedProof) {
     const [name, ...headlineParts] = selectedProof.split(":");
     const headline = headlineParts.join(":").trim().replace(/[.!?]+$/g, "");
-    return `For proof, I would keep it to one matched artifact: ${name.trim()} - ${headline}.`;
+    return `For proof, I would use one matched artifact: ${name.trim()} - ${headline}.`;
   }
   const proofText = [...proofPoints, ...portfolioItems.map((item) => item.result), ...portfolioItems.map((item) => item.name)].join(" ");
   if (/klaviyo silver partner/i.test(proofText) || /8\+?\s*years/i.test(proofText)) {
-    return "For proof, I would keep it to one Klaviyo/lifecycle artifact instead of dumping credentials.";
+    return "For proof, I would use one matched artifact: the closest Klaviyo/lifecycle proof, not a credential dump.";
   }
   const portfolio = firstProofLabel(proofPoints, portfolioItems);
   if (portfolio && !/portfolio|general/i.test(portfolio)) {
-    return `For proof, I would use ${portfolio} if it is the cleanest match for this scope.`;
+    return `For proof, I would use one matched artifact: ${portfolio} if it is the cleanest match for this scope.`;
   }
-  return "For proof, I would use one artifact only after browser QA confirms it matches this application.";
+  return "For proof, I would use one matched artifact: the single closest example after browser QA confirms it matches this application.";
 }
 
 function logisticsLine(strategy: CopyStrategy): string {
@@ -870,6 +873,11 @@ function addIssue(issues: DraftQualityGateIssue[], issue: DraftQualityGateIssue)
 
 function hasCompleteCta(text: string): boolean {
   return /\b(if it makes sense|if useful|happy to|send me|share|we can start|walk me through|take a quick look|choose a 10-minute call|2-slide plan|would you prefer|async (?:audit |template |)?outline|quick call)\b/i.test(text) && /[.!?]$/.test(text.trim());
+}
+
+function hasOutboundSalesArgument(text: string): boolean {
+  return /\b(?:make|save|lift|increase|recover|protect|reduce|unlock|turn)\b[^.\n]{0,90}\b(?:money|revenue|conversion|conversions|repeat purchase|retention|engagement|trust|time|friction|leak|leaks|pipeline|profit|profitability|roi)\b/i.test(text) ||
+    /\b(?:money|revenue|conversion|conversions|repeat purchase|retention|engagement|trust|time|friction|leak|leaks|pipeline|profit|profitability|roi)\b[^.\n]{0,90}\b(?:make|save|lift|increase|recover|protect|reduce|unlock|turn|compound)\b/i.test(text);
 }
 
 function wordCount(text: string): number {
@@ -1264,6 +1272,12 @@ export function evaluateDraftQualityGate(input: {
   }
   if (/\bjust adding noise\b/i.test(text)) {
     addIssue(issues, { code: "banned_noise_phrase", severity: "critical", message: "Cover letter contains the banned phrase just adding noise." });
+  }
+  if (/\bThe customer problem is\b/i.test(text)) {
+    addIssue(issues, { code: "formulaic_customer_problem_bridge", severity: "critical", message: "Cover letter uses formulaic customer-problem bridge language instead of natural operator voice." });
+  }
+  if (!hasOutboundSalesArgument(text)) {
+    addIssue(issues, { code: "missing_outbound_sales_argument", severity: "critical", message: "Cover letter must make a clear cold-outbound style argument: make/save money, save time, reduce pain, or improve the client's life/workflow." });
   }
   if (/\bsend me the store url\b/i.test(text)) {
     addIssue(issues, { code: "store_url_punt_cta", severity: "critical", message: "Cover letter punts to a store URL instead of using the available job context first." });
