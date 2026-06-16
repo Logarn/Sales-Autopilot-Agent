@@ -702,6 +702,15 @@ export function draftScreeningAnswersFromCopyStrategy(input: {
   portfolioItems: PortfolioItem[];
   jobText: string;
 }): string[] {
+  const explicitQuestions = extractExplicitScreeningQuestions(input.jobText);
+  if (explicitQuestions.length > 0) {
+    return explicitQuestions
+      .map((question) => answerExplicitScreeningQuestion(question, input))
+      .filter(Boolean)
+      .map((answer) => answer.split(/\s+/).slice(0, 80).join(" "))
+      .slice(0, 4);
+  }
+
   const answers: string[] = [];
   const source = input.jobText;
   if (/rate|hourly|budget|price|retainer/i.test(source)) {
@@ -720,6 +729,56 @@ export function draftScreeningAnswersFromCopyStrategy(input: {
     answers.push("I can start with a short diagnostic pass, then prioritize the highest-impact customer moments before implementation.");
   }
   return answers.map((answer) => answer.split(/\s+/).slice(0, 70).join(" ")).slice(0, 4);
+}
+
+function extractExplicitScreeningQuestions(jobText: string): string[] {
+  const section = firstMatch(jobText, [
+    /(?:asked to answer the following questions?|you will be asked to answer the following questions?|application questions?)\s*(?:when submitting a proposal)?:?\s*([\s\S]{0,1400}?)(?=\n\s*(?:Skills|Previous skills|Activity|About the client)\b|Skills\b|$)/i,
+    /(?:to apply|please include|please answer)\s*:?\s*([\s\S]{0,900}?)(?=\n\s*(?:Skills|Previous skills|Activity|About the client)\b|Skills\b|$)/i,
+  ]) || "";
+  const source = section || jobText;
+  return unique([...source.matchAll(/([^?\n]{12,260}\?)/g)]
+    .map((match) => (match[1] ?? "")
+      .replace(/\s+/g, " ")
+      .replace(/^(?:and\s+)?(?:you will be asked to answer the following questions? when submitting a proposal:)?/i, "")
+      .trim())
+    .filter((question) => /[a-z]/i.test(question) && !/how is your day going/i.test(question)))
+    .slice(0, 4);
+}
+
+function answerExplicitScreeningQuestion(
+  question: string,
+  input: {
+    strategy: CopyStrategy;
+    suggestedBid: string;
+    proofPoints: string[];
+    portfolioItems: PortfolioItem[];
+    jobText: string;
+  },
+): string {
+  const q = question.toLowerCase();
+  const proof = firstProofLabel(input.proofPoints, input.portfolioItems);
+  if (/(?:shopify stores?|stores?).*(?:over|doing).*(?:\$?1m|1m|million)|(?:\$?1m|1m|million).*(?:shopify|annually)/i.test(q)) {
+    return "Yes. Closest matches are DTC/Shopify-side retention work for Truly Beauty and The Fly Boutique. My role was strategy plus implementation: lifecycle priorities, Klaviyo flow/campaign logic, offer/customer-moment thinking, QA, and revenue reporting. Relevant proof: Fly Boutique grew email revenue from $83K to $300K/month; Truly Beauty scaled retention revenue past $1.2M/month.";
+  }
+  if (/strategy.*implementation|implementation.*strategy|primarily provide/i.test(q)) {
+    return "Both. I am most useful when strategy and implementation stay connected: diagnose the ecommerce/retention bottleneck, choose the first 3-5 day slice, then help build or QA the Klaviyo/site/email execution instead of stopping at recommendations.";
+  }
+  if (/(?:15 minutes|reviewing|first\s+3|three things|investigate)/i.test(q)) {
+    return "I would investigate three things first: mobile path from homepage/collection to PDP and cart; offer/category clarity plus Google Merchant/feed risks; and Klaviyo capture, welcome, post-purchase, replenishment/winback, and how those flows connect to the strongest product moments.";
+  }
+  if (/portfolio|sample|example|previous work|case stud|proof/i.test(q)) {
+    return proof
+      ? `I would use ${proof} as the closest proof angle, then keep the application focused on the exact customer path and acceptance criteria instead of dumping unrelated samples.`
+      : "I would share one tightly matched sample only, then explain why it maps to this job's customer path and acceptance criteria.";
+  }
+  if (/rate|hourly|budget|price|retainer/i.test(q)) {
+    return `My working rate is ${input.suggestedBid.replace(/[.!?]+$/g, "")}. For a first slice, I would keep scope tight around one clear audit/fix path so you can judge fit before expanding.`;
+  }
+  if (/availability|start|timeline|when can you/i.test(q)) {
+    return "I can start with a contained 3-5 day diagnostic/fix slice and keep updates async-friendly, with the first pass focused on the highest-impact customer or ecommerce bottleneck.";
+  }
+  return `I would answer this through the first slice: ${input.strategy.repeat_purchase_or_conversion_moment}. Done = the priority issue is mapped, the first fix is clear, and the next implementation step is easy to approve.`;
 }
 
 function indexOfAny(lower: string, needles: string[]): number {

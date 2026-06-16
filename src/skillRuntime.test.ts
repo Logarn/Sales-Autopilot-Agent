@@ -203,6 +203,25 @@ assert(/hierarchy|mobile|template|figma|design/i.test(agencyDesignDraft.proposal
 assert(!/first result|routine formation|replenishment window|next-best product education/i.test(agencyDesignDraft.proposalText), `Agency design proposal should not drift into beauty retention lifecycle copy:\n${agencyDesignDraft.proposalText}`);
 assert(agencyDesignDraft.draftQualityGate.ready, `Agency design proposal should pass the draft gate. Issues: ${JSON.stringify(agencyDesignDraft.draftQualityGate.issues)}`);
 
+const shopifyPartner = scored({
+  title: "Established Shopify Store ($3.5M Revenue) Seeking Ecommerce Partner - Branding & Logo Design",
+  description: [
+    "Website redesign and modernization, conversion optimization, Google Merchant Center compliance and visibility, Email marketing strategy and Klaviyo optimization.",
+    "What I'm really looking for is someone who can evaluate the business, identify the highest-impact opportunities, and potentially become an ongoing partner.",
+    "You will be asked to answer the following questions when submitting a proposal:",
+    "What Shopify stores have you worked on that are doing over $1M annually, and what was your role?",
+    "Do you primarily provide strategy, implementation, or both?",
+    "If you spent 15 minutes reviewing WigParty.Com, what are the first 3 things you would investigate?",
+  ].join(" "),
+  category: "Ecommerce Marketing",
+  skills: ["Shopify", "Klaviyo", "Conversion Optimization", "Google Merchant Center"],
+});
+const shopifyPartnerDraft = buildApplicationDraft(shopifyPartner);
+const shopifyPartnerAnswers = shopifyPartnerDraft.structuredProposal?.clientRequestAnswers ?? [];
+assert(shopifyPartnerAnswers.some((answer: string) => /Truly Beauty|Fly Boutique|strategy plus implementation|300K\/month|1\.2M\/month/i.test(answer)), `Shopify $1M screening answer should name relevant proof and role:\n${JSON.stringify(shopifyPartnerAnswers)}`);
+assert(shopifyPartnerAnswers.some((answer: string) => /^Both\./i.test(answer)), `Strategy/implementation screening answer should be direct:\n${JSON.stringify(shopifyPartnerAnswers)}`);
+assert(shopifyPartnerAnswers.some((answer: string) => /mobile path|Google Merchant|Klaviyo capture|replenishment\/winback/i.test(answer)), `WigParty 15-minute review answer should give three concrete investigation areas:\n${JSON.stringify(shopifyPartnerAnswers)}`);
+
 const gateBase = {
   job: beauty,
   copyStrategy: beautyDraft.copyStrategy,
