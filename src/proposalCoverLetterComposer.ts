@@ -408,7 +408,47 @@ export async function rewriteProposalCoverLetterWithKimi(
   const proposalText = sanitizeProposalText(raw, input.job);
   const validationError = validateRewrite(proposalText, input);
   if (validationError) {
-    return fallback(validationError);
+    const repair = await provider.completeJson<ProposalCoverLetterPayload>({
+      temperature: PROPOSAL_COPY_TEMPERATURE,
+      maxTokens: 900,
+      timeoutMs: PROPOSAL_COPY_REQUEST_TIMEOUT_MS,
+      plainTextFallbackKey: "proposalText",
+      messages: [
+        {
+          role: "system",
+          content: [
+            "You output only the final Upwork cover letter for Steve Logarn.",
+            "No analysis, no checklist, no explanation, no rationale, no markdown fence.",
+            "Return JSON only. The proposalText string must begin directly with: Steve here - how is your day going?",
+            "Keep it 150-220 words, include one 3-5 day `Done = ...` milestone, one proof, logistics, and a choice-based CTA.",
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            invalidReason: validationError,
+            job: compactJob(input.job),
+            laneGuidance: laneGuidance(input),
+            sourceDraftToRewrite: input.deterministicDraft.proposalText,
+            selectedProof: proofStrategy?.summary ?? "",
+            selectedPortfolioItems: selectedPortfolioItems.map((item) => item.name),
+          }),
+        },
+      ],
+    });
+    if (repair.ok) {
+      const repairedText = sanitizeProposalText(extractProposalText(repair.data), input.job);
+      const repairValidationError = validateRewrite(repairedText, input);
+      if (!repairValidationError) {
+        return {
+          proposalText: repairedText,
+          usedLlm: true,
+          provider: "kimi",
+        };
+      }
+      return fallback(`${validationError}; repair: ${repairValidationError}`);
+    }
+    return fallback(`${validationError}; repair: ${repair.error ?? repair.skippedReason ?? "proposal copy repair failed"}`);
   }
   return {
     proposalText,

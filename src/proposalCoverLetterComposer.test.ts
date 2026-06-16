@@ -39,8 +39,9 @@ function job(partial: Partial<JobPosting> = {}): JobPosting {
 
 class FakeProposalProvider implements ProposalCoverLetterClient {
   requests: LlmJsonRequest[] = [];
+  private index = 0;
 
-  constructor(private readonly payload: Record<string, unknown>, private readonly available = true) {}
+  constructor(private readonly payload: Record<string, unknown> | Array<Record<string, unknown>>, private readonly available = true) {}
 
   isAvailable(): boolean {
     return this.available;
@@ -48,7 +49,10 @@ class FakeProposalProvider implements ProposalCoverLetterClient {
 
   async completeJson<T>(request: LlmJsonRequest): Promise<LlmJsonResult<T>> {
     this.requests.push(request);
-    return { ok: true, data: this.payload as T };
+    const payload = Array.isArray(this.payload)
+      ? this.payload[Math.min(this.index++, this.payload.length - 1)]
+      : this.payload;
+    return { ok: true, data: payload as T };
   }
 }
 
@@ -193,6 +197,27 @@ async function run(): Promise<void> {
   }));
   assert.equal(verboseKimiRewrite.usedLlm, true, "Proposal composer should strip Kimi preamble/rationale from a usable cover letter.");
   assert.equal(verboseKimiRewrite.proposalText, brandDesignProposal);
+
+  const repairProvider = new FakeProposalProvider([
+    {
+      proposalText: [
+        "The user wants me to write an Upwork cover letter. I will reason through all rules first.",
+        "This output is intentionally long and not a usable cover letter because it does not begin with Steve's opener.",
+        "It should be rejected and repaired by the second Kimi pass.",
+      ].join(" "),
+    },
+    { proposalText: brandDesignProposal },
+  ]);
+  const repairedRewrite = await rewriteProposalCoverLetterWithKimi({
+    job: brandDesignJob,
+    deterministicDraft: brandDesignDraft,
+    copyStrategy: brandDesignDraft.copyStrategy,
+    brandFactPack: brandDesignDraft.brandFactPack,
+    proofStrategy: brandDesignDraft.proofStrategy,
+  }, repairProvider);
+  assert.equal(repairedRewrite.usedLlm, true, "Proposal composer should make one repair pass after invalid Kimi reasoning output.");
+  assert.equal(repairedRewrite.proposalText, brandDesignProposal);
+  assert.equal(repairProvider.requests.length, 2);
 
   const wrongDesignProof = await rewriteProposalCoverLetterWithKimi({
     job: brandDesignJob,
