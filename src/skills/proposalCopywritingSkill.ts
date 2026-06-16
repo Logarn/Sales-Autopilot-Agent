@@ -61,6 +61,7 @@ export interface CopyStrategy {
   repeat_purchase_or_conversion_moment: string;
   likely_lifecycle_gap: string;
   offer_or_project_mechanism: string;
+  retention_lane: string;
   proof_angle: string;
   proof_verification_state: ProofVerificationState;
   requested_tools: string[];
@@ -426,6 +427,7 @@ export function buildCopyStrategy(input: {
     repeat_purchase_or_conversion_moment: input.brandFactPack.repeatPurchaseMoment || repeatMomentFor(category),
     likely_lifecycle_gap: input.brandFactPack.likelyLifecycleLeak || input.understanding.likelyLifecycleOrConversionLeak,
     offer_or_project_mechanism: mechanism,
+    retention_lane: retentionLaneFor(input.job, category),
     proof_angle: proofState === "unavailable"
       ? "proof unavailable; do not claim specific proof"
       : input.brandFactPack.proofAngle || "use proof after the customer and commercial logic is clear",
@@ -470,6 +472,42 @@ function repeatMomentFor(category: string): string {
       return "welcome intent, abandoned intent, post-purchase education, replenishment, winback, and campaign segmentation";
     default:
       return "post-purchase education, segmentation, next-best action, and a clear reason to come back";
+  }
+}
+
+function retentionLaneFor(job: JobPosting, category: string): string {
+  const text = lowerSource(job);
+  if (/\b(?:shopify email|migration|migrate|move from|switch from)\b/i.test(text)) return "migration_foundation";
+  if (/\b(?:revenue share|email revenue|gross revenue|lift|growth|roi|conversion rate|cro|audit)\b/i.test(text)) return "revenue_lift";
+  if (/\b(?:founder voice|brand voice|tone of voice|doesn'?t sound like marketing|not sound like marketing)\b/i.test(text)) return "founder_voice";
+  if (/\b(?:subscription|recharge|loop|win[-\s]?back|replenishment|repeat purchase|churn)\b/i.test(text)) return "subscription_winback";
+  if (/\b(?:api|integration|integrations|deliverability|sender|dns|domain|events?|webhook|html|liquid|qa)\b/i.test(text)) return "technical_retention";
+  if (/\b(?:agency|multiple brands|multi[-\s]?brand|accounts|clients)\b/i.test(text)) return "agency_support";
+  if (category === "email_design") return "email_template_clarity";
+  if (/\b(?:flow|flows|automation|automations|audit|underperforming)\b/i.test(text)) return "flow_audit";
+  return "lifecycle_operator";
+}
+
+function laneLabel(lane: string): string {
+  switch (lane) {
+    case "migration_foundation":
+      return "Klaviyo migration/foundation";
+    case "revenue_lift":
+      return "owned-revenue";
+    case "founder_voice":
+      return "founder-voice retention";
+    case "subscription_winback":
+      return "subscription and win-back";
+    case "technical_retention":
+      return "retention systems";
+    case "agency_support":
+      return "multi-account lifecycle ops";
+    case "email_template_clarity":
+      return "email clarity";
+    case "flow_audit":
+      return "flow/audit";
+    default:
+      return "lifecycle";
   }
 }
 
@@ -524,38 +562,38 @@ function requestedToolSentence(strategy: CopyStrategy): string | null {
   return null;
 }
 
+function openerSpecifics(strategy: CopyStrategy): [string, string] {
+  const tools = requestedTools(strategy);
+  const toolSpecific = tools.length >= 2 ? `${tools.slice(0, 3).join(" + ")} execution` : tools[0] ? `${tools[0]} execution` : strategy.category;
+  const deliverableSpecific = strategy.requested_deliverables.length
+    ? strategy.requested_deliverables.slice(0, 2).join(" + ")
+    : laneLabel(strategy.retention_lane);
+  return [toolSpecific, deliverableSpecific];
+}
+
 function conciseHook(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
   const opener = "Steve here - how is your day going?";
-  const deliverableSpecifics = strategy.requested_deliverables.slice(0, 2).join(" and ");
+  const [specificOne, specificTwo] = openerSpecifics(strategy);
   if (strategy.category === "gardening" && tools.length > 0) {
-    return `${opener} I would not treat seasonal replenishment and lifecycle care like "set up more emails." The customer has seasonal logic first: what they are planting, what they are worried about, and when ${tools[0]} should help them buy or replenish next.`;
+    return `${opener} Two things stood out: seasonal replenishment and ${specificOne}. I would start with planting timing, care anxiety, and what the customer needs next before building more emails.`;
   }
   if (strategy.category === "email_design") {
-    const platformContext = tools.length ? ` through ${tools.join(" and ")}` : "";
-    return `${opener} I would not treat the reader's offer hierarchy and conversion path${platformContext} like "make the emails prettier." The reader needs campaign and template clarity before they have a chance to drift.`;
+    const platformDetail = requestedTools(strategy).length ? ` across ${requestedTools(strategy).slice(0, 2).join(" + ")}` : "";
+    return `${opener} Two things stood out: offer hierarchy/mobile CTA clarity and ${specificTwo}${platformDetail}. I would treat this as an offer-clarity problem first, not a prettier-template pass.`;
   }
-  if (tools.length >= 3 && /engagement|conversion/i.test(strategy.client_commercial_pain)) {
-    return `${opener} I would not treat the customer path across ${tools.slice(0, 3).join(", ")} like "make some ecommerce emails." The actual win is who gets what message, when they get it, and what they should do next.`;
-  }
-  if (tools.length >= 2) {
-    return `${opener} I would not make the customer moment in ${tools.join(" and ")} a tool-first strategy. The strategy is engagement, right timing, right message, and a next step that makes sense.`;
-  }
-  if (tools.length === 1) {
-    return `${opener} The customer needs a clearer reason to take the next step, so I would use ${tools[0]} around ${deliverableSpecifics || strategy.category}. The tool is just the delivery system; the real work is making the timing useful instead of noisy.`;
-  }
-  return `${opener} I would start with the customer path around ${strategy.category}${deliverableSpecifics ? ` and ${deliverableSpecifics}` : ""}, not the task list. The customer needs a clearer reason to trust, click, buy, or return, and ${strategy.client_commercial_pain}.`;
+  return `${opener} Two things stood out: customer lifecycle/commercial pain and ${specificOne} around ${specificTwo}. That makes this a ${laneLabel(strategy.retention_lane)} problem first, because ${strategy.client_commercial_pain}.`;
 }
 
 function oneStepSolution(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
   if (strategy.category === "email_design") {
-    return "I would start with offer hierarchy, mobile readability, product path, and CTA visibility on the priority templates. Pretty is nice. Clear is what gets paid.";
+    return "I would start by checking offer hierarchy, mobile readability, product path, and CTA visibility on the priority templates.";
   }
   if (tools.length >= 3) {
-    return "I would start with active flows, subscriber/list logic, campaign cadence, and reporting. Then I would rank the first three fixes by likely lift to engagement and conversion, not by how tidy they look in a checklist.";
+    return "I would start with active flows, subscriber/list logic, campaign cadence, and reporting, then rank the first fixes by likely lift.";
   }
-  return `I would start with a tight diagnostic pass: ${strategy.repeat_purchase_or_conversion_moment}. Then I would turn the clearest leak into the first practical fix.`;
+  return `I would start with a tight diagnostic pass around ${strategy.repeat_purchase_or_conversion_moment}, then turn the clearest leak into the first practical fix.`;
 }
 
 function microMilestoneLine(strategy: CopyStrategy): string {
@@ -580,17 +618,17 @@ function singleProofPoint(proofPoints: string[], portfolioItems: PortfolioItem[]
   if (selectedProof) {
     const [name, ...headlineParts] = selectedProof.split(":");
     const headline = headlineParts.join(":").trim().replace(/[.!?]+$/g, "");
-    return `For proof, I would keep it simple: ${name.trim()} - ${headline}. One matched artifact beats a proof dump.`;
+    return `For proof, I would keep it to one matched artifact: ${name.trim()} - ${headline}.`;
   }
   const proofText = [...proofPoints, ...portfolioItems.map((item) => item.result), ...portfolioItems.map((item) => item.name)].join(" ");
   if (/klaviyo silver partner/i.test(proofText) || /8\+?\s*years/i.test(proofText)) {
-    return "For proof, I would keep it tight to one Klaviyo/lifecycle artifact instead of dumping credentials.";
+    return "For proof, I would keep it to one Klaviyo/lifecycle artifact instead of dumping credentials.";
   }
   const portfolio = firstProofLabel(proofPoints, portfolioItems);
   if (portfolio && !/portfolio|general/i.test(portfolio)) {
-    return `For proof, I would use ${portfolio} only if it is the cleanest match for this scope.`;
+    return `For proof, I would use ${portfolio} if it is the cleanest match for this scope.`;
   }
-  return "For proof, I would only use one artifact if it matches this application after browser QA.";
+  return "For proof, I would use one artifact only after browser QA confirms it matches this application.";
 }
 
 function logisticsLine(strategy: CopyStrategy): string {
@@ -624,11 +662,9 @@ export function draftCoverLetterFromCopyStrategy(input: {
   return [
     conciseHook(strategy),
     "",
-    oneStepSolution(strategy),
+    `${oneStepSolution(strategy)} ${microMilestoneLine(strategy)}`,
     "",
     singleProofPoint(input.proofPoints, input.portfolioItems),
-    "",
-    microMilestoneLine(strategy),
     "",
     `${logisticsLine(strategy)} ${ctaLine(strategy)}`,
   ].filter((line) => line !== null).join("\n").replace(/\n{3,}/g, "\n\n").trim();
@@ -741,12 +777,18 @@ function countJobSpecificSignals(text: string, job: JobPosting, copyStrategy?: C
 }
 
 function proofMentionCount(text: string): number {
-  const proofParagraphs = text.split(/\n{2,}/).filter((paragraph) => /\bfor proof\b|\bone matched artifact\b|\bcase study\b|\bscreenshot\b|\bloom\b/i.test(paragraph));
+  const proofParagraphs = text.split(/\n{2,}/).filter((paragraph) => /\brelevant proof\b|\bfor proof\b|\bone matched artifact\b|\bcase study\b|\bscreenshot\b|\bloom\b/i.test(paragraph));
   return proofParagraphs.length;
 }
 
 function hasMicroMilestone(text: string): boolean {
-  return /\bDone\s*=/i.test(text) && /\b(?:first|3-5|three|five|slice|milestone|sprint|audit|diagnostic|fix)\b/i.test(text);
+  return /\bDone\s*=/i.test(text) &&
+    /\b(?:3\s*[-–]\s*5|3|4|5|three|four|five)\s*(?:day|days)\b/i.test(text) &&
+    /\b(?:first|slice|milestone|sprint|audit|diagnostic|fix)\b/i.test(text);
+}
+
+function hasMetricMarker(text: string): boolean {
+  return /(?:\b\d+(?:\.\d+)?\s*%|\$\s?\d|\b\d+\s*x\b|\bfrom\s+[^.\n]{1,40}\s+to\s+[^.\n]{1,60})/i.test(text);
 }
 
 function hasBinaryOrScopeCta(text: string): boolean {
@@ -845,6 +887,7 @@ export function evaluateProposalScorecard(input: {
   const readable = paragraphs >= 2 && paragraphs <= 5 && bullets <= 2 && words >= 60 && words <= 320;
   const customerOrGoal = /\b(?:customer|buyer|reader|shopper|subscriber|client|conversion|engagement|revenue|retention|trust|friction|repeat|replenishment|deliverability)\b/i.test(text);
   const proofPass = proofCount === 1 && input.proofVerificationState !== "unavailable" && input.proofVerificationState !== "do_not_claim";
+  const metricPass = hasMetricMarker(text);
   const soulLoaded = input.soulLoaded === true;
   const tonePass = soulLoaded && /^steve here\b/i.test(text) && /\bI would\b/i.test(text) && !usesGenericAiCliches(text);
   const ctaPass = hasBinaryOrScopeCta(text);
@@ -870,10 +913,10 @@ export function evaluateProposalScorecard(input: {
     scorecardDimension({
       dimension: "Proof relevance",
       weight: 15,
-      passed: proofPass,
+      passed: proofPass && metricPass,
       hardFail: true,
       partial: proofCount > 0,
-      message: `${proofCount} proof block(s) found; expected exactly one relevant proof artifact or example.`,
+      message: `${proofCount} proof block(s) found; expected exactly one relevant proof artifact or example with a metric.`,
     }),
     scorecardDimension({
       dimension: "Micro-milestone clarity",
@@ -1000,8 +1043,14 @@ export function evaluateDraftQualityGate(input: {
   if (scorecard.proofCount !== 1 || input.proofVerificationState === "unavailable" || input.proofVerificationState === "do_not_claim") {
     addIssue(issues, { code: "proof_count_not_one", severity: "critical", message: "Proposal must use exactly one relevant proof artifact or example." });
   }
+  if (!hasMetricMarker(text)) {
+    addIssue(issues, { code: "proof_metric_missing", severity: "critical", message: "Proposal proof must include a metric or quantified result." });
+  }
   if (!hasMicroMilestone(text)) {
-    addIssue(issues, { code: "missing_micro_milestone_done_criteria", severity: "critical", message: "Proposal must include one first slice with explicit Done = acceptance criteria." });
+    addIssue(issues, { code: "missing_micro_milestone_done_criteria", severity: "critical", message: "Proposal must include one 3-5 day first slice with explicit Done = acceptance criteria." });
+  }
+  if ((text.match(/[?]/g) ?? []).length > 2) {
+    addIssue(issues, { code: "question_overload", severity: "critical", message: "Proposal must not ask more than two questions." });
   }
   if (!hasBinaryOrScopeCta(text)) {
     addIssue(issues, { code: "missing_choice_based_cta", severity: "critical", message: "Proposal must end with a binary or scope-tied CTA question." });

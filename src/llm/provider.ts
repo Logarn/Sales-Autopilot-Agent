@@ -80,6 +80,15 @@ function responseFormatForProvider(provider: string): Record<string, unknown> {
   return { type: "json_object" };
 }
 
+function isGrokModel(value: string | undefined): boolean {
+  return /\b(?:grok|xai)\b/i.test(value ?? "");
+}
+
+function moonshotModel(preferred: string | undefined, fallback: string): string {
+  if (preferred && !isGrokModel(preferred)) return preferred;
+  return process.env.MOONSHOT_MODEL || process.env.KIMI_MODEL || fallback;
+}
+
 export function getLlmProviderConfig(): LlmProviderConfig {
   const provider = (process.env.LLM_PROVIDER || LLM_PROVIDER || "openai-compatible").trim().toLowerCase();
 
@@ -113,6 +122,16 @@ export function getLlmProviderConfig(): LlmProviderConfig {
     };
   }
 
+  if (provider === "kimi" || provider === "moonshot") {
+    return {
+      enabled: LLM_NORMALIZATION_ENABLED,
+      provider: "moonshot",
+      apiKey: process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY || MOONSHOT_API_KEY || process.env.LLM_API_KEY || LLM_API_KEY,
+      model: moonshotModel(process.env.LLM_MODEL || LLM_MODEL, MOONSHOT_MODEL),
+      baseUrl: (process.env.MOONSHOT_BASE_URL || process.env.KIMI_BASE_URL || MOONSHOT_BASE_URL).replace(/\/$/, ""),
+    };
+  }
+
   return {
     enabled: LLM_NORMALIZATION_ENABLED,
     provider,
@@ -143,7 +162,7 @@ function baseOpenAiCompatibleConfig(input: {
       enabled: input.enabled,
       provider: "moonshot",
       apiKey: process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY || MOONSHOT_API_KEY,
-      model: input.model || process.env.MOONSHOT_MODEL || process.env.KIMI_MODEL || MOONSHOT_MODEL,
+      model: moonshotModel(input.model, MOONSHOT_MODEL),
       baseUrl: (process.env.MOONSHOT_BASE_URL || process.env.KIMI_BASE_URL || MOONSHOT_BASE_URL).replace(/\/$/, ""),
     };
   }
@@ -182,10 +201,12 @@ export function getSlackCopyProviderConfig(): LlmProviderConfig {
 
 export function getSlackCopyProviderFallbackConfigs(): LlmProviderConfig[] {
   const primary = getSlackCopyProviderConfig();
+  const fallbackProvider = (process.env.SLACK_COPY_FALLBACK_PROVIDER || "").trim();
+  if (!fallbackProvider) return [primary];
   const fallback = baseOpenAiCompatibleConfig({
     enabled: primary.enabled,
-    provider: "xai",
-    model: process.env.SLACK_COPY_FALLBACK_MODEL || process.env.XAI_MODEL || process.env.GROK_MODEL || XAI_MODEL,
+    provider: fallbackProvider,
+    model: process.env.SLACK_COPY_FALLBACK_MODEL || (fallbackProvider === "kimi" || fallbackProvider === "moonshot" ? MOONSHOT_MODEL : process.env.XAI_MODEL || process.env.GROK_MODEL || XAI_MODEL),
   });
   if (primary.provider === fallback.provider && primary.model === fallback.model && primary.baseUrl === fallback.baseUrl) {
     return [primary];

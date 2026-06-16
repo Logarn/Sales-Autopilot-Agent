@@ -230,6 +230,7 @@ async function run(): Promise<void> {
       SLACK_COPY_LLM_ENABLED: "true",
       SLACK_COPY_PROVIDER: "kimi",
       SLACK_COPY_MODEL: "kimi-k2.6",
+      SLACK_COPY_FALLBACK_PROVIDER: "xai",
       MOONSHOT_API_KEY: "moonshot-test-key",
       MOONSHOT_BASE_URL: "https://api.moonshot.ai/v1",
       XAI_API_KEY: "xai-test-key",

@@ -44,6 +44,7 @@ The runtime must create:
   "repeat_purchase_or_conversion_moment": "",
   "likely_lifecycle_gap": "",
   "offer_or_project_mechanism": "",
+  "retention_lane": "migration_foundation | revenue_lift | founder_voice | lifecycle_operator | subscription_winback | technical_retention | agency_support | email_template_clarity | flow_audit",
   "proof_angle": "",
   "proof_verification_state": "verified | planned | unavailable | do_not_claim",
   "tone": "casual | direct | sharp | warm | witty",
@@ -65,6 +66,7 @@ Unknown fields stay unknown. Do not fake research, proof, portfolio, metrics, at
 - Pain/desire before proof.
 - Specific mechanism before flow names.
 - Exactly one proof artifact or relevant example. Never proof dump.
+- That proof must carry one metric or quantified result when proof is available.
 - One 3-5 day micro-milestone with explicit acceptance criteria using `Done = ...`.
 - One logistics sentence.
 - End with a choice-based CTA, such as quick call vs async outline, or one direct scope-tied question.
@@ -89,6 +91,17 @@ Unknown fields stay unknown. Do not fake research, proof, portfolio, metrics, at
 - Email design: hierarchy, offer clarity, skim behavior, mobile-first reading, CTA placement, conversion friction.
 - B2B/SaaS: workflow pain, wasted time, risk reduction, decision confidence, implementation friction, adoption.
 
+## Retention marketing lanes
+- Migration/foundation: Shopify Email or another ESP is capping segmentation, reporting, SMS, or behavioral logic.
+- Revenue lift: client names email revenue share, conversion, CRO, RPR, repeat purchase, or revenue growth.
+- Founder voice: client cares about voice, tone, personal writing, or not sounding like a marketing department.
+- Lifecycle operator: campaigns, flows, segmentation, and weekly owned-channel output.
+- Subscription/win-back: replenishment, repeat purchase, subscriptions, churn, or win-back recovery.
+- Technical retention: integrations, deliverability, event tracking, QA, Liquid/HTML, subscriptions, or API work.
+- Agency support: multiple brands/accounts where speed, QA, and consistency matter.
+- Email template clarity: offer hierarchy, product path, mobile skim behavior, and CTA clarity.
+- Flow/audit: underperforming flows, missing automations, account audit, or prioritized quick wins.
+
 ## Fatal quality gates
 Fail or revise before browser fill if:
 - `soul.md` was not loaded before proposal copywriting
@@ -101,7 +114,9 @@ Fail or revise before browser fill if:
 - copy has no business opportunity or commercial pain
 - copy lists tools/flows before explaining customer logic
 - copy has no single relevant proof artifact/example, or mentions more than one proof item
-- copy has no `Done = ...` micro-milestone
+- copy has no metric or quantified result attached to the proof
+- copy has no 3-5 day `Done = ...` micro-milestone
+- copy asks more than two questions
 - copy has no choice-based CTA
 - copy claims proof/portfolio/attachments without verification
 - copy has no complete CTA
