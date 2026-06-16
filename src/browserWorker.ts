@@ -2149,6 +2149,21 @@ async function trySelectHighlightsFromOpenDialog(page: PlaywrightPageLike, highl
   return selected;
 }
 
+async function pageHasCommittedHighlights(page: PlaywrightPageLike, highlights: string[]): Promise<boolean> {
+  if (!page.evaluate || highlights.length === 0) return false;
+  return page.evaluate((aliasesByHighlight = []) => {
+    const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
+    const text = document.body?.innerText ?? "";
+    const startMatch = text.match(/profile\s+highlights(?:\s+new)?/i);
+    const afterStart = startMatch && startMatch.index !== undefined ? text.slice(startMatch.index + startMatch[0].length) : "";
+    const endMatch = afterStart.match(/boost\s+your\s+proposal/i);
+    const section = normalize(endMatch && endMatch.index !== undefined ? afterStart.slice(0, endMatch.index) : afterStart);
+    if (!section) return false;
+    if (!Array.isArray(aliasesByHighlight) || aliasesByHighlight.length === 0) return /\bportfolio\s+1\b/i.test(section);
+    return aliasesByHighlight.every((aliases) => Array.isArray(aliases) && aliases.some((alias) => section.includes(normalize(String(alias)))));
+  }, highlights.map(highlightAliases)).catch(() => false);
+}
+
 async function waitForHighlightDialogReady(page: PlaywrightPageLike): Promise<boolean> {
   if (!page.evaluate) return false;
   for (let attempt = 0; attempt < 12; attempt += 1) {
@@ -2308,6 +2323,7 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHigh
   if (!page.evaluate) return false;
   const evaluate = page.evaluate.bind(page) as NonNullable<PlaywrightPageLike["evaluate"]>;
   const expectedAliases = expectedHighlights.map(highlightAliases);
+  const requiredHighlightCount = Math.min(4, expectedHighlights.length);
   const hasVisibleDialog = () => evaluate(() => {
     const dialog = document.querySelector("[role='dialog']") as HTMLElement | null;
     if (!dialog) return false;
@@ -2358,6 +2374,14 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHigh
   }).catch(() => false);
   const hasCommittedHighlights = () => evaluate((aliasesByHighlight = []) => {
     const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
+    const text = document.body?.innerText ?? "";
+    const startMatch = text.match(/profile\s+highlights(?:\s+new)?/i);
+    const afterStart = startMatch && startMatch.index !== undefined ? text.slice(startMatch.index + startMatch[0].length) : "";
+    const endMatch = afterStart.match(/boost\s+your\s+proposal/i);
+    const profileSection = normalize(endMatch && endMatch.index !== undefined ? afterStart.slice(0, endMatch.index) : afterStart);
+    if (profileSection && Array.isArray(aliasesByHighlight) && aliasesByHighlight.length > 0) {
+      return aliasesByHighlight.every((aliases) => Array.isArray(aliases) && aliases.some((alias) => profileSection.includes(normalize(String(alias)))));
+    }
     const visibleDialogs = Array.from(document.querySelectorAll("[role='dialog']")).filter((dialog) => {
       const htmlDialog = dialog as HTMLElement;
       const rect = htmlDialog.getBoundingClientRect();
@@ -2428,10 +2452,14 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHigh
     return false;
   };
 
+  if (await pageHasCommittedHighlights(page, expectedHighlights)) return true;
+  if (!await hasVisibleDialog()) return false;
+
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (requiredHighlightCount > 0 && await readSelectedHighlightCountInOpenDialog(page) < requiredHighlightCount) return false;
     const buttonIndex = await findButtonIndex();
     if (await hasCommittedHighlights() && await closeCommittedHighlightsDialog()) return true;
-    if (buttonIndex < 0) return !await hasOpenConfirmButton();
+    if (buttonIndex < 0) return await pageHasCommittedHighlights(page, expectedHighlights);
     if (typeof page.locator("[role='dialog'] button").nth !== "function") return false;
     const button = page.locator("[role='dialog'] button").nth!(buttonIndex);
     try {
@@ -2443,14 +2471,14 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHigh
       await clickConfirmWithDom();
     }
     await page.waitForTimeout?.(1000).catch(() => undefined);
-    if (!await hasOpenConfirmButton()) return true;
+    if (!await hasOpenConfirmButton()) return await pageHasCommittedHighlights(page, expectedHighlights) || !await hasVisibleDialog();
     if (await hasCommittedHighlights()) {
       if (await closeCommittedHighlightsDialog()) return true;
       await closeDialogWithDom();
     }
     await clickConfirmWithDom();
     await page.waitForTimeout?.(1000).catch(() => undefined);
-    if (!await hasOpenConfirmButton()) return true;
+    if (!await hasOpenConfirmButton()) return await pageHasCommittedHighlights(page, expectedHighlights) || !await hasVisibleDialog();
     if (await hasCommittedHighlights()) {
       if (await closeCommittedHighlightsDialog()) return true;
       await closeDialogWithDom();
@@ -2461,8 +2489,10 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHigh
 
 async function trySelectProofHighlights(page: PlaywrightPageLike, highlights: string[]): Promise<number> {
   if (highlights.length === 0) return 0;
+  if (await pageHasCommittedHighlights(page, highlights)) return highlights.length;
+  const requiredHighlightCount = Math.min(4, highlights.length);
   let selected = await trySelectHighlightsFromOpenDialog(page, highlights);
-  if (selected > 0) {
+  if (selected >= requiredHighlightCount) {
     return await tryConfirmHighlightsDialog(page, highlights) ? selected : 0;
   }
   const opened = await tryClickFirst(page, [
@@ -2485,7 +2515,7 @@ async function trySelectProofHighlights(page: PlaywrightPageLike, highlights: st
     return 0;
   }
   selected = await trySelectHighlightsFromOpenDialog(page, highlights);
-  if (selected > 0) {
+  if (selected >= requiredHighlightCount) {
     return await tryConfirmHighlightsDialog(page, highlights) ? selected : 0;
   }
   return 0;
