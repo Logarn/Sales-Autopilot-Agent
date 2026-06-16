@@ -135,6 +135,16 @@ async function run(): Promise<void> {
   assert.match(brandPrompt, /Lane: ecommerce brand\/logo\/conversion design/i, "Brand design prompt should include lane-specific guidance.");
   assert.match(brandPrompt, /Do not use Hangaritas/i, "Brand design prompt should explicitly block retention proof drift.");
 
+  const aliasRewrite = await rewriteProposalCoverLetterWithKimi({
+    job: brandDesignJob,
+    deterministicDraft: brandDesignDraft,
+    copyStrategy: brandDesignDraft.copyStrategy,
+    brandFactPack: brandDesignDraft.brandFactPack,
+    proofStrategy: brandDesignDraft.proofStrategy,
+  }, new FakeProposalProvider({ proposal_text: brandDesignProposal, rationale: "kimi used snake_case" }));
+  assert.equal(aliasRewrite.usedLlm, true, "Proposal composer should accept Kimi proposal_text JSON alias.");
+  assert.equal(aliasRewrite.proposalText, brandDesignProposal);
+
   const wrongDesignProof = await rewriteProposalCoverLetterWithKimi({
     job: brandDesignJob,
     deterministicDraft: brandDesignDraft,
