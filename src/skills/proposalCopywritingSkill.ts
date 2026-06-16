@@ -556,7 +556,7 @@ function proofSentence(strategy: CopyStrategy, proofPoints: string[], portfolioI
 }
 
 function requestedTools(strategy: CopyStrategy): string[] {
-  const toolOrder = ["Klaviyo", "Mailchimp", "Omnisend", "Shopify", "Postscript", "Attentive"];
+  const toolOrder = ["Klaviyo", "Brevo", "Mailchimp", "Omnisend", "Shopify", "Postscript", "Attentive"];
   return toolOrder.filter((tool) => strategy.requested_tools.some((item) => item.toLowerCase() === tool.toLowerCase()));
 }
 
@@ -588,30 +588,34 @@ function brandContext(strategy: CopyStrategy): string {
 }
 
 function isSetupConfigurationScope(strategy: CopyStrategy): boolean {
+  const tools = requestedTools(strategy).map((tool) => tool.toLowerCase());
+  if (!tools.includes("brevo")) return false;
   const combined = [
     strategy.requested_deliverables.join(" "),
     strategy.likely_lifecycle_gap,
     strategy.offer_or_project_mechanism,
     strategy.client_commercial_pain,
   ].join(" ").toLowerCase();
-  return /\b(?:setup|configuration|configure|implementation|sender reputation|warmup|contact import|transactional api|list quality)\b/.test(combined);
+  return /\b(?:account setup|setup|configuration|configure|implementation|sender reputation|warmup|contact import|transactional api|list quality)\b/.test(combined);
 }
 
 function conciseHook(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
   const opener = "Steve here - how is your day going?";
   const [specificOne, specificTwo] = openerSpecifics(strategy);
+  const context = brandContext(strategy);
+  const contextPrefix = context !== "the account" ? `${context}: ` : "";
   if (isSetupConfigurationScope(strategy)) {
-    return `${opener} Two things stood out: ${brandContext(strategy)} needs ${specificOne} and ${specificTwo}. I would treat this as Brevo account setup with customer-data risk first: sender reputation, contact import/cleanup, segmentation, automations, and transactional API separation all need to be clean before volume ramps.`;
+    return `${opener} Two things stood out: ${context} needs Brevo account setup and ${specificTwo}. I would treat this as customer-data risk first: sender reputation, contact import/cleanup, segmentation, automations, and transactional API separation all need to be clean before volume ramps.`;
   }
   if (strategy.category === "gardening" && tools.length > 0) {
-    return `${opener} Two things stood out: seasonal replenishment and ${specificOne}. I would start with planting timing, care anxiety, and what the customer needs next before building more emails.`;
+    return `${opener} ${contextPrefix}two things stood out: seasonal replenishment and ${specificOne}. I would start with planting timing, care anxiety, and what the customer needs next before building more emails.`;
   }
   if (strategy.category === "email_design") {
     const platformDetail = requestedTools(strategy).length ? ` across ${requestedTools(strategy).slice(0, 2).join(" + ")}` : "";
-    return `${opener} Two things stood out: offer hierarchy/mobile CTA clarity and ${specificTwo}${platformDetail}. The reader needs the offer, product path, and CTA to make sense in seconds, so I would treat this as an offer-clarity problem first, not a prettier-template pass.`;
+    return `${opener} ${contextPrefix}two things stood out: offer hierarchy/mobile CTA clarity and ${specificTwo}${platformDetail}. The reader needs the offer, product path, and CTA to make sense in seconds, so I would treat this as an offer-clarity problem first, not a prettier-template pass.`;
   }
-  return `${opener} Two things stood out: customer lifecycle/commercial pain and ${specificOne} around ${specificTwo}. That makes this a ${laneLabel(strategy.retention_lane)} problem first, because ${strategy.client_commercial_pain}.`;
+  return `${opener} ${contextPrefix}two things stood out: customer lifecycle/commercial pain and ${specificOne} around ${specificTwo}. That makes this a ${laneLabel(strategy.retention_lane)} problem first, because ${strategy.client_commercial_pain}.`;
 }
 
 function oneStepSolution(strategy: CopyStrategy): string {
