@@ -365,6 +365,7 @@ export async function rewriteProposalCoverLetterWithKimi(
           "- 150-220 words unless a required opening phrase forces a little extra room.",
           "- First two meaningful lines must prove the job was read with at least two job-specific details from the post.",
           "- The sentence immediately after Steve's opener must include at least two exact job/scope terms, such as branding/logo design, conversion optimization, Shopify, Figma, Klaviyo, flows, or the named brand/site.",
+          "- In retention/email jobs, name the customer/commercial logic before any platform or flow/tool list. Do not put Klaviyo, Mailchimp, Omnisend, flows, automations, CRM, templates, or Figma before words like customer, buyer, offer, trust, routine, or hierarchy.",
           "- Lead with the client's commercial/customer problem, not Steve's biography.",
           "- Include one low-risk 3-5 day micro-milestone and the literal text `Done = ...`.",
           "- Include exactly one proof artifact or case study mention, with exactly one metric or quantified result.",
@@ -434,6 +435,7 @@ export async function rewriteProposalCoverLetterWithKimi(
             "Return JSON only. The proposalText string must begin directly with: Steve here - how is your day going?",
             "Keep it 150-220 words, include one 3-5 day `Done = ...` milestone, one proof, logistics, and a choice-based CTA.",
             "The sentence after Steve's opener must include at least two exact job/scope terms. The proof paragraph must begin: For proof, I would use one matched artifact:",
+            "For retention/email jobs, customer/commercial logic must appear before any platform, flow, automation, CRM, template, or Figma reference.",
           ].join("\n"),
         },
         {
