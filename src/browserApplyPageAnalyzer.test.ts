@@ -241,6 +241,18 @@ assert.equal(unreadableConnects.connects.visible, false);
 assert(unreadableConnects.blockers.includes("required_connects_unreadable"), "unreadable Connects must block ready status");
 assert.equal(unreadableConnects.ready, false);
 
+const noVisibleScreeningFields = analyzeApplyPageSnapshot(snapshot({
+  visibleText: "Required for proposal: 8 Connects\nCover Letter\nHourly rate\nSend for 8 Connects",
+  fieldValues: [
+    { kind: "textarea", inputType: null, label: "Cover letter", id: null, name: null, ariaLabel: null, placeholder: null, dataTest: null, value: filledPlan.coverLetter },
+    { kind: "input", inputType: "text", label: "Hourly rate", id: "step-rate", name: null, ariaLabel: "Hourly rate", placeholder: null, dataTest: null, value: "80" },
+  ],
+  actionLabels: ["Send for 8 Connects"],
+}), filledPlan);
+assert.equal(noVisibleScreeningFields.screening.state, "not_required", "planned screening answers should not block when Upwork renders no screening fields");
+assert(!noVisibleScreeningFields.blockers.includes("screening_answers_not_verified"), "absent screening fields must not create a hard apply-page blocker");
+assert.equal(noVisibleScreeningFields.ready, true);
+
 const selectedBoost = analyzeApplyPageSnapshot(snapshot({
   visibleText: "Required for proposal: 8 Connects\nBoost your proposal\nSend for 8 Connects",
   fieldValues: [
