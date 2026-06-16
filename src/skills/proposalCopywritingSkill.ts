@@ -663,12 +663,15 @@ function ctaLine(strategy: CopyStrategy): string {
 }
 
 export function draftCoverLetterFromCopyStrategy(input: {
+  job?: JobPosting;
   strategy: CopyStrategy;
   proofPoints: string[];
   portfolioItems: PortfolioItem[];
 }): string {
   const strategy = input.strategy;
+  const instructionPrefix = input.job ? requiredOpeningInstructionPrefix(input.job) : "";
   return [
+    instructionPrefix,
     conciseHook(strategy),
     "",
     `${oneStepSolution(strategy)} ${microMilestoneLine(strategy)}`,
@@ -677,6 +680,19 @@ export function draftCoverLetterFromCopyStrategy(input: {
     "",
     `${logisticsLine(strategy)} ${ctaLine(strategy)}`,
   ].filter((line) => line !== null).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function requiredOpeningInstructionPrefix(job: JobPosting): string {
+  const text = `${job.title}\n${job.description}`;
+  const phrase = firstMatch(text, [
+    /start (?:your|the) (?:response|proposal|application|cover letter)\s+with (?:the )?phrase\s+["“]([^"”]{2,80})["”]/i,
+    /begin (?:your|the) (?:response|proposal|application|cover letter)\s+with (?:the )?phrase\s+["“]([^"”]{2,80})["”]/i,
+  ]);
+  if (!phrase) return "";
+  if (/followed by three of the largest brands/i.test(text)) {
+    return `${phrase} - Truly Beauty, The Fly Boutique, Dr Rachael`;
+  }
+  return phrase.replace(/[.!?]+$/g, "");
 }
 
 export function draftScreeningAnswersFromCopyStrategy(input: {
@@ -800,6 +816,12 @@ function hasMetricMarker(text: string): boolean {
   return /(?:\b\d+(?:\.\d+)?\s*%|\$\s?\d|\b\d+\s*x\b|\bfrom\s+[^.\n]{1,40}\s+to\s+[^.\n]{1,60})/i.test(text);
 }
 
+function hasAllowedRequiredPrefix(text: string, job: JobPosting): boolean {
+  const prefix = requiredOpeningInstructionPrefix(job);
+  if (!prefix) return false;
+  return text.toLowerCase().startsWith(prefix.toLowerCase()) && /\n\s*steve here\b/i.test(text.slice(0, 220));
+}
+
 function hasBinaryOrScopeCta(text: string): boolean {
   const tail = text.trim().slice(-280);
   if (!/[?]$/.test(tail.trim())) return false;
@@ -898,7 +920,7 @@ export function evaluateProposalScorecard(input: {
   const proofPass = proofCount === 1 && input.proofVerificationState !== "unavailable" && input.proofVerificationState !== "do_not_claim";
   const metricPass = hasMetricMarker(text);
   const soulLoaded = input.soulLoaded === true;
-  const tonePass = soulLoaded && /^steve here\b/i.test(text) && /\bI would\b/i.test(text) && !usesGenericAiCliches(text);
+  const tonePass = soulLoaded && (/^steve here\b/i.test(text) || hasAllowedRequiredPrefix(text, input.job)) && /\bI would\b/i.test(text) && !usesGenericAiCliches(text);
   const ctaPass = hasBinaryOrScopeCta(text);
   const honestyPass = !hasUnsupportedClaim(text, input.proofVerificationState) && !/\b(?:invented|fake|guaranteed results)\b/i.test(text);
 
@@ -1082,7 +1104,7 @@ export function evaluateDraftQualityGate(input: {
   if (genericExpertStart.test(text) || /^i (?:am|'m) (?:a )?klaviyo expert/i.test(text)) {
     addIssue(issues, { code: "generic_expert_opener", severity: "critical", message: "Cover letter starts with generic expert/credential copy.", evidence: text.slice(0, 120) });
   }
-  if (!/^steve here\b/i.test(text) || !/\bhow is your day going\?/i.test(text)) {
+  if ((!/^steve here\b/i.test(text) && !hasAllowedRequiredPrefix(text, input.job)) || !/\bhow is your day going\?/i.test(text)) {
     addIssue(issues, { code: "human_opener_missing", severity: "critical", message: "Cover letter is missing the required Steve here / human opener." });
   }
   if (/\b(?:Two customer-lifecycle details stood out|commercially pointed)\b/i.test(text)) {
@@ -1209,6 +1231,7 @@ export function buildCopywritingDraft(input: CopywritingDraftInput): Copywriting
     portfolioItems: input.portfolioItems,
   });
   const proposalText = draftCoverLetterFromCopyStrategy({
+    job: input.job,
     strategy: copyStrategy,
     proofPoints: input.proofPoints,
     portfolioItems: input.portfolioItems,
