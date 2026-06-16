@@ -117,6 +117,17 @@ function runTests(): void {
   assert(!includes(designSelection.autoAttachAssets, "design-case-studies"), "Design job should not attach the same proof file when portfolio is selected");
   assert(designSelection.selectedFigmaLinks.length > 0, "Design job should include Figma links");
 
+  const brandingJob = createJob({
+    title: "Established Shopify Store Seeking Ecommerce Partner - Branding & Logo Design",
+    description: "Need branding, logo design, website modernization, conversion optimization, and a sharper Shopify store experience.",
+    skills: ["Shopify", "Brand Design", "Conversion Optimization"],
+  });
+  const brandingSelection = selectPortfolioAssetsForJob(brandingJob);
+  assert(includes(brandingSelection.selectedProof, "design-case-studies"), "Branding/logo job should select design case studies");
+  assert(includes(brandingSelection.selectedUpworkPortfolioItems, "design-case-studies-upwork"), "Branding/logo job should select design case studies in Upwork portfolio");
+  assert(brandingSelection.selectedUpworkPortfolioItems[0]?.id === "design-case-studies-upwork", "Branding/logo job should rank design case studies first in Upwork portfolio");
+  assert(!includes(brandingSelection.selectedProof, "hangaritas-screenshot"), "Branding/logo job should not select Hangaritas Klaviyo proof");
+
   const mailchimpAutomationJob = createJob({
     title: "Mailchimp automation expert for premium skincare webshop",
     description: "Need lifecycle automation, segmentation, deliverability, flows, and revenue attribution for a skincare ecommerce brand.",

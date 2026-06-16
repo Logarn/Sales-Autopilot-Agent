@@ -218,6 +218,11 @@ const shopifyPartner = scored({
 });
 const shopifyPartnerDraft = buildApplicationDraft(shopifyPartner);
 const shopifyPartnerAnswers = shopifyPartnerDraft.structuredProposal?.clientRequestAnswers ?? [];
+assert.equal(shopifyPartnerDraft.copyStrategy.category, "brand_design", `Shopify branding/logo partner job should classify as brand design:\n${JSON.stringify(shopifyPartnerDraft.copyStrategy)}`);
+assert(/brand|logo|identity|offer hierarchy|product path|conversion/i.test(shopifyPartnerDraft.proposalText), `Shopify branding/logo partner proposal should lead with brand-conversion logic:\n${shopifyPartnerDraft.proposalText}`);
+assert(/Design Case Studies|Premium DTC email design|visual systems proof/i.test(shopifyPartnerDraft.proposalText), `Shopify branding/logo partner proposal should use design proof:\n${shopifyPartnerDraft.proposalText}`);
+assert(!/Hangaritas|win[-\s]?back|post[-\s]?purchase|replenishment|lifecycle flow|email revenue/i.test(shopifyPartnerDraft.proposalText), `Shopify branding/logo partner proposal should not drift into retention proof:\n${shopifyPartnerDraft.proposalText}`);
+assert(shopifyPartnerDraft.draftQualityGate.ready, `Shopify branding/logo partner proposal should pass the draft gate. Issues: ${JSON.stringify(shopifyPartnerDraft.draftQualityGate.issues)}`);
 assert(shopifyPartnerAnswers.some((answer: string) => /Truly Beauty|Fly Boutique|strategy plus implementation|300K\/month|1\.2M\/month/i.test(answer)), `Shopify $1M screening answer should name relevant proof and role:\n${JSON.stringify(shopifyPartnerAnswers)}`);
 assert(shopifyPartnerAnswers.some((answer: string) => /^Both\./i.test(answer)), `Strategy/implementation screening answer should be direct:\n${JSON.stringify(shopifyPartnerAnswers)}`);
 assert(shopifyPartnerAnswers.some((answer: string) => /mobile path|Google Merchant|Klaviyo capture|replenishment\/winback/i.test(answer)), `WigParty 15-minute review answer should give three concrete investigation areas:\n${JSON.stringify(shopifyPartnerAnswers)}`);
