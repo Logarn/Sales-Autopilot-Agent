@@ -2422,8 +2422,6 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHigh
       .some((candidate) => /^(?:add to highlights|add\s+\d+\s*[/]\s*4)$/i.test((candidate.textContent ?? "").replace(/\s+/g, " ").trim()) && !(candidate as HTMLButtonElement).disabled && isVisibleButton(candidate as HTMLButtonElement));
   }).catch(() => false);
   const clickConfirmWithDom = () => evaluate(() => {
-    const dialog = document.querySelector("[role='dialog']");
-    if (!dialog) return false;
     const isVisibleButton = (button: HTMLButtonElement): boolean => {
       const style = window.getComputedStyle(button);
       return style.visibility !== "hidden" &&
@@ -2431,9 +2429,20 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHigh
         button.getClientRects().length > 0 &&
         Boolean(button.offsetWidth || button.offsetHeight);
     };
+    const visibleDialogs = Array.from(document.querySelectorAll("[role='dialog']")).filter((candidate) => {
+      const htmlDialog = candidate as HTMLElement;
+      const rect = htmlDialog.getBoundingClientRect();
+      const style = window.getComputedStyle(htmlDialog);
+      return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    });
+    const dialog = visibleDialogs[visibleDialogs.length - 1] ?? null;
+    if (!dialog) return false;
     const button = Array.from(dialog.querySelectorAll("button"))
       .find((candidate) => /^(?:add to highlights|add\s+\d+\s*[/]\s*4)$/i.test((candidate.textContent ?? "").replace(/\s+/g, " ").trim()) && !(candidate as HTMLButtonElement).disabled && isVisibleButton(candidate as HTMLButtonElement)) as HTMLButtonElement | undefined;
-    button?.click();
+    button?.scrollIntoView({ block: "center", inline: "nearest" });
+    button?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+    button?.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+    button?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
     return Boolean(button);
   }).catch(() => false);
   const hasCommittedHighlights = () => evaluate((aliasesByHighlight = []) => {
@@ -2521,8 +2530,16 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHigh
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (requiredHighlightCount > 0 && await readSelectedHighlightCountInOpenDialog(page) < requiredHighlightCount) return false;
-    const buttonIndex = await findButtonIndex();
     if (await hasCommittedHighlights() && await closeCommittedHighlightsDialog()) return true;
+    if (await clickConfirmWithDom()) {
+      await page.waitForTimeout?.(1000).catch(() => undefined);
+      if (!await hasOpenConfirmButton()) return await pageHasCommittedHighlights(page, expectedHighlights) || !await hasVisibleDialog();
+      if (await hasCommittedHighlights()) {
+        if (await closeCommittedHighlightsDialog()) return true;
+        await closeDialogWithDom();
+      }
+    }
+    const buttonIndex = await findButtonIndex();
     if (buttonIndex < 0) return await pageHasCommittedHighlights(page, expectedHighlights);
     if (typeof page.locator("[role='dialog'] button").nth !== "function") return false;
     const button = page.locator("[role='dialog'] button").nth!(buttonIndex);
