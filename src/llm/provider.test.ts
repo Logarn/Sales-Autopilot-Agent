@@ -254,6 +254,21 @@ async function run(): Promise<void> {
     assert.deepEqual(requestBodies.map((body) => Boolean(body.response_format)), [true, false]);
     assert.equal((requestBodies[0].messages as Array<{ content: string }>)[0].content.includes("/no_think"), true);
 
+    requestBodies = [];
+    globalThis.fetch = async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      if (requestBodies.length === 1) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({ ok: true, source: "empty-content-retry" }) } }],
+      }), { status: 200 });
+    };
+    const emptyContentRetry = await provider.completeJson<{ ok: boolean; source: string }>({ messages: [{ role: "user", content: "hi" }] });
+    assert.equal(emptyContentRetry.ok, true);
+    assert.equal(emptyContentRetry.data?.source, "empty-content-retry");
+    assert.deepEqual(requestBodies.map((body) => Boolean(body.response_format)), [true, false]);
+
     globalThis.fetch = async () => new Response(JSON.stringify({
       choices: [{ message: { content: "Sure:\n```json\n{\"ok\":true,\"source\":\"fenced-json\"}\n```" } }],
     }), { status: 200 });
