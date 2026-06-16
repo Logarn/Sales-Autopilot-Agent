@@ -85,6 +85,18 @@ function responseFormatForProvider(provider: string): Record<string, unknown> {
   return { type: "json_object" };
 }
 
+function thinkingForProvider(config: LlmProviderConfig): Record<string, unknown> | null {
+  if (config.provider !== "moonshot") return null;
+  if (/kimi-k2\.7/i.test(config.model)) return null;
+  if (!/kimi-k2\.(?:5|6)/i.test(config.model)) return null;
+  return { type: "disabled" };
+}
+
+function temperatureForProvider(config: LlmProviderConfig, request: LlmJsonRequest, thinking: Record<string, unknown> | null): number {
+  if (config.provider === "moonshot" && thinking?.type === "disabled") return 0.6;
+  return request.temperature ?? 0.1;
+}
+
 function isGrokModel(value: string | undefined): boolean {
   return /\b(?:grok|xai)\b/i.test(value ?? "");
 }
@@ -242,8 +254,7 @@ function safeErrorMessage(error: unknown, config: LlmProviderConfig): string {
 }
 
 function shouldDisableProviderThinking(config: LlmProviderConfig): boolean {
-  return (config.provider === "lmstudio" && /qwen/i.test(config.model)) ||
-    config.provider === "moonshot";
+  return config.provider === "lmstudio" && /qwen/i.test(config.model);
 }
 
 function messagesForProvider(messages: LlmChatMessage[], config: LlmProviderConfig): LlmChatMessage[] {
@@ -300,10 +311,11 @@ export class OpenAiCompatibleProvider {
       return { ok: false, skippedReason: "LLM_API_KEY not configured" };
     }
 
+    const thinking = thinkingForProvider(this.config);
     const requestBody = {
       model: this.config.model,
       messages: messagesForProvider(request.messages, this.config),
-      temperature: request.temperature ?? 0.1,
+      temperature: temperatureForProvider(this.config, request, thinking),
       max_tokens: request.maxTokens ?? 1800,
     };
 
@@ -319,6 +331,7 @@ export class OpenAiCompatibleProvider {
         signal: controller.signal,
         body: JSON.stringify({
           ...requestBody,
+          ...(thinking ? { thinking } : {}),
           ...(includeResponseFormat ? { response_format: responseFormatForProvider(this.config.provider) } : {}),
         }),
       }).finally(() => clearTimeout(timeout));
