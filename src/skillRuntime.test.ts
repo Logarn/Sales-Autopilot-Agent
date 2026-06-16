@@ -263,6 +263,8 @@ const retentionNoiseDraft = buildApplicationDraft(retentionJobWithDesignSkillNoi
 assert(/klaviyo/i.test(retentionNoiseDraft.proposalText), `Retention job should keep Klaviyo specificity:\n${retentionNoiseDraft.proposalText}`);
 assert(/flows|subscriber|deliverability|customer moment/i.test(retentionNoiseDraft.proposalText), `Retention job should stay on the actual retention/flow scope:\n${retentionNoiseDraft.proposalText}`);
 assert(!/offer hierarchy|mobile CTA|priority template|prettier-template|email reader/i.test(retentionNoiseDraft.proposalText), `Scraped Email Design skills should not force design/template proposal copy:\n${retentionNoiseDraft.proposalText}`);
+assert.equal(retentionNoiseDraft.brandFactPack.productCategory, "DTC ecommerce", "Noisy Email Design skills should not force email-design brand fact logic.");
+assert(!/visual hierarchy|buried CTA|design-tool/i.test(retentionNoiseDraft.brandFactPack.likelyLifecycleLeak), `Brand fact pack should stay on retention/lifecycle leakage:\n${JSON.stringify(retentionNoiseDraft.brandFactPack)}`);
 assert(retentionNoiseDraft.draftQualityGate.ready, `Retention job with noisy design skills should pass the draft gate. Issues: ${JSON.stringify(retentionNoiseDraft.draftQualityGate.issues)}`);
 
 beauty.applicationDraft = beautyDraft;
