@@ -239,6 +239,19 @@ async function run(): Promise<void> {
     assert.deepEqual(requestBodies.map((body) => Boolean(body.response_format)), [true]);
 
     requestBodies = [];
+    const kimiProvider = new OpenAiCompatibleProvider({
+      enabled: true,
+      provider: "moonshot",
+      apiKey: "moonshot-key",
+      model: "kimi-k2.6",
+      baseUrl: "https://api.moonshot.ai/v1",
+    });
+    const kimiResult = await kimiProvider.completeJson<{ ok: boolean; source: string }>({ messages: [{ role: "user", content: "hi" }] });
+    assert.equal(kimiResult.ok, true);
+    assert.equal(kimiResult.data?.source, "message-content");
+    assert.equal((requestBodies[0].messages as Array<{ content: string }>)[0].content.includes("/no_think"), true);
+
+    requestBodies = [];
     globalThis.fetch = async (_input, init) => {
       requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
       if (requestBodies.length === 1) {
