@@ -47,6 +47,7 @@ export interface LlmJsonRequest {
   temperature?: number;
   maxTokens?: number;
   timeoutMs?: number;
+  plainTextFallbackKey?: string;
 }
 
 export interface LlmJsonResult<T> {
@@ -277,6 +278,12 @@ function parseJsonContent<T>(content: string): T {
   }
 }
 
+function plainTextFallback<T>(content: string, key?: string): LlmJsonResult<T> | null {
+  const cleaned = content.trim();
+  if (!key || cleaned.length < 120 || /^\.{3,}$/.test(cleaned)) return null;
+  return { ok: true, data: { [key]: cleaned } as T };
+}
+
 export class OpenAiCompatibleProvider {
   constructor(private readonly config: LlmProviderConfig = getLlmProviderConfig()) {}
 
@@ -356,7 +363,13 @@ export class OpenAiCompatibleProvider {
         if (!retryContent) {
           return { ok: false, error: "LLM response did not include JSON content" };
         }
-        return { ok: true, data: parseJsonContent<T>(retryContent) };
+        try {
+          return { ok: true, data: parseJsonContent<T>(retryContent) };
+        } catch (retryError) {
+          return plainTextFallback<T>(retryContent, request.plainTextFallbackKey) ??
+            plainTextFallback<T>(content, request.plainTextFallbackKey) ??
+            { ok: false, error: safeErrorMessage(retryError, this.config) };
+        }
       }
     } catch (error) {
       return { ok: false, error: safeErrorMessage(error, this.config) };

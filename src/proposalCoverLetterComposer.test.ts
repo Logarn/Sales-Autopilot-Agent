@@ -84,6 +84,7 @@ async function run(): Promise<void> {
   assert.match(rewrite.proposalText, /quick call or an async first-pass audit outline\?$/);
   assert.equal(provider.requests.length, 1);
   assert((provider.requests[0]?.timeoutMs ?? 0) >= 75_000, "Proposal copy Kimi request should use the longer proposal-copy timeout.");
+  assert.equal(provider.requests[0]?.plainTextFallbackKey, "proposalText", "Proposal copy should accept long non-JSON Kimi text as proposalText.");
   const prompt = provider.requests.flatMap((request) => request.messages.map((message) => message.content)).join("\n");
   assert.match(prompt, /Operating constitution from soul\.md/i, "Proposal copy prompt should include soul.md.");
   assert.match(prompt, /Upwork Proposal Operating System for Retention Marketing/i, "Prompt should include the retention copy OS.");
