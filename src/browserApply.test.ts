@@ -2225,7 +2225,7 @@ async function runTests(): Promise<void> {
       },
     );
     await cdpWithoutDisconnectSession.close();
-    assert(!cdpWithoutDisconnectCloseCalled, "CDP close must not fall back to browser.close when disconnect is unavailable");
+    assert(cdpWithoutDisconnectCloseCalled, "CDP close should close the Playwright CDP connection when disconnect is unavailable");
 
     let launchPersistentCalled = false;
     const launchContext = { newPage: async () => ({}), close: async () => undefined };
