@@ -248,6 +248,23 @@ assert(evaluateDraftQualityGate({
   proposalText: "Two customer-lifecycle details stood out: you want engagement/conversion improved through subscriber lists and campaign performance insights, across Klaviyo, Mailchimp, Omnisend.\n\nI would start with a commercially pointed 3-5 day audit/fix slice.\n\nIf it makes sense, send me the current flow/campaign setup and I will map the first fixes I would make.",
 }).issues.some((issue) => issue.code === "sterile_template_voice"), "Old sterile proposal template voice should fail quality gate.");
 
+const retentionJobWithDesignSkillNoise = scored({
+  title: "Klaviyo Marketing and Retention Specialist",
+  description: [
+    "We are seeking a Klaviyo Marketing and Retention Specialist to enhance our email marketing strategy.",
+    "The ideal candidate will have experience creating engaging campaigns, analyzing performance, and optimizing for better results.",
+    "Responsibilities include developing targeted email flows, managing subscriber lists, and aligning marketing efforts with business goals.",
+    "You will be creating content, building flows, ensuring deliverability, and helping with Shopify conversion management.",
+  ].join(" "),
+  category: "Email Marketing",
+  skills: ["Klaviyo Email Design Adobe Photoshop", "Marketing Strategy", "Social Media Marketing"],
+});
+const retentionNoiseDraft = buildApplicationDraft(retentionJobWithDesignSkillNoise);
+assert(/klaviyo/i.test(retentionNoiseDraft.proposalText), `Retention job should keep Klaviyo specificity:\n${retentionNoiseDraft.proposalText}`);
+assert(/flows|subscriber|deliverability|customer moment/i.test(retentionNoiseDraft.proposalText), `Retention job should stay on the actual retention/flow scope:\n${retentionNoiseDraft.proposalText}`);
+assert(!/offer hierarchy|mobile CTA|priority template|prettier-template|email reader/i.test(retentionNoiseDraft.proposalText), `Scraped Email Design skills should not force design/template proposal copy:\n${retentionNoiseDraft.proposalText}`);
+assert(retentionNoiseDraft.draftQualityGate.ready, `Retention job with noisy design skills should pass the draft gate. Issues: ${JSON.stringify(retentionNoiseDraft.draftQualityGate.issues)}`);
+
 beauty.applicationDraft = beautyDraft;
 markJobSeen(beauty, true);
 const planResult = buildBrowserApplyPlan(beauty.id);

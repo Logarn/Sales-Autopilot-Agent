@@ -162,6 +162,10 @@ function lowerSource(job: JobPosting): string {
   return sourceText(job).toLowerCase();
 }
 
+function primaryLowerSource(job: JobPosting): string {
+  return `${job.title}\n${job.description}\n${job.category}`.toLowerCase();
+}
+
 function unique(values: Array<string | null | undefined>): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -223,11 +227,14 @@ function visibleBrandUrl(job: JobPosting): string {
 
 function categoryFor(job: JobPosting, intelligence: JobIntelligence): string {
   const text = lowerSource(job);
+  const primaryText = primaryLowerSource(job);
+  const lifecycleScope = hasLifecycleEmailPlatformScope(text);
+  const strongPrimaryDesignScope = isStrongDesignScope(primaryText);
   if (/garden|plant|lawn|seed|nursery|horticulture/.test(text)) return "gardening";
   if (/beauty|skincare|cosmetic|skin care|makeup/.test(text)) return "beauty";
   if (/fashion|apparel|clothing|boutique|jewelry/.test(text)) return "fashion";
-  if (isStrongDesignScope(text)) return "email_design";
-  if (hasLifecycleEmailPlatformScope(text)) return "dtc ecommerce";
+  if (lifecycleScope && !strongPrimaryDesignScope) return "dtc ecommerce";
+  if (strongPrimaryDesignScope || (!lifecycleScope && isStrongDesignScope(text))) return "email_design";
   if (/\b(?:klaviyo|mailchimp|omnisend|ecommerce|e-commerce|customer retention|retention|email campaign|email marketing|flows?)\b/.test(text)) return "dtc ecommerce";
   if (/saas|b2b|software|crm implementation|sales pipeline/.test(text)) return "b2b_saas";
   if (intelligence.ecommerceVertical && intelligence.ecommerceVertical !== "unknown") return intelligence.ecommerceVertical;
@@ -287,7 +294,7 @@ function customerInsightFor(category: string): string {
 
 function commercialPainFor(job: JobPosting, category: string): string {
   const text = lowerSource(job);
-  if (isStrongDesignScope(text)) {
+  if (isStrongDesignScope(primaryLowerSource(job))) {
     return "emails may look busy or finished without making the offer, CTA, and product path obvious fast enough";
   }
   if (/crm|customer data|segment|segmentation|list/.test(text)) {
@@ -311,7 +318,7 @@ function commercialPainFor(job: JobPosting, category: string): string {
 function mechanismFor(job: JobPosting, category: string, platform: string): string {
   const text = lowerSource(job);
   const platformLabel = platform && platform !== "unknown" ? platform : "the CRM";
-  if (category === "email_design" || isStrongDesignScope(text)) {
+  if (category === "email_design" || isStrongDesignScope(primaryLowerSource(job))) {
     return "build the work around hierarchy first: the reason to care, the offer, the proof, the product path, and one clear action";
   }
   if (category === "gardening") {
@@ -333,12 +340,13 @@ function mechanismFor(job: JobPosting, category: string, platform: string): stri
 
 function deliverables(job: JobPosting): string[] {
   const text = lowerSource(job);
+  const primaryText = primaryLowerSource(job);
   return unique([
     /audit/.test(text) ? "audit" : null,
     /flow|automation|journey/.test(text) ? "flows/automations" : null,
     /campaign|newsletter/.test(text) ? "campaigns/newsletters" : null,
     /segment|list/.test(text) ? "segmentation/list work" : null,
-    /design|template|figma/.test(text) ? "email design/templates" : null,
+    /design|template|figma/.test(primaryText) ? "email design/templates" : null,
     /setup|configuration|configure|implementation/.test(text) ? "setup/configuration" : null,
     /deliverability|sender|warm/.test(text) ? "deliverability/sender reputation" : null,
   ]);
