@@ -304,9 +304,7 @@ export async function acquireBrowserSession(
         // Disconnect Playwright's CDP transport without closing the visible Chrome process or its tabs.
         if (typeof browser.disconnect === "function") {
           await browser.disconnect();
-          return;
         }
-        await browser.close();
       },
     };
   }

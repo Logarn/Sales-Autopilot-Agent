@@ -2205,6 +2205,28 @@ async function runTests(): Promise<void> {
     assert(cdpDisconnectCalled, "CDP close should disconnect Playwright from the visible browser");
     assert(!cdpCloseCalled, "CDP close must not close the visible browser or prepared application tabs");
 
+    let cdpWithoutDisconnectCloseCalled = false;
+    const cdpWithoutDisconnectSession = await acquireBrowserSession(
+      {
+        connectOverCDP: async () => ({
+          contexts: () => [cdpContext],
+          close: async () => { cdpWithoutDisconnectCloseCalled = true; },
+        }),
+        launchPersistentContext: async () => {
+          throw new Error("launch path should not be used in cdp mode");
+        },
+      },
+      {
+        mode: "cdp",
+        userDataDir: "./data/browser-profile",
+        chromeExecutablePath: null,
+        cdpUrl: "http://127.0.0.1:9222",
+        headless: false,
+      },
+    );
+    await cdpWithoutDisconnectSession.close();
+    assert(!cdpWithoutDisconnectCloseCalled, "CDP close must not fall back to browser.close when disconnect is unavailable");
+
     let launchPersistentCalled = false;
     const launchContext = { newPage: async () => ({}), close: async () => undefined };
     const launchSession = await acquireBrowserSession(
