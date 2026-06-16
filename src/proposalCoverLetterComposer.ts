@@ -39,8 +39,17 @@ export interface ProposalCoverLetterRewriteResult {
 interface ProposalCoverLetterPayload {
   proposalText?: unknown;
   proposal_text?: unknown;
+  proposal?: unknown;
+  proposalDraft?: unknown;
+  proposal_draft?: unknown;
+  proposalBody?: unknown;
+  proposal_body?: unknown;
   coverLetter?: unknown;
   cover_letter?: unknown;
+  coverLetterText?: unknown;
+  cover_letter_text?: unknown;
+  letter?: unknown;
+  content?: unknown;
   text?: unknown;
   body?: unknown;
   rationale?: unknown;
@@ -179,14 +188,80 @@ function sanitizeProposalText(text: string, job: JobPosting): string {
   return cleaned.trim();
 }
 
+const proposalTextKeys = [
+  "proposalText",
+  "proposal_text",
+  "proposal",
+  "proposalDraft",
+  "proposal_draft",
+  "proposalBody",
+  "proposal_body",
+  "coverLetter",
+  "cover_letter",
+  "coverLetterText",
+  "cover_letter_text",
+  "letter",
+  "content",
+  "text",
+  "body",
+  "message",
+  "output",
+];
+
+const nonProposalTextKeys = new Set([
+  "rationale",
+  "reason",
+  "score",
+  "scores",
+  "issues",
+  "riskFlags",
+  "risk_flags",
+  "metadata",
+]);
+
+function extractNestedProposalText(value: unknown, depth = 0): string {
+  if (typeof value === "string") return value;
+  if (!value || depth > 4) return "";
+  if (Array.isArray(value)) {
+    const nested = value
+      .map((item) => extractNestedProposalText(item, depth + 1))
+      .filter(Boolean);
+    return nested.find((item) => wordCount(item) >= 80) ?? nested[0] ?? "";
+  }
+  if (typeof value !== "object") return "";
+
+  const record = value as Record<string, unknown>;
+  for (const key of proposalTextKeys) {
+    const nested = extractNestedProposalText(record[key], depth + 1);
+    if (nested) return nested;
+  }
+
+  for (const [key, nestedValue] of Object.entries(record)) {
+    if (nonProposalTextKeys.has(key)) continue;
+    const nested = extractNestedProposalText(nestedValue, depth + 1);
+    if (wordCount(nested) >= 80) return nested;
+  }
+  return "";
+}
+
 function extractProposalText(payload: ProposalCoverLetterPayload | undefined): string {
   const value = payload?.proposalText ??
     payload?.proposal_text ??
+    payload?.proposal ??
+    payload?.proposalDraft ??
+    payload?.proposal_draft ??
+    payload?.proposalBody ??
+    payload?.proposal_body ??
     payload?.coverLetter ??
     payload?.cover_letter ??
+    payload?.coverLetterText ??
+    payload?.cover_letter_text ??
+    payload?.letter ??
+    payload?.content ??
     payload?.text ??
     payload?.body;
-  return typeof value === "string" ? value : "";
+  if (typeof value === "string") return value;
+  return extractNestedProposalText(value) || extractNestedProposalText(payload);
 }
 
 function validateRewrite(text: string, input: ProposalCoverLetterRewriteInput): string | null {
