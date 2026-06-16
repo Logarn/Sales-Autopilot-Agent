@@ -329,12 +329,35 @@ export class OpenAiCompatibleProvider {
         return { ok: false, error: safeErrorMessage(attempt.body.error?.message ?? `LLM request failed with ${attempt.status}`, this.config) };
       }
 
-      const choice = attempt.body.choices?.[0];
-      const content = choice?.message?.content || choice?.message?.reasoning_content || choice?.reasoning_content;
+      const contentFor = (item: ChatCompletionAttempt): string => {
+        const choice = item.body.choices?.[0];
+        return choice?.message?.content || choice?.message?.reasoning_content || choice?.reasoning_content || "";
+      };
+
+      let content = contentFor(attempt);
+      if (!content) {
+        const retry = await send(false);
+        if (!retry.ok) {
+          return { ok: false, error: safeErrorMessage(retry.body.error?.message ?? `LLM request failed with ${retry.status}`, this.config) };
+        }
+        content = contentFor(retry);
+      }
       if (!content) {
         return { ok: false, error: "LLM response did not include JSON content" };
       }
-      return { ok: true, data: parseJsonContent<T>(content) };
+      try {
+        return { ok: true, data: parseJsonContent<T>(content) };
+      } catch (error) {
+        const retry = await send(false);
+        if (!retry.ok) {
+          return { ok: false, error: safeErrorMessage(retry.body.error?.message ?? `LLM request failed with ${retry.status}`, this.config) };
+        }
+        const retryContent = contentFor(retry);
+        if (!retryContent) {
+          return { ok: false, error: "LLM response did not include JSON content" };
+        }
+        return { ok: true, data: parseJsonContent<T>(retryContent) };
+      }
     } catch (error) {
       return { ok: false, error: safeErrorMessage(error, this.config) };
     }
