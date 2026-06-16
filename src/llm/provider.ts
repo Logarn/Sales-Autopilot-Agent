@@ -18,6 +18,9 @@ import {
   OPENROUTER_API_KEY,
   OPENROUTER_BASE_URL,
   OPENROUTER_MODEL,
+  PROPOSAL_COPY_LLM_ENABLED,
+  PROPOSAL_COPY_MODEL,
+  PROPOSAL_COPY_PROVIDER,
   SLACK_COPY_LLM_ENABLED,
   SLACK_COPY_MODEL,
   SLACK_COPY_PROVIDER,
@@ -195,6 +198,16 @@ export function getSlackCopyProviderConfig(): LlmProviderConfig {
     enabled: runtimeBoolean(process.env.SLACK_COPY_LLM_ENABLED, SLACK_COPY_LLM_ENABLED),
     provider: process.env.SLACK_COPY_PROVIDER || SLACK_COPY_PROVIDER || "kimi",
     model: process.env.SLACK_COPY_MODEL || SLACK_COPY_MODEL,
+    genericProvider: generic,
+  });
+}
+
+export function getProposalCopyProviderConfig(): LlmProviderConfig {
+  const generic = getLlmProviderConfig();
+  return baseOpenAiCompatibleConfig({
+    enabled: runtimeBoolean(process.env.PROPOSAL_COPY_LLM_ENABLED, PROPOSAL_COPY_LLM_ENABLED),
+    provider: process.env.PROPOSAL_COPY_PROVIDER || PROPOSAL_COPY_PROVIDER || "kimi",
+    model: process.env.PROPOSAL_COPY_MODEL || PROPOSAL_COPY_MODEL,
     genericProvider: generic,
   });
 }

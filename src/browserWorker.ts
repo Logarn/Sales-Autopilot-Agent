@@ -43,6 +43,7 @@ import {
   recordPlannedScreeningCoverage,
   recordLatestVerifiedProposalFallback,
   recordProposalVersion,
+  saveApplicationDraft,
   markSlackWorkflowPromiseStatus,
   updateApplicationStatus,
   updateBrowserActionStatus,
@@ -4034,6 +4035,35 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
   };
   updateBrowserActionStatus(action.id, "in_progress");
   incrementBrowserActionAttempts(action.id);
+
+  if (action.actionType === "prepare_application_review") {
+    const scoredJob = getScoredJobForSlackPreview(action.jobId);
+    if (scoredJob?.description?.trim()) {
+      const previousStatus = getApplicationStatus(action.jobId);
+      const previousDraft = getApplicationDraft(action.jobId);
+      const regeneratedDraft = await buildApplicationDraftWithResearch(scoredJob);
+      saveApplicationDraft({
+        ...regeneratedDraft,
+        status: previousStatus && previousStatus !== "submitted" && previousStatus !== "applied"
+          ? previousStatus
+          : regeneratedDraft.status,
+        suggestedConnects: previousDraft?.suggestedConnects ?? regeneratedDraft.suggestedConnects,
+        suggestedBoostConnects: previousDraft?.suggestedBoostConnects ?? regeneratedDraft.suggestedBoostConnects,
+        connectsStrategy: previousDraft?.connectsStrategy ?? regeneratedDraft.connectsStrategy,
+        connectsWarnings: previousDraft?.connectsWarnings?.length ? previousDraft.connectsWarnings : regeneratedDraft.connectsWarnings,
+      });
+      saveTextArtifact(options, action, "proposal-copy-refresh.json", JSON.stringify({
+        actionId: action.id,
+        jobId: action.jobId,
+        generatedAt: regeneratedDraft.generatedAt,
+        proposalStyleMemoryIds: regeneratedDraft.proposalStyleMemoryIds ?? [],
+        invocationOrder: regeneratedDraft.skillUseTrace?.invocationOrder ?? [],
+        draftQualityGateReady: regeneratedDraft.draftQualityGate?.ready ?? false,
+        scorecard: regeneratedDraft.draftQualityGate?.scorecard ?? null,
+        finalSubmitManual: regeneratedDraft.draftQualityGate?.finalSubmitManual ?? true,
+      }, null, 2));
+    }
+  }
 
   const applyPlanResult = action.actionType === "prepare_application_review" ? buildBrowserApplyPlan(action.jobId) : null;
   const stalePayloadErrors =

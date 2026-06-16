@@ -8,6 +8,10 @@ import { evaluateConnectsStrategy, formatConnectsStrategy } from "./connectsStra
 import { buildDeterministicJobIntelligence } from "./jobIntelligenceParser";
 import { loadConnectsRules, loadFreelancerProfile, loadPortfolioLibrary } from "./profile";
 import { loadProfileKnowledge } from "./profileKnowledge";
+import {
+  rewriteProposalCoverLetterWithKimi,
+  type ProposalCoverLetterClient,
+} from "./proposalCoverLetterComposer";
 import { buildSalesLearningPromptContext } from "./salesLearningMemory";
 import {
   buildInitialSkillUseTrace,
@@ -62,6 +66,7 @@ export interface BuildApplicationDraftOptions {
 
 export interface BuildApplicationDraftWithResearchOptions {
   brandResearchProvider?: BrandResearchToolProvider;
+  proposalCopyProvider?: ProposalCoverLetterClient;
 }
 
 function jobText(job: JobPosting): string {
@@ -610,5 +615,114 @@ export async function buildApplicationDraftWithResearch(
     job,
     provider: options.brandResearchProvider,
   });
-  return buildApplicationDraft(job, { brandResearchRun });
+  const deterministicDraft = buildApplicationDraft(job, { brandResearchRun });
+  const rewrite = await rewriteProposalCoverLetterWithKimi({
+    job,
+    deterministicDraft,
+    copyStrategy: deterministicDraft.copyStrategy as Parameters<typeof evaluateDraftQualityGate>[0]["copyStrategy"],
+    brandFactPack: deterministicDraft.brandFactPack,
+    proofStrategy: deterministicDraft.proofStrategy,
+    selectedPortfolioItems: deterministicDraft.selectedPortfolioItems,
+  }, options.proposalCopyProvider);
+
+  if (!rewrite.usedLlm) {
+    return {
+      ...deterministicDraft,
+      skillUseTrace: deterministicDraft.skillUseTrace
+        ? {
+            ...deterministicDraft.skillUseTrace,
+            invocationOrder: [
+              ...deterministicDraft.skillUseTrace.invocationOrder,
+              `cover_letter_drafting:proposal-copy-kimi-fallback:${rewrite.reason ?? "unknown"}`,
+            ],
+          }
+        : deterministicDraft.skillUseTrace,
+      proposalStyleMemoryIds: [
+        ...(deterministicDraft.proposalStyleMemoryIds ?? []),
+        `proposal_copy_llm:fallback:${rewrite.reason ?? "unknown"}`,
+      ].slice(0, 10),
+    };
+  }
+
+  const profile = loadFreelancerProfile();
+  const finalProposal = shortenProposalSafely(
+    cleanProposal(rewrite.proposalText, profile.voice?.bannedPhrases ?? []),
+    1800,
+  );
+  const draftQualityGate = evaluateDraftQualityGate({
+    proposalText: finalProposal,
+    job,
+    copyStrategy: deterministicDraft.copyStrategy as any,
+    brandFactPack: deterministicDraft.brandFactPack,
+    skillLoaded: true,
+    fullJobDescriptionRead: job.description.trim().length > 0 && deterministicDraft.jobUnderstanding?.fullJobDescription === job.description,
+    copyStrategyCreated: Boolean(deterministicDraft.copyStrategy?.one_sentence_sales_argument),
+    finalSubmitManual: true,
+    proofVerificationState: deterministicDraft.proofStrategy?.proofVerificationState ?? deterministicDraft.copyStrategy?.proof_verification_state,
+    screeningAnswers: deterministicDraft.structuredProposal?.clientRequestAnswers ?? [],
+    soulLoaded: true,
+  });
+
+  if (!draftQualityGate.ready) {
+    return {
+      ...deterministicDraft,
+      skillUseTrace: deterministicDraft.skillUseTrace
+        ? {
+            ...deterministicDraft.skillUseTrace,
+            invocationOrder: [
+              ...deterministicDraft.skillUseTrace.invocationOrder,
+              `cover_letter_drafting:proposal-copy-kimi-rejected:${draftQualityGate.issues.slice(0, 3).map((issue) => issue.code).join(",")}`,
+            ],
+          }
+        : deterministicDraft.skillUseTrace,
+      proposalStyleMemoryIds: [
+        ...(deterministicDraft.proposalStyleMemoryIds ?? []),
+        "proposal_copy_llm:rejected_by_quality_gate",
+      ].slice(0, 10),
+    };
+  }
+
+  const skillUseTrace = deterministicDraft.skillUseTrace
+    ? {
+        ...deterministicDraft.skillUseTrace,
+        invocationOrder: [
+          ...deterministicDraft.skillUseTrace.invocationOrder,
+          "cover_letter_drafting:proposal-copy-kimi-conversion-os",
+        ],
+        qualityGateReady: draftQualityGate.ready,
+        browserFillAllowed: draftQualityGate.ready &&
+          deterministicDraft.skillUseTrace.captureConfidence !== "low" &&
+          deterministicDraft.skillUseTrace.missingRequiredSkills.length === 0,
+      }
+    : deterministicDraft.skillUseTrace;
+
+  return {
+    ...deterministicDraft,
+    proposalText: finalProposal,
+    proposalQuality: critiqueProposal(finalProposal, job, profile),
+    jobIntelligence: buildDeterministicJobIntelligence(job, finalProposal),
+    draftQualityGate,
+    skillUseTrace,
+    proposalStyleMemoryIds: [
+      ...(deterministicDraft.proposalStyleMemoryIds ?? []),
+      "proposal_copy_llm:kimi_conversion_os",
+    ].slice(0, 10),
+    structuredProposal: deterministicDraft.structuredProposal
+      ? {
+          ...deterministicDraft.structuredProposal,
+          opening: deterministicDraft.copyStrategy?.opening_angle ?? deterministicDraft.structuredProposal.opening,
+          diagnosis: deterministicDraft.copyStrategy?.one_sentence_sales_argument ?? deterministicDraft.structuredProposal.diagnosis,
+          proof: deterministicDraft.proofStrategy?.summary ?? deterministicDraft.structuredProposal.proof,
+          browserFillNotes: {
+            ...deterministicDraft.structuredProposal.browserFillNotes,
+            approvedText: finalProposal,
+            profileNotes: [
+              ...deterministicDraft.structuredProposal.browserFillNotes.profileNotes,
+              "proposal copy LLM: Kimi conversion OS pass completed with soul.md context",
+            ],
+          },
+        }
+      : deterministicDraft.structuredProposal,
+    generatedAt: new Date().toISOString(),
+  };
 }

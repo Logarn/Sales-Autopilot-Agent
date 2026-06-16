@@ -183,7 +183,12 @@ async function runTests(): Promise<void> {
     });
 
     const planResult = buildBrowserApplyPlan(storedJob.id);
-    assert(planResult.valid, "apply plan should stay valid when proof is represented by an Upwork portfolio item instead of a missing file attachment");
+    assert(planResult.valid, `apply plan should stay valid when proof is represented by an Upwork portfolio item instead of a missing file attachment: ${JSON.stringify({
+      issues: planResult.issues,
+      attachments: planResult.plan?.attachments?.map((item: any) => item.filePath),
+      highlights: planResult.plan?.highlights,
+      proofHighlights: planResult.plan?.proofHighlights,
+    })}`);
     assert(!planResult.issues.some((issue: any) => issue.code === "required_attachment_missing_locally"), "portfolio-backed proof should not create a missing attachment blocker");
     assert(planResult.plan.highlights.some((label: string) => label.includes("Truly Beauty")), "apply plan should preserve the selected Truly Beauty Upwork portfolio highlight");
     assert(planResult.plan.attachments.length === 0, "apply plan should not duplicate a portfolio proof as a file attachment");

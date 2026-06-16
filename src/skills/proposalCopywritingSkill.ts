@@ -580,10 +580,30 @@ function openerSpecifics(strategy: CopyStrategy): [string, string] {
   return [toolSpecific, deliverableSpecific];
 }
 
+function brandContext(strategy: CopyStrategy): string {
+  const name = strategy.brand_name && strategy.brand_name !== "unknown" ? strategy.brand_name : "";
+  const url = strategy.brand_url && strategy.brand_url !== "unknown" ? strategy.brand_url : "";
+  if (name && url) return `${name} / ${url}`;
+  return name || url || "the account";
+}
+
+function isSetupConfigurationScope(strategy: CopyStrategy): boolean {
+  const combined = [
+    strategy.requested_deliverables.join(" "),
+    strategy.likely_lifecycle_gap,
+    strategy.offer_or_project_mechanism,
+    strategy.client_commercial_pain,
+  ].join(" ").toLowerCase();
+  return /\b(?:setup|configuration|configure|implementation|sender reputation|warmup|contact import|transactional api|list quality)\b/.test(combined);
+}
+
 function conciseHook(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
   const opener = "Steve here - how is your day going?";
   const [specificOne, specificTwo] = openerSpecifics(strategy);
+  if (isSetupConfigurationScope(strategy)) {
+    return `${opener} Two things stood out: ${brandContext(strategy)} needs ${specificOne} and ${specificTwo}. I would treat this as Brevo account setup with customer-data risk first: sender reputation, contact import/cleanup, segmentation, automations, and transactional API separation all need to be clean before volume ramps.`;
+  }
   if (strategy.category === "gardening" && tools.length > 0) {
     return `${opener} Two things stood out: seasonal replenishment and ${specificOne}. I would start with planting timing, care anxiety, and what the customer needs next before building more emails.`;
   }
@@ -596,6 +616,9 @@ function conciseHook(strategy: CopyStrategy): string {
 
 function oneStepSolution(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
+  if (isSetupConfigurationScope(strategy)) {
+    return "I would start by mapping the setup risks: sender reputation warmup, contact import/cleanup, list and segment architecture, automation logic, newsletter targeting, and the transactional API boundary.";
+  }
   if (strategy.category === "email_design") {
     return "I would start by checking offer hierarchy, mobile readability, product path, and CTA visibility on the priority templates.";
   }
@@ -607,6 +630,9 @@ function oneStepSolution(strategy: CopyStrategy): string {
 
 function microMilestoneLine(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
+  if (isSetupConfigurationScope(strategy)) {
+    return "First 3-5 day slice: Brevo setup audit and first configuration map. Done = sender warmup, contact import/cleanup, list segmentation, priority automations, and transactional API separation are mapped for QA.";
+  }
   if (strategy.category === "email_design") {
     return "First 3-5 day slice: tighten the priority template path. Done = the offer, hierarchy, product path, and CTA are clear on mobile before expanding the set.";
   }

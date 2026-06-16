@@ -52,6 +52,7 @@ async function run(): Promise<void> {
   const {
     getLlmProviderConfig,
     getJobIntelligenceProviderConfig,
+    getProposalCopyProviderConfig,
     getSlackCopyProviderConfig,
     getSlackCopyProviderFallbackConfigs,
     OpenAiCompatibleProvider,
@@ -155,6 +156,24 @@ async function run(): Promise<void> {
     SLACK_COPY_MODEL: "kimi-k2.6",
   }, () => {
     const config = getSlackCopyProviderConfig();
+    assert.equal(config.enabled, true);
+    assert.equal(config.provider, "moonshot");
+    assert.equal(config.apiKey, "moonshot-key");
+    assert.equal(config.model, "kimi-k2.6");
+    assert.equal(config.baseUrl, "https://api.moonshot.ai/v1");
+  });
+
+  withEnv({
+    PROPOSAL_COPY_LLM_ENABLED: "true",
+    PROPOSAL_COPY_PROVIDER: "kimi",
+    MOONSHOT_API_KEY: "moonshot-key",
+    MOONSHOT_BASE_URL: "https://api.moonshot.ai/v1",
+    PROPOSAL_COPY_MODEL: "kimi-k2.6",
+    LLM_PROVIDER: "xai",
+    LLM_MODEL: "grok-4.3",
+    XAI_API_KEY: "xai-key",
+  }, () => {
+    const config = getProposalCopyProviderConfig();
     assert.equal(config.enabled, true);
     assert.equal(config.provider, "moonshot");
     assert.equal(config.apiKey, "moonshot-key");
