@@ -145,6 +145,33 @@ async function run(): Promise<void> {
   assert.equal(aliasRewrite.usedLlm, true, "Proposal composer should accept Kimi proposal_text JSON alias.");
   assert.equal(aliasRewrite.proposalText, brandDesignProposal);
 
+  const proposalAliasRewrite = await rewriteProposalCoverLetterWithKimi({
+    job: brandDesignJob,
+    deterministicDraft: brandDesignDraft,
+    copyStrategy: brandDesignDraft.copyStrategy,
+    brandFactPack: brandDesignDraft.brandFactPack,
+    proofStrategy: brandDesignDraft.proofStrategy,
+  }, new FakeProposalProvider({ proposal: brandDesignProposal, rationale: "kimi used generic proposal key" }));
+  assert.equal(proposalAliasRewrite.usedLlm, true, "Proposal composer should accept Kimi proposal JSON alias.");
+  assert.equal(proposalAliasRewrite.proposalText, brandDesignProposal);
+
+  const nestedAliasRewrite = await rewriteProposalCoverLetterWithKimi({
+    job: brandDesignJob,
+    deterministicDraft: brandDesignDraft,
+    copyStrategy: brandDesignDraft.copyStrategy,
+    brandFactPack: brandDesignDraft.brandFactPack,
+    proofStrategy: brandDesignDraft.proofStrategy,
+  }, new FakeProposalProvider({
+    result: {
+      content: {
+        cover_letter_text: brandDesignProposal,
+      },
+    },
+    rationale: "kimi nested the cover letter under result.content",
+  }));
+  assert.equal(nestedAliasRewrite.usedLlm, true, "Proposal composer should accept nested Kimi cover-letter content.");
+  assert.equal(nestedAliasRewrite.proposalText, brandDesignProposal);
+
   const wrongDesignProof = await rewriteProposalCoverLetterWithKimi({
     job: brandDesignJob,
     deterministicDraft: brandDesignDraft,
