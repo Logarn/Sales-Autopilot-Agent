@@ -128,6 +128,24 @@ function hasMetric(text: string): boolean {
   return /(?:\b\d+(?:\.\d+)?\s*%|\$\s?\d|\b\d+\s*x\b|\bfrom\s+[^.\n]{1,40}\s+to\s+[^.\n]{1,60})/i.test(text);
 }
 
+function jobSource(job: JobPosting): string {
+  return `${job.title}\n${job.description}\n${job.skills.join(" ")}\n${job.category}`;
+}
+
+function isBrandDesignScope(job: JobPosting): boolean {
+  const text = jobSource(job).toLowerCase();
+  return /\b(?:branding|brand identity|logo design|logo|visual identity|brand refresh|brand system|brand design|rebrand)\b/.test(text) &&
+    /\b(?:design|branding|logo|identity|visual|creative|ecommerce|shopify|store|website)\b/.test(text);
+}
+
+function hasDesignPortfolioProof(text: string): boolean {
+  return /\b(?:design case studies|premium dtc email design|ARMRA|Thrive Market|Ritual|visual systems proof|brand identity|logo)\b/i.test(text);
+}
+
+function hasWrongRetentionProofForDesign(text: string): boolean {
+  return /\b(?:Hangaritas|Klaviyo screenshot|win[-\s]?back|post[-\s]?purchase|replenishment|lifecycle flow|retention revenue|email revenue)\b/i.test(text);
+}
+
 function hasChoiceCta(text: string): boolean {
   const tail = text.trim().slice(-280);
   return /\?$/.test(tail) && /\b(?:or|prefer|rather|option a|option b|call|async|outline|plan|audit)\b/i.test(tail);
@@ -159,12 +177,14 @@ function sanitizeProposalText(text: string, job: JobPosting): string {
 function validateRewrite(text: string, input: ProposalCoverLetterRewriteInput): string | null {
   if (!text.trim()) return "empty proposal";
   const words = wordCount(text);
+  const brandDesignScope = isBrandDesignScope(input.job) || input.deterministicDraft.copyStrategy?.category === "brand_design";
   if (words < 120 || words > 240) return `proposal word count ${words} outside safe LLM band`;
   if (!hasHumanOpening(text, input.job)) return "missing Steve/soul human opener";
   if (!hasMicroMilestone(text)) return "missing 3-5 day Done = milestone";
-  if (!hasMetric(text)) return "missing proof metric";
+  if (!hasMetric(text) && !(brandDesignScope && hasDesignPortfolioProof(text))) return "missing proof metric";
   if (!hasChoiceCta(text)) return "missing choice-based CTA";
   if (proofBlockCount(text) !== 1) return "proof count is not exactly one";
+  if (brandDesignScope && hasWrongRetentionProofForDesign(text)) return "wrong retention proof for brand/design scope";
   if (hasUnsafeClaim(text)) return "unsafe submit/security/guarantee claim";
   if (hasScaffoldLabel(text)) return "internal scaffold label";
   if (/\b(?:I am excited to apply|Dear Hiring Manager|tailored to your needs|leverage my expertise|proven track record)\b/i.test(text)) {
@@ -172,9 +192,36 @@ function validateRewrite(text: string, input: ProposalCoverLetterRewriteInput): 
   }
   const missingTools = ["klaviyo", "mailchimp", "omnisend", "shopify", "figma", "brevo"]
     .filter((tool) => `${input.job.title}\n${input.job.description}\n${input.job.skills.join(" ")}`.toLowerCase().includes(tool))
+    .filter((tool) => !(brandDesignScope && /^(klaviyo|mailchimp|omnisend|brevo)$/i.test(tool)))
     .filter((tool) => !text.toLowerCase().includes(tool));
   if (missingTools.length > 0) return `missing requested tool specificity: ${missingTools.join(", ")}`;
   return null;
+}
+
+function laneGuidance(input: ProposalCoverLetterRewriteInput): string {
+  const strategy = input.copyStrategy ?? input.deterministicDraft.copyStrategy ?? null;
+  const category = strategy?.category ?? "";
+  const lane = (strategy as { retention_lane?: string } | null)?.retention_lane ?? "";
+  if (category === "brand_design" || lane === "brand_conversion_design" || isBrandDesignScope(input.job)) {
+    return [
+      "Lane: ecommerce brand/logo/conversion design.",
+      "Use the same conversion-led Upwork OS, but do not force retention/Klaviyo language just because the store is on Shopify.",
+      "Lead with brand trust, logo/identity clarity, offer hierarchy, product/category path, conversion friction, and the first visual decision the client should make.",
+      "Use Design Case Studies as the proof when selected. Do not use Hangaritas, Klaviyo screenshot, win-back, replenishment, lifecycle, or email revenue proof for this lane.",
+      "A design portfolio proof may be concrete without a revenue metric; do not invent metrics.",
+    ].join("\n");
+  }
+  if (category === "email_design" || lane === "email_template_clarity") {
+    return [
+      "Lane: email design/template clarity.",
+      "Use the conversion-led design variant: offer hierarchy, mobile clarity, product path, CTA visibility, and one design proof.",
+      "Do not turn the proposal into a generic retention audit unless the primary job asks for lifecycle strategy.",
+    ].join("\n");
+  }
+  return [
+    "Lane: Shopify/Klaviyo or ecommerce retention/lifecycle.",
+    "Use the Upwork Proposal Operating System for Retention Marketing on Shopify and Klaviyo exactly: diagnosis, one 3-5 day Done = milestone, one matched proof, logistics, choice CTA.",
+  ].join("\n");
 }
 
 export async function rewriteProposalCoverLetterWithKimi(
@@ -202,9 +249,10 @@ export async function rewriteProposalCoverLetterWithKimi(
       {
         role: "system",
         content: [
-          "You write Upwork cover letters for Steve Logarn, a retention/lifecycle marketer for Shopify and Klaviyo brands.",
+          "You write Upwork cover letters for Steve Logarn, a conversion-led ecommerce operator across retention/lifecycle, Shopify/Klaviyo, and brand/design clarity work.",
           "This is not a classic cover letter. Write a tiny diagnosis-led sales memo that earns a reply.",
-          "Use the Upwork Proposal Operating System for Retention Marketing on Shopify and Klaviyo:",
+          laneGuidance(input),
+          "Use the Upwork Proposal Operating System:",
           "- 150-220 words unless a required opening phrase forces a little extra room.",
           "- First two meaningful lines must prove the job was read with at least two job-specific details from the post.",
           "- Lead with the client's commercial/customer problem, not Steve's biography.",

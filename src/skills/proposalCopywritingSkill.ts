@@ -229,12 +229,15 @@ function categoryFor(job: JobPosting, intelligence: JobIntelligence): string {
   const text = lowerSource(job);
   const primaryText = primaryLowerSource(job);
   const lifecycleScope = hasLifecycleEmailPlatformScope(text);
+  const strongPrimaryBrandDesignScope = isBrandDesignScope(primaryText);
   const strongPrimaryDesignScope = isStrongDesignScope(primaryText);
   if (/garden|plant|lawn|seed|nursery|horticulture/.test(text)) return "gardening";
+  if (strongPrimaryBrandDesignScope) return "brand_design";
   if (strongPrimaryDesignScope) return "email_design";
   if (/beauty|skincare|cosmetic|skin care|makeup/.test(text)) return "beauty";
   if (/fashion|apparel|clothing|boutique|jewelry/.test(text)) return "fashion";
   if (lifecycleScope && !strongPrimaryDesignScope) return "dtc ecommerce";
+  if (!lifecycleScope && isBrandDesignScope(text)) return "brand_design";
   if (!lifecycleScope && isStrongDesignScope(text)) return "email_design";
   if (/\b(?:klaviyo|mailchimp|omnisend|ecommerce|e-commerce|customer retention|retention|email campaign|email marketing|flows?)\b/.test(text)) return "dtc ecommerce";
   if (/saas|b2b|software|crm implementation|sales pipeline/.test(text)) return "b2b_saas";
@@ -248,11 +251,20 @@ function hasLifecycleEmailPlatformScope(text: string): boolean {
     /\b(?:flow|flows|automation|automations|campaign|campaigns|subscriber|subscribers|list|lists|engagement|conversion|performance|insights|ecommerce|e-commerce|retention|lifecycle)\b/.test(text);
 }
 
+function isBrandDesignScope(text: string): boolean {
+  return /\b(?:branding|brand identity|logo design|logo|visual identity|brand refresh|brand system|brand design|rebrand)\b/.test(text) &&
+    /\b(?:design|branding|logo|identity|visual|creative|ecommerce|shopify|store|website)\b/.test(text);
+}
+
+function isEmailDesignScope(text: string): boolean {
+  return /\b(?:figma|email design|design system|campaign design|flow design|creative direction|visual design|mockup)\b/.test(text);
+}
+
 function isStrongDesignScope(text: string): boolean {
-  if (hasLifecycleEmailPlatformScope(text) && !/\b(?:figma|email design|design system|campaign design|flow design|creative direction|visual design|mockup)\b/.test(text)) {
+  if (hasLifecycleEmailPlatformScope(text) && !isEmailDesignScope(text) && !isBrandDesignScope(text)) {
     return false;
   }
-  return /\b(?:figma|email design|design system|campaign design|flow design|creative direction|visual design|mockup)\b/.test(text);
+  return isEmailDesignScope(text) || isBrandDesignScope(text);
 }
 
 function targetCustomerFor(category: string): string {
@@ -265,6 +277,8 @@ function targetCustomerFor(category: string): string {
       return "shoppers looking for fit, identity, occasion, styling confidence, and timely product discovery";
     case "email_design":
       return "email readers skimming quickly and deciding whether the offer is clear enough to click";
+    case "brand_design":
+      return "ecommerce shoppers judging whether the brand, product path, and visual identity feel credible enough to trust and buy from";
     case "b2b_saas":
       return "business buyers trying to reduce workflow pain, risk, implementation friction, and decision uncertainty";
     case "dtc ecommerce":
@@ -284,6 +298,8 @@ function customerInsightFor(category: string): string {
       return "A fashion customer is not just buying an item. They are buying fit, identity, occasion, and the feeling that this belongs in the version of themselves they want to show.";
     case "email_design":
       return "An email reader does not care what tool the template was built in. They care whether the email makes the offer obvious quickly enough to act on it.";
+    case "brand_design":
+      return "A shopper does not separate logo, brand feel, and conversion path. They decide quickly whether the store feels credible, clear, and worth buying from.";
     case "b2b_saas":
       return "A B2B buyer is not just buying implementation. They are trying to reduce risk, wasted time, decision friction, and the anxiety of choosing the wrong fix.";
     case "dtc ecommerce":
@@ -295,6 +311,9 @@ function customerInsightFor(category: string): string {
 
 function commercialPainFor(job: JobPosting, category: string): string {
   const text = lowerSource(job);
+  if (category === "brand_design" || isBrandDesignScope(primaryLowerSource(job))) {
+    return "a store can have real revenue while the brand identity, logo, offer hierarchy, and product path still fail to create enough trust quickly";
+  }
   if (isStrongDesignScope(primaryLowerSource(job))) {
     return "emails may look busy or finished without making the offer, CTA, and product path obvious fast enough";
   }
@@ -319,6 +338,9 @@ function commercialPainFor(job: JobPosting, category: string): string {
 function mechanismFor(job: JobPosting, category: string, platform: string): string {
   const text = lowerSource(job);
   const platformLabel = platform && platform !== "unknown" ? platform : "the CRM";
+  if (category === "brand_design" || isBrandDesignScope(primaryLowerSource(job))) {
+    return "build the work around brand trust first: logo/identity clarity, offer hierarchy, product/category path, conversion friction, and the first visual system decisions that make the store feel more credible";
+  }
   if (category === "email_design" || isStrongDesignScope(primaryLowerSource(job))) {
     return "build the work around hierarchy first: the reason to care, the offer, the proof, the product path, and one clear action";
   }
@@ -347,6 +369,7 @@ function deliverables(job: JobPosting): string[] {
     /flow|automation|journey/.test(text) ? "flows/automations" : null,
     /campaign|newsletter/.test(text) ? "campaigns/newsletters" : null,
     /segment|list/.test(text) ? "segmentation/list work" : null,
+    /branding|brand identity|logo|visual identity|brand design|rebrand/.test(primaryText) ? "branding/logo design" : null,
     /design|template|figma/.test(primaryText) ? "email design/templates" : null,
     /setup|configuration|configure|implementation/.test(text) ? "setup/configuration" : null,
     /deliverability|sender|warm/.test(text) ? "deliverability/sender reputation" : null,
@@ -460,6 +483,8 @@ function buyingMomentFor(category: string): string {
       return "trust-building, first use, routine formation, replenishment, and product pairing";
     case "email_design":
       return "the first few seconds when the reader decides whether the offer is clear enough to keep reading";
+    case "brand_design":
+      return "the first few seconds when a shopper decides whether the store feels credible, clear, and worth buying from";
     case "fashion":
       return "occasion, identity, fit confidence, drop timing, and abandoned product intent";
     case "b2b_saas":
@@ -477,6 +502,8 @@ function repeatMomentFor(category: string): string {
       return "first result, habit formation, replenishment timing, education, and next-best product";
     case "email_design":
       return "offer clarity, product path, proof, mobile hierarchy, and one obvious CTA";
+    case "brand_design":
+      return "brand trust, logo/identity clarity, offer hierarchy, product/category path, and conversion friction";
     case "dtc ecommerce":
       return "welcome intent, abandoned intent, post-purchase education, replenishment, winback, and campaign segmentation";
     default:
@@ -492,6 +519,7 @@ function retentionLaneFor(job: JobPosting, category: string): string {
   if (/\b(?:subscription|recharge|loop|win[-\s]?back|replenishment|repeat purchase|churn)\b/i.test(text)) return "subscription_winback";
   if (/\b(?:api|integration|integrations|deliverability|sender|dns|domain|events?|webhook|html|liquid|qa)\b/i.test(text)) return "technical_retention";
   if (/\b(?:agency|multiple brands|multi[-\s]?brand|accounts|clients)\b/i.test(text)) return "agency_support";
+  if (category === "brand_design") return "brand_conversion_design";
   if (category === "email_design") return "email_template_clarity";
   if (/\b(?:flow|flows|automation|automations|audit|underperforming)\b/i.test(text)) return "flow_audit";
   return "lifecycle_operator";
@@ -513,6 +541,8 @@ function laneLabel(lane: string): string {
       return "multi-account lifecycle ops";
     case "email_template_clarity":
       return "email clarity";
+    case "brand_conversion_design":
+      return "brand conversion design";
     case "flow_audit":
       return "flow/audit";
     default:
@@ -611,6 +641,9 @@ function conciseHook(strategy: CopyStrategy): string {
   if (strategy.category === "gardening" && tools.length > 0) {
     return `${opener} ${contextPrefix}two things stood out: seasonal replenishment and ${specificOne}. I would start with planting timing, care anxiety, and what the customer needs next before building more emails.`;
   }
+  if (strategy.category === "brand_design") {
+    return `${opener} ${contextPrefix}two things stood out: the store already has commercial traction and the brief is asking for branding/logo work that can carry more trust. I would treat this as a brand-conversion problem first: identity, offer hierarchy, product path, and the first impression need to make the store feel easier to believe and buy from.`;
+  }
   if (strategy.category === "email_design") {
     const platformDetail = requestedTools(strategy).length ? ` across ${requestedTools(strategy).slice(0, 2).join(" + ")}` : "";
     return `${opener} ${contextPrefix}two things stood out: offer hierarchy/mobile CTA clarity and ${specificTwo}${platformDetail}. The reader needs the offer, product path, and CTA to make sense in seconds, so I would treat this as an offer-clarity problem first, not a prettier-template pass.`;
@@ -622,6 +655,9 @@ function oneStepSolution(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
   if (isSetupConfigurationScope(strategy)) {
     return "I would start by mapping the setup risks: sender reputation warmup, contact import/cleanup, list and segment architecture, automation logic, newsletter targeting, and the transactional API boundary.";
+  }
+  if (strategy.category === "brand_design") {
+    return "I would start by looking at the homepage/PDP path, logo and identity fit, offer clarity, category navigation, and the trust cues that should support a cleaner buying decision.";
   }
   if (strategy.category === "email_design") {
     return "I would start by checking offer hierarchy, mobile readability, product path, and CTA visibility on the priority templates.";
@@ -636,6 +672,9 @@ function microMilestoneLine(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
   if (isSetupConfigurationScope(strategy)) {
     return "First 3-5 day slice: Brevo setup audit and first configuration map. Done = sender warmup, contact import/cleanup, list segmentation, priority automations, and transactional API separation are mapped for QA.";
+  }
+  if (strategy.category === "brand_design") {
+    return "First 3-5 day slice: brand/conversion diagnostic. Done = the logo/identity risks, offer hierarchy, product path friction, and first design direction are mapped before any full redesign work expands.";
   }
   if (strategy.category === "email_design") {
     return "First 3-5 day slice: tighten the priority template path. Done = the offer, hierarchy, product path, and CTA are clear on mobile before expanding the set.";
@@ -672,6 +711,9 @@ function singleProofPoint(proofPoints: string[], portfolioItems: PortfolioItem[]
 
 function logisticsLine(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
+  if (strategy.category === "brand_design") {
+    return "I can keep the first step async-friendly and focused on the decisions that make the store sharper before bigger design execution.";
+  }
   if (strategy.category === "email_design") {
     return "I can keep this async-friendly and show the before/after logic before expanding the set.";
   }
@@ -683,6 +725,9 @@ function logisticsLine(strategy: CopyStrategy): string {
 
 function ctaLine(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
+  if (strategy.category === "brand_design") {
+    return "Would you prefer a quick call, or should I send the first async brand/conversion outline?";
+  }
   if (strategy.category === "email_design") {
     return "Would you prefer a quick call, or should I send the first async template outline?";
   }
@@ -868,6 +913,15 @@ function scorecardJobSignals(job: JobPosting, copyStrategy?: CopyStrategy | null
     "lifecycle",
     "audit",
     "design",
+    "branding",
+    "logo",
+    "identity",
+    "brand",
+    "website",
+    "redesign",
+    "modernization",
+    "conversion optimization",
+    "google merchant",
     "template",
     "deliverability",
     "segmentation",
@@ -903,6 +957,10 @@ function hasMicroMilestone(text: string): boolean {
 
 function hasMetricMarker(text: string): boolean {
   return /(?:\b\d+(?:\.\d+)?\s*%|\$\s?\d|\b\d+\s*x\b|\bfrom\s+[^.\n]{1,40}\s+to\s+[^.\n]{1,60})/i.test(text);
+}
+
+function hasDesignPortfolioProofMarker(text: string): boolean {
+  return /\b(?:design case studies|premium dtc email design|ARMRA|Thrive Market|Ritual|visual systems proof|brand identity|logo)\b/i.test(text);
 }
 
 function hasAllowedRequiredPrefix(text: string, job: JobPosting): boolean {
@@ -1007,7 +1065,8 @@ export function evaluateProposalScorecard(input: {
   const readable = paragraphs >= 2 && paragraphs <= 5 && bullets <= 2 && words >= 60 && words <= 320;
   const customerOrGoal = /\b(?:customer|buyer|reader|shopper|subscriber|client|conversion|engagement|revenue|retention|trust|friction|repeat|replenishment|deliverability)\b/i.test(text);
   const proofPass = proofCount === 1 && input.proofVerificationState !== "unavailable" && input.proofVerificationState !== "do_not_claim";
-  const metricPass = hasMetricMarker(text);
+  const designScope = isBrandDesignScope(sourceText(input.job).toLowerCase()) || input.copyStrategy?.category === "brand_design";
+  const metricPass = hasMetricMarker(text) || (designScope && hasDesignPortfolioProofMarker(text));
   const soulLoaded = input.soulLoaded === true;
   const tonePass = soulLoaded && (/^steve here\b/i.test(text) || hasAllowedRequiredPrefix(text, input.job)) && /\bI would\b/i.test(text) && !usesGenericAiCliches(text);
   const ctaPass = hasBinaryOrScopeCta(text);
@@ -1163,7 +1222,8 @@ export function evaluateDraftQualityGate(input: {
   if (scorecard.proofCount !== 1 || input.proofVerificationState === "unavailable" || input.proofVerificationState === "do_not_claim") {
     addIssue(issues, { code: "proof_count_not_one", severity: "critical", message: "Proposal must use exactly one relevant proof artifact or example." });
   }
-  if (!hasMetricMarker(text)) {
+  const designScope = isBrandDesignScope(sourceText(input.job).toLowerCase()) || input.copyStrategy?.category === "brand_design";
+  if (!hasMetricMarker(text) && !(designScope && hasDesignPortfolioProofMarker(text))) {
     addIssue(issues, { code: "proof_metric_missing", severity: "critical", message: "Proposal proof must include a metric or quantified result." });
   }
   if (!hasMicroMilestone(text)) {
@@ -1211,6 +1271,14 @@ export function evaluateDraftQualityGate(input: {
   if (/\b(?:screenshot\s*\d+|general retention portfolio)\b/i.test(text)) {
     addIssue(issues, { code: "weak_or_unverified_proof_reference", severity: "critical", message: "Cover letter references vague or unverified proof instead of a relevant verified proof plan.", evidence: text.match(/\b(?:screenshot\s*\d+|general retention portfolio)\b/i)?.[0] });
   }
+  if (designScope && /\b(?:Hangaritas|Klaviyo screenshot|win[-\s]?back|post[-\s]?purchase|replenishment|lifecycle flow|retention revenue|email revenue)\b/i.test(text)) {
+    addIssue(issues, {
+      code: "wrong_proof_or_lane_for_design_scope",
+      severity: "critical",
+      message: "Primary branding/logo/design jobs must use the design proof lane, not forced retention/Klaviyo proof.",
+      evidence: text.match(/\b(?:Hangaritas|Klaviyo screenshot|win[-\s]?back|post[-\s]?purchase|replenishment|lifecycle flow|retention revenue|email revenue)\b/i)?.[0],
+    });
+  }
   if (/\b(?:Relevant background|To answer the application notes directly|Relevant examples|Additional relevant example|Relevant proof|Approach|Credentials):/i.test(text)) {
     addIssue(issues, {
       code: "internal_scaffold_labels",
@@ -1229,7 +1297,9 @@ export function evaluateDraftQualityGate(input: {
     addIssue(issues, { code: "proposal_too_long", severity: "critical", message: "Cover letter should stay tight and near the 200-word winning proposal structure." });
   }
   const customerInsight = input.copyStrategy?.customer_state_of_mind ?? "";
-  if (!customerInsight || (!text.toLowerCase().includes(customerInsight.slice(0, 28).toLowerCase()) && !/\b(?:customer|buyer|reader|shopper|subscriber)\b/i.test(text))) {
+  const hasCustomerInsightLanguage = /\b(?:customer|buyer|reader|shopper|subscriber)\b/i.test(text) ||
+    (designScope && /\b(?:store|trust|buying decision|buy from|identity|offer hierarchy|product path)\b/i.test(text));
+  if (!customerInsight || (!text.toLowerCase().includes(customerInsight.slice(0, 28).toLowerCase()) && !hasCustomerInsightLanguage)) {
     addIssue(issues, { code: "missing_customer_insight", severity: "critical", message: "Cover letter does not include a clear customer insight before selling services." });
   }
   const commercialPain = input.copyStrategy?.client_commercial_pain ?? "";
@@ -1237,7 +1307,9 @@ export function evaluateDraftQualityGate(input: {
     addIssue(issues, { code: "missing_commercial_pain", severity: "critical", message: "Cover letter does not name a business opportunity or commercial pain." });
   }
   const jobText = sourceText(input.job).toLowerCase();
-  const requiredPlatforms = ["klaviyo", "mailchimp", "omnisend"].filter((platform) => jobText.includes(platform));
+  const requiredPlatforms = ["klaviyo", "mailchimp", "omnisend"]
+    .filter((platform) => jobText.includes(platform))
+    .filter((platform) => !(designScope && platform === "klaviyo"));
   const missingPlatforms = requiredPlatforms.filter((platform) => !lower.includes(platform));
   if (missingPlatforms.length > 0) {
     addIssue(issues, {

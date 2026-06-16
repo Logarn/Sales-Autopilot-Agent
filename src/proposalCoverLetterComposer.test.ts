@@ -95,6 +95,60 @@ async function run(): Promise<void> {
   assert(researchedDraft.skillUseTrace?.invocationOrder.some((item: string) => item === "cover_letter_drafting:proposal-copy-kimi-conversion-os"), "Async draft should record the Kimi conversion cover-letter pass.");
   assert.equal(researchedDraft.draftQualityGate?.ready, true);
 
+  const brandDesignJob = scoreJob(job({
+    id: "proposal-kimi-brand-design",
+    title: "Established Shopify Store Seeking Ecommerce Partner - Branding & Logo Design",
+    description: [
+      "Need branding, logo design, website modernization, conversion optimization, and a sharper Shopify store experience.",
+      "The store is already doing meaningful revenue, but the brand identity and buying path need to feel more credible.",
+      "Please include relevant proof and the first thing you would improve.",
+    ].join(" "),
+    category: "Ecommerce Design",
+    skills: ["Shopify", "Brand Design", "Conversion Optimization"],
+  }));
+  const brandDesignDraft = buildApplicationDraft(brandDesignJob);
+  const brandDesignProposal = [
+    "Steve here - how is your day going?",
+    "",
+    "Your Shopify store already has traction, but the branding/logo brief says the first leak is trust and product-path clarity, not another generic ecommerce checklist. I would start with a 3-5 day brand/conversion diagnostic across the homepage, PDP path, logo/identity fit, and offer hierarchy.",
+    "",
+    "Done = the identity risks, buying-path friction, and first design direction are mapped clearly enough to approve before a full redesign expands.",
+    "",
+    "For proof, I would use one matched artifact: Design Case Studies - premium DTC email design and campaign/flow visual systems proof.",
+    "",
+    "I can keep the first pass async-friendly and decision-focused before bigger design execution. Would you prefer a quick call or an async brand/conversion outline?",
+  ].join("\n");
+  const brandProvider = new FakeProposalProvider({ proposalText: brandDesignProposal, rationale: "uses brand design lane" });
+  const brandRewrite = await rewriteProposalCoverLetterWithKimi({
+    job: brandDesignJob,
+    deterministicDraft: brandDesignDraft,
+    copyStrategy: brandDesignDraft.copyStrategy,
+    brandFactPack: brandDesignDraft.brandFactPack,
+    proofStrategy: brandDesignDraft.proofStrategy,
+    selectedPortfolioItems: brandDesignDraft.selectedPortfolioItems,
+  }, brandProvider);
+  assert.equal(brandRewrite.usedLlm, true, JSON.stringify(brandRewrite, null, 2));
+  assert.match(brandRewrite.proposalText, /Design Case Studies/);
+  assert.doesNotMatch(brandRewrite.proposalText, /Hangaritas|win[-\s]?back|replenishment|email revenue/i);
+  const brandPrompt = brandProvider.requests.flatMap((request) => request.messages.map((message) => message.content)).join("\n");
+  assert.match(brandPrompt, /Lane: ecommerce brand\/logo\/conversion design/i, "Brand design prompt should include lane-specific guidance.");
+  assert.match(brandPrompt, /Do not use Hangaritas/i, "Brand design prompt should explicitly block retention proof drift.");
+
+  const wrongDesignProof = await rewriteProposalCoverLetterWithKimi({
+    job: brandDesignJob,
+    deterministicDraft: brandDesignDraft,
+    copyStrategy: brandDesignDraft.copyStrategy,
+    brandFactPack: brandDesignDraft.brandFactPack,
+    proofStrategy: brandDesignDraft.proofStrategy,
+  }, new FakeProposalProvider({
+    proposalText: brandDesignProposal.replace(
+      "Design Case Studies - premium DTC email design and campaign/flow visual systems proof",
+      "Hangaritas screenshot - £21,681.29 attributed email revenue, up 173% vs previous period",
+    ),
+  }));
+  assert.equal(wrongDesignProof.usedLlm, false, "Brand design rewrite should reject Hangaritas/Klaviyo proof drift.");
+  assert.match(wrongDesignProof.reason ?? "", /wrong retention proof/i);
+
   const badProvider = new FakeProposalProvider({ proposalText: "Hi, I am excited to apply. I can help." });
   const fallback = await rewriteProposalCoverLetterWithKimi({
     job: scored,

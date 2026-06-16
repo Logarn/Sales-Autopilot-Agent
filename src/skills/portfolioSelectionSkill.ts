@@ -104,7 +104,7 @@ export const UPWORK_PORTFOLIO_ITEMS: UpworkPortfolioItem[] = [
     proofIds: ["design-case-studies"],
     aliases: ["design case studies", "steve's design case studies"],
     verticals: ["design", "email_design", "creative"],
-    keywords: ["figma", "email design", "design system", "template design", "creative direction", "visual design", "campaign design"],
+    keywords: ["figma", "email design", "design system", "template design", "creative direction", "visual design", "campaign design", "branding", "brand identity", "logo", "visual identity", "brand design"],
   },
   {
     id: "fly-boutique-upwork",
@@ -264,11 +264,11 @@ function isBroadLifecycleEmailScope(text: string): boolean {
 }
 
 function isDesignRelevant(text: string): boolean {
-  const strongDesignSignal = /\b(?:figma|email design|design system|campaign design|flow design|creative direction|visual design|mockup)\b/.test(text);
+  const strongDesignSignal = /\b(?:figma|email design|design system|campaign design|flow design|creative direction|visual design|mockup|branding|brand identity|logo design|logo|visual identity|brand design|rebrand)\b/.test(text);
   if (hasLifecycleEmailPlatformScope(text) && !strongDesignSignal) {
     return false;
   }
-  return strongDesignSignal || /\b(?:template design|email templates?|creative|visual|mockup)\b/.test(text);
+  return strongDesignSignal || /\b(?:template design|email templates?|creative|visual|mockup|brand refresh|brand system)\b/.test(text);
 }
 
 function pickFigmaLinks(text: string, figmaLinks: PortfolioLink[]): PortfolioLink[] {
@@ -289,11 +289,11 @@ const VERTICAL_TERMS: Record<string, string[]> = {
   apparel: ["apparel", "clothing", "fashion", "boutique"],
   beauty: ["beauty", "skincare", "skin care", "cosmetic", "makeup"],
   cosmetics: ["beauty", "skincare", "skin care", "cosmetic", "makeup"],
-  creative: ["creative", "visual", "campaign design", "template"],
+  creative: ["creative", "visual", "campaign design", "template", "branding", "logo", "brand identity"],
   deliverability: ["deliverability", "spam", "inbox", "rfm"],
-  design: ["figma", "email design", "template design", "creative direction", "visual design", "design system"],
+  design: ["figma", "email design", "template design", "creative direction", "visual design", "design system", "branding", "brand identity", "logo", "visual identity", "brand design"],
   ecommerce: ["dtc", "d2c", "ecommerce", "e-commerce", "shopify", "woocommerce", "bigcommerce", "retention", "lifecycle"],
-  email_design: ["figma", "email design", "email template", "campaign design", "flow design", "template design"],
+  email_design: ["figma", "email design", "email template", "campaign design", "flow design", "template design", "branding", "brand identity", "logo"],
   fashion: ["fashion", "apparel", "boutique", "clothing"],
   food: ["food", "beverage", "drink", "cpg"],
   furniture: ["furniture", "sofa", "mattress", "home goods"],
