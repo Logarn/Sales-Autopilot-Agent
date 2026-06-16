@@ -182,6 +182,15 @@ function sanitizeProposalText(text: string, job: JobPosting): string {
     .replace(/[ \t]{2,}/g, " ")
     .trim();
   const requiredPrefix = extractRequiredOpeningPrefix(job);
+  if (!requiredPrefix) {
+    const openerMatch = cleaned.match(/\bSteve here\s*-\s*how is your day going\?/i);
+    if (openerMatch?.index && openerMatch.index > 0) {
+      cleaned = cleaned.slice(openerMatch.index).trim();
+    }
+  }
+  cleaned = cleaned
+    .split(/\n\s*(?:Rationale|Why this works|Explanation|Notes)\s*:/i)[0]
+    .trim();
   if (requiredPrefix && !cleaned.toLowerCase().startsWith(requiredPrefix.toLowerCase())) {
     cleaned = `${requiredPrefix}\n\n${cleaned}`;
   }

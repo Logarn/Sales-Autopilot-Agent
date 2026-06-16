@@ -175,6 +175,24 @@ async function run(): Promise<void> {
   assert.equal(nestedAliasRewrite.usedLlm, true, "Proposal composer should accept nested Kimi cover-letter content.");
   assert.equal(nestedAliasRewrite.proposalText, brandDesignProposal);
 
+  const verboseKimiRewrite = await rewriteProposalCoverLetterWithKimi({
+    job: brandDesignJob,
+    deterministicDraft: brandDesignDraft,
+    copyStrategy: brandDesignDraft.copyStrategy,
+    brandFactPack: brandDesignDraft.brandFactPack,
+    proofStrategy: brandDesignDraft.proofStrategy,
+  }, new FakeProposalProvider({
+    proposalText: [
+      "The user wants me to write an Upwork cover letter. I need to follow the operating system and avoid generic copy.",
+      "",
+      brandDesignProposal,
+      "",
+      "Rationale: this uses the brand design lane.",
+    ].join("\n"),
+  }));
+  assert.equal(verboseKimiRewrite.usedLlm, true, "Proposal composer should strip Kimi preamble/rationale from a usable cover letter.");
+  assert.equal(verboseKimiRewrite.proposalText, brandDesignProposal);
+
   const wrongDesignProof = await rewriteProposalCoverLetterWithKimi({
     job: brandDesignJob,
     deterministicDraft: brandDesignDraft,
