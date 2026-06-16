@@ -1,4 +1,4 @@
-import { PROPOSAL_COPY_TEMPERATURE } from "./config";
+import { PROPOSAL_COPY_REQUEST_TIMEOUT_MS, PROPOSAL_COPY_TEMPERATURE } from "./config";
 import {
   OpenAiCompatibleProvider,
   getProposalCopyProviderConfig,
@@ -245,6 +245,7 @@ export async function rewriteProposalCoverLetterWithKimi(
   const response = await provider.completeJson<ProposalCoverLetterPayload>({
     temperature: PROPOSAL_COPY_TEMPERATURE,
     maxTokens: 1300,
+    timeoutMs: PROPOSAL_COPY_REQUEST_TIMEOUT_MS,
     messages: [
       {
         role: "system",

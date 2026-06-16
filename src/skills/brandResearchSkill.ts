@@ -54,6 +54,7 @@ function isUsefulBrandDomain(value: string): boolean {
   const domain = cleanCandidateDomain(value);
   if (!domain || !domain.includes(".")) return false;
   if (/upwork\.com$/i.test(domain)) return false;
+  if (/^(?:company\.more|client\.more|profile\.more|www\.company\.more)$/i.test(domain)) return false;
   if (/\b(?:fixed-price|intermediate|proposals|connects|tooltip|posted|worldwide|hour|hr)\b/i.test(domain)) return false;
   const parts = domain.split(".");
   const tld = parts[parts.length - 1] ?? "";
