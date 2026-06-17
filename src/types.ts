@@ -179,6 +179,20 @@ export interface FreelancerProfile {
   preferredJobTypes: string[];
   avoidJobTypes: string[];
   proofPoints: string[];
+  upwork?: {
+    profileUrl?: string;
+    videoIntroUrl?: string;
+    totalEarnings?: string | number;
+    totalJobs?: number;
+    connectsAvailable?: number;
+    availability?: string;
+    contractToHire?: boolean;
+    averageResponseTime?: string;
+    languages?: string[];
+    verified?: boolean;
+    militaryVeteran?: boolean;
+    associatedWith?: string;
+  };
   voice: VoiceRules;
 }
 

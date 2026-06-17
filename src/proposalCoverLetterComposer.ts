@@ -303,13 +303,16 @@ function validateRewrite(text: string, input: ProposalCoverLetterRewriteInput): 
   const words = wordCount(text);
   const brandDesignScope = isBrandDesignScope(input.job) || input.deterministicDraft.copyStrategy?.category === "brand_design";
   if (words < 120 || words > 240) return `proposal word count ${words} outside safe LLM band`;
+  if (/\bquick read\b/i.test(text)) return "formulaic quick-read opener";
   if (!hasHumanOpening(text, input.job)) return "missing Steve/soul human opener";
+  if (/\bThe useful first move is\b/i.test(text)) return "formulaic first-move phrasing";
   if (!hasMicroMilestone(text)) return "missing 3-5 day Done = milestone";
   if (!hasMetric(text) && !(brandDesignScope && hasDesignPortfolioProof(text))) return "missing proof metric";
   if (!hasChoiceCta(text)) return "missing choice-based CTA";
   if (proofBlockCount(text) !== 1) return "proof count is not exactly one";
   if (!/For proof, I would use one matched artifact:/i.test(text)) return "proof paragraph missing exact one-artifact phrase";
   if (!hasOutboundSalesArgument(text)) return "missing outbound sales argument";
+  if (/flows\/automations \+ campaigns\/newsletters/i.test(text)) return "raw slash-plus scope phrasing";
   if (/\bThe customer problem is\b/i.test(text)) return "formulaic customer-problem bridge";
   if (brandDesignScope && hasWrongRetentionProofForDesign(text)) return "wrong retention proof for brand/design scope";
   if (hasUnsafeClaim(text)) return "unsafe submit/security/guarantee claim";

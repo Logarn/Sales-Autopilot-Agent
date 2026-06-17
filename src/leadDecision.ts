@@ -1,6 +1,7 @@
 import { hasUnknownRequiredConnects } from "./connectsStrategy";
 import { evaluatePlatformEligibility, type PlatformEligibility } from "./platformEligibility";
-import type { JobIntelligence, ScoredJob } from "./types";
+import { loadFreelancerProfile } from "./profile";
+import type { FreelancerProfile, JobIntelligence, ScoredJob } from "./types";
 
 export type LeadDecisionType = "post_to_slack" | "skip" | "manual_review";
 
@@ -13,6 +14,70 @@ export interface LeadDecisionResult {
   shouldAutoPrepare: boolean;
   watchOuts: string[];
   internalSkipReason?: string;
+}
+
+interface FreelancerProfileRequirementAssessment {
+  decision: "pass" | "manual_review" | "skip";
+  reason?: string;
+  watchOut?: string;
+}
+
+function parseMoneyAmount(raw: string | null | undefined, suffix: string | null | undefined): number | null {
+  const numeric = Number.parseFloat(String(raw ?? "").replace(/,/g, ""));
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  const normalizedSuffix = String(suffix ?? "").trim().toLowerCase();
+  if (normalizedSuffix === "k") return numeric * 1000;
+  if (normalizedSuffix === "m") return numeric * 1000000;
+  return numeric;
+}
+
+function formatUsd(amount: number): string {
+  return `$${Math.round(amount).toLocaleString("en-US")}`;
+}
+
+function parseProfileUpworkEarnings(profile: FreelancerProfile): number {
+  const value = profile.upwork?.totalEarnings;
+  if (typeof value === "number" && Number.isFinite(value)) return Math.max(0, value);
+  const match = String(value ?? "").match(/([0-9][0-9,]*(?:\.\d+)?)\s*([km])?/i);
+  return parseMoneyAmount(match?.[1], match?.[2]) ?? 0;
+}
+
+function findMinimumUpworkEarningsRequirement(job: ScoredJob): number | null {
+  const source = `${job.title}\n${job.description}\n${(job.skills || []).join("\n")}`;
+  const patterns = [
+    /\b(?:must|need|needs|requires?|requirement|looking for|only)\b[^.\n]{0,140}?\b(?:earned|earnings?|made)\b[^.\n]{0,120}?\b(?:on|in)\s+upwork\b[^.\n]{0,40}?\$?\s*([0-9][0-9,]*(?:\.\d+)?)\s*([km])?/i,
+    /\b(?:earned|earnings?|made)\b[^.\n]{0,80}?(?:at least|minimum|over|above|more than)?[^0-9$]{0,20}?\$?\s*([0-9][0-9,]*(?:\.\d+)?)\s*([km])?\+?[^.\n]{0,120}?\b(?:on|in)\s+upwork\b/i,
+    /\bupwork\b[^.\n]{0,120}?\b(?:earned|earnings?|made)\b[^.\n]{0,80}?(?:at least|minimum|over|above|more than)?[^0-9$]{0,20}?\$?\s*([0-9][0-9,]*(?:\.\d+)?)\s*([km])?/i,
+    /\bminimum\b[^.\n]{0,30}?\$?\s*([0-9][0-9,]*(?:\.\d+)?)\s*([km])?[^.\n]{0,60}?\b(?:earned|earnings?)\b[^.\n]{0,60}?\bupwork\b/i,
+  ];
+  for (const pattern of patterns) {
+    const match = source.match(pattern);
+    const amount = parseMoneyAmount(match?.[1], match?.[2]);
+    if (amount !== null) return amount;
+  }
+  return null;
+}
+
+function assessFreelancerProfileRequirements(job: ScoredJob, profile: FreelancerProfile): FreelancerProfileRequirementAssessment {
+  const requiredUpworkEarnings = findMinimumUpworkEarningsRequirement(job);
+  if (!requiredUpworkEarnings) return { decision: "pass" };
+  const currentUpworkEarnings = parseProfileUpworkEarnings(profile);
+  if (currentUpworkEarnings >= requiredUpworkEarnings) return { decision: "pass" };
+
+  const closeEnoughFloor = Math.min(5000, requiredUpworkEarnings * 0.5);
+  const watchOut = `Job asks for ${formatUsd(requiredUpworkEarnings)}+ earned on Upwork; profile shows about ${formatUsd(currentUpworkEarnings)}.`;
+  if (currentUpworkEarnings < closeEnoughFloor) {
+    return {
+      decision: "skip",
+      reason: "Explicit Upwork earnings requirement is far above the current profile.",
+      watchOut,
+    };
+  }
+  return {
+    decision: "manual_review",
+    reason: "Job asks for higher Upwork earnings than the current profile; keep it human-reviewed only.",
+    watchOut,
+  };
 }
 
 function isDtcEcommerceVertical(value: string | undefined): boolean {
@@ -137,7 +202,12 @@ function hasMissingOnlyClientHistory(job: ScoredJob): boolean {
 
 export function decideLeadHandling(job: ScoredJob, intelligence?: JobIntelligence | null): LeadDecisionResult {
   const eligibility = evaluatePlatformEligibility(intelligence);
-  const watchOuts = watchOutsForLead(job, intelligence);
+  const profile = loadFreelancerProfile();
+  const profileRequirement = assessFreelancerProfileRequirements(job, profile);
+  const watchOuts = Array.from(new Set([
+    ...watchOutsForLead(job, intelligence),
+    ...(profileRequirement.watchOut ? [profileRequirement.watchOut] : []),
+  ]));
   const strongSignals = hasStrongDtcSignals(job, intelligence);
   const scopeClear = hasScopeClarity(job, intelligence);
   const clientQuality = job.scoreBreakdown?.clientQualityScore?.score ?? 50;
@@ -171,6 +241,31 @@ export function decideLeadHandling(job: ScoredJob, intelligence?: JobIntelligenc
       shouldAutoPrepare: false,
       watchOuts,
       internalSkipReason: "major_red_flags",
+    };
+  }
+
+  if (profileRequirement.decision === "skip") {
+    return {
+      decision: "skip",
+      reason: profileRequirement.reason ?? "Explicit freelancer-profile requirement is too far above the current profile.",
+      scoreUsed: job.score,
+      platformEligibility: eligibility.platformEligibility,
+      shouldPostToSlack: false,
+      shouldAutoPrepare: false,
+      watchOuts,
+      internalSkipReason: "freelancer_profile_requirement",
+    };
+  }
+
+  if (profileRequirement.decision === "manual_review") {
+    return {
+      decision: "manual_review",
+      reason: profileRequirement.reason ?? "Explicit freelancer-profile requirement needs human review.",
+      scoreUsed: job.score,
+      platformEligibility: eligibility.platformEligibility,
+      shouldPostToSlack: true,
+      shouldAutoPrepare: false,
+      watchOuts,
     };
   }
 

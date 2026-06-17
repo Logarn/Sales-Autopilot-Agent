@@ -124,4 +124,17 @@ assert(reviewClient.watchOuts.includes("No client feedback history"));
 const ineligible = decideLeadHandling(mkJob({ score: 90 }), intel({ primaryPlatform: "Customer.io", platformsMentioned: ["Customer.io"] }));
 assert.equal(ineligible.shouldAutoPrepare, false);
 
+const hardProfileGate = decideLeadHandling(mkJob({
+  description: "Need Klaviyo help. To apply, you must have earned over $10,000 on Upwork already.",
+}), intel({ primaryPlatform: "Klaviyo", platformsMentioned: ["Klaviyo"] }));
+assert.equal(hardProfileGate.decision, "skip");
+assert.equal(hardProfileGate.internalSkipReason, "freelancer_profile_requirement");
+assert(hardProfileGate.watchOuts.some((item) => item.includes("earned on Upwork")));
+
+const nearProfileGate = decideLeadHandling(mkJob({
+  description: "Need lifecycle email support. Please only apply if you have earned at least $600 on Upwork.",
+}), intel({ primaryPlatform: "Klaviyo", platformsMentioned: ["Klaviyo"] }));
+assert.equal(nearProfileGate.decision, "manual_review");
+assert.equal(nearProfileGate.shouldAutoPrepare, false);
+
 console.log("lead decision tests passed");

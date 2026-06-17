@@ -604,6 +604,48 @@ function requestedToolSentence(strategy: CopyStrategy): string | null {
   return null;
 }
 
+function humanizeScopeFragment(value: string): string {
+  return value
+    .replace(/\s*\+\s*/g, " and ")
+    .replace(/([A-Za-z])\/([A-Za-z])/g, "$1 and $2")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function joinHumanList(values: string[]): string {
+  const cleaned = values.map(humanizeScopeFragment).filter(Boolean);
+  if (cleaned.length <= 1) return cleaned[0] ?? "";
+  if (cleaned.length === 2) return `${cleaned[0]} and ${cleaned[1]}`;
+  return `${cleaned.slice(0, -1).join(", ")}, and ${cleaned[cleaned.length - 1]}`;
+}
+
+function deliverableFocus(strategy: CopyStrategy): string {
+  const deliverables = strategy.requested_deliverables.map(humanizeScopeFragment).filter(Boolean);
+  if (deliverables.length > 0) return joinHumanList(deliverables.slice(0, 2));
+  return laneLabel(strategy.retention_lane);
+}
+
+function jobSpecificTerms(job?: JobPosting): string[] {
+  if (!job) return [];
+  const source = `${job.title}\n${job.description}`;
+  const candidates: Array<{ pattern: RegExp; label: string }> = [
+    { pattern: /\bKlaviyo\b/i, label: "Klaviyo" },
+    { pattern: /\bShopify\b/i, label: "Shopify" },
+    { pattern: /\bMailchimp\b/i, label: "Mailchimp" },
+    { pattern: /\bOmnisend\b/i, label: "Omnisend" },
+    { pattern: /\bonboarding emails?\b/i, label: "onboarding emails" },
+    { pattern: /\bretention messaging\b/i, label: "retention messaging" },
+    { pattern: /\bsegmentation\b/i, label: "segmentation" },
+    { pattern: /\bsubscription\b/i, label: "subscription" },
+    { pattern: /\bbranding\b/i, label: "branding" },
+    { pattern: /\blogo design\b/i, label: "logo design" },
+    { pattern: /\bconversion optimization\b/i, label: "conversion optimization" },
+    { pattern: /\bcampaigns?\b/i, label: "campaigns" },
+    { pattern: /\bflows?\b/i, label: "flows" },
+  ];
+  return candidates.filter((candidate) => candidate.pattern.test(source)).map((candidate) => candidate.label).slice(0, 3);
+}
+
 function openerSpecifics(strategy: CopyStrategy): [string, string] {
   const tools = requestedTools(strategy);
   const toolSpecific = tools.length >= 2 ? `${tools.slice(0, 3).join(" + ")} execution` : tools[0] ? `${tools[0]} execution` : strategy.category;
@@ -632,46 +674,49 @@ function isSetupConfigurationScope(strategy: CopyStrategy): boolean {
   return /\b(?:account setup|setup|configuration|configure|implementation|sender reputation|warmup|contact import|transactional api|list quality)\b/.test(combined);
 }
 
-function conciseHook(strategy: CopyStrategy): string {
+function conciseHook(strategy: CopyStrategy, job?: JobPosting): string {
   const tools = requestedTools(strategy);
   const opener = "Steve here - how is your day going?";
-  const [specificOne, specificTwo] = openerSpecifics(strategy);
   const context = brandContext(strategy);
   const contextPrefix = context !== "the account" ? `${context}: ` : "";
+  const toolList = joinHumanList(tools.slice(0, 3));
+  const deliverableFocusText = deliverableFocus(strategy);
+  const jobTerms = joinHumanList(jobSpecificTerms(job));
+  const specificityBundle = jobTerms ? `${jobTerms}, plus ${deliverableFocusText}` : deliverableFocusText;
   if (isSetupConfigurationScope(strategy)) {
-    return `${opener} Quick read: customer-data risk is the money leak before volume ever ramps; ${context} needs Brevo account setup and ${specificTwo}. Sender reputation, contact import/cleanup, segmentation, automations, and transactional API separation all need to be clean before the channel can safely make money.`;
+    return `${opener} ${contextPrefix}Brevo setup only helps if sender reputation, contact quality, segmentation, automations, and transactional separation are clean from day one. If that foundation is loose, more volume just amplifies the mess instead of helping ${deliverableFocusText}.`;
   }
   if (strategy.category === "gardening" && tools.length > 0) {
-    return `${opener} ${contextPrefix}quick read: seasonal replenishment and ${specificOne} are only useful if they meet the customer at the right planting/care moment. The first move can lift revenue by reducing care anxiety and making the next purchase feel obvious before building more emails.`;
+    return `${opener} ${contextPrefix}seasonal replenishment only works when the message meets the customer at the right planting and care moment. If that timing is off, more email just creates noise instead of making the next purchase feel obvious.`;
   }
   if (strategy.category === "brand_design") {
-    return `${opener} ${contextPrefix}quick read: the store already has commercial traction, but the branding/logo work has to carry more trust before shoppers buy. The first move can lift conversion by fixing identity, offer hierarchy, product path, and first-impression credibility.`;
+    return `${opener} ${contextPrefix}there is already demand here; the bigger gap looks like trust and first-click clarity. If the identity, offer hierarchy, and product path feel loose, traffic has to work harder than it should before shoppers buy.`;
   }
   if (strategy.category === "email_design") {
-    const platformDetail = requestedTools(strategy).length ? ` across ${requestedTools(strategy).slice(0, 2).join(" + ")}` : "";
-    return `${opener} ${contextPrefix}quick read: offer hierarchy/mobile CTA clarity and ${specificTwo}${platformDetail} are where the reader either clicks or drifts. The first move can lift conversion by making the offer, product path, and CTA make sense in seconds, not from a prettier-template pass.`;
+    const platformDetail = toolList ? ` in ${toolList}` : "";
+    return `${opener} ${contextPrefix}for this kind of email work, the click depends on whether the offer, product path, and CTA are obvious on mobile in a few seconds. A prettier template without that logic usually just hides the same conversion leak${platformDetail}.`;
   }
   if (tools.length >= 3) {
-    return `${opener} Quick read: customer engagement and conversion are leaking across ${tools.slice(0, 3).join(", ")} and ${specificTwo}. The first move can recover revenue by tying flows, campaigns, subscriber logic, and reporting to the buyer moments where someone is actually ready to act.`;
+    return `${opener} ${contextPrefix}the customer-timing problem comes first here: ${specificityBundle} only pays off if it is tied to real buying moments; otherwise ${toolList} just spreads the same noise across more sends.`;
   }
-  return `${opener} ${contextPrefix}quick read: the customer/revenue leak comes first; ${specificTwo} and ${specificOne} only matter if they recover revenue or conversion. This looks like a ${laneLabel(strategy.retention_lane)} problem first, because ${strategy.client_commercial_pain}.`;
+  return `${opener} ${contextPrefix}the customer-timing problem comes first here: ${specificityBundle} only helps if it lines up with a real buying moment, and ${toolList || humanizeScopeFragment(strategy.requested_tools[0] ?? laneLabel(strategy.retention_lane))} only matters once that timing is right. ${humanizeScopeFragment(strategy.client_commercial_pain)}`;
 }
 
 function oneStepSolution(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
   if (isSetupConfigurationScope(strategy)) {
-    return "The useful first move is mapping the setup risks: sender reputation warmup, contact import/cleanup, list and segment architecture, automation logic, newsletter targeting, and the transactional API boundary.";
+    return "I would start by mapping sender reputation warmup, contact import and cleanup, segment structure, automation logic, newsletter targeting, and the transactional API boundary.";
   }
   if (strategy.category === "brand_design") {
-    return "The useful first move is looking at the homepage/PDP path, logo and identity fit, offer clarity, category navigation, and the trust cues that should support a cleaner buying decision.";
+    return "I would start by looking at the homepage-to-PDP path, logo and identity fit, offer clarity, category navigation, and the trust cues shaping the first buying decision.";
   }
   if (strategy.category === "email_design") {
-    return "The useful first move is checking offer hierarchy, mobile readability, product path, and CTA visibility on the priority templates.";
+    return "I would start by checking offer hierarchy, mobile readability, product path, and CTA visibility on the priority templates.";
   }
   if (tools.length >= 3) {
-    return "The useful first move is active flows, subscriber/list logic, campaign cadence, and reporting, then ranking the first fixes by likely lift.";
+    return "I would start by reviewing the live flows, subscriber logic, campaign cadence, and reporting, then rank the first fixes by likely lift.";
   }
-  return `The useful first move is a tight diagnostic pass around ${strategy.repeat_purchase_or_conversion_moment}, then turning the clearest leak into the first practical fix.`;
+  return `I would start with a tight diagnostic pass around ${strategy.repeat_purchase_or_conversion_moment}, then turn the clearest leak into the first practical fix.`;
 }
 
 function microMilestoneLine(strategy: CopyStrategy): string {
@@ -753,7 +798,7 @@ export function draftCoverLetterFromCopyStrategy(input: {
   const instructionPrefix = input.job ? requiredOpeningInstructionPrefix(input.job) : "";
   return [
     instructionPrefix,
-    conciseHook(strategy),
+    conciseHook(strategy, input.job),
     "",
     `${oneStepSolution(strategy)} ${microMilestoneLine(strategy)}`,
     "",

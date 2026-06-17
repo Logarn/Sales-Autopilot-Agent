@@ -1527,7 +1527,8 @@ async function runTests(): Promise<void> {
     assert(prepCompletionText.includes("remote Chrome"), "Prep completion alert should say the draft is in remote Chrome");
     assert(prepCompletionText.includes("VNC"), "Prep completion alert should direct QA to remote Chrome/VNC");
     assert(!prepCompletionText.includes("Safari"), "Prep completion alert should not push URL copy/paste into local Safari");
-    assert(!prepCompletionText.includes("*Apply URL:*"), "Prep completion alert should not require URL copy/paste into VNC");
+    assert(prepCompletionText.includes("*Apply link:*"), "Prep completion alert should include the apply link for long-thread QA jumps");
+    assert(prepCompletionText.includes(`${beautyJob.url}/apply`), "Prep completion alert should include the exact apply URL");
     assert(prepCompletionText.includes("• *Cover letter:* filled"), "Prep completion alert should only claim filled cover letter when verified");
     assert(prepCompletionText.includes("• *Screening answers:* filled"), "Prep completion alert should summarize verified screening answers compactly");
     assert(prepCompletionText.includes("• *Proof files:* attached: Truly Beauty case study"), "Prep completion alert should include verified proof files checklist item.");
@@ -1665,6 +1666,7 @@ async function runTests(): Promise<void> {
     assert(kimiQaHandoffText.startsWith("Kimi QA:"), "QA handoff should use Kimi copy when the provider is available and safe.");
     assert(kimiQaRequests.some((request) => request.messages?.[1]?.content?.includes("\"path\":\"qa_handoff\"")), "Kimi QA handoff request should use the qa_handoff path.");
     assert(kimiQaRequests.some((request) => JSON.stringify(request).includes("Operating constitution from soul.md")), "Kimi QA handoff request should include soul.md context.");
+    assert(kimiQaHandoffText.includes("*Apply link:*"), "Kimi QA handoff must preserve the apply link.");
     assert(kimiQaHandoffText.includes("*Proof files:*"), "Kimi QA handoff must preserve proof file status wording.");
     assert(kimiQaHandoffText.includes("*Portfolio highlights:*"), "Kimi QA handoff must preserve portfolio status wording.");
     assert(kimiQaHandoffText.includes("• *Final submit:* untouched — nothing submitted"), "Kimi QA handoff must preserve final-submit untouched.");

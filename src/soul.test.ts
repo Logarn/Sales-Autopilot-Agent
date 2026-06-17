@@ -38,6 +38,9 @@ const draft = buildApplicationDraft(job);
 assert(draft.proposalText.includes("Steve here"), "Proposal draft generation should use the required soul opener.");
 assert(draft.proposalText.toLowerCase().includes("how is your day going?"), "Proposal draft generation should keep the human opener.");
 assert(!/commercially pointed|Two customer-lifecycle details stood out/i.test(draft.proposalText), "Proposal draft must not use the old sterile template voice.");
+assert(!/\bquick read\b/i.test(draft.proposalText), "Proposal draft should avoid canned quick-read phrasing.");
+assert(!/\bThe useful first move is\b/i.test(draft.proposalText), "Proposal draft should avoid canned first-move phrasing.");
+assert(!/flows\/automations \+ campaigns\/newsletters/i.test(draft.proposalText), "Proposal draft should avoid raw slash-plus scope bundles.");
 assert(draft.structuredProposal?.browserFillNotes.profileNotes.some((note) => note.includes("soul.md loaded for proposal_draft_generation")), "Proposal browser fill notes should carry soul draft guidance.");
 assert(draft.proposalText.includes("I would"), "Proposal draft should keep first-person sales voice.");
 

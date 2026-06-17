@@ -1162,6 +1162,14 @@ function buildPrepareDraftStatusMessage(input: {
   const boostSummary = diagnostics.boostConnects && diagnostics.boostConnects > 0
     ? `${diagnostics.boostConnects} selected, under your 50 cap`
     : "not set yet";
+  const jobToken = [diagnostics.applyUrl, diagnostics.jobId, diagnostics.sourceUrl]
+    .map((value) => String(value ?? "").match(/(?:manual:upwork-|\/job\/~|\/jobs\/~|~)(\d{12,})/)?.[1] ?? null)
+    .find(Boolean);
+  const jobLabel = diagnostics.jobTitle?.trim() || (jobToken ? "Upwork job" : null);
+  const jobReferenceLines = [
+    jobLabel ? `• *Job:* ${jobToken ? `${jobLabel} (\`...${jobToken.slice(-3)}\`)` : jobLabel}` : null,
+    diagnostics.applyUrl ? `• *Apply link:* ${diagnostics.applyUrl}` : null,
+  ].filter((line): line is string => Boolean(line));
 
   if (readyForFinalManualSubmit) {
     return [
@@ -1169,6 +1177,7 @@ function buildPrepareDraftStatusMessage(input: {
       "",
       "I prepared this in remote Chrome and stopped before submit.",
       "Nothing submitted: I did not click the final Upwork submit button.",
+      ...(jobReferenceLines.length > 0 ? ["", ...jobReferenceLines] : []),
       "",
       [
         `• *Cover letter:* ${coverLetterSummary}`,
@@ -1192,6 +1201,7 @@ function buildPrepareDraftStatusMessage(input: {
       "",
       "I can see the proposal page, but the Connects section isn’t readable right now. I left submit untouched and skipped boost for now.",
       "Nothing submitted: I did not click the final Upwork submit button.",
+      ...(jobReferenceLines.length > 0 ? ["", ...jobReferenceLines] : []),
       "",
       "Current readback:",
       [
@@ -1223,6 +1233,7 @@ function buildPrepareDraftStatusMessage(input: {
       ? blockerReason
       : `I reached the Upwork application and stopped before submit. ${blockerReason}`,
     "Nothing submitted: I did not click the final Upwork submit button.",
+    ...(jobReferenceLines.length > 0 ? ["", ...jobReferenceLines] : []),
     "",
     "Current readback:",
     [
@@ -1271,6 +1282,8 @@ export async function postPrepareDraftStatus(
     "• *Final submit:* untouched — nothing submitted",
     "• *Proof files:*",
     "• *Portfolio highlights:*",
+    "• *Apply link:*",
+    ...(input.diagnostics.applyUrl ? [input.diagnostics.applyUrl] : []),
     ...(deterministicText.includes("Proof planned") ? ["Proof planned"] : []),
     ...(deterministicText.includes("Proof verified") ? ["Proof verified"] : []),
   ];
