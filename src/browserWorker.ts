@@ -1740,6 +1740,7 @@ async function tryFillFirst(page: PlaywrightPageLike, selectors: string[], value
         await locator.scrollIntoViewIfNeeded?.({ timeout: 1500 }).catch(() => undefined);
         await locator.fill("", { timeout: 1500 });
         await locator.fill(value, { timeout: 1500 });
+        await page.waitForTimeout?.(250).catch(() => undefined);
         if (await firstFieldValueMatches(page, selector, value)) return true;
         if (await forceSetFirstFieldValue(page, selector, value) && await firstFieldValueMatches(page, selector, value)) {
           return true;
@@ -1780,7 +1781,7 @@ async function firstFieldValueMatches(page: PlaywrightPageLike, selector: string
 
 async function forceSetFirstFieldValue(page: PlaywrightPageLike, selector: string, value: string): Promise<boolean> {
   if (!page.evaluate) return false;
-  return page.evaluate((input) => {
+  const changed = await page.evaluate((input) => {
     if (!input) return false;
     const { selector: cssSelector, value: nextValue } = input;
     const elements = Array.from(document.querySelectorAll(cssSelector)) as Array<HTMLInputElement | HTMLTextAreaElement>;
@@ -1795,15 +1796,23 @@ async function forceSetFirstFieldValue(page: PlaywrightPageLike, selector: strin
     if (!element) return false;
     const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+    const previousValue = element.value;
     if (setter) {
       setter.call(element, nextValue);
     } else {
       element.value = nextValue;
     }
+    const tracker = (element as HTMLInputElement & { _valueTracker?: { setValue(value: string): void } })._valueTracker;
+    tracker?.setValue?.(previousValue);
+    element.focus();
     element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: nextValue }));
+    element.dispatchEvent(new Event("input", { bubbles: true }));
     element.dispatchEvent(new Event("change", { bubbles: true }));
+    element.blur();
     return true;
   }, { selector, value }).catch(() => false);
+  if (changed) await page.waitForTimeout?.(350).catch(() => undefined);
+  return changed;
 }
 
 function hourlyRateInputValue(value: string): string | null {
@@ -1861,7 +1870,7 @@ async function tryFillScreeningAnswers(page: PlaywrightPageLike, answers: string
   let filled = 0;
   for (let index = 0; index < cleanAnswers.length && index + 1 < count; index += 1) {
     try {
-      await textareas.nth(index + 1).fill(cleanAnswers[index], { timeout: 1500 });
+      await textareas.nth(index + 1).fill(cleanAnswers[index], { timeout: 3500 });
       filled += 1;
     } catch {
       // Leave the remaining answer for manual review rather than risking a wrong field.
@@ -1869,7 +1878,78 @@ async function tryFillScreeningAnswers(page: PlaywrightPageLike, answers: string
     }
   }
 
+  if (filled < cleanAnswers.length && page.evaluate) {
+    const fallback = await page.evaluate((inputAnswers = []) => {
+      const answers = Array.isArray(inputAnswers)
+        ? inputAnswers.map((answer) => String(answer ?? "").trim()).filter(Boolean)
+        : [];
+      if (answers.length === 0) return 0;
+      const isVisible = (element: Element): boolean => {
+        const htmlElement = element as HTMLElement;
+        const rect = htmlElement.getBoundingClientRect();
+        const style = window.getComputedStyle(htmlElement);
+        return rect.width > 0 &&
+          rect.height > 0 &&
+          style.display !== "none" &&
+          style.visibility !== "hidden";
+      };
+      const textareas = Array.from(document.querySelectorAll<HTMLTextAreaElement>("textarea"))
+        .filter(isVisible);
+      if (textareas.length <= 1) return 0;
+      const screeningFields = textareas.slice(1, answers.length + 1);
+      let changed = 0;
+      for (let index = 0; index < screeningFields.length; index += 1) {
+        const field = screeningFields[index];
+        const answer = answers[index];
+        if (!field || !answer) continue;
+        if (field.value.trim() === answer) {
+          changed += 1;
+          continue;
+        }
+        field.focus();
+        field.value = answer;
+        field.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: answer }));
+        field.dispatchEvent(new Event("change", { bubbles: true }));
+        changed += 1;
+      }
+      return changed;
+    }, cleanAnswers).catch(() => 0);
+    filled = Math.max(filled, fallback);
+  }
+
   return { filled, skipped: cleanAnswers.length - filled };
+}
+
+async function closeOpenProfileHighlightDialog(page: PlaywrightPageLike): Promise<boolean> {
+  if (!page.evaluate) return false;
+  const closed = await page.evaluate(() => {
+    const normalize = (value: string): string => value.replace(/\s+/g, " ").trim().toLowerCase();
+    const dialogs = Array.from(document.querySelectorAll("[role='dialog']")).filter((dialog) => {
+      const htmlDialog = dialog as HTMLElement;
+      const rect = htmlDialog.getBoundingClientRect();
+      const style = window.getComputedStyle(htmlDialog);
+      return rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden";
+    });
+    const dialog = dialogs.find((candidate) =>
+      /\b(?:profile highlights|select up to four highlights|add profile highlights)\b/i.test(candidate.textContent ?? "")
+    );
+    if (!dialog) return false;
+    const buttons = Array.from(dialog.querySelectorAll("button")) as HTMLButtonElement[];
+    const button = buttons.find((candidate) => /close/i.test(normalize(candidate.getAttribute("aria-label") ?? ""))) ??
+      buttons.find((candidate) => /^cancel$/i.test(normalize(candidate.textContent ?? ""))) ??
+      buttons.find((candidate) => /close/i.test(normalize(candidate.textContent ?? "")));
+    if (!button) return false;
+    button.click();
+    button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+    button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    return true;
+  }).catch(() => false);
+  if (closed) await page.waitForTimeout?.(750).catch(() => undefined);
+  return closed;
 }
 
 async function pageLooksFixedPriceLive(page: PlaywrightPageLike): Promise<boolean> {
@@ -3417,6 +3497,8 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
   const skippedFields: string[] = [];
   const manualFields: string[] = [];
 
+  await closeOpenProfileHighlightDialog(page);
+
   const proposalSettings = await trySelectProposalSettings(page, plan);
   attemptedFields.push(...proposalSettings.attempted);
   manualFields.push(...proposalSettings.manual);
@@ -3438,10 +3520,6 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
     if (screening.skipped > 0) {
       manualFields.push("screeningAnswers");
     }
-  }
-
-  if (await tryConfirmHighlightsDialog(page, plan.highlights)) {
-    attemptedFields.push("highlights");
   }
 
   const fixedPricePage = await pageLooksFixedPriceLive(page);
@@ -3495,6 +3573,7 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
   } else if (plan.highlights.length > 0) {
     manualFields.push("highlights");
   }
+  await closeOpenProfileHighlightDialog(page);
 
   manualFields.push("finalSubmit");
   logger.info(`Submit guard after fill: stopBeforeSubmit=${plan.stopBeforeSubmit}; final submit remains manual.`);
