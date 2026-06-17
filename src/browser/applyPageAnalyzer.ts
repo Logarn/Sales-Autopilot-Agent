@@ -164,6 +164,16 @@ function containsExpectedHighlight(values: string[], expected: string): boolean 
   return highlightAliases(expected).some((alias) => containsExpected(values, alias));
 }
 
+function selectedHighlightControlCount(snapshot: ApplyPageSnapshot): number {
+  return snapshot.actionLabels.filter((label) => normalizeText(label) === "selected").length;
+}
+
+function profileHighlightPickerLooksOpen(snapshot: ApplyPageSnapshot): boolean {
+  return /\b(?:add profile highlights|select highlight|add to highlights|highlights\s*\(\s*\d\s*[/]\s*4\s*\)|portfolio\s*\(\d+\))\b/i.test(
+    [snapshot.visibleText, ...snapshot.actionLabels].join("\n")
+  );
+}
+
 function bestValue(values: string[]): string | null {
   return [...values].filter((value) => value.trim()).sort((a, b) => b.length - a.length)[0] ?? null;
 }
@@ -362,13 +372,17 @@ function analyzeAttachments(snapshot: ApplyPageSnapshot, plan?: BrowserApplyFill
 function analyzePortfolioHighlights(snapshot: ApplyPageSnapshot, plan?: BrowserApplyFillPlan | null): ApplyPageFieldState {
   const expected = plan?.highlights ?? [];
   const selectedEvidence = [...snapshot.checkedLabels, ...snapshot.selectedHighlightLabels];
-  const visible = selectedEvidence.length > 0 || /\b(?:portfolio project|profile highlight|certificates?|work samples?|add portfolio)\b/i.test(snapshot.visibleText);
+  const selectedControls = selectedHighlightControlCount(snapshot);
+  const pickerOpen = profileHighlightPickerLooksOpen(snapshot);
+  const visible = selectedEvidence.length > 0 || selectedControls > 0 || /\b(?:portfolio project|profile highlight|certificates?|work samples?|add portfolio)\b/i.test(snapshot.visibleText);
   if (expected.length === 0) {
     return { state: visible ? "not_required" : "not_required", visible, filled: false, detail: visible ? "Portfolio/profile section is visible; no highlights were planned." : "No portfolio/profile highlight section or planned highlights detected." };
   }
   const verified = expected.filter((highlight) => containsExpectedHighlight(selectedEvidence, highlight));
-  if (verified.length === expected.length) {
-    return { state: "visible_filled", visible: true, filled: true, valuePreview: verified.join(", "), detail: `Verified selected portfolio/profile proof: ${verified.join(", ")}.` };
+  const expectedSelections = Math.min(expected.length, 4);
+  if (verified.length === expected.length || (!pickerOpen && selectedControls >= expectedSelections)) {
+    const valuePreview = verified.length === expected.length ? verified.join(", ") : `${selectedControls} selected Upwork profile highlight controls`;
+    return { state: "visible_filled", visible: true, filled: true, valuePreview, detail: `Verified selected portfolio/profile proof: ${valuePreview}.` };
   }
   return {
     state: visible ? "visible_requires_input" : "not_visible",

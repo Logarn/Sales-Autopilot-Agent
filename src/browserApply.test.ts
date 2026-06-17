@@ -170,6 +170,7 @@ async function runTests(): Promise<void> {
     fileNames?: string[];
     attachmentRows?: string[];
     selectedHighlightLabels?: string[];
+    actionLabels?: string[];
   }) {
     const makeElement = (field: {
       value: string;
@@ -248,6 +249,17 @@ async function runTests(): Promise<void> {
             files: [],
             textContent: "",
             getAttribute: (attributeName: string) => attributeName === "aria-label" ? `Delete attachment ${name}` : null,
+            closest: () => null,
+          })),
+          ...(input.actionLabels ?? []).map((label) => ({
+            value: "",
+            checked: false,
+            type: "button",
+            tagName: "BUTTON",
+            name: null,
+            files: [],
+            textContent: label,
+            getAttribute: () => null,
             closest: () => null,
           })),
         ];
@@ -1342,6 +1354,46 @@ async function runTests(): Promise<void> {
       bodyText: "Required for proposal: 8 Connects\nSend for 8 Connects",
     });
     assert(truncatedLifelyVerification.find((item) => item.field === "profileHighlights")?.status === "verified", "Upwork-truncated selected Lifely portfolio title should verify in browser diagnostics.");
+
+    const selectedButtonsOnlyVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({
+        visibleText: "Required for proposal: 8 Connects\nProfile highlights\nBoost your proposal\nSend for 8 Connects",
+        inputValues: [verificationPlan.coverLetter, "$50"],
+        actionLabels: ["Selected", "Selected", "Selected", "Selected", "Send for 8 Connects"],
+      }),
+      plan: {
+        ...verificationPlan,
+        screeningAnswers: [],
+        attachments: [],
+        highlights: ["The Fly Boutique", "Steve's Design Case Studies", "From $250k to $1.2 Million In 12 Months / Truly Beauty", "How Lifely Transformed Their Retention Marketing"],
+      },
+      fields: { attemptedFields: ["coverLetter", "rate", "highlights"], skippedFields: [], manualFields: ["finalSubmit"] },
+      bodyText: "Required for proposal: 8 Connects\nSend for 8 Connects",
+    });
+    assert(
+      selectedButtonsOnlyVerification.find((item) => item.field === "profileHighlights")?.status === "verified",
+      "Four Upwork Selected controls should verify four planned profile highlights even when names are hidden.",
+    );
+
+    const uncommittedSelectedButtonsVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({
+        visibleText: "Required for proposal: 8 Connects\nProfile highlights\nAdd profile highlights\nHighlights (4/4)\nBoost your proposal\nSend for 8 Connects",
+        inputValues: [verificationPlan.coverLetter, "$50"],
+        actionLabels: ["Selected", "Selected", "Selected", "Selected", "Select highlight", "Add to highlights", "Send for 8 Connects"],
+      }),
+      plan: {
+        ...verificationPlan,
+        screeningAnswers: [],
+        attachments: [],
+        highlights: ["The Fly Boutique", "Steve's Design Case Studies", "From $250k to $1.2 Million In 12 Months / Truly Beauty", "How Lifely Transformed Their Retention Marketing"],
+      },
+      fields: { attemptedFields: ["coverLetter", "rate", "highlights"], skippedFields: [], manualFields: ["finalSubmit"] },
+      bodyText: "Required for proposal: 8 Connects\nSend for 8 Connects",
+    });
+    assert(
+      uncommittedSelectedButtonsVerification.find((item) => item.field === "profileHighlights")?.status !== "verified",
+      "Selected controls inside an open picker must not verify until Add to highlights commits them.",
+    );
 
     const duplicateAttachmentVerification = await verifyApplyPreparationOnPage({
       page: fakeApplyPage({

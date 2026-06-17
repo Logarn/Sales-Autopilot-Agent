@@ -299,6 +299,26 @@ const truncatedLifelySelected = analyzeApplyPageSnapshot(snapshot({
 }), plan({ highlights: ["How Lifely Transformed Their Retention Marketing"] }));
 assert.equal(truncatedLifelySelected.portfolioHighlights.state, "visible_filled", "Upwork-truncated selected Lifely portfolio title should verify from selected-highlight evidence.");
 
+const selectedButtonsOnlyHighlights = analyzeApplyPageSnapshot(snapshot({
+  visibleText: "Required for proposal: 8 Connects\nProfile highlights\nBoost your proposal\nSend for 8 Connects",
+  fieldValues: [
+    { kind: "textarea", inputType: null, label: "Cover letter", id: null, name: null, ariaLabel: null, placeholder: null, dataTest: null, value: filledPlan.coverLetter },
+    { kind: "input", inputType: "text", label: "Hourly rate", id: null, name: null, ariaLabel: "Hourly rate", placeholder: null, dataTest: null, value: "80" },
+  ],
+  actionLabels: ["Selected", "Selected", "Selected", "Selected", "Send for 8 Connects"],
+}), plan({ highlights: ["The Fly Boutique", "Steve's Design Case Studies", "From $250k to $1.2 Million In 12 Months / Truly Beauty", "How Lifely Transformed Their Retention Marketing"] }));
+assert.equal(selectedButtonsOnlyHighlights.portfolioHighlights.state, "visible_filled", "Four Upwork Selected controls should verify four planned profile highlights even when names are hidden.");
+
+const uncommittedSelectedButtons = analyzeApplyPageSnapshot(snapshot({
+  visibleText: "Required for proposal: 8 Connects\nProfile highlights\nAdd profile highlights\nHighlights (4/4)\nBoost your proposal\nSend for 8 Connects",
+  fieldValues: [
+    { kind: "textarea", inputType: null, label: "Cover letter", id: null, name: null, ariaLabel: null, placeholder: null, dataTest: null, value: filledPlan.coverLetter },
+    { kind: "input", inputType: "text", label: "Hourly rate", id: null, name: null, ariaLabel: "Hourly rate", placeholder: null, dataTest: null, value: "80" },
+  ],
+  actionLabels: ["Selected", "Selected", "Selected", "Selected", "Select highlight", "Add to highlights", "Send for 8 Connects"],
+}), plan({ highlights: ["The Fly Boutique", "Steve's Design Case Studies", "From $250k to $1.2 Million In 12 Months / Truly Beauty", "How Lifely Transformed Their Retention Marketing"] }));
+assert.equal(uncommittedSelectedButtons.portfolioHighlights.state, "visible_requires_input", "Selected controls inside an open picker must not verify until Add to highlights commits them.");
+
 const unsetBoostWithAmbientConnects = analyzeApplyPageSnapshot(snapshot({
   visibleText: "Required for proposal: 9 Connects\nBoost your proposal\n#4 bid 25 Connects\nSend for 9 Connects",
   fieldValues: [

@@ -1779,6 +1779,15 @@ async function firstFieldValueMatches(page: PlaywrightPageLike, selector: string
   }, { selector, expected: expectedPrefix }).catch(() => false);
 }
 
+async function firstVisibleTextareaHasSubstantialText(page: PlaywrightPageLike): Promise<boolean> {
+  if (!page.evaluate) return false;
+  return page.evaluate(() => {
+    const firstTextarea = Array.from(document.querySelectorAll<HTMLTextAreaElement>("textarea"))
+      .find((element) => !element.disabled && !element.readOnly && element.value.replace(/\s+/g, " ").trim().length >= 200);
+    return Boolean(firstTextarea?.value && firstTextarea.value.replace(/\s+/g, " ").trim().length >= 200);
+  }).catch(() => false);
+}
+
 async function forceSetFirstFieldValue(page: PlaywrightPageLike, selector: string, value: string): Promise<boolean> {
   if (!page.evaluate) return false;
   const changed = await page.evaluate((input) => {
@@ -1802,6 +1811,7 @@ async function forceSetFirstFieldValue(page: PlaywrightPageLike, selector: strin
     } else {
       element.value = nextValue;
     }
+    (element as HTMLInputElement & HTMLTextAreaElement & { _value?: string })._value = nextValue;
     const tracker = (element as HTMLInputElement & { _valueTracker?: { setValue(value: string): void } })._valueTracker;
     tracker?.setValue?.(previousValue);
     element.focus();
@@ -1914,6 +1924,7 @@ async function tryFillScreeningAnswers(page: PlaywrightPageLike, answers: string
         } else {
           field.value = answer;
         }
+        (field as HTMLTextAreaElement & { _value?: string })._value = answer;
         const tracker = (field as HTMLTextAreaElement & { _valueTracker?: { setValue(value: string): void } })._valueTracker;
         tracker?.setValue?.(previousValue);
         field.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: answer }));
@@ -2348,7 +2359,18 @@ async function pageHasCommittedHighlights(page: PlaywrightPageLike, highlights: 
   if (!page.evaluate || highlights.length === 0) return false;
   return page.evaluate((aliasesByHighlight = []) => {
     const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
-    const text = document.body?.innerText ?? "";
+    const visibleDialogs = Array.from(document.querySelectorAll("[role='dialog']")).filter((candidate) => {
+      const dialog = candidate as HTMLElement;
+      const rect = dialog.getBoundingClientRect();
+      const style = window.getComputedStyle(dialog);
+      return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    });
+    if (visibleDialogs.some((dialog) => /\b(?:select highlight|add to highlights|add profile highlights|highlights\s*\(\s*\d\s*[/]\s*4\s*\)|portfolio\s*\(\d+\))\b/i.test(dialog.textContent ?? ""))) {
+      return false;
+    }
+    const bodyClone = document.body?.cloneNode(true) as HTMLElement | null;
+    bodyClone?.querySelectorAll("[role='dialog']").forEach((dialog) => dialog.remove());
+    const text = bodyClone?.textContent ?? document.body?.innerText ?? "";
     const startMatch = text.match(/profile\s+highlights(?:\s+new)?/i);
     const afterStart = startMatch && startMatch.index !== undefined ? text.slice(startMatch.index + startMatch[0].length) : "";
     const endMatch = afterStart.match(/boost\s+your\s+proposal/i);
@@ -2572,6 +2594,8 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHigh
     const button = Array.from(dialog.querySelectorAll("button"))
       .find((candidate) => /^(?:add to highlights|add\s+\d+\s*[/]\s*4)$/i.test((candidate.textContent ?? "").replace(/\s+/g, " ").trim()) && !(candidate as HTMLButtonElement).disabled && isVisibleButton(candidate as HTMLButtonElement)) as HTMLButtonElement | undefined;
     button?.scrollIntoView({ block: "center", inline: "nearest" });
+    button?.focus();
+    button?.click();
     button?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
     button?.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
     button?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
@@ -2579,7 +2603,9 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHigh
   }).catch(() => false);
   const hasCommittedHighlights = () => evaluate((aliasesByHighlight = []) => {
     const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
-    const text = document.body?.innerText ?? "";
+    const bodyClone = document.body?.cloneNode(true) as HTMLElement | null;
+    bodyClone?.querySelectorAll("[role='dialog']").forEach((dialog) => dialog.remove());
+    const text = bodyClone?.textContent ?? document.body?.innerText ?? "";
     const startMatch = text.match(/profile\s+highlights(?:\s+new)?/i);
     const afterStart = startMatch && startMatch.index !== undefined ? text.slice(startMatch.index + startMatch[0].length) : "";
     const endMatch = afterStart.match(/boost\s+your\s+proposal/i);
@@ -3031,6 +3057,16 @@ function textDiffers(left: string | null | undefined, right: string | null | und
 
 function textCollectionContainsHighlight(values: string[], expected: string): boolean {
   return highlightAliases(expected).some((alias) => textCollectionContains(values, alias));
+}
+
+function selectedHighlightControlCount(snapshot: ApplyVerificationSnapshot): number {
+  return snapshot.actionLabels.filter((label) => normalizeVerificationValue(label) === "selected").length;
+}
+
+function profileHighlightPickerLooksOpen(snapshot: ApplyVerificationSnapshot): boolean {
+  return /\b(?:add profile highlights|select highlight|add to highlights|highlights\s*\(\s*\d\s*[/]\s*4\s*\)|portfolio\s*\(\d+\))\b/i.test(
+    [snapshot.visibleText, ...snapshot.actionLabels].join("\n")
+  );
 }
 
 function proposalVersionSourceFromPayload(value: unknown): ProposalVersionSource {
@@ -3489,8 +3525,14 @@ export async function verifyApplyPreparationOnPage(input: {
   } else {
     const highlightEvidence = [...snapshot.checkedLabels, ...snapshot.selectedHighlightLabels];
     const verifiedHighlights = plan.highlights.filter((highlight) => textCollectionContainsHighlight(highlightEvidence, highlight));
-    if (verifiedHighlights.length === plan.highlights.length) {
-      results.push(verification("profileHighlights", "verified", `Verified selected portfolio/profile proof: ${verifiedHighlights.join(", ")}.`, { actual: verifiedHighlights.join(", ") }));
+    const selectedControls = selectedHighlightControlCount(snapshot);
+    const pickerOpen = profileHighlightPickerLooksOpen(snapshot);
+    const expectedSelections = Math.min(plan.highlights.length, 4);
+    if (verifiedHighlights.length === plan.highlights.length || (!pickerOpen && selectedControls >= expectedSelections)) {
+      const actual = verifiedHighlights.length === plan.highlights.length
+        ? verifiedHighlights.join(", ")
+        : `${selectedControls} selected Upwork profile highlight controls`;
+      results.push(verification("profileHighlights", "verified", `Verified selected portfolio/profile proof: ${actual}.`, { actual }));
     } else if (/add a portfolio project|add portfolio project|add a certificate|add certificate/i.test(snapshot.visibleText)) {
       results.push(verification("profileHighlights", "attempted_unverified", `Portfolio/certificate selector entry is visible, but selected proof is not verified yet. Expected: ${plan.highlights.join(", ")}`, { expected: plan.highlights.join(", "), actual: highlightEvidence.join(" | ") }));
     } else if (fields.manualFields.includes("highlights")) {
@@ -3555,9 +3597,12 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
   manualFields.push(...proposalSettings.manual);
 
   const coverLetterFilled = await tryFillFirst(page, ["textarea[name*='cover']", "textarea[aria-label*='Cover']", "textarea"], plan.coverLetter);
-  const coverLetterReady = coverLetterFilled || await firstFieldValueMatches(page, "textarea", plan.coverLetter);
-  if (coverLetterReady) {
+  const coverLetterMatches = coverLetterFilled || await firstFieldValueMatches(page, "textarea", plan.coverLetter);
+  const coverLetterReady = coverLetterMatches || await firstVisibleTextareaHasSubstantialText(page);
+  if (coverLetterMatches) {
     attemptedFields.push("coverLetter");
+  } else if (coverLetterReady) {
+    manualFields.push("coverLetter");
   } else {
     skippedFields.push("coverLetter");
   }
@@ -3626,6 +3671,22 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
     manualFields.push("highlights");
   }
   await closeOpenProfileHighlightDialog(page);
+
+  if (plan.screeningAnswers.length > 0 && coverLetterReady) {
+    const screening = await tryFillScreeningAnswers(page, plan.screeningAnswers);
+    if (screening.filled > 0) {
+      const existingIndex = attemptedFields.findIndex((field) => field.startsWith("screeningAnswers:"));
+      if (existingIndex >= 0) {
+        attemptedFields[existingIndex] = `screeningAnswers:${Math.max(screening.filled, Number.parseInt(attemptedFields[existingIndex].split(":")[1] ?? "0", 10) || 0)}`;
+      } else {
+        attemptedFields.push(`screeningAnswers:${screening.filled}`);
+      }
+    }
+    if (screening.skipped === 0) {
+      const manualIndex = manualFields.indexOf("screeningAnswers");
+      if (manualIndex >= 0) manualFields.splice(manualIndex, 1);
+    }
+  }
 
   manualFields.push("finalSubmit");
   logger.info(`Submit guard after fill: stopBeforeSubmit=${plan.stopBeforeSubmit}; final submit remains manual.`);
@@ -4167,9 +4228,10 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
   updateBrowserActionStatus(action.id, "in_progress");
   incrementBrowserActionAttempts(action.id);
 
+  const storedApplyPlan = action.actionType === "prepare_application_review" ? action.payload.applyPlan ?? null : null;
   if (action.actionType === "prepare_application_review") {
     const scoredJob = getScoredJobForSlackPreview(action.jobId);
-    if (scoredJob?.description?.trim()) {
+    if (!storedApplyPlan && scoredJob?.description?.trim()) {
       const previousStatus = getApplicationStatus(action.jobId);
       const previousDraft = getApplicationDraft(action.jobId);
       const regeneratedDraft = await buildApplicationDraftWithResearch(scoredJob);
@@ -4200,10 +4262,18 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
     }
   }
 
-  const applyPlanResult = action.actionType === "prepare_application_review" ? buildBrowserApplyPlan(action.jobId) : null;
+  const applyPlanResult = action.actionType === "prepare_application_review"
+    ? storedApplyPlan
+      ? {
+          plan: storedApplyPlan,
+          valid: !(storedApplyPlan.validationIssues ?? []).some((validationIssue) => validationIssue.severity === "error"),
+          issues: storedApplyPlan.validationIssues ?? [],
+        }
+      : buildBrowserApplyPlan(action.jobId)
+    : null;
   const stalePayloadErrors =
-    action.actionType === "prepare_application_review"
-      ? ((action.payload.applyPlan as BrowserApplyFillPlan | undefined)?.validationIssues ?? []).filter(
+    storedApplyPlan
+      ? (storedApplyPlan.validationIssues ?? []).filter(
           (validationIssue) => validationIssue.severity === "error"
         )
       : [];
