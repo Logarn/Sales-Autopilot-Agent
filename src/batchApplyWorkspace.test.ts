@@ -139,7 +139,7 @@ async function runTests(): Promise<void> {
     const batchActions = listBrowserActions(null, 1000).filter((action) => action.actionType === "prepare_application_review");
     assert(batchActions.length === 10, "Batch start should queue exactly 10 prepare actions.");
     for (const action of batchActions) {
-      updateBrowserActionStatus(action.id, "completed", "Prepared for QA.");
+      updateBrowserActionStatus(action.id, "paused", "Draft prepared for human QA in remote Chrome. Reopen it from the saved apply link before review; final submit was not clicked.");
       updateApplicationStatus(action.jobId, "prepared_for_qa", "Test protected QA hold.");
       mergeBrowserActionPayload(action.id, {
         qaHold: {

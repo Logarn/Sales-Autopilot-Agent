@@ -1394,7 +1394,7 @@ function buildSlackConversationBrainInput(input: {
     text: input.text,
     limit: 8,
   });
-  const proofVerified = Boolean(latestAction?.status === "completed" && applicationStatus === "prepared_for_qa");
+  const proofVerified = Boolean((latestAction?.status === "completed" || latestAction?.status === "paused") && applicationStatus === "prepared_for_qa");
   const activeCta = deriveSlackActiveCta(state);
   return {
     latestUserMessage: input.text,

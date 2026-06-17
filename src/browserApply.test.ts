@@ -1453,18 +1453,19 @@ async function runTests(): Promise<void> {
     });
     assert(tabMismatchVerification.find((item) => item.field === "targetTab")?.status === "attempted_unverified", "Tab mismatch must not produce false apply-prep success.");
 
+    const beautyApplyUrl = "https://www.upwork.com/ab/proposals/job/~022055111111111111111/apply/";
     let prepCompletionText = "";
     const prepCompletionPost = await postPrepareDraftStatus(
       {
         thread: { channelId: "C123", messageTs: "999.222", threadTs: "999.222" },
-        heading: "✅ Upwork application page prepared for final manual submit for browser action #707.",
+        heading: "✅ Upwork draft saved for QA for browser action #707.",
         diagnostics: {
           actionId: 707,
           jobId: beautyJob.id,
           jobTitle: beautyJob.title,
           actionType: "prepare_application_review",
           sourceUrl: beautyJob.url,
-          applyUrl: `${beautyJob.url}/apply`,
+          applyUrl: beautyApplyUrl,
           intendedAction: "Open Upwork apply page, prepare fields for human review, and stop before submit.",
           state: "apply_page_loaded",
           stopBeforeSubmit: true,
@@ -1523,12 +1524,13 @@ async function runTests(): Promise<void> {
       },
     );
     assert(prepCompletionPost === "posted", "Prepared browser application should post final-review Slack thread reply");
-    assert(prepCompletionText.includes("✅ *Ready for QA*"), "Prep completion alert should use concise ready-for-QA wording");
+    assert(prepCompletionText.includes("✅ *Saved for QA*"), "Prep completion alert should use saved-for-QA wording instead of pretending the tab stack is already staged.");
     assert(prepCompletionText.includes("remote Chrome"), "Prep completion alert should say the draft is in remote Chrome");
     assert(prepCompletionText.includes("VNC"), "Prep completion alert should direct QA to remote Chrome/VNC");
     assert(!prepCompletionText.includes("Safari"), "Prep completion alert should not push URL copy/paste into local Safari");
     assert(prepCompletionText.includes("*Apply link:*"), "Prep completion alert should include the apply link for long-thread QA jumps");
-    assert(prepCompletionText.includes(`${beautyJob.url}/apply`), "Prep completion alert should include the exact apply URL");
+    assert(prepCompletionText.includes(beautyApplyUrl), "Prep completion alert should include the exact apply URL");
+    assert(prepCompletionText.includes("saved the apply link below for QA"), "Prep completion alert should describe a saved QA handoff instead of claiming a live visible tab stack.");
     assert(prepCompletionText.includes("• *Cover letter:* filled"), "Prep completion alert should only claim filled cover letter when verified");
     assert(prepCompletionText.includes("• *Screening answers:* filled"), "Prep completion alert should summarize verified screening answers compactly");
     assert(prepCompletionText.includes("• *Proof files:* attached: Truly Beauty case study"), "Prep completion alert should include verified proof files checklist item.");
@@ -1542,6 +1544,7 @@ async function runTests(): Promise<void> {
     assert(prepCompletionText.includes("You can correct proof here in Slack"), "Prep completion alert should explain natural proof corrections");
     assert(prepCompletionText.includes("Nothing submitted: I did not click the final Upwork submit button."), "Prep completion alert should explicitly say nothing was submitted.");
     assert(prepCompletionText.includes("• *Final submit:* untouched — nothing submitted"), "Prep completion alert should include final-submit checklist item.");
+    assert(prepCompletionText.includes("open the Apply link in remote Chrome/VNC"), "Prep completion alert should tell the reviewer how to reopen the proposal safely.");
     assert(prepCompletionText.includes("manually click *Send for 4 Connects*"), "Prep completion alert should preserve final submit safety");
     assert(!prepCompletionText.includes("Fields filled:"), "Prep completion alert should not include internal field inventory");
     assert(!prepCompletionText.includes("Auto-attach assets:"), "Prep completion alert should not include exhaustive proof inventory");
@@ -1555,7 +1558,7 @@ async function runTests(): Promise<void> {
       jobTitle: beautyJob.title,
       actionType: "prepare_application_review",
       sourceUrl: beautyJob.url,
-      applyUrl: `${beautyJob.url}/apply`,
+      applyUrl: beautyApplyUrl,
       intendedAction: "Open Upwork apply page, prepare fields for human review, and stop before submit.",
       state: "field_preparation_incomplete",
       stopBeforeSubmit: true,

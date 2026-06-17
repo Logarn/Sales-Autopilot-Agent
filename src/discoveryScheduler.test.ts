@@ -28,7 +28,7 @@ function action(id: number, status: BrowserAction["status"], actionType: Browser
 
 function protectedPrepareAction(id: number): BrowserAction {
   return {
-    ...action(id, "completed", "prepare_application_review"),
+    ...action(id, "paused", "prepare_application_review"),
     jobId: "manual:upwork-022055333333333333333",
     payload: {
       url: "https://www.upwork.com/jobs/~022055333333333333333",

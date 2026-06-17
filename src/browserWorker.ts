@@ -1117,7 +1117,8 @@ function buildPrepareDraftStatusMessage(input: {
     diagnostics.manualFields.some((field) => field !== "finalSubmit") ||
     diagnostics.connectsDecision !== "safe_apply" ||
     hasUnverifiedRequiredApplyFields(fieldVerification);
-  const readyForFinalManualSubmit = diagnostics.state === "apply_page_loaded" && diagnostics.stopBeforeSubmit && !needsManualReview;
+  const savedApplyLink = hasSavedQaApplyUrl(diagnostics.applyUrl) ? diagnostics.applyUrl : null;
+  const readyForSavedQa = diagnostics.state === "apply_page_loaded" && diagnostics.stopBeforeSubmit && !needsManualReview && Boolean(savedApplyLink);
   const coverLetterSummary = coverLetterVerification?.status === "verified"
     ? "filled"
     : coverLetterVerification?.status === "attempted_unverified"
@@ -1162,20 +1163,20 @@ function buildPrepareDraftStatusMessage(input: {
   const boostSummary = diagnostics.boostConnects && diagnostics.boostConnects > 0
     ? `${diagnostics.boostConnects} selected, under your 50 cap`
     : "not set yet";
-  const jobToken = [diagnostics.applyUrl, diagnostics.jobId, diagnostics.sourceUrl]
+  const jobToken = [savedApplyLink, diagnostics.jobId, diagnostics.sourceUrl]
     .map((value) => String(value ?? "").match(/(?:manual:upwork-|\/job\/~|\/jobs\/~|~)(\d{12,})/)?.[1] ?? null)
     .find(Boolean);
   const jobLabel = diagnostics.jobTitle?.trim() || (jobToken ? "Upwork job" : null);
   const jobReferenceLines = [
     jobLabel ? `• *Job:* ${jobToken ? `${jobLabel} (\`...${jobToken.slice(-3)}\`)` : jobLabel}` : null,
-    diagnostics.applyUrl ? `• *Apply link:* ${diagnostics.applyUrl}` : null,
+    savedApplyLink ? `• *Apply link:* ${savedApplyLink}` : null,
   ].filter((line): line is string => Boolean(line));
 
-  if (readyForFinalManualSubmit) {
+  if (readyForSavedQa) {
     return [
-      "✅ *Ready for QA*",
+      "✅ *Saved for QA*",
       "",
-      "I prepared this in remote Chrome and stopped before submit.",
+      "I prepared this in remote Chrome, saved the apply link below for QA, and stopped before submit.",
       "Nothing submitted: I did not click the final Upwork submit button.",
       ...(jobReferenceLines.length > 0 ? ["", ...jobReferenceLines] : []),
       "",
@@ -1191,7 +1192,7 @@ function buildPrepareDraftStatusMessage(input: {
       "",
       correctionLine,
       "",
-      `*Next:* review in VNC. Reply with changes, or manually click *${submitLabel}* if it looks good.`,
+      `*Next:* open the Apply link in remote Chrome/VNC, review, reply with changes, or manually click *${submitLabel}* if it looks good.`,
     ].join("\n");
   }
 
@@ -1199,7 +1200,7 @@ function buildPrepareDraftStatusMessage(input: {
     return [
       "⚠️ *I couldn’t verify the Connects cost yet.*",
       "",
-      "I can see the proposal page, but the Connects section isn’t readable right now. I left submit untouched and skipped boost for now.",
+      "I reached the proposal page, but the Connects section isn’t readable right now. I left submit untouched and skipped boost for now.",
       "Nothing submitted: I did not click the final Upwork submit button.",
       ...(jobReferenceLines.length > 0 ? ["", ...jobReferenceLines] : []),
       "",
@@ -1348,7 +1349,7 @@ function promiseNotificationForPrepareDraftStatus(input: {
   diagnostics: ApplyPreparationDiagnostics;
   text: string;
 }): SlackPromiseNotificationPlan {
-  const isReady = input.diagnostics.state === "apply_page_loaded";
+  const isReady = input.diagnostics.state === "apply_page_loaded" && hasSavedQaApplyUrl(input.diagnostics.applyUrl);
   const blocker = isReady ? null : stateStatusMessage(input.diagnostics.state as DetectedBrowserState);
   return {
     notificationType: isReady ? "qa_ready" : "qa_blocked",
@@ -3989,6 +3990,11 @@ function terminalStatusForState(state: DetectedBrowserState): "completed" | "pau
   return "completed";
 }
 
+function prepareTerminalStatusForState(state: DetectedBrowserState): "completed" | "paused" {
+  if (state === "apply_page_loaded") return "paused";
+  return terminalStatusForState(state);
+}
+
 function stateStatusMessage(state: DetectedBrowserState): string {
   if (state === "browser_profile_in_use") {
     return "Chrome profile is already open. Use CDP mode or close Chrome before retrying.";
@@ -4008,7 +4014,14 @@ function stateStatusMessage(state: DetectedBrowserState): string {
   if (state === "connects_not_verified") {
     return "Connects not verified on the apply page. The application page stays open for QA; boost was skipped and final submit was not clicked.";
   }
+  if (state === "apply_page_loaded") {
+    return "Draft prepared for human QA in remote Chrome. Reopen it from the saved apply link before review; final submit was not clicked.";
+  }
   return `Detected state: ${state}; stop-before-submit enforced.`;
+}
+
+function hasSavedQaApplyUrl(value: string | null | undefined): value is string {
+  return typeof value === "string" && /https?:\/\/(?:www\.)?upwork\.com\/ab\/proposals\/job\/~[^/]+\/apply\/?$/i.test(value.trim());
 }
 
 function quarantineBackoffUntil(repeatCount: number, now = new Date()): string | null {
@@ -4471,6 +4484,8 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
 
     if (action.actionType === "prepare_application_review") {
       const diagnostics = buildApplyDiagnostics(action, plan, applyPlanResult?.issues ?? [], state, fields);
+      const holdApplyUrl = [snapshot?.url, diagnostics.applyUrl, url].find((value): value is string => hasSavedQaApplyUrl(value));
+      const readyForSavedQa = state === "apply_page_loaded" && Boolean(holdApplyUrl);
       saveApplyDiagnostics(options, action, diagnostics);
       if (plan) {
         recordBrowserApplyPlanLearning(plan, state === "apply_page_loaded" ? "browser_apply_prepared" : "browser_apply_attempt");
@@ -4513,7 +4528,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           source: "browser_apply_prep",
         });
       }
-      updateBrowserActionStatus(action.id, terminalStatusForState(state), stateStatusMessage(state));
+      updateBrowserActionStatus(action.id, prepareTerminalStatusForState(state), stateStatusMessage(state));
       if (["login_required", "two_factor_required", "captcha_or_security_challenge"].includes(state)) {
         await quarantineBrowserChallenge({
           action,
@@ -4526,24 +4541,25 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         markBrowserChallengeResolved(action.id);
       }
       if (state === "apply_page_loaded" || state === "connects_not_verified" || state === "field_preparation_incomplete") {
-        const qaStatus = state === "apply_page_loaded" ? "prepared_for_qa" : "needs_review";
-        const holdApplyUrl = snapshot?.url ?? diagnostics.applyUrl ?? url;
+        const qaStatus = readyForSavedQa ? "prepared_for_qa" : "needs_review";
         updateApplicationStatus(
           action.jobId,
           qaStatus,
-          state === "apply_page_loaded"
-            ? "Browser draft prepared in remote Chrome for final human QA. Final submit was not clicked."
+          readyForSavedQa
+            ? "Browser draft prepared in remote Chrome and saved with a direct apply link for human QA. Final submit was not clicked."
             : "Browser draft preparation needs human review in remote Chrome. Final submit was not clicked."
         );
         mergeBrowserActionPayload(action.id, {
           qaHold: {
             protected: true,
             jobId: action.jobId,
-            applyUrl: holdApplyUrl,
+            applyUrl: holdApplyUrl ?? undefined,
             status: qaStatus,
             state,
-            reason: state === "apply_page_loaded"
+            reason: readyForSavedQa
               ? "awaiting_human_qa"
+              : state === "apply_page_loaded"
+                ? "saved_apply_link_missing"
               : state === "connects_not_verified"
                 ? "connects_not_verified"
                 : "needs_review",
@@ -4553,16 +4569,16 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           },
         });
       }
-      if (state === "apply_page_loaded") {
+      if (readyForSavedQa) {
         if (thread) {
           updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "prepared_draft", { jobId: action.jobId });
         }
       }
       const postStatus = await postPrepareDraftStatus({
         thread,
-        heading: state === "apply_page_loaded" ? `✅ Upwork application page prepared for final manual submit for browser action #${action.id}.` : `⚠️ Draft preparation paused for browser action #${action.id}.`,
+        heading: readyForSavedQa ? `✅ Upwork draft saved for QA for browser action #${action.id}.` : `⚠️ Draft preparation paused for browser action #${action.id}.`,
         diagnostics,
-        nextCommand: state === "apply_page_loaded" ? "status" : `retry ${action.id}`,
+        nextCommand: readyForSavedQa ? "status" : `retry ${action.id}`,
       });
       countPrepareDraftStatusPost(result, postStatus);
       logger.info(`Browser action #${action.id} detected state: ${state}`);

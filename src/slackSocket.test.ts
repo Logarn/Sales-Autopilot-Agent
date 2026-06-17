@@ -1691,7 +1691,7 @@ async function runTests(): Promise<void> {
     assert(getBrowserActionById(prepareResult.actionId!)?.status === "pending", "Retry with the action id previously exposed by the bot should still work in-thread.");
     assert(directRetryReplies.some((reply) => reply.includes("Retry queued")), "Direct retry should still answer conversationally.");
 
-    updateBrowserActionStatus(prepareResult.actionId!, "completed", "Prepared for QA.");
+    updateBrowserActionStatus(prepareResult.actionId!, "paused", "Draft prepared for human QA in remote Chrome. Reopen it from the saved apply link before review; final submit was not clicked.");
     updateApplicationStatus(prepareJob.id, "prepared_for_qa", "Test protected QA hold.");
     mergeBrowserActionPayload(prepareResult.actionId!, {
       qaHold: {
@@ -1786,7 +1786,7 @@ async function runTests(): Promise<void> {
       });
       const qaPrep = queuePrepareDraftFromSlackThread({ channelId: "CQA", threadTs: `700.${i}` });
       assert(qaPrep.ok && typeof qaPrep.actionId === "number", `QA protected setup ${i} should queue before cap.`);
-      updateBrowserActionStatus(qaPrep.actionId!, "completed", "Prepared for QA.");
+      updateBrowserActionStatus(qaPrep.actionId!, "paused", "Draft prepared for human QA in remote Chrome. Reopen it from the saved apply link before review; final submit was not clicked.");
       updateApplicationStatus(qaJob.id, "prepared_for_qa", "Test protected QA hold.");
       mergeBrowserActionPayload(qaPrep.actionId!, {
         qaHold: {
