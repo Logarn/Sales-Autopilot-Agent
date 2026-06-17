@@ -259,7 +259,7 @@ interface PlaywrightLocatorLike {
   nth?(index: number): PlaywrightLocatorLike;
   textContent(options?: { timeout?: number }): Promise<string | null>;
   scrollIntoViewIfNeeded?(options?: { timeout?: number }): Promise<unknown>;
-  click?(options?: { timeout?: number }): Promise<unknown>;
+  click?(options?: { timeout?: number; force?: boolean }): Promise<unknown>;
   fill(value: string, options?: { timeout?: number }): Promise<unknown>;
   setInputFiles(files: string[], options?: { timeout?: number }): Promise<unknown>;
   check(options?: { timeout?: number }): Promise<unknown>;
@@ -1878,7 +1878,7 @@ async function tryFillScreeningAnswers(page: PlaywrightPageLike, answers: string
     }
   }
 
-  if (filled < cleanAnswers.length && page.evaluate) {
+  if (page.evaluate) {
     const fallback = await page.evaluate((inputAnswers = []) => {
       const answers = Array.isArray(inputAnswers)
         ? inputAnswers.map((answer) => String(answer ?? "").trim()).filter(Boolean)
@@ -1906,10 +1906,20 @@ async function tryFillScreeningAnswers(page: PlaywrightPageLike, answers: string
           changed += 1;
           continue;
         }
+        const previousValue = field.value;
+        const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
         field.focus();
-        field.value = answer;
+        if (setter) {
+          setter.call(field, answer);
+        } else {
+          field.value = answer;
+        }
+        const tracker = (field as HTMLTextAreaElement & { _valueTracker?: { setValue(value: string): void } })._valueTracker;
+        tracker?.setValue?.(previousValue);
         field.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: answer }));
+        field.dispatchEvent(new Event("input", { bubbles: true }));
         field.dispatchEvent(new Event("change", { bubbles: true }));
+        field.blur();
         changed += 1;
       }
       return changed;
@@ -2225,6 +2235,9 @@ async function trySelectHighlightsFromOpenDialog(page: PlaywrightPageLike, highl
     if (domSelected > 0) {
       await page.waitForTimeout?.(750).catch(() => undefined);
     }
+    if (await readSelectedHighlightCountInOpenDialog(page) < requiredHighlightCount) {
+      await trustedClickVisibleHighlightButtons(page, requiredHighlightCount);
+    }
   }
   let selected = 0;
   for (const highlight of highlights) {
@@ -2234,7 +2247,31 @@ async function trySelectHighlightsFromOpenDialog(page: PlaywrightPageLike, highl
     }
     if (await tryTrustedSelectHighlightFromOpenDialog(page, highlight) && await openDialogHasSelectedHighlight(page, highlight)) selected += 1;
   }
-  return selected;
+  return Math.max(selected, await readSelectedHighlightCountInOpenDialog(page));
+}
+
+async function trustedClickVisibleHighlightButtons(page: PlaywrightPageLike, requiredHighlightCount: number): Promise<number> {
+  if (requiredHighlightCount <= 0) return 0;
+  const buttons = page.locator("[role='dialog'] button:has-text('Select highlight')");
+  const buttonCount = await buttons.count().catch(() => 0);
+  let clicked = 0;
+  for (let index = 0; index < Math.min(buttonCount, requiredHighlightCount); index += 1) {
+    const before = await readSelectedHighlightCountInOpenDialog(page);
+    const button = buttons.nth?.(0);
+    if (!button) continue;
+    try {
+      await button.scrollIntoViewIfNeeded?.({ timeout: 1500 }).catch(() => undefined);
+      if (typeof button.click === "function") {
+        await button.click({ timeout: 3000, force: true });
+      }
+    } catch {
+      // Keep trying the next visible select button.
+    }
+    await page.waitForTimeout?.(650).catch(() => undefined);
+    if (await readSelectedHighlightCountInOpenDialog(page) > before) clicked += 1;
+    if (await readSelectedHighlightCountInOpenDialog(page) >= requiredHighlightCount) break;
+  }
+  return clicked;
 }
 
 async function clickMatchingHighlightsInOpenDialogWithDom(page: PlaywrightPageLike, highlights: string[]): Promise<number> {
@@ -2276,6 +2313,13 @@ async function clickMatchingHighlightsInOpenDialogWithDom(page: PlaywrightPageLi
       .filter((button): button is HTMLButtonElement => /^selected$/i.test(normalize(button.textContent ?? "")) && isVisible(button));
     const selectButtons = () => Array.from(dialog.querySelectorAll("button"))
       .filter((button): button is HTMLButtonElement => /^select highlight$/i.test(normalize(button.textContent ?? "")) && !(button as HTMLButtonElement).disabled && isVisible(button));
+    const trustedClick = (button: HTMLButtonElement): void => {
+      button.scrollIntoView({ block: "center", inline: "nearest" });
+      button.click();
+      button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+      button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    };
     let matched = 0;
     for (const aliases of normalizedAliasGroups) {
       if (selectedButtons().some((button) => rowMatchesAliases(button, aliases))) {
@@ -2284,11 +2328,17 @@ async function clickMatchingHighlightsInOpenDialogWithDom(page: PlaywrightPageLi
       }
       const button = selectButtons().find((candidate) => rowMatchesAliases(candidate, aliases));
       if (!button) continue;
-      button.scrollIntoView({ block: "center", inline: "nearest" });
-      button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-      button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-      button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+      trustedClick(button);
       matched += 1;
+    }
+    const requiredHighlightCount = Math.min(4, normalizedAliasGroups.length);
+    const remaining = requiredHighlightCount - matched;
+    const visibleSelectButtons = selectButtons();
+    if (remaining > 0 && visibleSelectButtons.length <= requiredHighlightCount) {
+      for (const button of visibleSelectButtons.slice(0, remaining)) {
+        trustedClick(button);
+        matched += 1;
+      }
     }
     return matched;
   }, highlights.map(highlightAliases)).catch(() => 0);
@@ -2388,6 +2438,7 @@ async function clickHighlightInOpenDialogWithDom(page: PlaywrightPageLike, highl
       });
     if (!matchingButton) return false;
     matchingButton.scrollIntoView({ block: "center", inline: "nearest" });
+    matchingButton.click();
     matchingButton.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
     matchingButton.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
     matchingButton.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
@@ -3504,14 +3555,15 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
   manualFields.push(...proposalSettings.manual);
 
   const coverLetterFilled = await tryFillFirst(page, ["textarea[name*='cover']", "textarea[aria-label*='Cover']", "textarea"], plan.coverLetter);
-  if (coverLetterFilled) {
+  const coverLetterReady = coverLetterFilled || await firstFieldValueMatches(page, "textarea", plan.coverLetter);
+  if (coverLetterReady) {
     attemptedFields.push("coverLetter");
   } else {
     skippedFields.push("coverLetter");
   }
 
   if (plan.screeningAnswers.length > 0) {
-    const screening = coverLetterFilled
+    const screening = coverLetterReady
       ? await tryFillScreeningAnswers(page, plan.screeningAnswers)
       : { filled: 0, skipped: plan.screeningAnswers.length };
     if (screening.filled > 0) {
