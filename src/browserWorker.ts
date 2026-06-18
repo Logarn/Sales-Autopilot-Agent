@@ -945,6 +945,40 @@ export function shouldUseDirectFallbackForCaptureAction(action: BrowserAction): 
   return action.actionType === "capture_job_from_url" && !isDiscoveryBestMatchesCaptureAction(action);
 }
 
+function sourceContextCaptureLacksClientSignals(capture: {
+  extracted: UpworkStructuredExtractionResult;
+  snapshot: PageSnapshot;
+}): boolean {
+  const previewJob = normalizedPacketToJobPosting(buildDeterministicOpportunityPacket(capture.extracted.rawText, {
+    url: capture.snapshot.url,
+    source: "deterministic",
+    capturedAt: new Date(),
+  }));
+  const hasClientCountry = previewJob.clientCountry.trim() && !/not specified/i.test(previewJob.clientCountry);
+  return previewJob.clientRating <= 0 &&
+    previewJob.clientSpend <= 0 &&
+    previewJob.clientHireRate <= 0 &&
+    previewJob.clientTotalHires <= 0 &&
+    previewJob.clientFeedbackCount <= 0 &&
+    !hasClientCountry;
+}
+
+export function shouldFallbackToDirectJobCaptureFromSourceContext(
+  action: BrowserAction,
+  capture: Awaited<ReturnType<typeof tryCaptureDiscoverySourceContext>> | null,
+): boolean {
+  if (!capture || action.actionType !== "capture_job_from_url" || !isDiscoveryBestMatchesCaptureAction(action)) {
+    return false;
+  }
+  if (capture.state === "captcha_or_security_challenge" || capture.state === "source_context_unavailable") {
+    return true;
+  }
+  if (capture.state !== "captured") {
+    return false;
+  }
+  return sourceContextCaptureLacksClientSignals(capture);
+}
+
 export async function tryCaptureDiscoverySourceContext(
   context: { pages?: () => PlaywrightPageLike[] },
   action: BrowserAction,
@@ -3798,9 +3832,11 @@ async function inspectWithBrowser(
     const sourceContextPageFound = sourceContextAttempted && openPages.some((candidate) => isDiscoverySourceContextPage(candidate.url()));
     const directJobPageRejectedForDiscovery = sourceContextAttempted && openPages.some((candidate) => isDirectUpworkJobPage(candidate.url()) && urlsReferToSameUpworkJob(candidate.url(), url));
     const sourceContextCapture = sourceContextAttempted ? await tryCaptureDiscoverySourceContext(sessionHandle.context, action, url) : null;
-    const shouldDirectFallback = !sourceContextAttempted || shouldUseDirectFallbackForCaptureAction(action);
+    const sourceContextDirectFallback = shouldFallbackToDirectJobCaptureFromSourceContext(action, sourceContextCapture);
+    const usedSourceContextCapture = Boolean(sourceContextCapture) && !sourceContextDirectFallback;
+    const shouldDirectFallback = !sourceContextAttempted || shouldUseDirectFallbackForCaptureAction(action) || sourceContextDirectFallback;
     const protectedApplyUrls = currentProtectedQaApplyUrls();
-    const selectedPage = sourceContextCapture || !shouldDirectFallback
+    const selectedPage = usedSourceContextCapture || !shouldDirectFallback
       ? null
       : action.actionType === "capture_application_snapshot"
         ? selectVisibleApplicationSnapshotPage(sessionHandle.context, url)
@@ -3829,13 +3865,13 @@ async function inspectWithBrowser(
         : "Discovery source context did not contain readable target job content; direct fallback is disabled for discovery-origin captures.",
     };
     const unavailableSnapshot: PageSnapshot = { url: currentPageUrlBeforeCapture, title: currentPageTitleBeforeCapture, textExcerpt: "" };
-    const settled = sourceContextCapture
-      ? { snapshot: sourceContextCapture.snapshot, bodyText: sourceContextCapture.bodyText, detection: sourceContextCapture.detection, samples: [{ step: 1, url: sourceContextCapture.sourcePageUrl, title: sourceContextCapture.snapshot.title, textExcerpt: sourceContextCapture.snapshot.textExcerpt, detection: sourceContextCapture.detection }] }
+    const settled = usedSourceContextCapture
+      ? { snapshot: sourceContextCapture!.snapshot, bodyText: sourceContextCapture!.bodyText, detection: sourceContextCapture!.detection, samples: [{ step: 1, url: sourceContextCapture!.sourcePageUrl, title: sourceContextCapture!.snapshot.title, textExcerpt: sourceContextCapture!.snapshot.textExcerpt, detection: sourceContextCapture!.detection }] }
       : !shouldDirectFallback || (action.actionType === "capture_application_snapshot" && !selectedPage)
         ? { snapshot: unavailableSnapshot, bodyText: "", detection: unavailableDetection, samples: [{ step: 1, url: currentPageUrlBeforeCapture, title: "", textExcerpt: "", detection: unavailableDetection }] }
         : await settlePageAndDetect(page!, action);
     let { snapshot, bodyText, detection, samples } = settled;
-    let state = sourceContextCapture?.state ?? detection.state;
+    let state = usedSourceContextCapture ? sourceContextCapture!.state : detection.state;
     let extractedRawText = bodyText;
     let extractionDiagnostics: unknown;
     if (plan && state === "job_page_loaded" && page && await tryClickApplyNow(page)) {
@@ -3847,16 +3883,16 @@ async function inspectWithBrowser(
       state = detection.state;
     }
     if (action.actionType === "capture_job_from_url" && state === "captured") {
-      const extracted = sourceContextCapture?.extracted ?? await extractUpworkJobContent(page!);
+      const extracted = usedSourceContextCapture ? sourceContextCapture!.extracted : await extractUpworkJobContent(page!);
       extractedRawText = extracted.rawText;
       extractionDiagnostics = extracted.diagnostics;
       logger.info(
         `Capture extraction #${action.id}: titleSource=${extracted.diagnostics.titleSource} descriptionSource=${extracted.diagnostics.descriptionSource} ` +
           `title=${extracted.diagnostics.capturedTitle} descriptionLength=${extracted.diagnostics.descriptionLength} ` +
           `removedNoiseMarkers=${extracted.diagnostics.removedNoiseMarkers} rawConfigNoiseDetected=${extracted.diagnostics.rawConfigNoiseDetected} ` +
-          `lowConfidence=${extracted.diagnostics.lowConfidence} sourceContext=${Boolean(sourceContextCapture)}`
+          `lowConfidence=${extracted.diagnostics.lowConfidence} sourceContext=${usedSourceContextCapture}`
       );
-      saveTextArtifact(options, action, sourceContextCapture ? "capture-source-context-extraction.json" : "capture-extraction.json", JSON.stringify(extracted, null, 2));
+      saveTextArtifact(options, action, usedSourceContextCapture ? "capture-source-context-extraction.json" : "capture-extraction.json", JSON.stringify(extracted, null, 2));
       if (extracted.diagnostics.lowConfidence) {
         state = "source_context_unavailable";
       }
@@ -3911,20 +3947,22 @@ async function inspectWithBrowser(
       sessionMode: options.sessionMode,
       targetUrl: url,
       pageReuse: {
-        reusedExistingPage: sourceContextCapture ? true : selectedPage?.reusedExistingPage ?? true,
-        reason: sourceContextCapture
+        reusedExistingPage: usedSourceContextCapture ? true : selectedPage?.reusedExistingPage ?? true,
+        reason: usedSourceContextCapture
           ? "Used Best Matches source-context capture before direct navigation."
+          : sourceContextDirectFallback
+            ? "Discovery source context lacked reliable client metadata or hit a blocker; fell back to direct job page capture."
           : selectedPage?.reason ?? "Discovery source context unavailable; direct fallback disabled.",
-        selectedPageUrl: sourceContextCapture?.sourcePageUrl ?? selectedPage?.page.url() ?? snapshot.url,
+        selectedPageUrl: usedSourceContextCapture ? sourceContextCapture!.sourcePageUrl : selectedPage?.page.url() ?? snapshot.url,
       },
       tabHygiene,
       settleSamples: samples,
       finalSnapshot: snapshot,
       finalDetection: { ...detection, state },
-      captureStrategy: sourceContextCapture
-        ? sourceContextCapture.state === "source_context_unavailable" ? "source_context_unavailable" : sourceContextCapture.readable ? "source_context" : "blocked_before_capture"
+      captureStrategy: usedSourceContextCapture
+        ? sourceContextCapture!.state === "source_context_unavailable" ? "source_context_unavailable" : sourceContextCapture!.readable ? "source_context" : "blocked_before_capture"
         : shouldDirectFallback ? "direct_fallback" : "source_context_unavailable",
-      selectedPageKind: sourceContextCapture ? "source_context" : selectedPage ? (isDirectUpworkJobPage(selectedPage.page.url()) ? "direct_job_page" : "source_context") : "none",
+      selectedPageKind: usedSourceContextCapture ? "source_context" : selectedPage ? (isDirectUpworkJobPage(selectedPage.page.url()) ? "direct_job_page" : "source_context") : "none",
       directJobPageRejectedForDiscovery,
       sourceContextPageFound,
       sourceContextAttempted,

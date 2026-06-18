@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { extractUpworkSourceContextJobContent } from "./browserCapture";
-import { getDiscoverySourceMetadata, isCaptureBlockedState, isCaptureManualAttentionState, isDirectUpworkJobPage, isDiscoveryBestMatchesCaptureAction, isDiscoverySourceContextPage, shouldUseDirectFallbackForCaptureAction, tryCaptureDiscoverySourceContext } from "./browserWorker";
+import { getDiscoverySourceMetadata, isCaptureBlockedState, isCaptureManualAttentionState, isDirectUpworkJobPage, isDiscoveryBestMatchesCaptureAction, isDiscoverySourceContextPage, shouldFallbackToDirectJobCaptureFromSourceContext, shouldUseDirectFallbackForCaptureAction, tryCaptureDiscoverySourceContext } from "./browserWorker";
 import type { BrowserAction } from "./types";
 
 const targetJobId = "022054851116146838271";
@@ -58,6 +58,32 @@ function page(input: { url: string; title?: string; html: string; text?: string 
   };
 }
 
+function sourceCaptureResult(
+  extracted: NonNullable<ReturnType<typeof extractUpworkSourceContextJobContent>>,
+  overrides: Partial<Awaited<ReturnType<typeof tryCaptureDiscoverySourceContext>>> = {},
+): NonNullable<Awaited<ReturnType<typeof tryCaptureDiscoverySourceContext>>> {
+  return {
+    state: "captured",
+    snapshot: {
+      url: canonicalJobUrl,
+      title: "Upwork",
+      textExcerpt: extracted.description.slice(0, 120),
+    },
+    bodyText: extracted.description,
+    extracted,
+    detection: {
+      state: "captured",
+      source: "body_text",
+      matchedText: targetJobId,
+      summary: "Test source-context capture.",
+    },
+    sourcePageUrl: "https://www.upwork.com/nx/find-work/best-matches",
+    matchedTarget: true,
+    readable: true,
+    ...overrides,
+  };
+}
+
 async function runTests(): Promise<void> {
   const readableHtml = `
     <main>
@@ -86,6 +112,41 @@ async function runTests(): Promise<void> {
   assert.equal(extracted.diagnostics.titleSource, "card_heading");
   assert.match(extracted.rawText, new RegExp(canonicalJobUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(extracted.rawText, /Klaviyo|Shopify|automation/i);
+
+  const discoveryAction = action();
+  assert.equal(
+    shouldFallbackToDirectJobCaptureFromSourceContext(discoveryAction, sourceCaptureResult(extracted)),
+    true,
+    "metadata-thin Best Matches source context should fall through to direct job capture for client-quality enrichment",
+  );
+
+  const richClientExtracted = extractUpworkSourceContextJobContent({
+    html: `
+      <main>
+        <article data-test="job-tile">
+          <a href="/jobs/Retention-Lead_~${targetJobId}/"><h2>Retention Lead for Klaviyo Lifecycle Flows</h2></a>
+          <section data-test="job-description-text">
+            We need a senior lifecycle operator for Klaviyo email and SMS flows, campaign planning, reporting, and segmentation for a scaling DTC brand.
+          </section>
+          <div>4.9 of 5 stars</div>
+          <div>24 reviews</div>
+          <div>$12K+ total spent</div>
+          <div>14 hires</div>
+          <div>86% hire rate</div>
+          <div>United States</div>
+        </article>
+      </main>`,
+    pageUrl: "https://www.upwork.com/nx/find-work/best-matches",
+    pageTitle: "Best Matches - Upwork",
+    targetJobId,
+    canonicalJobUrl,
+  });
+  assert.ok(richClientExtracted, "rich client history text should still extract from source context");
+  assert.equal(
+    shouldFallbackToDirectJobCaptureFromSourceContext(discoveryAction, sourceCaptureResult(richClientExtracted)),
+    false,
+    "source context with usable client signals should stay on the source-context path",
+  );
 
   const wrongId = extractUpworkSourceContextJobContent({
     html: readableHtml,
@@ -147,7 +208,6 @@ async function runTests(): Promise<void> {
   assert.equal(restricted.diagnostics.lowConfidence, true);
   assert.match(restricted.diagnostics.reasons.join(" "), /restricted|manual|missing|short/i);
 
-  const discoveryAction = action();
   assert.equal(isDiscoveryBestMatchesCaptureAction(discoveryAction), true);
   assert.deepEqual(getDiscoverySourceMetadata(discoveryAction), { sourceType: "best_matches", sourceLabel: "Best Matches", canonicalJobUrl });
   assert.equal(shouldUseDirectFallbackForCaptureAction(discoveryAction), false, "discovery-origin captures must not direct-fallback by default");
@@ -223,6 +283,7 @@ async function runTests(): Promise<void> {
   assert.equal(visibleBlocked.state, "captcha_or_security_challenge");
   assert.equal(visibleBlocked.detection.signalStrength, "strong");
   assert.equal(visibleBlocked.detection.matchedVisible, true);
+  assert.equal(shouldFallbackToDirectJobCaptureFromSourceContext(discoveryAction, visibleBlocked), true, "visible source-context blockers should allow direct job fallback");
 
   const blocked = await tryCaptureDiscoverySourceContext(
     { pages: () => [page({ url: "https://www.upwork.com/nx/find-work/best-matches", title: "Just a moment...", html: `<body>Checking if the site connection is secure</body>` })] },
