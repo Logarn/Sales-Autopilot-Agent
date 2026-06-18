@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
+import { stripCaptureNoise } from "./browserCapture";
 import { DB_PATH, TIMEZONE } from "./config";
 import { areNearDuplicateJobs, buildJobFingerprint } from "./dedupe";
 import { shadowWriteMemoriMemory } from "./memoriAdapter";
@@ -30,6 +31,7 @@ import {
   ProposalVersionConfidence,
   ProposalVersionSnapshot,
   ProposalVersionSource,
+  ScoreComponent,
   ScoredJob,
   ScreeningCoverageItem,
   ScreeningCoverageStatus,
@@ -66,6 +68,8 @@ interface SeenFingerprintRow {
   client_rating: number | null;
   client_spend: number | null;
   client_hire_rate: number | null;
+  client_total_hires: number | null;
+  client_feedback_count: number | null;
   skills: string | null;
   experience_level: string | null;
   connects_cost: number | null;
@@ -98,6 +102,8 @@ interface SlackPreviewJobRow {
   client_rating: number | null;
   client_spend: number | null;
   client_hire_rate: number | null;
+  client_total_hires: number | null;
+  client_feedback_count: number | null;
   skills: string | null;
   experience_level: string | null;
   connects_cost: number | null;
@@ -1472,6 +1478,8 @@ CREATE TABLE IF NOT EXISTS seen_jobs (
   client_rating REAL,
   client_spend REAL,
   client_hire_rate REAL,
+  client_total_hires INTEGER,
+  client_feedback_count INTEGER,
   skills TEXT,
   experience_level TEXT,
   connects_cost INTEGER,
@@ -2056,6 +2064,8 @@ ensureSeenJobsColumn("client_country", "TEXT");
 ensureSeenJobsColumn("client_rating", "REAL");
 ensureSeenJobsColumn("client_spend", "REAL");
 ensureSeenJobsColumn("client_hire_rate", "REAL");
+ensureSeenJobsColumn("client_total_hires", "INTEGER");
+ensureSeenJobsColumn("client_feedback_count", "INTEGER");
 ensureSeenJobsColumn("skills", "TEXT");
 ensureSeenJobsColumn("experience_level", "TEXT");
 ensureSeenJobsColumn("connects_cost", "INTEGER");
@@ -2120,6 +2130,8 @@ const upsertSeenStmt = db.prepare(
     client_rating,
     client_spend,
     client_hire_rate,
+    client_total_hires,
+    client_feedback_count,
     skills,
     experience_level,
     connects_cost,
@@ -2130,7 +2142,7 @@ const upsertSeenStmt = db.prepare(
     fingerprint,
     notified
   )
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
    ON CONFLICT(id) DO UPDATE SET
      title = excluded.title,
      url = excluded.url,
@@ -2142,6 +2154,8 @@ const upsertSeenStmt = db.prepare(
      client_rating = excluded.client_rating,
      client_spend = excluded.client_spend,
      client_hire_rate = excluded.client_hire_rate,
+     client_total_hires = excluded.client_total_hires,
+     client_feedback_count = excluded.client_feedback_count,
      skills = excluded.skills,
      experience_level = excluded.experience_level,
      connects_cost = excluded.connects_cost,
@@ -2158,7 +2172,7 @@ const seenFingerprintStmt = db.prepare<[string], SeenRow>(
 );
 const recentSeenFingerprintsStmt = db.prepare<[], SeenFingerprintRow>(
   `SELECT id, title, url, description, posted_at, budget, client_country, client_rating, client_spend,
-          client_hire_rate, skills, experience_level, connects_cost, proposal_count, competition_level, fingerprint
+          client_hire_rate, client_total_hires, client_feedback_count, skills, experience_level, connects_cost, proposal_count, competition_level, fingerprint
    FROM seen_jobs
    WHERE fingerprint IS NOT NULL
    ORDER BY seen_at DESC
@@ -3739,7 +3753,7 @@ const outcomeLearningRowsStmt = db.prepare<[], OutcomeLearningRow>(
 );
 const slackPreviewJobStmt = db.prepare<[string], SlackPreviewJobRow>(
   `SELECT s.id, s.title, s.url, s.description, s.score, s.match_level, s.budget, s.client_country,
-          s.client_rating, s.client_spend, s.client_hire_rate, s.skills, s.experience_level,
+          s.client_rating, s.client_spend, s.client_hire_rate, s.client_total_hires, s.client_feedback_count, s.skills, s.experience_level,
           s.connects_cost, s.proposal_count, s.competition_level, s.posted_at, a.status, a.fit_score, a.fit_reasons, a.red_flags,
           a.suggested_bid, a.suggested_connects, a.suggested_boost_connects, a.connects_warnings,
           a.selected_portfolio_items, a.proposal_text, a.structured_proposal, a.generated_at, a.job_intelligence, a.connects_strategy,
@@ -3809,15 +3823,15 @@ function rowToJobPosting(row: SeenFingerprintRow): JobPosting {
     id: row.id,
     title: row.title,
     url: row.url,
-    description: row.description ?? "",
+    description: stripCaptureNoise(row.description ?? "").cleaned,
     postedAt: row.posted_at ?? "",
     budget: row.budget ?? "",
     clientCountry: row.client_country ?? "",
     clientRating: row.client_rating ?? 0,
     clientSpend: row.client_spend ?? 0,
     clientHireRate: row.client_hire_rate ?? 0,
-    clientTotalHires: 0,
-    clientFeedbackCount: 0,
+    clientTotalHires: row.client_total_hires ?? 0,
+    clientFeedbackCount: row.client_feedback_count ?? 0,
     category: "",
     experienceLevel: row.experience_level ?? "",
     connectsCost: row.connects_cost ?? 0,
@@ -3843,6 +3857,8 @@ export function markJobSeen(job: ScoredJob, notified: boolean): void {
     job.clientRating,
     job.clientSpend,
     job.clientHireRate,
+    job.clientTotalHires,
+    job.clientFeedbackCount,
     JSON.stringify(job.skills),
     job.experienceLevel,
     job.connectsCost,
@@ -4397,15 +4413,139 @@ function parseJsonObject<T>(value: string | null | undefined): T | undefined {
   }
 }
 
+function clampScore(value: number, min = 0, max = 100): number {
+  return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+function previewBudgetMax(value: string | null | undefined): number | null {
+  const values = value?.match(/\d+(?:,\d{3})*(?:\.\d+)?/g)?.map((item) => Number(item.replace(/,/g, ""))) ?? [];
+  if (values.length === 0) return null;
+  return Math.max(...values);
+}
+
+function previewClientQualityScore(row: SlackPreviewJobRow): ScoreComponent {
+  const reasons: string[] = [];
+  const risks: string[] = [];
+  let score = 45;
+
+  if ((row.client_rating ?? 0) >= 4.8 && (row.client_feedback_count ?? 0) >= 5) {
+    score += 25;
+    reasons.push(`Strong client rating (${row.client_rating?.toFixed(1)})`);
+  } else if ((row.client_rating ?? 0) >= 4.5) {
+    score += 15;
+    reasons.push(`Good client rating (${row.client_rating?.toFixed(1)})`);
+  } else if ((row.client_rating ?? 0) > 0 && (row.client_rating ?? 0) < 4.2) {
+    score -= 18;
+    risks.push(`Low client rating (${row.client_rating?.toFixed(1)})`);
+  } else if ((row.client_feedback_count ?? 0) === 0) {
+    score -= 5;
+    risks.push("No client feedback yet");
+  }
+
+  if ((row.client_spend ?? 0) >= 10000) {
+    score += 20;
+    reasons.push(`Proven spend: $${Math.round(row.client_spend ?? 0).toLocaleString("en-US")}`);
+  } else if ((row.client_spend ?? 0) >= 1000) {
+    score += 10;
+    reasons.push(`Some spend history: $${Math.round(row.client_spend ?? 0).toLocaleString("en-US")}`);
+  } else if ((row.client_spend ?? 0) === 0) {
+    score -= 8;
+    risks.push("No recorded client spend");
+  }
+
+  if ((row.client_hire_rate ?? 0) >= 70) {
+    score += 10;
+    reasons.push(`High hire rate (${Math.round(row.client_hire_rate ?? 0)}%)`);
+  } else if ((row.client_hire_rate ?? 0) > 0 && (row.client_hire_rate ?? 0) < 35) {
+    score -= 12;
+    risks.push(`Low hire rate (${Math.round(row.client_hire_rate ?? 0)}%)`);
+  }
+
+  if ((row.client_total_hires ?? 0) >= 10) {
+    score += 5;
+    reasons.push(`${row.client_total_hires} prior hires`);
+  }
+
+  return {
+    score: clampScore(score),
+    reasons,
+    risks,
+  };
+}
+
+function previewOpportunityScore(row: SlackPreviewJobRow): ScoreComponent {
+  const reasons: string[] = [];
+  const risks: string[] = [];
+  let score = 50;
+  const budget = row.budget ?? "";
+  const budgetMax = previewBudgetMax(budget);
+  const hourlyBudget = /\/\s*hr|hourly|per hour/i.test(budget);
+
+  if (budgetMax !== null) {
+    if (hourlyBudget && budgetMax >= 50) {
+      score += 14;
+      reasons.push(`Strong hourly budget signal (${budget})`);
+    } else if (hourlyBudget && budgetMax >= 35) {
+      score += 8;
+      reasons.push(`Solid hourly budget signal (${budget})`);
+    } else if (budgetMax >= 3000) {
+      score += 20;
+      reasons.push(`High budget signal (${budget})`);
+    } else if (budgetMax >= 1000) {
+      score += 12;
+      reasons.push(`Solid budget signal (${budget})`);
+    } else if (budgetMax > 0 && budgetMax < 300) {
+      score -= 12;
+      risks.push(`Low budget signal (${budget})`);
+    }
+  }
+
+  const experienceLevel = (row.experience_level ?? "").toLowerCase();
+  if (experienceLevel.includes("expert")) {
+    score += 10;
+    reasons.push("Expert experience level requested");
+  } else if (experienceLevel.includes("entry")) {
+    score -= 10;
+    risks.push("Entry-level opportunity");
+  }
+
+  return {
+    score: clampScore(score),
+    reasons,
+    risks,
+  };
+}
+
+function previewConnectsRiskScore(row: SlackPreviewJobRow, connectsWarnings: string[]): ScoreComponent {
+  const risks = [...connectsWarnings];
+  let score = 85;
+  if ((row.connects_cost ?? 0) <= 0) {
+    score -= 18;
+    risks.push("Required Connects are unknown from stored preview data.");
+  } else if ((row.connects_cost ?? 0) > 20) {
+    score -= 18;
+    risks.push(`High Connects cost (${row.connects_cost})`);
+  }
+  return {
+    score: clampScore(score),
+    reasons: score >= 80 ? ["Connects cost is within the normal range"] : [],
+    risks,
+  };
+}
+
 export function getScoredJobForSlackPreview(jobId: string): ScoredJob | null {
   const row = slackPreviewJobStmt.get(jobId);
   if (!row) {
     return null;
   }
+  const sanitizedDescription = stripCaptureNoise(row.description ?? "").cleaned;
 
   const fitReasons = parseJsonStringArray(row.fit_reasons);
   const redFlags = parseJsonStringArray(row.red_flags);
   const connectsWarnings = parseJsonStringArray(row.connects_warnings);
+  const clientQualityScore = previewClientQualityScore(row);
+  const opportunityScore = previewOpportunityScore(row);
+  const connectsRiskScore = previewConnectsRiskScore(row, connectsWarnings);
   const applicationDraft: ApplicationDraft | undefined = row.proposal_text
     ? {
         jobId: row.id,
@@ -4451,15 +4591,15 @@ export function getScoredJobForSlackPreview(jobId: string): ScoredJob | null {
     id: row.id,
     title: row.title,
     url: row.url,
-    description: row.description ?? "",
+    description: sanitizedDescription,
     postedAt: row.posted_at ?? new Date().toISOString(),
     budget: row.budget ?? "",
     clientCountry: row.client_country ?? "",
     clientRating: row.client_rating ?? 0,
     clientSpend: row.client_spend ?? 0,
     clientHireRate: row.client_hire_rate ?? 0,
-    clientTotalHires: 0,
-    clientFeedbackCount: 0,
+    clientTotalHires: row.client_total_hires ?? 0,
+    clientFeedbackCount: row.client_feedback_count ?? 0,
     category: "stored",
     experienceLevel: row.experience_level ?? "",
     connectsCost: row.connects_cost ?? 0,
@@ -4475,10 +4615,10 @@ export function getScoredJobForSlackPreview(jobId: string): ScoredJob | null {
     negativeKeywords: [],
     scoreBreakdown: {
       fitScore: { score: row.fit_score ?? row.score ?? 0, reasons: fitReasons, risks: redFlags },
-      clientQualityScore: { score: 0, reasons: [], risks: [] },
-      opportunityScore: { score: 0, reasons: [], risks: [] },
+      clientQualityScore,
+      opportunityScore,
       redFlagScore: { score: redFlags.length ? 50 : 100, reasons: [], risks: redFlags },
-      connectsRiskScore: { score: 0, reasons: [], risks: connectsWarnings },
+      connectsRiskScore,
       finalScore: row.score ?? row.fit_score ?? 0,
       reasons: fitReasons,
       risks: redFlags,

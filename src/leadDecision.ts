@@ -22,6 +22,87 @@ interface FreelancerProfileRequirementAssessment {
   watchOut?: string;
 }
 
+const MIN_CLIENT_QUALITY_FOR_SLACK = 70;
+const MIN_CLIENT_QUALITY_FOR_UNKNOWN_PLATFORM_REVIEW = 85;
+const ECOMMERCE_TERMS = ["dtc", "d2c", "ecommerce", "e-commerce", "shopify", "woocommerce", "bigcommerce", "beauty", "skincare", "fashion", "supplements", "food", "home"];
+const LIFECYCLE_TERMS = ["retention", "lifecycle", "email", "sms", "flow", "flows", "automation", "campaign", "segmentation", "klaviyo", "attentive", "postscript", "omnisend", "mailchimp", "mailerlite", "deliverability"];
+const CRO_SCOPE_TERMS = [
+  " cro ",
+  "conversion rate optimization",
+  "conversion optimization",
+  "landing page",
+  "homepage",
+  "product page",
+  "product detail page",
+  "pdp",
+  "funnel",
+  "checkout optimization",
+  "heatmap",
+];
+const SHOPIFY_DEVELOPMENT_TERMS = [
+  "shopify developer",
+  "shopify development",
+  "shopify dev",
+  "shopify theme",
+  "theme customization",
+  "theme customisation",
+  "liquid",
+  "storefront",
+  "custom app",
+  "app build",
+  "website build",
+  "website redesign",
+  "website development",
+  "web development",
+  "web design",
+  "page speed",
+  "speed optimization",
+  "bug fix",
+];
+const BRANDING_SCOPE_TERMS = [
+  "logo design",
+  "branding",
+  "brand identity",
+  "brand strategy",
+  "website modernization",
+  "website modernisation",
+];
+const EMAIL_SAFE_DESIGN_TERMS = [
+  "email design",
+  "email designer",
+  "email template",
+  "newsletter design",
+  "klaviyo template",
+  "campaign design",
+];
+
+function unique(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
+function leadText(job: ScoredJob, intelligence?: JobIntelligence | null): string {
+  const requiredSkills = intelligence && Array.isArray(intelligence.requiredSkills) ? intelligence.requiredSkills : [];
+  return [
+    job.title,
+    job.description,
+    ...(job.skills || []),
+    intelligence?.primaryPlatform ?? "",
+    ...(Array.isArray(intelligence?.platformsMentioned) ? intelligence?.platformsMentioned : []),
+    intelligence?.platformCategory ?? "",
+    intelligence?.businessType ?? "",
+    intelligence?.ecommerceVertical ?? "",
+    intelligence?.jobCategory ?? "",
+    intelligence?.taskType ?? "",
+    intelligence?.clientGoal ?? "",
+    requiredSkills.join(" "),
+    intelligence?.fitScoreReasoning ?? "",
+  ].join(" ").toLowerCase();
+}
+
+function containsAny(text: string, terms: string[]): boolean {
+  return terms.some((term) => text.includes(term));
+}
+
 function parseMoneyAmount(raw: string | null | undefined, suffix: string | null | undefined): number | null {
   const numeric = Number.parseFloat(String(raw ?? "").replace(/,/g, ""));
   if (!Number.isFinite(numeric) || numeric <= 0) return null;
@@ -86,15 +167,34 @@ function isDtcEcommerceVertical(value: string | undefined): boolean {
 }
 
 function hasStrongDtcSignals(job: ScoredJob, intelligence?: JobIntelligence | null): boolean {
-  const requiredSkills = intelligence && Array.isArray(intelligence.requiredSkills) ? intelligence.requiredSkills : [];
-  const text = `${job.title} ${job.description} ${(job.skills || []).join(" ")} ${intelligence?.taskType ?? ""} ${intelligence?.businessType ?? ""} ${intelligence?.clientGoal ?? ""} ${requiredSkills.join(" ")}`.toLowerCase();
-  const commerceTerms = ["dtc", "d2c", "ecommerce", "e-commerce", "shopify", "woocommerce", "bigcommerce", "beauty", "skincare", "fashion", "supplements", "food", "home"];
-  const lifecycleTerms = ["retention", "lifecycle", "email", "sms", "flow", "flows", "automation", "campaign", "segmentation", "klaviyo", "attentive", "postscript", "omnisend", "mailchimp", "mailerlite"];
+  const text = leadText(job, intelligence);
   const commerceFit = intelligence && isDtcEcommerceVertical(intelligence.ecommerceVertical)
     ? true
-    : commerceTerms.some((term) => text.includes(term));
-  const lifecycleFit = lifecycleTerms.some((term) => text.includes(term));
+    : containsAny(text, ECOMMERCE_TERMS);
+  const lifecycleFit = containsAny(text, LIFECYCLE_TERMS);
   return commerceFit && lifecycleFit;
+}
+
+function isCroOrStorefrontScope(job: ScoredJob, intelligence?: JobIntelligence | null): boolean {
+  const text = ` ${leadText(job, intelligence)} `;
+  if (containsAny(text, CRO_SCOPE_TERMS)) return true;
+  if (text.includes("shopify") && containsAny(text, SHOPIFY_DEVELOPMENT_TERMS)) return true;
+  if (containsAny(text, BRANDING_SCOPE_TERMS) && !containsAny(text, EMAIL_SAFE_DESIGN_TERMS)) return true;
+  return false;
+}
+
+function hasStrictExpertiseFit(job: ScoredJob, intelligence: JobIntelligence | null | undefined, profile: FreelancerProfile): boolean {
+  if (!hasStrongDtcSignals(job, intelligence)) return false;
+  if (isCroOrStorefrontScope(job, intelligence)) return false;
+  const text = leadText(job, intelligence);
+  const avoidTerms = unique([
+    ...(profile.avoidJobTypes ?? []),
+    ...(profile.avoidIndustries ?? []),
+  ]).map((value) => value.toLowerCase()).filter(Boolean);
+  if (avoidTerms.some((term) => text.includes(term) && !containsAny(text, LIFECYCLE_TERMS))) {
+    return false;
+  }
+  return true;
 }
 
 function hasMajorRedFlags(job: ScoredJob, intelligence?: JobIntelligence | null): boolean {
@@ -166,7 +266,7 @@ function watchOutsForLead(job: ScoredJob, intelligence?: JobIntelligence | null)
   if (job.clientRating > 0 && job.clientRating < 4.2) {
     watchOuts.push(`Low client rating (${job.clientRating.toFixed(1)})`);
   }
-  return Array.from(new Set(watchOuts));
+  return unique(watchOuts);
 }
 
 function isBudgetTooWeak(job: ScoredJob): boolean {
@@ -204,14 +304,15 @@ export function decideLeadHandling(job: ScoredJob, intelligence?: JobIntelligenc
   const eligibility = evaluatePlatformEligibility(intelligence);
   const profile = loadFreelancerProfile();
   const profileRequirement = assessFreelancerProfileRequirements(job, profile);
-  const watchOuts = Array.from(new Set([
+  const watchOuts = unique([
     ...watchOutsForLead(job, intelligence),
     ...(profileRequirement.watchOut ? [profileRequirement.watchOut] : []),
-  ]));
+  ]);
   const strongSignals = hasStrongDtcSignals(job, intelligence);
+  const strictExpertiseFit = hasStrictExpertiseFit(job, intelligence, profile);
+  const outOfExpertiseScope = isCroOrStorefrontScope(job, intelligence);
   const scopeClear = hasScopeClarity(job, intelligence);
   const clientQuality = job.scoreBreakdown?.clientQualityScore?.score ?? 50;
-  const missingOnlyClientHistory = hasMissingOnlyClientHistory(job);
   const connectsStrategy = job.applicationDraft?.connectsStrategy ?? job.scoreBreakdown?.connectsStrategy;
   const connectsRequiredUnknown = hasUnknownRequiredConnects(connectsStrategy);
   const platformEligible = eligibility.platformEligibility === "eligible";
@@ -257,6 +358,45 @@ export function decideLeadHandling(job: ScoredJob, intelligence?: JobIntelligenc
     };
   }
 
+  if (outOfExpertiseScope) {
+    return {
+      decision: "skip",
+      reason: "Lead is outside the current email/SMS lifecycle scope.",
+      scoreUsed: job.score,
+      platformEligibility: eligibility.platformEligibility,
+      shouldPostToSlack: false,
+      shouldAutoPrepare: false,
+      watchOuts,
+      internalSkipReason: "out_of_scope",
+    };
+  }
+
+  if (!strictExpertiseFit) {
+    return {
+      decision: "skip",
+      reason: "Lead does not fit the current DTC lifecycle retention focus tightly enough.",
+      scoreUsed: job.score,
+      platformEligibility: eligibility.platformEligibility,
+      shouldPostToSlack: false,
+      shouldAutoPrepare: false,
+      watchOuts,
+      internalSkipReason: "weak_dtc_lifecycle_fit",
+    };
+  }
+
+  if (clientQuality < MIN_CLIENT_QUALITY_FOR_SLACK || hasVeryWeakClientHistory(job) || hasExplicitPoorClientSignal(job)) {
+    return {
+      decision: "skip",
+      reason: "Client quality is below the current minimum threshold.",
+      scoreUsed: job.score,
+      platformEligibility: eligibility.platformEligibility,
+      shouldPostToSlack: false,
+      shouldAutoPrepare: false,
+      watchOuts,
+      internalSkipReason: "weak_client_quality",
+    };
+  }
+
   if (profileRequirement.decision === "manual_review") {
     return {
       decision: "manual_review",
@@ -296,7 +436,7 @@ export function decideLeadHandling(job: ScoredJob, intelligence?: JobIntelligenc
   }
 
   if (eligibility.platformEligibility === "manual_review") {
-    if (strongSignals && job.score >= 60 && scopeClear && !weakBudget) {
+    if (strongSignals && job.score >= 75 && scopeClear && !weakBudget && clientQuality >= MIN_CLIENT_QUALITY_FOR_UNKNOWN_PLATFORM_REVIEW) {
       return {
         decision: "manual_review",
         reason: "Platform needs manual review, but DTC lifecycle/email context is strong.",
@@ -345,44 +485,16 @@ export function decideLeadHandling(job: ScoredJob, intelligence?: JobIntelligenc
     };
   }
 
-  const weakClientQualityHardBlock =
-    (clientQuality < 35 && !missingOnlyClientHistory) ||
-    (hasVeryWeakClientHistory(job) && !missingOnlyClientHistory);
-  if (weakClientQualityHardBlock && job.score < 88) {
-    return {
-      decision: "skip",
-      reason: "Client quality signals are too weak for Slack lead review.",
-      scoreUsed: job.score,
-      platformEligibility: eligibility.platformEligibility,
-      shouldPostToSlack: false,
-      shouldAutoPrepare: false,
-      watchOuts,
-      internalSkipReason: "weak_client_quality",
-    };
-  }
-
-  if (!strongSignals && job.score < 78) {
-    return {
-      decision: "skip",
-      reason: "Approved platform found, but DTC/ecommerce lifecycle fit is not strong enough.",
-      scoreUsed: job.score,
-      platformEligibility: eligibility.platformEligibility,
-      shouldPostToSlack: false,
-      shouldAutoPrepare: false,
-      watchOuts,
-      internalSkipReason: "weak_dtc_lifecycle_fit",
-    };
-  }
-
   if (!scopeClear && job.score < 85) {
     return {
-      decision: "manual_review",
-      reason: "Lead may fit, but scope clarity is weak.",
+      decision: "skip",
+      reason: "Lead stays near the niche, but scope clarity is too weak.",
       scoreUsed: job.score,
       platformEligibility: eligibility.platformEligibility,
-      shouldPostToSlack: true,
+      shouldPostToSlack: false,
       shouldAutoPrepare: false,
       watchOuts,
+      internalSkipReason: "unclear_scope",
     };
   }
 
@@ -395,18 +507,6 @@ export function decideLeadHandling(job: ScoredJob, intelligence?: JobIntelligenc
       shouldPostToSlack: true,
       shouldAutoPrepare: false,
       watchOuts: [...watchOuts, ...connectsStrategy.risks],
-    };
-  }
-
-  if ((clientQuality < 55 || hasVeryWeakClientHistory(job)) && job.score < 92) {
-    return {
-      decision: "manual_review",
-      reason: "Lead fits but client quality is weak enough to require review.",
-      scoreUsed: job.score,
-      platformEligibility: eligibility.platformEligibility,
-      shouldPostToSlack: true,
-      shouldAutoPrepare: false,
-      watchOuts,
     };
   }
 
