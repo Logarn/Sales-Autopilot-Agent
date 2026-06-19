@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import { extractUpworkSourceContextJobContent } from "./browserCapture";
 import { getDiscoverySourceMetadata, isCaptureBlockedState, isCaptureManualAttentionState, isDirectUpworkJobPage, isDiscoveryBestMatchesCaptureAction, isDiscoverySourceContextPage, shouldFallbackToDirectJobCaptureFromSourceContext, shouldUseDirectFallbackForCaptureAction, tryCaptureDiscoverySourceContext } from "./browserWorker";
+import { buildDeterministicOpportunityPacket, normalizedPacketToJobPosting } from "./normalization";
 import type { BrowserAction } from "./types";
 
 const targetJobId = "022054851116146838271";
@@ -118,6 +119,36 @@ async function runTests(): Promise<void> {
     shouldFallbackToDirectJobCaptureFromSourceContext(discoveryAction, sourceCaptureResult(extracted)),
     true,
     "metadata-thin Best Matches source context should fall through to direct job capture for client-quality enrichment",
+  );
+
+  const noisyThinExtracted = extractUpworkSourceContextJobContent({
+    html: `
+      <main>
+        <div>Find jobs you're interested in. Narrow down your results by rate, location, client history, and more.</div>
+        <article data-test="job-tile">
+          <a href="/jobs/Klaviyo-Retention-Lead_~${targetJobId}/"><h2>Klaviyo Retention Lead for DTC Supplement Brand</h2></a>
+          <section data-test="job-description-text">
+            We need a senior Klaviyo operator to own lifecycle campaigns, flows, segmentation, and reporting for a scaling ecommerce account.
+          </section>
+          <div>Hourly: $55.00 - $85.00</div>
+        </article>
+      </main>`,
+    pageUrl: "https://www.upwork.com/nx/find-work/best-matches",
+    pageTitle: "Best Matches - Upwork",
+    targetJobId,
+    canonicalJobUrl,
+  });
+  assert.ok(noisyThinExtracted, "feed chrome plus readable target card should still extract");
+  const noisyThinPreview = normalizedPacketToJobPosting(buildDeterministicOpportunityPacket(noisyThinExtracted.rawText, {
+    url: canonicalJobUrl,
+    source: "deterministic",
+    capturedAt: new Date(),
+  }));
+  assert.match(noisyThinPreview.clientCountry, /client history, and more/i, "feed chrome can currently look like a country");
+  assert.equal(
+    shouldFallbackToDirectJobCaptureFromSourceContext(discoveryAction, sourceCaptureResult(noisyThinExtracted)),
+    true,
+    "source context with only location-shaped feed chrome must still fall through to direct job capture",
   );
 
   const richClientExtracted = extractUpworkSourceContextJobContent({

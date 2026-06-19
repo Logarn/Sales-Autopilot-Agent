@@ -954,13 +954,11 @@ function sourceContextCaptureLacksClientSignals(capture: {
     source: "deterministic",
     capturedAt: new Date(),
   }));
-  const hasClientCountry = previewJob.clientCountry.trim() && !/not specified/i.test(previewJob.clientCountry);
   return previewJob.clientRating <= 0 &&
     previewJob.clientSpend <= 0 &&
     previewJob.clientHireRate <= 0 &&
     previewJob.clientTotalHires <= 0 &&
-    previewJob.clientFeedbackCount <= 0 &&
-    !hasClientCountry;
+    previewJob.clientFeedbackCount <= 0;
 }
 
 export function shouldFallbackToDirectJobCaptureFromSourceContext(
