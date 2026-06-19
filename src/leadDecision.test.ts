@@ -126,16 +126,25 @@ const reviewClient = decideLeadHandling(mkJob({
   clientFeedbackCount: 0,
   scoreBreakdown: { ...weakClientBreakdown, clientQualityScore: { score: 46, reasons: [], risks: [] }, finalScore: 89 },
 }), intel({ primaryPlatform: "Klaviyo", platformsMentioned: ["Klaviyo"] }));
-assert.equal(reviewClient.decision, "skip");
-assert.equal(reviewClient.shouldAutoPrepare, false);
+assert.equal(reviewClient.decision, "post_to_slack");
+assert.equal(reviewClient.shouldAutoPrepare, true);
 assert(reviewClient.watchOuts.includes("No client feedback history"));
 
 const borderlineClient = decideLeadHandling(mkJob({
   score: 90,
   scoreBreakdown: { ...mkJob().scoreBreakdown!, clientQualityScore: { score: 69, reasons: [], risks: [] }, finalScore: 90 },
 }), intel({ primaryPlatform: "Klaviyo", platformsMentioned: ["Klaviyo"] }));
-assert.equal(borderlineClient.decision, "skip");
-assert.equal(borderlineClient.internalSkipReason, "weak_client_quality");
+assert.equal(borderlineClient.decision, "post_to_slack");
+
+const sparseClientButLowScore = decideLeadHandling(mkJob({
+  score: 78,
+  clientSpend: 0,
+  clientTotalHires: 0,
+  clientFeedbackCount: 0,
+  scoreBreakdown: { ...weakClientBreakdown, clientQualityScore: { score: 50, reasons: [], risks: [] }, finalScore: 78 },
+}), intel({ primaryPlatform: "Klaviyo", platformsMentioned: ["Klaviyo"] }));
+assert.equal(sparseClientButLowScore.decision, "skip");
+assert.equal(sparseClientButLowScore.internalSkipReason, "weak_client_quality");
 
 const croOnly = decideLeadHandling(mkJob({
   title: "Shopify CRO specialist",

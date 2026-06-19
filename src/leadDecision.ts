@@ -22,8 +22,10 @@ interface FreelancerProfileRequirementAssessment {
   watchOut?: string;
 }
 
-const MIN_CLIENT_QUALITY_FOR_SLACK = 70;
-const MIN_CLIENT_QUALITY_FOR_UNKNOWN_PLATFORM_REVIEW = 85;
+const MIN_CLIENT_QUALITY_FOR_SLACK = 60;
+const MIN_CLIENT_QUALITY_FOR_UNKNOWN_PLATFORM_REVIEW = 75;
+const MIN_CLIENT_QUALITY_FOR_SPARSE_HISTORY_OVERRIDE = 45;
+const MIN_SCORE_FOR_SPARSE_HISTORY_OVERRIDE = 80;
 const ECOMMERCE_TERMS = ["dtc", "d2c", "ecommerce", "e-commerce", "shopify", "woocommerce", "bigcommerce", "beauty", "skincare", "fashion", "supplements", "food", "home"];
 const LIFECYCLE_TERMS = ["retention", "lifecycle", "email", "sms", "flow", "flows", "automation", "campaign", "segmentation", "klaviyo", "attentive", "postscript", "omnisend", "mailchimp", "mailerlite", "deliverability"];
 const CRO_SCOPE_TERMS = [
@@ -300,6 +302,20 @@ function hasMissingOnlyClientHistory(job: ScoredJob): boolean {
   return hasVeryWeakClientHistory(job) && job.clientRating <= 0 && job.clientHireRate <= 0 && !hasExplicitPoorClientSignal(job);
 }
 
+function allowsSparseClientHistoryOverride(input: {
+  job: ScoredJob;
+  clientQuality: number;
+  scopeClear: boolean;
+  weakBudget: boolean;
+}): boolean {
+  const { job, clientQuality, scopeClear, weakBudget } = input;
+  if (!hasVeryWeakClientHistory(job)) return false;
+  if (hasExplicitPoorClientSignal(job)) return false;
+  if (job.score < MIN_SCORE_FOR_SPARSE_HISTORY_OVERRIDE) return false;
+  if (!scopeClear || weakBudget) return false;
+  return clientQuality >= MIN_CLIENT_QUALITY_FOR_SPARSE_HISTORY_OVERRIDE || job.clientRating >= 4.8;
+}
+
 export function decideLeadHandling(job: ScoredJob, intelligence?: JobIntelligence | null): LeadDecisionResult {
   const eligibility = evaluatePlatformEligibility(intelligence);
   const profile = loadFreelancerProfile();
@@ -318,6 +334,12 @@ export function decideLeadHandling(job: ScoredJob, intelligence?: JobIntelligenc
   const platformEligible = eligibility.platformEligibility === "eligible";
   const weakBudget = isBudgetTooWeak(job);
   const stale = isStale(job);
+  const sparseClientHistoryOverride = allowsSparseClientHistoryOverride({
+    job,
+    clientQuality,
+    scopeClear,
+    weakBudget,
+  });
 
   if (eligibility.platformEligibility === "ineligible") {
     return {
@@ -384,10 +406,36 @@ export function decideLeadHandling(job: ScoredJob, intelligence?: JobIntelligenc
     };
   }
 
-  if (clientQuality < MIN_CLIENT_QUALITY_FOR_SLACK || hasVeryWeakClientHistory(job) || hasExplicitPoorClientSignal(job)) {
+  if (hasExplicitPoorClientSignal(job)) {
     return {
       decision: "skip",
       reason: "Client quality is below the current minimum threshold.",
+      scoreUsed: job.score,
+      platformEligibility: eligibility.platformEligibility,
+      shouldPostToSlack: false,
+      shouldAutoPrepare: false,
+      watchOuts,
+      internalSkipReason: "weak_client_quality",
+    };
+  }
+
+  if (clientQuality < MIN_CLIENT_QUALITY_FOR_SLACK && !sparseClientHistoryOverride) {
+    return {
+      decision: "skip",
+      reason: "Client quality is below the current minimum threshold.",
+      scoreUsed: job.score,
+      platformEligibility: eligibility.platformEligibility,
+      shouldPostToSlack: false,
+      shouldAutoPrepare: false,
+      watchOuts,
+      internalSkipReason: "weak_client_quality",
+    };
+  }
+
+  if (hasVeryWeakClientHistory(job) && !sparseClientHistoryOverride) {
+    return {
+      decision: "skip",
+      reason: "Client history is too thin for the current threshold.",
       scoreUsed: job.score,
       platformEligibility: eligibility.platformEligibility,
       shouldPostToSlack: false,
