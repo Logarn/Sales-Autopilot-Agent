@@ -81,6 +81,7 @@ import {
   SLACK_AGENT_AMBIENT_CHANNEL_IDS,
   SLACK_ALLOWED_USER_IDS,
 } from "./config";
+import { decideLeadHandling } from "./leadDecision";
 import { logger } from "./logger";
 import { buildProposalContextPack } from "./skills/profileContextSkill";
 import { formatConnectsStrategy } from "./connectsStrategy";
@@ -1936,6 +1937,26 @@ export function queuePrepareDraftFromSlackThread(input: { channelId: string; thr
     });
     return { ok: false, ...blocker };
   }
+  const prepBlocker = prepareDraftReadinessBlocker(state.jobId);
+  if (prepBlocker) {
+    upsertSlackWorkflowState({
+      channelId: state.channelId,
+      threadTs: state.threadTs,
+      workflowState: "draft_ready",
+      draftRequested: true,
+      prepRequested: false,
+      lastAgentReply: prepBlocker,
+    });
+    markSlackWorkflowPromiseStatus({
+      channelId: state.channelId,
+      threadTs: state.threadTs,
+      status: "blocked",
+      workflowState: "draft_ready",
+      blocker: prepBlocker,
+      lastAgentReply: prepBlocker,
+    });
+    return { ok: false, text: prepBlocker, threadStatus: "error" };
+  }
   const qaCapacity = canQueueNewQaPreparation(state.jobId);
   if (!qaCapacity.ok) {
     return {
@@ -2051,6 +2072,18 @@ function screeningSummary(count: number): string {
   return count > 0 ? `${count} answer${count === 1 ? "" : "s"}` : "none captured";
 }
 
+function blockingPreparePlanIssueCodes(jobId: string): string[] {
+  return buildBrowserApplyPlan(jobId).issues
+    .filter((issue) => issue.severity === "error")
+    .map((issue) => issue.code);
+}
+
+function prepareDraftReadinessBlocker(jobId: string): string | null {
+  const blockingIssues = blockingPreparePlanIssueCodes(jobId);
+  if (blockingIssues.length === 0) return null;
+  return `I won’t queue browser prep yet because this draft still fails browser-fill readiness: ${blockingIssues.join(", ")}. Regenerate or revise the draft first. Final submit remains manual.`;
+}
+
 export function startBatchApplyWorkspaceFromSlack(input: {
   channelId: string;
   threadTs: string;
@@ -2075,9 +2108,20 @@ export function startBatchApplyWorkspaceFromSlack(input: {
   for (const candidate of candidates) {
     if (position >= targetCount) break;
     if (getApplicationStatus(candidate.jobId) === "submitted") continue;
-    position += 1;
+    const scoredJob = getScoredJobForSlackPreview(candidate.jobId);
+    const leadDecision = scoredJob ? decideLeadHandling(scoredJob, scoredJob.applicationDraft?.jobIntelligence ?? null) : null;
+    if (!scoredJob || !leadDecision || leadDecision.decision !== "post_to_slack" || scoredJob.matchLevel === "skip") {
+      skipped += 1;
+      continue;
+    }
+    const prepBlocker = prepareDraftReadinessBlocker(candidate.jobId);
+    if (prepBlocker) {
+      skipped += 1;
+      continue;
+    }
     const existing = existingProtected.get(candidate.jobId);
     if (existing) {
+      position += 1;
       const status = existing.state === "blocked" ? "blocked" : "ready";
       if (status === "blocked") blocked += 1;
       else ready += 1;
@@ -2108,7 +2152,6 @@ export function startBatchApplyWorkspaceFromSlack(input: {
       ackText: "Batch prep queued.",
     });
     if (!result.ok) {
-      position -= 1;
       if (/applications waiting for QA|pause new prep/i.test(result.text)) {
         stopReason = result.text;
         break;
@@ -2116,6 +2159,7 @@ export function startBatchApplyWorkspaceFromSlack(input: {
       skipped += 1;
       continue;
     }
+    position += 1;
     queued += 1;
     upsertBatchApplyWorkspaceItem({
       batchId: batch.id,
@@ -2158,7 +2202,7 @@ export function startBatchApplyWorkspaceFromSlack(input: {
     skipped,
     text: [
       `Batch workspace started for ${tracked}/${targetCount} application${targetCount === 1 ? "" : "s"}.`,
-      `${queued} queued for safe browser prep; ${ready} already ready for QA; ${blocked} blocked.`,
+      `${queued} queued for safe browser prep; ${ready} already ready for QA; ${blocked} blocked; ${skipped} skipped.`,
       stopReason ? `Stopped early: ${stopReason}` : null,
       "I will fill only safe fields, preserve protected tabs, and stop before submit. Final submit remains manual.",
     ].filter((line): line is string => Boolean(line)).join("\n"),

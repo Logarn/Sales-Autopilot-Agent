@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 interface TestCase {
@@ -47,6 +47,14 @@ function cleanupDatabase(path: string): void {
   }
 }
 
+function ensureProofAsset(root: string, relativePath: string): void {
+  const fullPath = resolve(root, relativePath);
+  mkdirSync(dirname(fullPath), { recursive: true });
+  if (!existsSync(fullPath)) {
+    writeFileSync(fullPath, "test proof asset\n");
+  }
+}
+
 async function runTests(): Promise<void> {
   const tempDb = resolve(process.cwd(), "data/.tmp-slack-socket/jobs.db");
   const proofRoot = resolve(process.cwd(), "data/.tmp-slack-socket/proof-assets");
@@ -59,6 +67,8 @@ async function runTests(): Promise<void> {
   process.env.SLACK_ALLOWED_CHANNEL_IDS = "C123,C456,CBRAIN,CDEAL,CDISC,CEVERY,CMULTI,CNO,COWN,CPREVIEW,CQA,CSKIP,CSUBMIT,C_SHARED,CREJECT,CRETRYDONE,C0AQW8W6RFU";
   process.env.SLACK_COPY_LLM_ENABLED = "false";
   process.env.BROWSER_QA_MAX_PROTECTED_TABS = "5";
+  ensureProofAsset(proofRoot, "profile/attachments/steve-logarn-intro.pdf");
+  ensureProofAsset(proofRoot, "profile/attachments/fly-boutique-case-study.pdf");
 
   const { applySlackThreadRevision, buildDraftPreviewFromSlackThread, buildSlackSocketStartupError, handleSlackSocketTextEvent, handleThreadCommand, parseSlackThreadCommand, parseUpworkJobUrlFromText, parseUpworkJobUrlsFromText, queueCaptureFromSlackUrl, queuePrepareDraftFromSlackThread, resetSlackSocketEventDedupeForTests } = require("./slackSocket") as {
     applySlackThreadRevision: (input: { channelId: string; threadTs: string; instruction: string }) => { ok: boolean; text: string; proposalVersion?: number };
@@ -117,6 +127,15 @@ async function runTests(): Promise<void> {
       if (action.status !== "pending" && action.status !== "in_progress") continue;
       if (exceptIds.has(action.id)) continue;
       updateBrowserActionStatus(action.id, "cancelled", "test cleanup before QA reservation cap assertion");
+    }
+  }
+
+  function materializeDraftProofAssets(draft: { selectedPortfolioItems: Array<{ filePath: string }>; proofStrategy?: { selectedAttachmentPaths?: string[] } | null }): void {
+    for (const item of draft.selectedPortfolioItems) {
+      ensureProofAsset(proofRoot, item.filePath);
+    }
+    for (const path of draft.proofStrategy?.selectedAttachmentPaths ?? []) {
+      ensureProofAsset(proofRoot, path);
     }
   }
   const { buildApplicationDraft } = require("./agent") as { buildApplicationDraft: (job: any) => any };
@@ -611,6 +630,7 @@ async function runTests(): Promise<void> {
       sourceQuery: "manual",
     });
     prepareJob.applicationDraft = buildApplicationDraft(prepareJob);
+    materializeDraftProofAssets(prepareJob.applicationDraft);
     markJobSeen(prepareJob, false);
     upsertSlackThreadState({
       channelId: "C123",
@@ -629,6 +649,7 @@ async function runTests(): Promise<void> {
         url: `https://www.upwork.com/jobs/~${id.replace(/[^a-z0-9]/gi, "")}`,
       });
       job.applicationDraft = buildApplicationDraft(job);
+      materializeDraftProofAssets(job.applicationDraft);
       markJobSeen(job, false);
       upsertSlackThreadState({
         channelId,
@@ -1470,6 +1491,7 @@ async function runTests(): Promise<void> {
         url: `https://www.upwork.com/jobs/~multiapproval${i}`,
       });
       job.applicationDraft = buildApplicationDraft(job);
+      materializeDraftProofAssets(job.applicationDraft);
       markJobSeen(job, false);
       upsertSlackThreadState({
         channelId: "CMULTI",
@@ -1775,6 +1797,7 @@ async function runTests(): Promise<void> {
         url: `https://www.upwork.com/jobs/~qafulljob${i}`,
       });
       qaJob.applicationDraft = buildApplicationDraft(qaJob);
+      materializeDraftProofAssets(qaJob.applicationDraft);
       markJobSeen(qaJob, false);
       upsertSlackThreadState({
         channelId: "CQA",
@@ -1807,6 +1830,7 @@ async function runTests(): Promise<void> {
       url: "https://www.upwork.com/jobs/~qafulljob5",
     });
     fifthQaJob.applicationDraft = buildApplicationDraft(fifthQaJob);
+    materializeDraftProofAssets(fifthQaJob.applicationDraft);
     markJobSeen(fifthQaJob, false);
     upsertSlackThreadState({
       channelId: "CQA",
@@ -1826,6 +1850,7 @@ async function runTests(): Promise<void> {
       url: "https://www.upwork.com/jobs/~qacappedjob",
     });
     cappedJob.applicationDraft = buildApplicationDraft(cappedJob);
+    materializeDraftProofAssets(cappedJob.applicationDraft);
     markJobSeen(cappedJob, false);
     upsertSlackThreadState({
       channelId: "CQA",

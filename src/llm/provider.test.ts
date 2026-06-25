@@ -296,10 +296,10 @@ async function run(): Promise<void> {
     assert.equal(offline.ok, false);
 
     const plainProposal = [
-      "Steve here - how is your day going?",
+      "Steve here.",
       "Your Shopify store already has traction, and the branding brief points to trust, offer clarity, and product-path friction.",
       "I would start with a 3-5 day diagnostic. Done = identity risks, buying path friction, and first design direction mapped.",
-      "Would you prefer a quick call or an async outline?",
+      "If useful, would you rather see the first async outline here, or do a quick call?",
     ].join("\n\n");
     globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: plainProposal } }] }), { status: 200 });
     const plainTextFallback = await provider.completeJson<{ proposalText: string }>({

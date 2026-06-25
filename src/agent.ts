@@ -9,7 +9,7 @@ import { buildDeterministicJobIntelligence } from "./jobIntelligenceParser";
 import { loadConnectsRules, loadFreelancerProfile, loadPortfolioLibrary } from "./profile";
 import { loadProfileKnowledge } from "./profileKnowledge";
 import {
-  rewriteProposalCoverLetterWithKimi,
+  composeProposalCoverLetterWithKimi,
   type ProposalCoverLetterClient,
 } from "./proposalCoverLetterComposer";
 import { buildSalesLearningPromptContext } from "./salesLearningMemory";
@@ -20,7 +20,13 @@ import {
 } from "./skillRuntime";
 import { buildSoulRuntimeGuidance } from "./soul";
 import { buildBrandFactPack, loadBrandResearchSkill } from "./skills/brandResearchSkill";
-import { buildCopywritingDraft, evaluateDraftQualityGate, loadProposalCopywritingSkill } from "./skills/proposalCopywritingSkill";
+import {
+  buildCopywritingDraft,
+  buildFallbackCoverLetterFromCopyStrategy,
+  buildProposalReasoningContext,
+  evaluateDraftQualityGate,
+  loadProposalCopywritingSkill,
+} from "./skills/proposalCopywritingSkill";
 import { selectPortfolioAssetsForJob } from "./skills/portfolioSelectionSkill";
 import {
   ApplicationDraft,
@@ -28,6 +34,7 @@ import {
   JobPosting,
   KnowledgeArtifact,
   PortfolioItem,
+  ProposalGenerationTrace,
   ProofStrategy,
   ScoredJob,
   StructuredProposalDraft,
@@ -471,7 +478,28 @@ function evaluateConnects(job: ScoredJob): {
   };
 }
 
-export function buildApplicationDraft(job: ScoredJob, options: BuildApplicationDraftOptions = {}): ApplicationDraft {
+interface DraftFoundation {
+  job: ScoredJob;
+  profile: FreelancerProfile;
+  redFlags: string[];
+  fitReasons: string[];
+  rateRetainerAnswer: string;
+  preliminaryJobIntelligence: ReturnType<typeof buildDeterministicJobIntelligence>;
+  brandFactPack: ApplicationDraft["brandFactPack"];
+  reasoningContext: ReturnType<typeof buildProposalReasoningContext>;
+  proofStrategy: ProofStrategy;
+  portfolioItems: PortfolioItem[];
+  proposalCopywritingSkillLoaded: boolean;
+  soulGuidance: string[];
+  salesLearningGuidance: string[];
+  initialSkillTrace: ReturnType<typeof buildInitialSkillUseTrace>;
+  proposalStyleMemoryIds: string[];
+  cleanBannedPhrases: string[];
+  connects: ReturnType<typeof evaluateConnects>;
+  buildFallbackProposalText: () => string;
+}
+
+function buildDraftFoundation(job: ScoredJob, options: BuildApplicationDraftOptions = {}): DraftFoundation {
   if (!job.description.trim()) {
     throw new Error("Full job description is required before application draft generation.");
   }
@@ -514,7 +542,7 @@ export function buildApplicationDraft(job: ScoredJob, options: BuildApplicationD
   ].slice(0, 8);
 
   const rateRetainerAnswer = suggestBid(job, profile);
-  const copywritingDraft = buildCopywritingDraft({
+  const reasoningContext = buildProposalReasoningContext({
     job,
     profile,
     intelligence: preliminaryJobIntelligence,
@@ -524,26 +552,6 @@ export function buildApplicationDraft(job: ScoredJob, options: BuildApplicationD
     skill: proposalCopywritingSkill,
     soulGuidance,
   });
-  const proposal = cleanProposal(
-    copywritingDraft.proposalText,
-    [...(profile.voice?.bannedPhrases ?? []), ...voiceBannedPhrases(voiceKnowledge)]
-  );
-  const finalProposal = shortenProposalSafely(proposal, 1800);
-  const draftQualityGate = evaluateDraftQualityGate({
-    proposalText: finalProposal,
-    job,
-    copyStrategy: copywritingDraft.copyStrategy,
-    brandFactPack,
-    skillLoaded: Boolean(proposalCopywritingSkill.markdown.includes("# Proposal Copywriting Skill")),
-    fullJobDescriptionRead: job.description.trim().length > 0 && copywritingDraft.jobUnderstanding.fullJobDescription === job.description,
-    copyStrategyCreated: Boolean(copywritingDraft.copyStrategy.one_sentence_sales_argument),
-    finalSubmitManual: true,
-    proofVerificationState: copywritingDraft.copyStrategy.proof_verification_state,
-    screeningAnswers: copywritingDraft.screeningAnswers,
-    soulLoaded: soulGuidance.length > 0,
-  });
-  const proposalQuality = critiqueProposal(finalProposal, job, profile);
-  const jobIntelligence = buildDeterministicJobIntelligence(job, finalProposal);
   const connects = evaluateConnects(job);
   if (bidRuleKnowledge.length) {
     connects.warnings.push(...bidRuleKnowledge.map((artifact) => `Profile bid rule: ${artifact.summary}`));
@@ -551,57 +559,163 @@ export function buildApplicationDraft(job: ScoredJob, options: BuildApplicationD
   if (salesLearningGuidance.length) {
     connects.warnings.push(...salesLearningGuidance.filter((line) => /boost|connects|source|timing/i.test(line)));
   }
-  const skillUseTrace = finalizeSkillUseTrace({
-    trace: initialSkillTrace,
-    brandFactPack,
-    copyStrategy: copywritingDraft.copyStrategy,
-    proofStrategy,
-    qualityGateReady: draftQualityGate.ready,
-  });
   const proposalStyleMemoryIds = salesLearning.relevantMemories
     .map((memory) => `${memory.type}:${memory.scope}:${memory.subject}`)
     .slice(0, 8);
 
   return {
-    jobId: job.id,
-    status: "draft",
-    fitScore: Math.min(100, Math.max(0, job.scoreBreakdown.fitScore.score)),
-    fitReasons,
+    job,
+    profile,
     redFlags,
-    suggestedBid: rateRetainerAnswer,
-    suggestedConnects: job.connects?.requiredConnects ?? job.connectsCost,
-    suggestedBoostConnects: connects.suggestedBoostConnects,
-    connectsWarnings: connects.warnings,
-    connectsStrategy: connects.strategy,
-    selectedPortfolioItems: portfolioItems,
-    proposalQuality,
-    proposalText: finalProposal,
-    jobIntelligence,
-    structuredProposal: buildStructuredProposalDraft({
-      job,
-      profile,
-      opening: copywritingDraft.copyStrategy.opening_angle,
-      diagnosis: copywritingDraft.copyStrategy.one_sentence_sales_argument,
-      proof: proofStrategy.summary,
-      clientRequestAnswers: copywritingDraft.screeningAnswers,
-      rateRetainerAnswer,
-      cta: copywritingDraft.copyStrategy.cta,
-      portfolioItems,
-      proposalText: finalProposal,
-      suggestedConnects: job.connects?.requiredConnects ?? job.connectsCost,
-      suggestedBoostConnects: connects.suggestedBoostConnects,
-      soulGuidance: [...soulGuidance, ...salesLearningGuidance],
-    }),
-    jobUnderstanding: copywritingDraft.jobUnderstanding,
+    fitReasons,
+    rateRetainerAnswer,
+    preliminaryJobIntelligence,
     brandFactPack,
-    copyStrategy: copywritingDraft.copyStrategy,
+    reasoningContext,
     proofStrategy,
+    portfolioItems,
+    proposalCopywritingSkillLoaded: Boolean(proposalCopywritingSkill.markdown.includes("# Proposal Copywriting Skill")),
+    soulGuidance,
+    salesLearningGuidance,
+    initialSkillTrace,
+    proposalStyleMemoryIds,
+    cleanBannedPhrases: [...(profile.voice?.bannedPhrases ?? []), ...voiceBannedPhrases(voiceKnowledge)],
+    connects,
+    buildFallbackProposalText: () => buildFallbackCoverLetterFromCopyStrategy({
+      job,
+      strategy: reasoningContext.copyStrategy,
+      proofPoints,
+      portfolioItems,
+    }),
+  };
+}
+
+function buildProposalGenerationInvocationTags(trace: ProposalGenerationTrace): string[] {
+  return [
+    "cover_letter_strategy:job_reader",
+    "cover_letter_strategy:problem_interpreter",
+    `cover_letter_strategy:angle_generator:${trace.candidateCount}`,
+    trace.mode === "llm_primary"
+      ? "cover_letter_drafting:proposal-writer-llm-primary"
+      : `cover_letter_drafting:deterministic-fallback:${trace.fallbackReason ?? "unknown"}`,
+    "cover_letter_critic:copy-os",
+    ...(trace.repairAttempted ? ["cover_letter_rewriter:repair-pass"] : []),
+    "cover_letter_validator:final-validator",
+  ];
+}
+
+function finalizeApplicationDraft(
+  foundation: DraftFoundation,
+  proposalText: string,
+  trace: ProposalGenerationTrace,
+): ApplicationDraft {
+  const cleanedProposal = shortenProposalSafely(
+    cleanProposal(proposalText, foundation.cleanBannedPhrases),
+    1800,
+  );
+  const draftQualityGate = evaluateDraftQualityGate({
+    proposalText: cleanedProposal,
+    job: foundation.job,
+    copyStrategy: foundation.reasoningContext.copyStrategy,
+    brandFactPack: foundation.brandFactPack,
+    skillLoaded: foundation.proposalCopywritingSkillLoaded,
+    fullJobDescriptionRead: foundation.job.description.trim().length > 0 &&
+      foundation.reasoningContext.jobUnderstanding.fullJobDescription === foundation.job.description,
+    copyStrategyCreated: Boolean(foundation.reasoningContext.copyStrategy.one_sentence_sales_argument),
+    finalSubmitManual: true,
+    proofVerificationState: foundation.proofStrategy.proofVerificationState ?? foundation.reasoningContext.copyStrategy.proof_verification_state,
+    screeningAnswers: foundation.reasoningContext.screeningAnswers,
+    soulLoaded: foundation.soulGuidance.length > 0,
+  });
+  const finalizedTrace = finalizeSkillUseTrace({
+    trace: foundation.initialSkillTrace,
+    brandFactPack: foundation.brandFactPack,
+    copyStrategy: foundation.reasoningContext.copyStrategy,
+    proofStrategy: foundation.proofStrategy,
+    qualityGateReady: draftQualityGate.ready,
+  });
+  const skillUseTrace = finalizedTrace
+    ? {
+        ...finalizedTrace,
+        invocationOrder: [
+          ...finalizedTrace.invocationOrder,
+          ...buildProposalGenerationInvocationTags(trace),
+        ],
+        qualityGateReady: draftQualityGate.ready,
+        browserFillAllowed: draftQualityGate.ready &&
+          finalizedTrace.captureConfidence !== "low" &&
+          finalizedTrace.missingRequiredSkills.length === 0,
+      }
+    : finalizedTrace;
+  return {
+    jobId: foundation.job.id,
+    status: "draft",
+    fitScore: Math.min(100, Math.max(0, foundation.job.scoreBreakdown.fitScore.score)),
+    fitReasons: foundation.fitReasons,
+    redFlags: foundation.redFlags,
+    suggestedBid: foundation.rateRetainerAnswer,
+    suggestedConnects: foundation.job.connects?.requiredConnects ?? foundation.job.connectsCost,
+    suggestedBoostConnects: foundation.connects.suggestedBoostConnects,
+    connectsWarnings: foundation.connects.warnings,
+    connectsStrategy: foundation.connects.strategy,
+    selectedPortfolioItems: foundation.portfolioItems,
+    proposalQuality: critiqueProposal(cleanedProposal, foundation.job, foundation.profile),
+    proposalText: cleanedProposal,
+    jobIntelligence: buildDeterministicJobIntelligence(foundation.job, cleanedProposal),
+    structuredProposal: buildStructuredProposalDraft({
+      job: foundation.job,
+      profile: foundation.profile,
+      opening: foundation.reasoningContext.copyStrategy.opening_angle,
+      diagnosis: foundation.reasoningContext.copyStrategy.one_sentence_sales_argument,
+      proof: foundation.proofStrategy.summary,
+      clientRequestAnswers: foundation.reasoningContext.screeningAnswers,
+      rateRetainerAnswer: foundation.rateRetainerAnswer,
+      cta: foundation.reasoningContext.copyStrategy.cta,
+      portfolioItems: foundation.portfolioItems,
+      proposalText: cleanedProposal,
+      suggestedConnects: foundation.job.connects?.requiredConnects ?? foundation.job.connectsCost,
+      suggestedBoostConnects: foundation.connects.suggestedBoostConnects,
+      soulGuidance: [
+        ...foundation.soulGuidance,
+        ...foundation.salesLearningGuidance,
+        trace.mode === "llm_primary"
+          ? `proposal writer path: llm_primary:${trace.provider}`
+          : `proposal writer path: deterministic_fallback:${trace.fallbackReason ?? "unknown"}`,
+      ],
+    }),
+    jobUnderstanding: foundation.reasoningContext.jobUnderstanding,
+    brandFactPack: foundation.brandFactPack,
+    copyStrategy: foundation.reasoningContext.copyStrategy,
+    proofStrategy: foundation.proofStrategy,
     draftQualityGate,
     skillUseTrace,
-    proposalStyleMemoryIds,
-    brandResearchStatus: copywritingDraft.brandResearchStatus,
+    proposalStyleMemoryIds: [
+      ...foundation.proposalStyleMemoryIds,
+      trace.mode === "llm_primary"
+        ? `proposal_copy_llm:${trace.selectedAngleId ?? "selected"}`
+        : `proposal_copy_fallback:${trace.fallbackReason ?? "unknown"}`,
+    ].slice(0, 10),
+    brandResearchStatus: foundation.reasoningContext.brandResearchStatus,
+    proposalGenerationTrace: trace,
     generatedAt: new Date().toISOString(),
   };
+}
+
+export function buildApplicationDraft(job: ScoredJob, options: BuildApplicationDraftOptions = {}): ApplicationDraft {
+  const foundation = buildDraftFoundation(job, options);
+  // This path is intentionally deterministic fallback only. The primary proposal writer lives
+  // in buildApplicationDraftWithResearch -> composeProposalCoverLetterWithKimi.
+  return finalizeApplicationDraft(
+    foundation,
+    foundation.buildFallbackProposalText(),
+    {
+      mode: "deterministic_fallback",
+      provider: "fallback",
+      candidateCount: 0,
+      repairAttempted: false,
+      fallbackReason: "deterministic_cover_letter_fallback_only",
+    },
+  );
 }
 
 export async function buildApplicationDraftWithResearch(
@@ -615,114 +729,44 @@ export async function buildApplicationDraftWithResearch(
     job,
     provider: options.brandResearchProvider,
   });
-  const deterministicDraft = buildApplicationDraft(job, { brandResearchRun });
-  const rewrite = await rewriteProposalCoverLetterWithKimi({
+  const foundation = buildDraftFoundation(job, { brandResearchRun });
+  const composed = await composeProposalCoverLetterWithKimi({
     job,
-    deterministicDraft,
-    copyStrategy: deterministicDraft.copyStrategy as Parameters<typeof evaluateDraftQualityGate>[0]["copyStrategy"],
-    brandFactPack: deterministicDraft.brandFactPack,
-    proofStrategy: deterministicDraft.proofStrategy,
-    selectedPortfolioItems: deterministicDraft.selectedPortfolioItems,
+    jobUnderstanding: foundation.reasoningContext.jobUnderstanding,
+    brandResearchStatus: foundation.reasoningContext.brandResearchStatus,
+    copyStrategy: foundation.reasoningContext.copyStrategy,
+    brandFactPack: foundation.brandFactPack,
+    proofStrategy: foundation.proofStrategy,
+    selectedPortfolioItems: foundation.portfolioItems,
+    fallbackProposalText: foundation.buildFallbackProposalText,
+    fallbackScreeningAnswers: foundation.reasoningContext.screeningAnswers,
+    suggestedBid: foundation.rateRetainerAnswer,
+    suggestedConnects: foundation.job.connects?.requiredConnects ?? foundation.job.connectsCost,
   }, options.proposalCopyProvider);
 
-  if (!rewrite.usedLlm) {
-    return {
-      ...deterministicDraft,
-      skillUseTrace: deterministicDraft.skillUseTrace
-        ? {
-            ...deterministicDraft.skillUseTrace,
-            invocationOrder: [
-              ...deterministicDraft.skillUseTrace.invocationOrder,
-              `cover_letter_drafting:proposal-copy-kimi-fallback:${rewrite.reason ?? "unknown"}`,
-            ],
-          }
-        : deterministicDraft.skillUseTrace,
-      proposalStyleMemoryIds: [
-        ...(deterministicDraft.proposalStyleMemoryIds ?? []),
-        `proposal_copy_llm:fallback:${rewrite.reason ?? "unknown"}`,
-      ].slice(0, 10),
-    };
+  if (!composed.usedLlm) {
+    return finalizeApplicationDraft(
+      foundation,
+      composed.proposalText,
+      composed.generationTrace,
+    );
   }
 
-  const profile = loadFreelancerProfile();
-  const finalProposal = shortenProposalSafely(
-    cleanProposal(rewrite.proposalText, profile.voice?.bannedPhrases ?? []),
-    1800,
+  const llmDraft = finalizeApplicationDraft(foundation, composed.proposalText, composed.generationTrace);
+  if (llmDraft.draftQualityGate?.ready) {
+    return llmDraft;
+  }
+
+  return finalizeApplicationDraft(
+    foundation,
+    foundation.buildFallbackProposalText(),
+    {
+      mode: "deterministic_fallback",
+      provider: "fallback",
+      candidateCount: composed.generationTrace.candidateCount,
+      repairAttempted: composed.generationTrace.repairAttempted,
+      fallbackReason: `final_validator_blocked:${llmDraft.draftQualityGate?.issues.slice(0, 3).map((issue) => issue.code).join(",") ?? "unknown"}`,
+      candidates: composed.generationTrace.candidates,
+    },
   );
-  const draftQualityGate = evaluateDraftQualityGate({
-    proposalText: finalProposal,
-    job,
-    copyStrategy: deterministicDraft.copyStrategy as any,
-    brandFactPack: deterministicDraft.brandFactPack,
-    skillLoaded: true,
-    fullJobDescriptionRead: job.description.trim().length > 0 && deterministicDraft.jobUnderstanding?.fullJobDescription === job.description,
-    copyStrategyCreated: Boolean(deterministicDraft.copyStrategy?.one_sentence_sales_argument),
-    finalSubmitManual: true,
-    proofVerificationState: deterministicDraft.proofStrategy?.proofVerificationState ?? deterministicDraft.copyStrategy?.proof_verification_state,
-    screeningAnswers: deterministicDraft.structuredProposal?.clientRequestAnswers ?? [],
-    soulLoaded: true,
-  });
-
-  if (!draftQualityGate.ready) {
-    return {
-      ...deterministicDraft,
-      skillUseTrace: deterministicDraft.skillUseTrace
-        ? {
-            ...deterministicDraft.skillUseTrace,
-            invocationOrder: [
-              ...deterministicDraft.skillUseTrace.invocationOrder,
-              `cover_letter_drafting:proposal-copy-kimi-rejected:${draftQualityGate.issues.slice(0, 3).map((issue) => issue.code).join(",")}`,
-            ],
-          }
-        : deterministicDraft.skillUseTrace,
-      proposalStyleMemoryIds: [
-        ...(deterministicDraft.proposalStyleMemoryIds ?? []),
-        "proposal_copy_llm:rejected_by_quality_gate",
-      ].slice(0, 10),
-    };
-  }
-
-  const skillUseTrace = deterministicDraft.skillUseTrace
-    ? {
-        ...deterministicDraft.skillUseTrace,
-        invocationOrder: [
-          ...deterministicDraft.skillUseTrace.invocationOrder,
-          "cover_letter_drafting:proposal-copy-kimi-conversion-os",
-        ],
-        qualityGateReady: draftQualityGate.ready,
-        browserFillAllowed: draftQualityGate.ready &&
-          deterministicDraft.skillUseTrace.captureConfidence !== "low" &&
-          deterministicDraft.skillUseTrace.missingRequiredSkills.length === 0,
-      }
-    : deterministicDraft.skillUseTrace;
-
-  return {
-    ...deterministicDraft,
-    proposalText: finalProposal,
-    proposalQuality: critiqueProposal(finalProposal, job, profile),
-    jobIntelligence: buildDeterministicJobIntelligence(job, finalProposal),
-    draftQualityGate,
-    skillUseTrace,
-    proposalStyleMemoryIds: [
-      ...(deterministicDraft.proposalStyleMemoryIds ?? []),
-      "proposal_copy_llm:kimi_conversion_os",
-    ].slice(0, 10),
-    structuredProposal: deterministicDraft.structuredProposal
-      ? {
-          ...deterministicDraft.structuredProposal,
-          opening: deterministicDraft.copyStrategy?.opening_angle ?? deterministicDraft.structuredProposal.opening,
-          diagnosis: deterministicDraft.copyStrategy?.one_sentence_sales_argument ?? deterministicDraft.structuredProposal.diagnosis,
-          proof: deterministicDraft.proofStrategy?.summary ?? deterministicDraft.structuredProposal.proof,
-          browserFillNotes: {
-            ...deterministicDraft.structuredProposal.browserFillNotes,
-            approvedText: finalProposal,
-            profileNotes: [
-              ...deterministicDraft.structuredProposal.browserFillNotes.profileNotes,
-              "proposal copy LLM: Kimi conversion OS pass completed with soul.md context",
-            ],
-          },
-        }
-      : deterministicDraft.structuredProposal,
-    generatedAt: new Date().toISOString(),
-  };
 }

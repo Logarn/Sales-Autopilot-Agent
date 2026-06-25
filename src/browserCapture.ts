@@ -364,6 +364,14 @@ const NOISE_PATTERNS = [
   /__APOLLO_STATE__/gi,
   /__NEXT_DATA__/gi,
   /checking if the site connection is secure/gi,
+  /Unrealistic Expectations/gi,
+  /Too Many Applicants/gi,
+  /Job posted too long ago/gi,
+  /Poor reviews about the client/gi,
+  /Doesn't Match Skills/gi,
+  /I am overqualified/gi,
+  /Budget too low/gi,
+  /Not in my preferred location/gi,
   /the client will not be notified/gi,
   /your feedback helps us improve job search/gi,
   /feedback helps us improve job search/gi,
@@ -372,6 +380,11 @@ const NOISE_PATTERNS = [
   /browse jobs/gi,
   /log in/gi,
   /sign up/gi,
+  /Save job/gi,
+  /more about\s+"/gi,
+  /Skip skills/gi,
+  /Previous skills\.?\s*Update list/gi,
+  /Next skills\.?\s*Update list/gi,
 ];
 
 function countNoiseMarkers(value: string): number {
@@ -383,10 +396,17 @@ export function stripCaptureNoise(value: string, maxLength = 6000): { cleaned: s
   let cleaned = value
     .replace(/window\.TOP_NAV_USER_CONFIG[\s\S]{0,5000}?;?/gi, " ")
     .replace(/\{\s*"(?:serviceName|visitorGqlTokenUrl|apollo|graphql|navigation)"[\s\S]{0,5000}?\}/gi, " ")
+    .replace(/\b(?:Unrealistic Expectations|Too Many Applicants|Job posted too long ago|Poor reviews about the client|Doesn't Match Skills|I am overqualified|Budget too low|Not in my preferred location)\b\s*/gi, " ")
     .replace(/\bthe client will not be notified\.?\s*/gi, " ")
     .replace(/\byour feedback helps us improve job search\.?\s*/gi, " ")
     .replace(/\bfeedback helps us improve job search\.?\s*/gi, " ")
-    .replace(/(?:Skip to main content|Search jobs|Browse jobs|Find talent|Why Upwork|Enterprise|Log in|Sign up)\s*/gi, " ")
+    .replace(/\bSave job\b\s*/gi, " ")
+    .replace(/\bmore about\s+"[^"]+"\s*/gi, " ")
+    .replace(/\b(?:Skip to main content|Search jobs|Browse jobs|Find talent|Why Upwork|Enterprise|Log in|Sign up)\b\s*/gi, " ")
+    .replace(/\bSkills\b\s*Skip skills\b[\s\S]{0,4000}$/i, " ")
+    .replace(/\bPrevious skills\.?\s*Update list\b[\s\S]{0,4000}$/i, " ")
+    .replace(/\bNext skills\.?\s*Update list\b[\s\S]{0,4000}$/i, " ")
+    .replace(/<div[^>]*$/i, " ")
     .replace(/[\[{][^\n]{120,}[\]}]/g, " ");
   const removedNoiseMarkers = countNoiseMarkers(value) - countNoiseMarkers(cleaned);
   cleaned = normalizeWhitespace(cleaned);
@@ -440,6 +460,9 @@ export function assessCaptureQuality(input: { title: string; description: string
   if (/^[\[{].{120,}[\]}]$/s.test(input.title) || /^[\[{].{300,}[\]}]$/s.test(input.description)) reasons.push("json_blob_detected");
   if (input.rawConfigNoiseDetected && input.description.length < 140) reasons.push("config_noise_overwhelmed_content");
   if (/window\.TOP_NAV_USER_CONFIG|visitorGqlTokenUrl|serviceName|graphql|apollo/i.test(combined) && input.description.length < 220) reasons.push("obvious_navigation_or_config_code");
+  if (/\b(?:Unrealistic Expectations|Too Many Applicants|Job posted too long ago|Poor reviews about the client|Doesn't Match Skills|I am overqualified|Budget too low|Not in my preferred location|Save job|more about\s+"|Skip skills|Previous skills\.?\s*Update list|Next skills\.?\s*Update list)\b/i.test(combined)) {
+    reasons.push("feedback_overlay_or_skills_noise");
+  }
   return { lowConfidence: reasons.length > 0, reasons };
 }
 

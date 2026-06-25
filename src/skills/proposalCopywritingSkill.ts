@@ -142,6 +142,14 @@ export interface CopywritingDraftResult {
   draftQualityGate: DraftQualityGateResult;
 }
 
+export interface ProposalReasoningContext {
+  jobUnderstanding: JobUnderstanding;
+  brandResearchStatus: BrandResearchStatus;
+  brandFactPack: BrandFactPack;
+  copyStrategy: CopyStrategy;
+  screeningAnswers: string[];
+}
+
 export function loadProposalCopywritingSkill(now = new Date()): CopywritingSkillRuntime {
   const skill = loadRuntimeSkill("proposal-copywriting", now);
   return {
@@ -216,6 +224,17 @@ function visibleBrandName(job: JobPosting): string {
     /\b(?:brand|store|company|site)\s+([A-Z][A-Za-z0-9&' -]{2,60}?)(?=\s*(?:\/|,|\.|\band\b|\bneeds\b|\bis\b|\n|$))/,
     /\bfor\s+([A-Z][A-Za-z0-9&' -]{2,50}?)(?=\s+(?:brand|store|shop|site|company)\b)/,
   ]) ?? "";
+}
+
+function isUsefulBrandName(value: string): boolean {
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  if (!cleaned) return false;
+  if (cleaned.split(/\s+/).length > 4) return false;
+  if (/^(?:need|needs|looking|look|hiring|seeking|head)\b/i.test(cleaned)) return false;
+  if (/\b(?:klaviyo|mailchimp|omnisend|figma|shopify|email|marketing|designer|design support|specialist)\b/i.test(cleaned) && cleaned.split(/\s+/).length > 2) {
+    return false;
+  }
+  return true;
 }
 
 function visibleBrandUrl(job: JobPosting): string {
@@ -612,6 +631,12 @@ function humanizeScopeFragment(value: string): string {
     .trim();
 }
 
+function sentenceCase(value: string): string {
+  const cleaned = humanizeScopeFragment(value).replace(/[.!?]+$/g, "").trim();
+  if (!cleaned) return "";
+  return `${cleaned[0].toUpperCase()}${cleaned.slice(1)}.`;
+}
+
 function joinHumanList(values: string[]): string {
   const cleaned = values.map(humanizeScopeFragment).filter(Boolean);
   if (cleaned.length <= 1) return cleaned[0] ?? "";
@@ -656,7 +681,7 @@ function openerSpecifics(strategy: CopyStrategy): [string, string] {
 }
 
 function brandContext(strategy: CopyStrategy): string {
-  const name = strategy.brand_name && strategy.brand_name !== "unknown" ? strategy.brand_name : "";
+  const name = strategy.brand_name && strategy.brand_name !== "unknown" && isUsefulBrandName(strategy.brand_name) ? strategy.brand_name : "";
   const url = strategy.brand_url && strategy.brand_url !== "unknown" ? strategy.brand_url : "";
   if (name && url) return `${name} / ${url}`;
   return name || url || "the account";
@@ -676,30 +701,35 @@ function isSetupConfigurationScope(strategy: CopyStrategy): boolean {
 
 function conciseHook(strategy: CopyStrategy, job?: JobPosting): string {
   const tools = requestedTools(strategy);
-  const opener = "Steve here - how is your day going?";
+  const opener = "Steve here.";
   const context = brandContext(strategy);
   const contextPrefix = context !== "the account" ? `${context}: ` : "";
   const toolList = joinHumanList(tools.slice(0, 3));
   const deliverableFocusText = deliverableFocus(strategy);
   const jobTerms = joinHumanList(jobSpecificTerms(job));
-  const specificityBundle = jobTerms ? `${jobTerms}, plus ${deliverableFocusText}` : deliverableFocusText;
+  const specificityAnchor = jobTerms || deliverableFocusText;
+  const toolGuard = tools.length > 1 ? "those tools" : toolList || "the tooling";
+  const toolValueLine = tools.length > 1
+    ? "Those tools matter after that, not before."
+    : `${toolList || humanizeScopeFragment(strategy.requested_tools[0] ?? laneLabel(strategy.retention_lane))} matters after that, not before.`;
+  const commercialPain = sentenceCase(strategy.client_commercial_pain);
   if (isSetupConfigurationScope(strategy)) {
-    return `${opener} ${contextPrefix}Brevo setup only helps if sender reputation, contact quality, segmentation, automations, and transactional separation are clean from day one. If that foundation is loose, more volume just amplifies the mess instead of helping ${deliverableFocusText}.`;
+    return `${opener} ${contextPrefix}A Brevo setup like this only works if sender reputation, contact quality, segmentation, automations, and transactional separation are clean from day one. If that foundation is loose, more volume just amplifies the mess instead of helping ${deliverableFocusText}.`;
   }
   if (strategy.category === "gardening" && tools.length > 0) {
-    return `${opener} ${contextPrefix}seasonal replenishment only works when the message meets the customer at the right planting and care moment. If that timing is off, more email just creates noise instead of making the next purchase feel obvious.`;
+    return `${opener} ${contextPrefix}Seasonal replenishment only works when the message meets the customer at the right planting and care moment. If that timing is off, more email just creates noise instead of making the next purchase feel obvious.`;
   }
   if (strategy.category === "brand_design") {
-    return `${opener} ${contextPrefix}there is already demand here; the bigger gap looks like trust and first-click clarity. If the identity, offer hierarchy, and product path feel loose, traffic has to work harder than it should before shoppers buy.`;
+    return `${opener} ${contextPrefix}The brief already ties branding, logo design, Shopify, and conversion optimization together here. If the identity, offer hierarchy, and product path feel loose, it gets harder to recover conversion from the traffic you are already paying for.`;
   }
   if (strategy.category === "email_design") {
     const platformDetail = toolList ? ` in ${toolList}` : "";
-    return `${opener} ${contextPrefix}for this kind of email work, the click depends on whether the offer, product path, and CTA are obvious on mobile in a few seconds. A prettier template without that logic usually just hides the same conversion leak${platformDetail}.`;
+    return `${opener} ${contextPrefix}For this kind of email work, the reader has to grasp template hierarchy, product path, and CTA on mobile in a few seconds across ${toolList || "the platform"}. Figma constraints only matter after that. A prettier template without that logic usually just hides the same conversion leak${platformDetail}.`;
   }
   if (tools.length >= 3) {
-    return `${opener} ${contextPrefix}the customer-timing problem comes first here: ${specificityBundle} only pays off if it is tied to real buying moments; otherwise ${toolList} just spreads the same noise across more sends.`;
+    return `${opener} ${contextPrefix}The brief reads like a customer-timing problem first across ${specificityAnchor}. That scope only pays off when it is tied to real buying moments. Otherwise ${toolGuard} just spread the same problem across more sends.`;
   }
-  return `${opener} ${contextPrefix}the customer-timing problem comes first here: ${specificityBundle} only helps if it lines up with a real buying moment, and ${toolList || humanizeScopeFragment(strategy.requested_tools[0] ?? laneLabel(strategy.retention_lane))} only matters once that timing is right. ${humanizeScopeFragment(strategy.client_commercial_pain)}`;
+  return `${opener} ${contextPrefix}The brief reads like a customer-timing problem first across ${specificityAnchor}. That scope only helps if it lines up with a real buying moment. ${toolValueLine} ${commercialPain}`;
 }
 
 function oneStepSolution(strategy: CopyStrategy): string {
@@ -763,37 +793,39 @@ function singleProofPoint(proofPoints: string[], portfolioItems: PortfolioItem[]
 function logisticsLine(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
   if (strategy.category === "brand_design") {
-    return "I can keep the first step async-friendly and focused on the decisions that make the store sharper before bigger design execution.";
+    return "I can keep the first pass async-friendly and focused on the decisions that make the store sharper before bigger design execution.";
   }
   if (strategy.category === "email_design") {
-    return "I can keep this async-friendly and show the before/after logic before expanding the set.";
+    return "I can keep the first pass async-friendly and show the before/after logic before expanding the set.";
   }
   if (tools.length >= 3) {
-    return "I can keep this async-friendly and show the performance logic before any bigger rebuild.";
+    return "I can keep the first pass tight and async-friendly so you can see the performance logic before any bigger rebuild.";
   }
-  return "I can start small and keep the first scope tied to the highest-leverage fix already implied by the brief.";
+  return "I can keep the first pass tight and async-friendly so you can see the logic before we expand scope.";
 }
 
 function ctaLine(strategy: CopyStrategy): string {
   const tools = requestedTools(strategy);
   if (strategy.category === "brand_design") {
-    return "Would you prefer a quick call, or should I send the first async brand/conversion outline?";
+    return "If useful, would you rather see the first async brand/conversion outline here, or do a quick call?";
   }
   if (strategy.category === "email_design") {
-    return "Would you prefer a quick call, or should I send the first async template outline?";
+    return "If useful, would you rather see the first async template outline here, or do a quick call?";
   }
   if (tools.length >= 3) {
-    return "Would you prefer a quick call, or should I send the first async audit outline from the current setup?";
+    return "If useful, would you rather see the first async audit outline here, or do a quick call?";
   }
-  return "Would you prefer a quick call, or should I send the first async outline from the current setup?";
+  return "If useful, would you rather see the first async outline here, or do a quick call?";
 }
 
-export function draftCoverLetterFromCopyStrategy(input: {
+export function buildFallbackCoverLetterFromCopyStrategy(input: {
   job?: JobPosting;
   strategy: CopyStrategy;
   proofPoints: string[];
   portfolioItems: PortfolioItem[];
 }): string {
+  // Deterministic surface copy is fallback-only. The primary proposal path should come from
+  // the LLM composer after job understanding, angle generation, critique, and validation.
   const strategy = input.strategy;
   const instructionPrefix = input.job ? requiredOpeningInstructionPrefix(input.job) : "";
   return [
@@ -1047,6 +1079,10 @@ function usesGenericAiCliches(text: string): boolean {
   return /\b(?:I am writing to express|tailored to your needs|leverage my expertise|extensive experience|passionate about|proven track record|take your business to the next level)\b/i.test(text);
 }
 
+function hasFauxCasualSmallTalk(text: string): boolean {
+  return /\b(?:how is your day going|hey there|hope you(?:'re| are) well|hope your week is going well|hope you're doing well|hows it going|how's it going)\b/i.test(text);
+}
+
 function hasUnsupportedClaim(text: string, proofState?: ProofVerificationState): boolean {
   if (/\bguarantee(?:d)?\b|\bwill definitely\b|\b100%\b/i.test(text)) return true;
   return /\b(?:attached|uploaded|selected portfolio|verified proof|included the file)\b/i.test(text) && proofState !== "verified";
@@ -1124,7 +1160,7 @@ export function evaluateProposalScorecard(input: {
   const designScope = isBrandDesignScope(sourceText(input.job).toLowerCase()) || input.copyStrategy?.category === "brand_design";
   const metricPass = hasMetricMarker(text) || (designScope && hasDesignPortfolioProofMarker(text));
   const soulLoaded = input.soulLoaded === true;
-  const tonePass = soulLoaded && (/^steve here\b/i.test(text) || hasAllowedRequiredPrefix(text, input.job)) && /\bI would\b/i.test(text) && !usesGenericAiCliches(text);
+  const tonePass = soulLoaded && /\bI would\b/i.test(text) && !usesGenericAiCliches(text) && !hasFauxCasualSmallTalk(text);
   const ctaPass = hasBinaryOrScopeCta(text);
   const honestyPass = !hasUnsupportedClaim(text, input.proofVerificationState) && !/\b(?:invented|fake|guaranteed results)\b/i.test(text);
 
@@ -1309,8 +1345,8 @@ export function evaluateDraftQualityGate(input: {
   if (genericExpertStart.test(text) || /^i (?:am|'m) (?:a )?klaviyo expert/i.test(text)) {
     addIssue(issues, { code: "generic_expert_opener", severity: "critical", message: "Cover letter starts with generic expert/credential copy.", evidence: text.slice(0, 120) });
   }
-  if ((!/^steve here\b/i.test(text) && !hasAllowedRequiredPrefix(text, input.job)) || !/\bhow is your day going\?/i.test(text)) {
-    addIssue(issues, { code: "human_opener_missing", severity: "critical", message: "Cover letter is missing the required Steve here / human opener." });
+  if (hasFauxCasualSmallTalk(text)) {
+    addIssue(issues, { code: "faux_casual_small_talk", severity: "critical", message: "Cover letter uses faux-casual small talk instead of opening from the job context." });
   }
   if (/\b(?:Two customer-lifecycle details stood out|commercially pointed)\b/i.test(text)) {
     addIssue(issues, { code: "sterile_template_voice", severity: "critical", message: "Cover letter still contains the old sterile proposal template voice.", evidence: text.match(/\b(?:Two customer-lifecycle details stood out|commercially pointed)\b/i)?.[0] });
@@ -1431,6 +1467,34 @@ export function evaluateDraftQualityGate(input: {
 }
 
 export function buildCopywritingDraft(input: CopywritingDraftInput): CopywritingDraftResult {
+  const reasoning = buildProposalReasoningContext(input);
+  const proposalText = buildFallbackCoverLetterFromCopyStrategy({
+    job: input.job,
+    strategy: reasoning.copyStrategy,
+    proofPoints: input.proofPoints,
+    portfolioItems: input.portfolioItems,
+  });
+  const draftQualityGate = evaluateDraftQualityGate({
+    proposalText,
+    job: input.job,
+    copyStrategy: reasoning.copyStrategy,
+    brandFactPack: input.brandFactPack,
+    skillLoaded: Boolean(input.skill.markdown.includes("# Proposal Copywriting Skill")),
+    fullJobDescriptionRead: input.job.description.trim().length > 0 && reasoning.jobUnderstanding.fullJobDescription === input.job.description,
+    copyStrategyCreated: Boolean(reasoning.copyStrategy.one_sentence_sales_argument),
+    finalSubmitManual: true,
+    proofVerificationState: reasoning.copyStrategy.proof_verification_state,
+    screeningAnswers: reasoning.screeningAnswers,
+    soulLoaded: (input.soulGuidance?.length ?? 0) > 0 || buildSoulRuntimeGuidance("proposal_copywriting_skill").length > 0,
+  });
+  return {
+    ...reasoning,
+    proposalText,
+    draftQualityGate,
+  };
+}
+
+export function buildProposalReasoningContext(input: CopywritingDraftInput): ProposalReasoningContext {
   if (!input.job.description.trim()) {
     throw new Error("Full job description is required before proposal-copywriting skill can run.");
   }
@@ -1453,12 +1517,6 @@ export function buildCopywritingDraft(input: CopywritingDraftInput): Copywriting
     proofPoints: input.proofPoints,
     portfolioItems: input.portfolioItems,
   });
-  const proposalText = draftCoverLetterFromCopyStrategy({
-    job: input.job,
-    strategy: copyStrategy,
-    proofPoints: input.proofPoints,
-    portfolioItems: input.portfolioItems,
-  });
   const screeningAnswers = draftScreeningAnswersFromCopyStrategy({
     strategy: copyStrategy,
     suggestedBid: input.profile.hourlyRate > 0 ? `$${input.profile.hourlyRate}/hr` : "Use the posted budget unless the scope is larger than described",
@@ -1466,26 +1524,11 @@ export function buildCopywritingDraft(input: CopywritingDraftInput): Copywriting
     portfolioItems: input.portfolioItems,
     jobText: sourceText(input.job),
   });
-  const draftQualityGate = evaluateDraftQualityGate({
-    proposalText,
-    job: input.job,
-    copyStrategy,
-    brandFactPack: input.brandFactPack,
-    skillLoaded: Boolean(input.skill.markdown.includes("# Proposal Copywriting Skill")),
-    fullJobDescriptionRead: input.job.description.trim().length > 0 && understanding.fullJobDescription === input.job.description,
-    copyStrategyCreated: Boolean(copyStrategy.one_sentence_sales_argument),
-    finalSubmitManual: true,
-    proofVerificationState: copyStrategy.proof_verification_state,
-    screeningAnswers,
-    soulLoaded: soulGuidance.length > 0,
-  });
   return {
     jobUnderstanding: understanding,
     brandResearchStatus,
     brandFactPack: input.brandFactPack,
     copyStrategy,
-    proposalText,
     screeningAnswers,
-    draftQualityGate,
   };
 }

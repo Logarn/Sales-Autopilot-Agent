@@ -269,8 +269,9 @@ const noisyCapturedJob = scored({
 });
 const noisyDraft = buildApplicationDraft(noisyCapturedJob);
 assert(!/10\.00|fixed-priceintermediate|upwork\.com|Screenshot\s*\d+|general retention portfolio/i.test(noisyDraft.proposalText), `Noisy captured proposal should not leak parsed page noise or vague proof references:\n${noisyDraft.proposalText}`);
-assert(/^Steve here\b/i.test(noisyDraft.proposalText), `Noisy captured proposal should keep the required human opener:\n${noisyDraft.proposalText}`);
-assert(/how is your day going\?/i.test(noisyDraft.proposalText), `Noisy captured proposal should use the soul opener instead of sterile template copy:\n${noisyDraft.proposalText}`);
+assert(noisyDraft.proposalGenerationTrace?.mode === "deterministic_fallback", "Deterministic noisy-capture draft should be explicitly marked as fallback-only.");
+assert(!/^(?:hey there|hi there|hello there|hope you(?:'re| are) well|how is your day going)/i.test(noisyDraft.proposalText.trim()), `Noisy captured proposal should avoid canned/faux-casual opener patterns:\n${noisyDraft.proposalText}`);
+assert(!/how is your day going\?/i.test(noisyDraft.proposalText), `Noisy captured proposal should avoid the awkward small-talk opener:\n${noisyDraft.proposalText}`);
 assert(!/commercially pointed|Two customer-lifecycle details stood out/i.test(noisyDraft.proposalText), `Noisy captured proposal should not use the old sterile template voice:\n${noisyDraft.proposalText}`);
 assert(!/The customer problem is/i.test(noisyDraft.proposalText), `Noisy captured proposal should not use formulaic customer-problem bridge copy:\n${noisyDraft.proposalText}`);
 assert(/\b(?:money|revenue|conversion|engagement|leak|profit|trust)\b/i.test(noisyDraft.proposalText), `Noisy captured proposal should make a cold-outbound style commercial argument:\n${noisyDraft.proposalText}`);
@@ -302,7 +303,7 @@ assert(evaluateDraftQualityGate({
   ...gateBase,
   job: noisyCapturedJob,
   proposalText: [
-    "Steve here - how is your day going?",
+    "Steve here.",
     "",
     "Klaviyo, Mailchimp, and Omnisend are in scope, and the work includes ecommerce flows, subscriber lists, templates, and reporting.",
     "",
@@ -310,7 +311,7 @@ assert(evaluateDraftQualityGate({
     "",
     "For proof, I would use one matched artifact: Hangaritas - £21,681.29 attributed email revenue, up 173% vs previous period.",
     "",
-    "I can keep this async-friendly this week. Would you prefer a quick call or an async outline?",
+    "I can keep this async-friendly this week. If useful, would you rather see the first async outline here, or do a quick call?",
   ].join("\n"),
 }).issues.some((issue) => issue.code === "missing_outbound_sales_argument"), "Drafts must fail when they list scope but do not make a commercial outbound argument.");
 

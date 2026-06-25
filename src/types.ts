@@ -387,8 +387,11 @@ export interface CopyStrategy {
   repeat_purchase_or_conversion_moment: string;
   likely_lifecycle_gap: string;
   offer_or_project_mechanism: string;
+  retention_lane: string;
   proof_angle: string;
   proof_verification_state: ProofVerificationState;
+  requested_tools: string[];
+  requested_deliverables: string[];
   tone: CopyTone;
   opening_angle: string;
   one_sentence_sales_argument: string;
@@ -620,6 +623,29 @@ export interface ApplicationDraft {
   skillUseTrace?: SkillUseTrace;
   proposalStyleMemoryIds?: string[];
   brandResearchStatus?: BrandResearchStatus;
+  proposalGenerationTrace?: ProposalGenerationTrace;
+}
+
+export interface ProposalCandidateTrace {
+  angleId: string;
+  angleLabel: string;
+  openerShape: string;
+  score: number;
+  valid: boolean;
+  issues: string[];
+  selected?: boolean;
+}
+
+export interface ProposalGenerationTrace {
+  mode: "llm_primary" | "deterministic_fallback";
+  provider: "kimi" | "fallback";
+  candidateCount: number;
+  selectedAngleId?: string;
+  selectedAngleLabel?: string;
+  selectedOpenerShape?: string;
+  repairAttempted: boolean;
+  fallbackReason?: string;
+  candidates?: ProposalCandidateTrace[];
 }
 
 export interface ProofPlanOverrideState {
