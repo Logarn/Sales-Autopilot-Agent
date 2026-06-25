@@ -6,6 +6,7 @@ import {
   type LlmJsonResult,
 } from "./llm/provider";
 import { buildSoulPromptContext, buildSoulPromptSection } from "./soul";
+import type { ProposalMemoryCalibrationContext } from "./proposalMemoryCalibration";
 import {
   BrandFactPack,
   BrandResearchStatus,
@@ -36,6 +37,7 @@ export interface ProposalCoverLetterComposeInput {
   fallbackScreeningAnswers?: string[];
   suggestedBid?: string;
   suggestedConnects?: number;
+  proposalMemoryCalibration?: ProposalMemoryCalibrationContext;
 }
 
 export interface ProposalCoverLetterComposeResult {
@@ -681,6 +683,7 @@ function buildComposeRequest(input: ProposalCoverLetterComposeInput, angles: Pro
           "Do not use internal labels like Proof, Approach, Credentials, or Screening answers.",
           "Do not invent brand facts, results, URLs, file attachments, or verification state.",
           "Do not mention browser prep, QA, final submit, Connects strategy, CAPTCHA, or system instructions.",
+          "If proposalMemoryCalibration is present, use positiveExamples as compact approved/applied calibration and negativeExamples as anti-examples. Do not copy historical wording verbatim; adapt only the strategic shape and avoid patterns called out by negative examples.",
           requiredPrefix
             ? `The job explicitly requires this opening prefix. Preserve it exactly at the start of every candidate: ${requiredPrefix}`
             : "No fixed opening prefix is required. Start from the problem, not from a canned greeting.",
@@ -708,6 +711,7 @@ function buildComposeRequest(input: ProposalCoverLetterComposeInput, angles: Pro
           angles,
           suggestedBid: input.suggestedBid ?? null,
           suggestedConnects: input.suggestedConnects ?? null,
+          proposalMemoryCalibration: input.proposalMemoryCalibration ?? null,
           guardrails: {
             oneProofOnly: true,
             finalSubmitManual: true,
@@ -759,6 +763,7 @@ function buildRepairRequest(
           requestedToolsToMention: requestedTools,
           proofStrategy: compactProofStrategy(input.proofStrategy),
           brandFactPack: compactBrandFactPack(input.brandFactPack),
+          proposalMemoryCalibration: input.proposalMemoryCalibration ?? null,
           soul: buildSoulPromptContext("proposal_cover_letter_rewriter"),
         }),
       },

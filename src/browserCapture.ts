@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { classifyUpworkNavigationUrl } from "./browserSafetyGuard";
 import { parseJobDetailCapture } from "./jobCapture";
 import { JobDetailCaptureResult } from "./jobCapture";
 
@@ -72,22 +73,15 @@ export function extractUpworkJobIdFromUrl(value: string): string | null {
 export function canonicalizeUpworkJobUrl(value: string): string | null {
   const parsed = normalizeUrl(value);
   const jobId = extractUpworkJobIdFromUrl(value);
-  if (!parsed || parsed.protocol !== "https:" || !isUpworkHost(parsed.hostname) || !jobId) {
+  if (!parsed || !isSupportedUpworkJobUrl(value) || !jobId) {
     return null;
   }
   return `${parsed.origin}/jobs/~${jobId}`;
 }
 
 export function isSupportedUpworkJobUrl(value: string): boolean {
-  const parsed = normalizeUrl(value);
-  if (!parsed || parsed.protocol !== "https:" || !isUpworkHost(parsed.hostname)) {
-    return false;
-  }
-  return Boolean(
-    parsed.pathname.match(/^\/jobs\/(?:[^/?#]+_)?~[A-Za-z0-9_-]{8,}\/?$/i) ||
-    parsed.pathname.match(/^\/nx\/find-work\/best-matches\/details\/~[A-Za-z0-9_-]{8,}\/?$/i) ||
-    parsed.pathname.match(/^\/(?:nx|ab)\/proposals\/job\/~[A-Za-z0-9_-]{8,}\/apply\/?$/i)
-  );
+  const classification = classifyUpworkNavigationUrl(value);
+  return classification.allowed && (classification.kind === "job_detail" || classification.kind === "apply_review");
 }
 
 export function isSafeUpworkJobUrl(value: string): boolean {

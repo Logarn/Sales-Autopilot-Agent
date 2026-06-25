@@ -20,6 +20,17 @@ export interface ApplyPageFieldSnapshot {
   visible?: boolean;
 }
 
+export interface ApplyPageSourceEvidence {
+  sourceText: string;
+  sourceLocation: string;
+}
+
+export interface ApplyPageQuestionEvidence extends ApplyPageSourceEvidence {
+  questionText: string;
+  answerState: ApplyPageSectionState;
+  answerPreview?: string;
+}
+
 export interface ApplyPageSnapshot {
   url: string;
   visibleText: string;
@@ -38,6 +49,8 @@ export interface ApplyPageFieldState {
   visible: boolean;
   filled: boolean;
   valuePreview?: string;
+  sourceText?: string;
+  sourceLocation?: string;
   detail: string;
 }
 
@@ -45,6 +58,8 @@ export interface ApplyPageConnectsAnalysis {
   visible: boolean;
   value: number | null;
   extraction: SourceBackedConnects;
+  sourceText: string | null;
+  sourceLocation: string | null;
   detail: string;
 }
 
@@ -52,6 +67,8 @@ export interface ApplyPageBoostAnalysis {
   visible: boolean;
   selectedValue: number | null;
   table: VisibleBoostBid[];
+  sourceText: string | null;
+  sourceLocation: string | null;
   state: "not_visible" | "visible_unset" | "visible_set" | "visible_over_cap" | "visible_table_only";
   detail: string;
 }
@@ -60,6 +77,9 @@ export interface ApplyPageScreeningAnalysis {
   visible: boolean;
   questionCount: number;
   answeredCount: number;
+  questions: ApplyPageQuestionEvidence[];
+  sourceText: string | null;
+  sourceLocation: string | null;
   state: ApplyPageSectionState;
   detail: string;
 }
@@ -75,6 +95,8 @@ export interface ApplyPageChallengeAnalysis {
   detected: boolean;
   kind: Extract<ApplyPageKind, "security_challenge" | "login_required" | "two_factor_required"> | null;
   matchedText: string | null;
+  sourceText: string | null;
+  sourceLocation: string | null;
 }
 
 export interface ApplyPageAnalyzerResult {
@@ -101,6 +123,35 @@ function lower(value: string): string {
   return compact(value).toLowerCase();
 }
 
+function visibleLines(text: string): string[] {
+  return text.replace(/\r/g, "").split("\n");
+}
+
+function compactLines(text: string): string[] {
+  return visibleLines(text).map(compact);
+}
+
+function lineEvidence(text: string, patterns: RegExp[], limit = 4): ApplyPageSourceEvidence[] {
+  const evidence: ApplyPageSourceEvidence[] = [];
+  const lines = compactLines(text);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line) continue;
+    if (patterns.some((pattern) => pattern.test(line))) {
+      evidence.push({ sourceText: line.slice(0, 240), sourceLocation: `line ${index + 1}` });
+      if (evidence.length >= limit) break;
+    }
+  }
+  return evidence;
+}
+
+function joinedEvidence(evidence: ApplyPageSourceEvidence[]): { sourceText: string | null; sourceLocation: string | null } {
+  return {
+    sourceText: evidence.length > 0 ? evidence.map((item) => item.sourceText).join(" | ") : null,
+    sourceLocation: evidence.length > 0 ? evidence.map((item) => item.sourceLocation).join(", ") : null,
+  };
+}
+
 function fieldDescriptor(field: ApplyPageFieldSnapshot): string {
   return [
     field.kind,
@@ -122,6 +173,18 @@ function isUserTextField(field: ApplyPageFieldSnapshot): boolean {
 
 function isVisibleField(field: ApplyPageFieldSnapshot): boolean {
   return field.visible !== false;
+}
+
+function fieldEvidence(field: ApplyPageFieldSnapshot, index: number): ApplyPageSourceEvidence {
+  const descriptor = compact([
+    field.label,
+    field.ariaLabel,
+    field.placeholder,
+    field.name,
+    field.id,
+    field.dataTest,
+  ].filter(Boolean).join(" ")) || field.kind;
+  return { sourceText: descriptor.slice(0, 240), sourceLocation: `field ${index + 1}` };
 }
 
 function parseNumber(value: string): number | null {
@@ -230,17 +293,32 @@ export function bestCoverLetterValue(snapshot: ApplyPageSnapshot, expected: stri
 }
 
 function detectChallenge(snapshot: ApplyPageSnapshot): ApplyPageChallengeAnalysis {
-  const combined = lower([snapshot.url, snapshot.title ?? "", snapshot.visibleText, ...snapshot.actionLabels].join("\n"));
+  const sources = [
+    { text: snapshot.url, location: "url" },
+    { text: snapshot.title ?? "", location: "title" },
+    ...compactLines(snapshot.visibleText).map((text, index) => ({ text, location: `line ${index + 1}` })),
+    ...snapshot.actionLabels.map((text, index) => ({ text, location: `action ${index + 1}` })),
+  ];
   const checks: Array<{ kind: ApplyPageChallengeAnalysis["kind"]; pattern: RegExp; label: string }> = [
     { kind: "two_factor_required", pattern: /\b(two[-\s]?factor|verification code|2fa)\b/i, label: "two-factor verification" },
     { kind: "security_challenge", pattern: /\b(__cf_chl|cdn-cgi\/challenge|just a moment|security check|attention required|verify you are human|i'?m not a robot|checking your browser|checking if the site connection is secure|captcha|cloudflare|unusual traffic)\b/i, label: "browser security challenge" },
     { kind: "login_required", pattern: /\b(log in|login|sign in)\b/i, label: "login required" },
   ];
   for (const check of checks) {
-    const match = combined.match(check.pattern);
-    if (match) return { detected: true, kind: check.kind, matchedText: match[0] || check.label };
+    for (const source of sources) {
+      const match = source.text.match(check.pattern);
+      if (match) {
+        return {
+          detected: true,
+          kind: check.kind,
+          matchedText: match[0] || check.label,
+          sourceText: compact(source.text).slice(0, 240),
+          sourceLocation: source.location,
+        };
+      }
+    }
   }
-  return { detected: false, kind: null, matchedText: null };
+  return { detected: false, kind: null, matchedText: null, sourceText: null, sourceLocation: null };
 }
 
 function looksLikeApplyPage(snapshot: ApplyPageSnapshot): boolean {
@@ -255,21 +333,92 @@ function analyzeCoverLetter(snapshot: ApplyPageSnapshot, plan?: BrowserApplyFill
   const values = coverLetterValues(snapshot);
   const best = bestValue(values);
   const expected = plan?.coverLetter ?? "";
+  const coverFieldIndex = snapshot.fieldValues.findIndex((field) =>
+    field.kind === "textarea" &&
+    isUserTextField(field) &&
+    (/\b(?:cover|letter|proposal|message)\b/i.test(fieldDescriptor(field)) || field.value === best)
+  );
+  const evidence = coverFieldIndex >= 0 ? fieldEvidence(snapshot.fieldValues[coverFieldIndex]!, coverFieldIndex) : undefined;
   if (expected.trim() && containsExpected(values, expected)) {
-    return { state: "visible_filled", visible: true, filled: true, valuePreview: compact(best ?? "").slice(0, 160), detail: "Cover letter field contains the intended text." };
+    return { state: "visible_filled", visible: true, filled: true, valuePreview: compact(best ?? "").slice(0, 160), ...(evidence ?? {}), detail: "Cover letter field contains the intended text." };
   }
   if (best) {
-    return { state: "visible_filled", visible: true, filled: true, valuePreview: compact(best).slice(0, 160), detail: "Cover letter field has text, but it does not match the planned text." };
+    return { state: "visible_filled", visible: true, filled: true, valuePreview: compact(best).slice(0, 160), ...(evidence ?? {}), detail: "Cover letter field has text, but it does not match the planned text." };
   }
-  const visible = snapshot.fieldValues.some((field) =>
+  const visibleIndex = snapshot.fieldValues.findIndex((field) =>
     field.kind === "textarea" &&
     isUserTextField(field) &&
     isVisibleField(field) &&
     (/\b(?:cover|letter|proposal|message)\b/i.test(fieldDescriptor(field)) || !field.value.trim())
   );
+  const visible = visibleIndex >= 0;
+  const visibleEvidence = visible ? fieldEvidence(snapshot.fieldValues[visibleIndex]!, visibleIndex) : undefined;
   return visible
-    ? { state: "visible_empty", visible: true, filled: false, detail: "Cover letter field is visible but empty." }
+    ? { state: "visible_empty", visible: true, filled: false, ...(visibleEvidence ?? {}), detail: "Cover letter field is visible but empty." }
     : { state: "not_visible", visible: false, filled: false, detail: "Cover letter field was not detected." };
+}
+
+function normalizeQuestionText(value: string): string {
+  return compact(value)
+    .replace(/^(?:\d{1,2}[.)]|[-•*])\s*/, "")
+    .replace(/^question\s*\d{1,2}\s*[:.)-]?\s*/i, "")
+    .replace(/\s+answer$/i, "")
+    .trim();
+}
+
+function genericQuestionLabel(value: string): boolean {
+  return /^(?:question\s*\d{1,2}|answer\s*\d{1,2}|question\s*\d{1,2}\s*answer)$/i.test(compact(value));
+}
+
+function extractVisibleScreeningQuestions(snapshot: ApplyPageSnapshot, questionFields: ApplyPageFieldSnapshot[]): ApplyPageQuestionEvidence[] {
+  const evidence: ApplyPageQuestionEvidence[] = [];
+  const seen = new Set<string>();
+  const push = (questionText: string, sourceText: string, sourceLocation: string, answerValue = "") => {
+    const normalized = normalizeQuestionText(questionText);
+    if (!normalized || normalized.length < 4) return;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    const answer = compact(answerValue);
+    evidence.push({
+      questionText: normalized.slice(0, 500),
+      sourceText: compact(sourceText).slice(0, 500),
+      sourceLocation,
+      answerState: answer ? "visible_filled" : "visible_empty",
+      ...(answer ? { answerPreview: answer.slice(0, 160) } : {}),
+    });
+  };
+
+  const lines = compactLines(snapshot.visibleText);
+  const startIndex = lines.findIndex((line) => /\b(?:screening questions|additional questions|questions from the client|answer the following|application questions)\b/i.test(line));
+  const scanStart = startIndex >= 0 ? startIndex + 1 : 0;
+  const stopPattern = /\b(?:cover letter|boost your proposal|profile highlights|portfolio|attachments?|hourly rate|terms|submit proposal|send for \d{1,3} connects|send proposal)\b/i;
+  for (let index = scanStart; index < lines.length && evidence.length < 6; index += 1) {
+    const line = lines[index];
+    if (!line) continue;
+    if (startIndex >= 0 && index > scanStart && stopPattern.test(line)) break;
+    if (startIndex < 0 && index > 80) break;
+    const next = lines[index + 1] ?? "";
+    if (/^question\s*\d{1,2}\s*$/i.test(line) && next && !stopPattern.test(next)) {
+      push(next, `${line} ${next}`, `line ${index + 1}`, questionFields[evidence.length]?.value ?? "");
+      index += 1;
+      continue;
+    }
+    if (/[?]$/.test(line) || /^(?:\d{1,2}[.)]|[-•*])\s+/.test(line) || /^question\s*\d{1,2}\s*[:.)-]\s+\S/i.test(line)) {
+      push(line, line, `line ${index + 1}`, questionFields[evidence.length]?.value ?? "");
+    }
+  }
+
+  questionFields.forEach((field) => {
+    const fieldIndex = snapshot.fieldValues.indexOf(field);
+    const candidates = [field.label, field.ariaLabel, field.placeholder].filter((value): value is string => Boolean(value?.trim()));
+    const bestLabel = candidates.find((value) => !genericQuestionLabel(value)) ?? candidates[0];
+    if (!bestLabel) return;
+    const fieldSource = fieldEvidence(field, fieldIndex >= 0 ? fieldIndex : 0);
+    push(bestLabel, fieldSource.sourceText, fieldSource.sourceLocation, field.value);
+  });
+
+  return evidence;
 }
 
 function analyzeScreening(snapshot: ApplyPageSnapshot, plan?: BrowserApplyFillPlan | null): ApplyPageScreeningAnalysis {
@@ -277,21 +426,25 @@ function analyzeScreening(snapshot: ApplyPageSnapshot, plan?: BrowserApplyFillPl
   const visibleText = lower(snapshot.visibleText);
   const candidates = nonCoverTextFields(snapshot, bestCoverLetterValue(snapshot, plan?.coverLetter) ?? "");
   const questionLikeFields = candidates.filter((field) => field.kind === "textarea" || /\b(?:question|answer|screening)\b/i.test(fieldDescriptor(field)));
+  const questions = extractVisibleScreeningQuestions(snapshot, questionLikeFields);
+  const source = joinedEvidence(questions);
   const visible = questionLikeFields.length > 0 || /\b(?:screening questions|additional questions|questions from the client|answer the following)\b/i.test(visibleText);
   if (planned.length === 0 && !visible) {
-    return { visible: false, questionCount: 0, answeredCount: 0, state: "not_required", detail: "No screening questions were detected or planned." };
+    return { visible: false, questionCount: 0, answeredCount: 0, questions, ...source, state: "not_required", detail: "No screening questions were detected or planned." };
   }
   if (planned.length > 0 && !visible) {
-    return { visible: false, questionCount: 0, answeredCount: 0, state: "not_required", detail: "No screening question fields are visible on this apply page." };
+    return { visible: false, questionCount: 0, answeredCount: 0, questions, ...source, state: "not_required", detail: "No screening question fields are visible on this apply page." };
   }
   const answers = planned.length > 0
     ? planned.filter((answer, index) => containsExpected(screeningValuesForAnswer(snapshot, bestCoverLetterValue(snapshot, plan?.coverLetter) ?? "", index), answer)).length
     : questionLikeFields.filter((field) => field.value.trim()).length;
-  const questionCount = Math.max(planned.length, questionLikeFields.length, visible ? 1 : 0);
+  const questionCount = Math.max(planned.length, questions.length, questionLikeFields.length, visible ? 1 : 0);
   return {
     visible,
     questionCount,
     answeredCount: answers,
+    questions,
+    ...source,
     state: answers >= questionCount && questionCount > 0 ? "visible_filled" : visible ? "visible_requires_input" : "not_visible",
     detail: questionCount === 0 ? "No screening questions were detected." : `${answers}/${questionCount} screening answers detected.`,
   };
@@ -319,14 +472,20 @@ function analyzeRate(snapshot: ApplyPageSnapshot, plan?: BrowserApplyFillPlan | 
 function analyzeConnects(snapshot: ApplyPageSnapshot): ApplyPageConnectsAnalysis {
   const extraction = extractConnectsFromVisibleText(snapshot.visibleText);
   if (extraction.requiredConnects === null) {
-    return { visible: false, value: null, extraction, detail: "Required Connects were not readable on the apply page." };
+    return { visible: false, value: null, extraction, sourceText: extraction.sourceText, sourceLocation: extraction.sourceLocation, detail: "Required Connects were not readable on the apply page." };
   }
-  return { visible: true, value: extraction.requiredConnects, extraction, detail: `Required Connects visible as ${extraction.requiredConnects}.` };
+  return { visible: true, value: extraction.requiredConnects, extraction, sourceText: extraction.sourceText, sourceLocation: extraction.sourceLocation, detail: `Required Connects visible as ${extraction.requiredConnects}.` };
 }
 
 function analyzeBoost(snapshot: ApplyPageSnapshot, plan?: BrowserApplyFillPlan | null): ApplyPageBoostAnalysis {
   const text = snapshot.visibleText;
   const table = extractVisibleBoostBids(text);
+  const source = joinedEvidence(lineEvidence(text, [
+    /\bboost your proposal\b/i,
+    /(?:rank|place|position|#)\s*\d{1,2}[^\n]{0,60}?\d{1,3}\s+connects?\b/i,
+    /\b\d{1,2}(?:st|nd|rd|th)?\s+(?:place|position)[^\n]{0,60}?\d{1,3}\s+connects?\b/i,
+    /\bbid to boost\b/i,
+  ]));
   const plannedBoost = plan?.connects.boost ?? 0;
   const boostFields = snapshot.fieldValues
     .filter(isUserTextField)
@@ -336,18 +495,18 @@ function analyzeBoost(snapshot: ApplyPageSnapshot, plan?: BrowserApplyFillPlan |
     : null;
   const visible = table.length > 0 || boostFields.length > 0 || /\b(?:boost your proposal|bid to boost|top\s+\d|place bid)\b/i.test(text);
   if (!visible) {
-    return { visible: false, selectedValue: null, table, state: "not_visible", detail: "Boost controls/table were not detected." };
+    return { visible: false, selectedValue: null, table, ...source, state: "not_visible", detail: "Boost controls/table were not detected." };
   }
   if (selectedValue !== null && selectedValue > 50) {
-    return { visible: true, selectedValue, table, state: "visible_over_cap", detail: `Boost field contains ${selectedValue}, above the hard cap.` };
+    return { visible: true, selectedValue, table, ...source, state: "visible_over_cap", detail: `Boost field contains ${selectedValue}, above the hard cap.` };
   }
   if (selectedValue !== null) {
-    return { visible: true, selectedValue, table, state: "visible_set", detail: `Boost field contains ${selectedValue}.` };
+    return { visible: true, selectedValue, table, ...source, state: "visible_set", detail: `Boost field contains ${selectedValue}.` };
   }
   if (plannedBoost > 0) {
-    return { visible: true, selectedValue: null, table, state: "visible_unset", detail: "Boost was planned but no selected boost value was detected." };
+    return { visible: true, selectedValue: null, table, ...source, state: "visible_unset", detail: "Boost was planned but no selected boost value was detected." };
   }
-  return { visible: true, selectedValue: null, table, state: table.length > 0 ? "visible_table_only" : "visible_unset", detail: table.length > 0 ? "Boost table is visible; no boost is selected." : "Boost controls are visible; no boost is selected." };
+  return { visible: true, selectedValue: null, table, ...source, state: table.length > 0 ? "visible_table_only" : "visible_unset", detail: table.length > 0 ? "Boost table is visible; no boost is selected." : "Boost controls are visible; no boost is selected." };
 }
 
 function analyzeAttachments(snapshot: ApplyPageSnapshot, plan?: BrowserApplyFillPlan | null): ApplyPageFieldState {

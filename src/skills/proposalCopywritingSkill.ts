@@ -714,7 +714,7 @@ function conciseHook(strategy: CopyStrategy, job?: JobPosting): string {
     : `${toolList || humanizeScopeFragment(strategy.requested_tools[0] ?? laneLabel(strategy.retention_lane))} matters after that, not before.`;
   const commercialPain = sentenceCase(strategy.client_commercial_pain);
   if (isSetupConfigurationScope(strategy)) {
-    return `${opener} ${contextPrefix}A Brevo setup like this only works if sender reputation, contact quality, segmentation, automations, and transactional separation are clean from day one. If that foundation is loose, more volume just amplifies the mess instead of helping ${deliverableFocusText}.`;
+    return `${opener} ${contextPrefix}Brevo account setup like this only works if sender reputation, contact quality, segmentation, automations, and transactional separation are clean from day one. If that foundation is loose, more volume just amplifies the mess instead of helping ${deliverableFocusText}.`;
   }
   if (strategy.category === "gardening" && tools.length > 0) {
     return `${opener} ${contextPrefix}Seasonal replenishment only works when the message meets the customer at the right planting and care moment. If that timing is off, more email just creates noise instead of making the next purchase feel obvious.`;

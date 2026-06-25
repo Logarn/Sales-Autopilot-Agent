@@ -12,6 +12,7 @@ import {
   composeProposalCoverLetterWithKimi,
   type ProposalCoverLetterClient,
 } from "./proposalCoverLetterComposer";
+import { buildProposalMemoryCalibrationContext } from "./proposalMemoryCalibration";
 import { buildSalesLearningPromptContext } from "./salesLearningMemory";
 import {
   buildInitialSkillUseTrace,
@@ -730,6 +731,14 @@ export async function buildApplicationDraftWithResearch(
     provider: options.brandResearchProvider,
   });
   const foundation = buildDraftFoundation(job, { brandResearchRun });
+  const proposalMemoryCalibration = buildProposalMemoryCalibrationContext({
+    title: job.title,
+    description: job.description,
+    skills: job.skills,
+    platform: platformLabel(foundation.preliminaryJobIntelligence),
+    excludeJobId: job.id,
+    limitPerPolarity: 2,
+  });
   const composed = await composeProposalCoverLetterWithKimi({
     job,
     jobUnderstanding: foundation.reasoningContext.jobUnderstanding,
@@ -742,6 +751,7 @@ export async function buildApplicationDraftWithResearch(
     fallbackScreeningAnswers: foundation.reasoningContext.screeningAnswers,
     suggestedBid: foundation.rateRetainerAnswer,
     suggestedConnects: foundation.job.connects?.requiredConnects ?? foundation.job.connectsCost,
+    proposalMemoryCalibration,
   }, options.proposalCopyProvider);
 
   if (!composed.usedLlm) {

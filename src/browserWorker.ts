@@ -67,7 +67,7 @@ import {
 } from "./types";
 import { extractConnectsFromVisibleText } from "./connectsExtraction";
 import { chooseVisibleBoost, extractVisibleBoostBids, hasUnknownRequiredConnects, type VisibleBoostBid } from "./connectsStrategy";
-import { guardedClick } from "./browserSafetyGuard";
+import { guardedClick, guardedGoto } from "./browserSafetyGuard";
 import { getSlackLeadPostingDecision, SlackPacketV3Context, writeV3CapturePacketWithLlm } from "./slackPacketV3";
 import { evaluatePlatformEligibility } from "./platformEligibility";
 import { decideLeadHandling } from "./leadDecision";
@@ -3853,7 +3853,7 @@ async function inspectWithBrowser(
       !urlsReferToSameUpworkJob(page.url(), url) ||
       (action.actionType === "open_apply_page" && !isUpworkApplyUrl(page.url()))
     )) {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+      await guardedGoto(page, url, { waitUntil: "domcontentloaded", timeout: 45000 });
     }
     const unavailableDetection: BrowserStateDetection = {
       state: "source_context_unavailable",

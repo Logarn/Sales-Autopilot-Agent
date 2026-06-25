@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { assertNoChallengeInteraction, classifySensitiveTarget, guardedClick, guardedFill } from "./browserSafetyGuard";
+import { assertNoChallengeInteraction, assertSafeUpworkNavigationUrl, classifySensitiveTarget, classifyUpworkNavigationUrl, guardedClick, guardedFill, guardedGoto } from "./browserSafetyGuard";
 
 async function runTests(): Promise<void> {
   const blocked = [
@@ -45,6 +45,41 @@ async function runTests(): Promise<void> {
     await assert.rejects(() => guardedClick({ click: async () => { finalSubmitClicked = true; } }, { label }));
     assert.equal(finalSubmitClicked, false, `${label} should be blocked as final submit`);
   }
+
+  const allowedNavigationUrls = [
+    "https://www.upwork.com/nx/find-work/best-matches",
+    "https://www.upwork.com/nx/search/jobs/?q=klaviyo",
+    "https://www.upwork.com/jobs/Email-Marketing_~022053866890130225260/",
+    "https://www.upwork.com/nx/find-work/best-matches/details/~022053866890130225260?pageTitle=Job%20Details",
+    "https://www.upwork.com/ab/proposals/job/~022053795172113889247/apply/",
+    "https://www.upwork.com/nx/proposals/job/~022053795172113889247/apply/",
+  ];
+  for (const url of allowedNavigationUrls) {
+    assert.equal(classifyUpworkNavigationUrl(url).allowed, true, `should allow navigation to ${url}`);
+    assert.doesNotThrow(() => assertSafeUpworkNavigationUrl(url));
+  }
+
+  const blockedNavigationUrls = [
+    { url: "https://www.upwork.com/ab/account-security/login", reason: "sensitive_upwork_url" },
+    { url: "https://www.upwork.com/nx/payments/billing-methods", reason: "sensitive_upwork_url" },
+    { url: "https://www.upwork.com/ab/contracts/~022053866890130225260", reason: "sensitive_upwork_url" },
+    { url: "https://www.upwork.com/freelancers/settings/profile", reason: "sensitive_upwork_url" },
+    { url: "http://www.upwork.com/jobs/~022053866890130225260", reason: "non_https_upwork_url" },
+    { url: "https://evil.example/jobs/~022053866890130225260", reason: "non_upwork_url" },
+  ];
+  for (const { url, reason } of blockedNavigationUrls) {
+    const classification = classifyUpworkNavigationUrl(url);
+    assert.equal(classification.allowed, false, `should block navigation to ${url}`);
+    assert.equal(classification.reason, reason, `blocked reason for ${url}`);
+    assert.throws(() => assertSafeUpworkNavigationUrl(url));
+  }
+
+  let navigatedTo = "";
+  await guardedGoto({ goto: async (url) => { navigatedTo = url; } }, allowedNavigationUrls[0]);
+  assert.equal(navigatedTo, allowedNavigationUrls[0], "allowed navigation should execute");
+
+  await assert.rejects(() => guardedGoto({ goto: async (url) => { navigatedTo = url; } }, blockedNavigationUrls[0].url));
+  assert.equal(navigatedTo, allowedNavigationUrls[0], "blocked navigation should not execute");
 
   console.log("browser safety guard tests passed");
 }

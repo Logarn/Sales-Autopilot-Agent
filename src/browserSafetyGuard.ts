@@ -1,5 +1,18 @@
 export type BrowserInteractionType = "click" | "fill" | "check";
 
+export type UpworkNavigationSafetyReason =
+  | "malformed_url"
+  | "non_https_upwork_url"
+  | "non_upwork_url"
+  | "sensitive_upwork_url"
+  | "unsupported_upwork_url";
+
+export type SafeUpworkNavigationKind =
+  | "find_work_feed"
+  | "job_search"
+  | "job_detail"
+  | "apply_review";
+
 export type ManualAttentionReason =
   | "password_required"
   | "passkey_required"
@@ -25,6 +38,14 @@ export interface SensitiveTargetClassification {
   matchedPattern?: string;
 }
 
+export interface UpworkNavigationSafetyClassification {
+  allowed: boolean;
+  reason?: UpworkNavigationSafetyReason;
+  kind?: SafeUpworkNavigationKind;
+  matchedPattern?: string;
+  normalizedUrl?: string;
+}
+
 export class BrowserSafetyGuardBlockedError extends Error {
   readonly reason: ManualAttentionReason;
   readonly category: ManualAttentionCategory;
@@ -39,6 +60,96 @@ export class BrowserSafetyGuardBlockedError extends Error {
     this.matchedPattern = classification.matchedPattern;
     this.target = target;
   }
+}
+
+export class UnsafeUpworkNavigationError extends Error {
+  readonly reason: UpworkNavigationSafetyReason;
+  readonly matchedPattern?: string;
+  readonly url: string;
+
+  constructor(url: string, classification: Required<Pick<UpworkNavigationSafetyClassification, "reason">> & Pick<UpworkNavigationSafetyClassification, "matchedPattern">) {
+    super(`Blocked unsafe Upwork navigation: ${classification.reason}${classification.matchedPattern ? ` (${classification.matchedPattern})` : ""}`);
+    this.name = "UnsafeUpworkNavigationError";
+    this.reason = classification.reason;
+    this.matchedPattern = classification.matchedPattern;
+    this.url = url;
+  }
+}
+
+const UPWORK_HOSTS = new Set(["upwork.com", "www.upwork.com"]);
+
+const SENSITIVE_UPWORK_PATH_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /^\/(?:ab|nx)\/(?:account|account-security|settings|security|payments?|billing|financial|wallet|contracts?|workroom|reports|identity|membership|connects)(?:\/|$)/i, label: "sensitive_app_area" },
+  { pattern: /^\/freelancers\/settings(?:\/|$)/i, label: "freelancer_settings" },
+  { pattern: /^\/(?:account|account-security|settings|security|payments?|billing|financial|wallet|contracts?|workroom|reports|identity|membership|connects)(?:\/|$)/i, label: "sensitive_area" },
+  { pattern: /\/(?:account-security|security-center|two-factor|password|payment-methods?|billing-methods?|contracts?|contract-room|financial-account|withdraw|membership|connects)(?:\/|$)/i, label: "sensitive_path_segment" },
+];
+
+const SAFE_UPWORK_NAVIGATION_PATH_PATTERNS: Array<{ pattern: RegExp; kind: SafeUpworkNavigationKind; label: string }> = [
+  { pattern: /^\/nx\/find-work\/?$/i, kind: "find_work_feed", label: "find_work_feed" },
+  { pattern: /^\/jobs\/(?:[^/?#]+_)?~[A-Za-z0-9_-]{8,}\/?$/i, kind: "job_detail", label: "job_detail" },
+  { pattern: /^\/nx\/find-work\/best-matches\/details\/~[A-Za-z0-9_-]{8,}\/?$/i, kind: "job_detail", label: "find_work_job_detail" },
+  { pattern: /^\/(?:nx|ab)\/proposals\/job\/~[A-Za-z0-9_-]{8,}\/apply\/?$/i, kind: "apply_review", label: "apply_review" },
+  { pattern: /^\/nx\/find-work\/(?:best-matches|most-recent|saved-search(?:es)?|search(?:\/jobs)?|search-jobs)(?:\/|$)/i, kind: "job_search", label: "find_work_search" },
+  { pattern: /^\/nx\/search\/jobs(?:\/|$)/i, kind: "job_search", label: "job_search" },
+];
+
+function parseUrl(value: string): URL | null {
+  try {
+    return new URL(value.trim());
+  } catch {
+    return null;
+  }
+}
+
+function isUpworkHost(hostname: string): boolean {
+  return UPWORK_HOSTS.has(hostname.toLowerCase());
+}
+
+export function classifyUpworkNavigationUrl(value: string): UpworkNavigationSafetyClassification {
+  const parsed = parseUrl(value);
+  if (!parsed) {
+    return { allowed: false, reason: "malformed_url" };
+  }
+  if (!isUpworkHost(parsed.hostname)) {
+    return { allowed: false, reason: "non_upwork_url", normalizedUrl: parsed.toString() };
+  }
+  if (parsed.protocol !== "https:") {
+    return { allowed: false, reason: "non_https_upwork_url", normalizedUrl: parsed.toString() };
+  }
+
+  const pathname = parsed.pathname;
+  const sensitive = SENSITIVE_UPWORK_PATH_PATTERNS.find((entry) => entry.pattern.test(pathname));
+  if (sensitive) {
+    return { allowed: false, reason: "sensitive_upwork_url", matchedPattern: sensitive.label, normalizedUrl: parsed.toString() };
+  }
+
+  const safe = SAFE_UPWORK_NAVIGATION_PATH_PATTERNS.find((entry) => entry.pattern.test(pathname));
+  if (safe) {
+    return { allowed: true, kind: safe.kind, matchedPattern: safe.label, normalizedUrl: parsed.toString() };
+  }
+
+  return { allowed: false, reason: "unsupported_upwork_url", normalizedUrl: parsed.toString() };
+}
+
+export function isSafeUpworkNavigationUrl(value: string): boolean {
+  return classifyUpworkNavigationUrl(value).allowed;
+}
+
+export function assertSafeUpworkNavigationUrl(value: string): void {
+  const classification = classifyUpworkNavigationUrl(value);
+  if (!classification.allowed && classification.reason) {
+    throw new UnsafeUpworkNavigationError(value, { reason: classification.reason, matchedPattern: classification.matchedPattern });
+  }
+}
+
+export interface GuardedGotoLike {
+  goto(url: string, options?: { waitUntil?: string; timeout?: number }): Promise<unknown>;
+}
+
+export async function guardedGoto(page: GuardedGotoLike, url: string, options?: { waitUntil?: string; timeout?: number }): Promise<unknown> {
+  assertSafeUpworkNavigationUrl(url);
+  return page.goto(url, options);
 }
 
 const SENSITIVE_PATTERNS: Array<{ pattern: RegExp; reason: ManualAttentionReason; category: ManualAttentionCategory; label: string }> = [

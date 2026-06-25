@@ -47,6 +47,8 @@ async function runTests(): Promise<void> {
   assert(canonicalizeUpworkJobUrl("https://www.upwork.com/nx/find-work/best-matches/details/~022053866890130225260?pageTitle=Job%20Details") === "https://www.upwork.com/jobs/~022053866890130225260", "best matches modal URL should normalize to canonical job URL");
   assert(canonicalizeUpworkJobUrl("https://www.upwork.com/nx/proposals/job/~022053795172113889247/apply/") === "https://www.upwork.com/jobs/~022053795172113889247", "nx apply URL should normalize to canonical job URL");
   assert(canonicalizeUpworkJobUrl("https://www.upwork.com/ab/proposals/job/~022053795172113889247/apply/") === "https://www.upwork.com/jobs/~022053795172113889247", "ab apply URL should normalize to canonical job URL");
+  assert(canonicalizeUpworkJobUrl("https://www.upwork.com/ab/contracts/~022053795172113889247") === null, "contract URLs with job-like tokens should not normalize as safe jobs");
+  assert(canonicalizeUpworkJobUrl("https://www.upwork.com/ab/account-security/login?job=~022053795172113889247") === null, "account/security URLs should not normalize as safe jobs");
   const urlTests: TestCase[] = [
     {
       name: "capture dry run should include url in parsed input",
