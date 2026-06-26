@@ -832,7 +832,7 @@ async function runTests(): Promise<void> {
       score: 84,
       scoreBreakdown: {
         ...beautyJob.scoreBreakdown,
-        clientQualityScore: { score: 46, reasons: ["Thin client history"], risks: ["Limited spend"] },
+        clientQualityScore: { score: 70, reasons: ["Enough client history for discovery review"], risks: ["Connects spend needs review"] },
         finalScore: 84,
       },
       applicationDraft: {
