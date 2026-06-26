@@ -47,6 +47,8 @@ async function runTests(): Promise<void> {
   assert(canonicalizeUpworkJobUrl("https://www.upwork.com/nx/find-work/best-matches/details/~022053866890130225260?pageTitle=Job%20Details") === "https://www.upwork.com/jobs/~022053866890130225260", "best matches modal URL should normalize to canonical job URL");
   assert(canonicalizeUpworkJobUrl("https://www.upwork.com/nx/proposals/job/~022053795172113889247/apply/") === "https://www.upwork.com/jobs/~022053795172113889247", "nx apply URL should normalize to canonical job URL");
   assert(canonicalizeUpworkJobUrl("https://www.upwork.com/ab/proposals/job/~022053795172113889247/apply/") === "https://www.upwork.com/jobs/~022053795172113889247", "ab apply URL should normalize to canonical job URL");
+  assert(canonicalizeUpworkJobUrl("https://www.upwork.com/ab/contracts/~022053795172113889247") === null, "contract URLs with job-like tokens should not normalize as safe jobs");
+  assert(canonicalizeUpworkJobUrl("https://www.upwork.com/ab/account-security/login?job=~022053795172113889247") === null, "account/security URLs should not normalize as safe jobs");
   const urlTests: TestCase[] = [
     {
       name: "capture dry run should include url in parsed input",
@@ -74,6 +76,10 @@ Screening Questions:
   assert(!noisy.cleaned.includes("window.TOP_NAV_USER_CONFIG"), "config noise should be stripped from capture text");
   assert(!/feedback helps us improve job search|client will not be notified/i.test(noisy.cleaned), "Upwork feedback UI noise should be stripped from capture text");
   assert(noisy.rawConfigNoiseDetected === true, "config noise detection should be flagged");
+
+  const feedbackOverlay = stripCaptureNoise(`Unrealistic Expectations\nToo Many Applicants\nJob posted too long ago\nPoor reviews about the client\nDoesn't Match Skills\nI am overqualified\nBudget too low\nNot in my preferred location\nThe client will not be notified. Your feedback helps us improve job search.\nSave job Design an Email Series on Figma and develop it on Klaviyo\nHourly - Intermediate\nHi,\nI’m looking for a Klaviyo email marketing expert to help set up and optimize email flows for an ecommerce brand.\nmore about \"Design an Email Series on Figma and develop it on Klaviyo\"\nSkills\nSkip skills\nPrevious skills. Update list\nEmail Marketing Strategy Klaviyo`);
+  assert(!/Unrealistic Expectations|Too Many Applicants|Save job|more about|Skip skills|Previous skills/i.test(feedbackOverlay.cleaned), "feedback poll and skills chrome should be stripped from capture text");
+  assert(feedbackOverlay.cleaned.includes("I’m looking for a Klaviyo email marketing expert"), "real job description should remain after overlay stripping");
 
   const mockPage = {
     url: () => "https://www.upwork.com/jobs/Mailchimp-E-commerce-Automation-Expert_~0123456789abcdef",
@@ -117,6 +123,14 @@ Screening Questions:
     rawConfigNoiseDetected: true,
   });
   assert(quality.lowConfidence, "dirty capture should be flagged low-confidence");
+
+  const overlayQuality = assessCaptureQuality({
+    title: "Klaviyo Email Marketing Expert Needed for Ecommerce Brand",
+    description: "Unrealistic Expectations Too Many Applicants Save job Klaviyo Email Marketing Expert Needed for Ecommerce Brand more about \"Klaviyo Email Marketing Expert Needed for Ecommerce Brand\" Skip skills",
+    rawText: "Unrealistic Expectations Too Many Applicants Save job",
+    rawConfigNoiseDetected: false,
+  });
+  assert(overlayQuality.lowConfidence, "feedback overlay remnants should be flagged low-confidence");
 
   // Status transition smoke test using an isolated DB file.
   const tempDb = resolve(process.cwd(), "data/.tmp-feature2-thread-state.db");

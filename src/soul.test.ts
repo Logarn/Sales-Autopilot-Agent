@@ -35,9 +35,15 @@ const job = scoreJob({
 });
 
 const draft = buildApplicationDraft(job);
-assert(draft.proposalText.includes("Steve here"), "Proposal draft generation should use the required soul opener.");
-assert(draft.proposalText.toLowerCase().includes("how is your day going?"), "Proposal draft generation should keep the human opener.");
+const opener = draft.proposalText.replace(/\s+/g, " ").trim().match(/^[^.!?]+[.!?]?/)?.[0] ?? "";
+assert(draft.proposalGenerationTrace?.mode === "deterministic_fallback", "Deterministic draft generation should now be explicitly marked as fallback-only.");
+assert(opener.length > 0, "Proposal draft generation should produce a real opener sentence.");
+assert(!/^hey there|^hi there|^hello there|^hope you(?:'re| are) well|^how is your day going/i.test(opener), "Proposal draft generation should avoid faux-casual canned openers.");
+assert(!draft.proposalText.toLowerCase().includes("how is your day going?"), "Proposal draft generation should avoid the awkward small-talk opener.");
 assert(!/commercially pointed|Two customer-lifecycle details stood out/i.test(draft.proposalText), "Proposal draft must not use the old sterile template voice.");
+assert(!/\bquick read\b/i.test(draft.proposalText), "Proposal draft should avoid canned quick-read phrasing.");
+assert(!/\bThe useful first move is\b/i.test(draft.proposalText), "Proposal draft should avoid canned first-move phrasing.");
+assert(!/flows\/automations \+ campaigns\/newsletters/i.test(draft.proposalText), "Proposal draft should avoid raw slash-plus scope bundles.");
 assert(draft.structuredProposal?.browserFillNotes.profileNotes.some((note) => note.includes("soul.md loaded for proposal_draft_generation")), "Proposal browser fill notes should carry soul draft guidance.");
 assert(draft.proposalText.includes("I would"), "Proposal draft should keep first-person sales voice.");
 

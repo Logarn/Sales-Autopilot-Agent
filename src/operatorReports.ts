@@ -15,6 +15,45 @@ export interface OperatorReportPeriod {
   endIso: string;
 }
 
+export type OperatorBlockerCategory =
+  | "auth"
+  | "rate_limit"
+  | "network"
+  | "navigation"
+  | "page_structure"
+  | "form_validation"
+  | "safety_guard"
+  | "manual_review"
+  | "unknown";
+
+export interface OperatorStatusCount {
+  status: string;
+  count: number;
+  evidence: string;
+}
+
+export interface OperatorBlockerCategorySummary {
+  category: OperatorBlockerCategory;
+  count: number;
+  evidence: string;
+  examples: string[];
+}
+
+export interface OperatorStatusSnapshot {
+  slackQueue: {
+    count: number;
+    maxAttempts: number;
+    evidence: string;
+  };
+  applicationStatuses: OperatorStatusCount[];
+  browserActionStatuses: OperatorStatusCount[];
+  blockersByCategory: OperatorBlockerCategorySummary[];
+  pendingBrowserActions: EvidenceItem[];
+  pausedBrowserActions: EvidenceItem[];
+  recentOutcomes: EvidenceItem[];
+  lastRunState: EvidenceItem[];
+}
+
 export interface OperatorReportSnapshot {
   generatedAt: string;
   period: OperatorReportPeriod;
@@ -32,6 +71,7 @@ export interface OperatorReportSnapshot {
   blockedItems: EvidenceItem[];
   lessons: EvidenceItem[];
   steveActionItems: EvidenceItem[];
+  operatorStatus?: OperatorStatusSnapshot;
 }
 
 export interface OperatorReportQuestionResult {
@@ -66,6 +106,70 @@ function nullableItem(item: EvidenceItem | null, emptyText: string): string {
   return item ? itemLine(item) : `- ${emptyText}`;
 }
 
+export function classifyOperatorBlocker(input: {
+  status?: string | null;
+  actionType?: string | null;
+  lastError?: string | null;
+  notes?: string | null;
+}): OperatorBlockerCategory {
+  const text = [input.status, input.actionType, input.lastError, input.notes]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (/\b(login|auth|sign[ -]?in|session|cookie|captcha|2fa|verification|verify)\b/.test(text)) return "auth";
+  if (/\b(rate limit|too many|429|throttl|quota)\b/.test(text)) return "rate_limit";
+  if (/\b(timeout|timed out|net::|econn|connection|network|dns|offline)\b/.test(text)) return "network";
+  if (/\b(stopbeforesubmit|final submit|manual submit|submit disabled|safety|guard)\b/.test(text)) return "safety_guard";
+  if (/\b(selector|locator|element|button|modal|dom|page changed|not found)\b/.test(text)) return "page_structure";
+  if (/\b(screening|question|required field|required answer|validation|connects|attachment|upload)\b/.test(text)) return "form_validation";
+  if (/\b(navigation|redirect|url|apply page|open page|page load)\b/.test(text)) return "navigation";
+  if (/\b(manual|review|paused|operator)\b/.test(text)) return "manual_review";
+  return "unknown";
+}
+
+function statusCountsLine(label: string, counts: OperatorStatusCount[], emptyText: string): string {
+  const rendered = counts.length ? counts.map((item) => `${item.status}=${item.count}`).join("; ") : emptyText;
+  const evidence = counts[0]?.evidence ?? "no rows";
+  return `- ${label}: ${rendered} (${evidence})`;
+}
+
+function blockerCategoryLine(item: OperatorBlockerCategorySummary): string {
+  const examples = item.examples.length ? ` examples: ${item.examples.join("; ")}` : "";
+  return `- ${item.category}: ${item.count}${examples} (${item.evidence})`;
+}
+
+function operatorStatusLines(snapshot: OperatorStatusSnapshot): string[] {
+  return [
+    "Operator status",
+    `- Slack queue: ${snapshot.slackQueue.count} queued; max_attempts=${snapshot.slackQueue.maxAttempts} (${snapshot.slackQueue.evidence})`,
+    statusCountsLine("Browser actions", snapshot.browserActionStatuses, "none"),
+    statusCountsLine("Applications", snapshot.applicationStatuses, "none"),
+    "Blockers by category",
+    snapshot.blockersByCategory.length
+      ? snapshot.blockersByCategory.map(blockerCategoryLine).join("\n")
+      : "- None active in browser_actions paused/failed.",
+    "Pending browser actions",
+    itemList(snapshot.pendingBrowserActions, "None queued."),
+    "Paused browser actions",
+    itemList(snapshot.pausedBrowserActions, "None paused."),
+    "Recent outcomes",
+    itemList(snapshot.recentOutcomes, "No recent outcome events in this period."),
+    "Last run state",
+    itemList(snapshot.lastRunState, "No worker heartbeat rows found."),
+    "Safety",
+    "- Report is read-only. Final submit remains manual and browser actions remain queued/paused until an operator runs or retries them.",
+  ];
+}
+
+function optionalOperatorStatusSection(snapshot?: OperatorStatusSnapshot): string[] {
+  return snapshot ? ["", ...operatorStatusLines(snapshot)] : [];
+}
+
+export function buildOperatorStatusReport(snapshot: OperatorStatusSnapshot): string {
+  return operatorStatusLines(snapshot).join("\n");
+}
+
 export function buildFridayOperatorHandoff(snapshot: OperatorReportSnapshot): string {
   return [
     `Friday Operator Handoff - ${snapshot.period.label}`,
@@ -80,6 +184,7 @@ export function buildFridayOperatorHandoff(snapshot: OperatorReportSnapshot): st
     metricLine("Wins", snapshot.wins),
     metricLine("Losses", snapshot.losses),
     metricLine("Connects used", snapshot.connectsUsed),
+    ...optionalOperatorStatusSection(snapshot.operatorStatus),
     "",
     "Best source",
     nullableItem(snapshot.bestSource, "Unavailable: no source-backed leads in this period."),

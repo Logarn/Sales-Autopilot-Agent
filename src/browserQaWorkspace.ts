@@ -139,7 +139,10 @@ function sameSavedApplyTab(candidateUrl: string, savedApplyUrl: string): boolean
   return Boolean(candidate && saved && candidate === saved);
 }
 
-function queueStateForAction(action: BrowserAction, applicationStatus: string | null): ProtectedQaQueueItem["state"] {
+function queueStateForAction(action: BrowserAction, applicationStatus: string | null, holdReason: string | null): ProtectedQaQueueItem["state"] {
+  if (applicationStatus === "prepared_for_qa" || holdReason === "awaiting_human_qa") {
+    return "ready";
+  }
   if (action.status === "paused" || action.status === "failed" || applicationStatus === "needs_review") {
     return "blocked";
   }
@@ -177,7 +180,7 @@ export function getProtectedQaQueueItems(limit = BROWSER_QA_MAX_PROTECTED_TABS):
       const required = plan?.connects.required ?? null;
       const boost = plan?.connects.boost ?? null;
       const latestProposal = getLatestProposalVersion(action.jobId);
-      const state = queueStateForAction(action, applicationStatus);
+      const state = queueStateForAction(action, applicationStatus, hold?.reason ?? null);
       const reason = humanBlockedReason(action.lastError || hold?.reason || hold?.state || "remote Chrome needs review");
       return {
         index: index + 1,

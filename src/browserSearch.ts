@@ -21,6 +21,7 @@ import {
   BrowserSearchRunSummary,
 } from "./types";
 import { formatBrowserSessionStatus, getBrowserSessionStatus, recordBrowserManualAttention } from "./browserSession";
+import { guardedGoto } from "./browserSafetyGuard";
 
 const UPWORK_SEARCH_URL = "https://www.upwork.com/nx/search/jobs/";
 const UPWORK_HOSTS = new Set(["upwork.com", "www.upwork.com"]);
@@ -232,7 +233,7 @@ async function extractSearchLinks(page: PlaywrightPageLike, query: BrowserSearch
 }
 
 async function captureJobPage(page: PlaywrightPageLike, link: BrowserSearchResultLink): Promise<BrowserCapturedJobPage | null> {
-  await page.goto(link.url, { waitUntil: "domcontentloaded", timeout: 45000 });
+  await guardedGoto(page, link.url, { waitUntil: "domcontentloaded", timeout: 45000 });
   const text = boundedText(await bodyText(page));
   const title = await page.title();
   if (detectLoginOrSecurity(page.url(), title, text)) {
@@ -271,7 +272,7 @@ export async function runBrowserSearch(config = getBrowserSearchConfig()): Promi
     context = await chromium.launchPersistentContext(BROWSER_USER_DATA_DIR, { headless: BROWSER_HEADLESS });
     const page = await context.newPage();
     for (const query of config.queries) {
-      await page.goto(query.url, { waitUntil: "domcontentloaded", timeout: 45000 });
+      await guardedGoto(page, query.url, { waitUntil: "domcontentloaded", timeout: 45000 });
       summary.queriesRun += 1;
       if (await assertNoSecurityPause(page)) {
         await recordBrowserManualAttention({ url: page.url(), title: await page.title(), reason: "browser_search_login_or_security_required" });

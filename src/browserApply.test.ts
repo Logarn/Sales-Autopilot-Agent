@@ -170,6 +170,7 @@ async function runTests(): Promise<void> {
     fileNames?: string[];
     attachmentRows?: string[];
     selectedHighlightLabels?: string[];
+    actionLabels?: string[];
   }) {
     const makeElement = (field: {
       value: string;
@@ -248,6 +249,17 @@ async function runTests(): Promise<void> {
             files: [],
             textContent: "",
             getAttribute: (attributeName: string) => attributeName === "aria-label" ? `Delete attachment ${name}` : null,
+            closest: () => null,
+          })),
+          ...(input.actionLabels ?? []).map((label) => ({
+            value: "",
+            checked: false,
+            type: "button",
+            tagName: "BUTTON",
+            name: null,
+            files: [],
+            textContent: label,
+            getAttribute: () => null,
             closest: () => null,
           })),
         ];
@@ -820,7 +832,7 @@ async function runTests(): Promise<void> {
       score: 84,
       scoreBreakdown: {
         ...beautyJob.scoreBreakdown,
-        clientQualityScore: { score: 46, reasons: ["Thin client history"], risks: ["Limited spend"] },
+        clientQualityScore: { score: 70, reasons: ["Enough client history for discovery review"], risks: ["Connects spend needs review"] },
         finalScore: 84,
       },
       applicationDraft: {
@@ -1343,6 +1355,46 @@ async function runTests(): Promise<void> {
     });
     assert(truncatedLifelyVerification.find((item) => item.field === "profileHighlights")?.status === "verified", "Upwork-truncated selected Lifely portfolio title should verify in browser diagnostics.");
 
+    const selectedButtonsOnlyVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({
+        visibleText: "Required for proposal: 8 Connects\nProfile highlights\nBoost your proposal\nSend for 8 Connects",
+        inputValues: [verificationPlan.coverLetter, "$50"],
+        actionLabels: ["Selected", "Selected", "Selected", "Selected", "Send for 8 Connects"],
+      }),
+      plan: {
+        ...verificationPlan,
+        screeningAnswers: [],
+        attachments: [],
+        highlights: ["The Fly Boutique", "Steve's Design Case Studies", "From $250k to $1.2 Million In 12 Months / Truly Beauty", "How Lifely Transformed Their Retention Marketing"],
+      },
+      fields: { attemptedFields: ["coverLetter", "rate", "highlights"], skippedFields: [], manualFields: ["finalSubmit"] },
+      bodyText: "Required for proposal: 8 Connects\nSend for 8 Connects",
+    });
+    assert(
+      selectedButtonsOnlyVerification.find((item) => item.field === "profileHighlights")?.status === "verified",
+      "Four Upwork Selected controls should verify four planned profile highlights even when names are hidden.",
+    );
+
+    const uncommittedSelectedButtonsVerification = await verifyApplyPreparationOnPage({
+      page: fakeApplyPage({
+        visibleText: "Required for proposal: 8 Connects\nProfile highlights\nAdd profile highlights\nHighlights (4/4)\nBoost your proposal\nSend for 8 Connects",
+        inputValues: [verificationPlan.coverLetter, "$50"],
+        actionLabels: ["Selected", "Selected", "Selected", "Selected", "Select highlight", "Add to highlights", "Send for 8 Connects"],
+      }),
+      plan: {
+        ...verificationPlan,
+        screeningAnswers: [],
+        attachments: [],
+        highlights: ["The Fly Boutique", "Steve's Design Case Studies", "From $250k to $1.2 Million In 12 Months / Truly Beauty", "How Lifely Transformed Their Retention Marketing"],
+      },
+      fields: { attemptedFields: ["coverLetter", "rate", "highlights"], skippedFields: [], manualFields: ["finalSubmit"] },
+      bodyText: "Required for proposal: 8 Connects\nSend for 8 Connects",
+    });
+    assert(
+      uncommittedSelectedButtonsVerification.find((item) => item.field === "profileHighlights")?.status !== "verified",
+      "Selected controls inside an open picker must not verify until Add to highlights commits them.",
+    );
+
     const duplicateAttachmentVerification = await verifyApplyPreparationOnPage({
       page: fakeApplyPage({
         visibleText: "Required for proposal: 8 Connects\nSend for 8 Connects\npackage.json\npackage.json",
@@ -1401,18 +1453,19 @@ async function runTests(): Promise<void> {
     });
     assert(tabMismatchVerification.find((item) => item.field === "targetTab")?.status === "attempted_unverified", "Tab mismatch must not produce false apply-prep success.");
 
+    const beautyApplyUrl = "https://www.upwork.com/ab/proposals/job/~022055111111111111111/apply/";
     let prepCompletionText = "";
     const prepCompletionPost = await postPrepareDraftStatus(
       {
         thread: { channelId: "C123", messageTs: "999.222", threadTs: "999.222" },
-        heading: "✅ Upwork application page prepared for final manual submit for browser action #707.",
+        heading: "✅ Upwork draft saved for QA for browser action #707.",
         diagnostics: {
           actionId: 707,
           jobId: beautyJob.id,
           jobTitle: beautyJob.title,
           actionType: "prepare_application_review",
           sourceUrl: beautyJob.url,
-          applyUrl: `${beautyJob.url}/apply`,
+          applyUrl: beautyApplyUrl,
           intendedAction: "Open Upwork apply page, prepare fields for human review, and stop before submit.",
           state: "apply_page_loaded",
           stopBeforeSubmit: true,
@@ -1471,11 +1524,13 @@ async function runTests(): Promise<void> {
       },
     );
     assert(prepCompletionPost === "posted", "Prepared browser application should post final-review Slack thread reply");
-    assert(prepCompletionText.includes("✅ *Ready for QA*"), "Prep completion alert should use concise ready-for-QA wording");
+    assert(prepCompletionText.includes("✅ *Saved for QA*"), "Prep completion alert should use saved-for-QA wording instead of pretending the tab stack is already staged.");
     assert(prepCompletionText.includes("remote Chrome"), "Prep completion alert should say the draft is in remote Chrome");
     assert(prepCompletionText.includes("VNC"), "Prep completion alert should direct QA to remote Chrome/VNC");
     assert(!prepCompletionText.includes("Safari"), "Prep completion alert should not push URL copy/paste into local Safari");
-    assert(!prepCompletionText.includes("*Apply URL:*"), "Prep completion alert should not require URL copy/paste into VNC");
+    assert(prepCompletionText.includes("*Apply link:*"), "Prep completion alert should include the apply link for long-thread QA jumps");
+    assert(prepCompletionText.includes(beautyApplyUrl), "Prep completion alert should include the exact apply URL");
+    assert(prepCompletionText.includes("saved the apply link below for QA"), "Prep completion alert should describe a saved QA handoff instead of claiming a live visible tab stack.");
     assert(prepCompletionText.includes("• *Cover letter:* filled"), "Prep completion alert should only claim filled cover letter when verified");
     assert(prepCompletionText.includes("• *Screening answers:* filled"), "Prep completion alert should summarize verified screening answers compactly");
     assert(prepCompletionText.includes("• *Proof files:* attached: Truly Beauty case study"), "Prep completion alert should include verified proof files checklist item.");
@@ -1489,6 +1544,7 @@ async function runTests(): Promise<void> {
     assert(prepCompletionText.includes("You can correct proof here in Slack"), "Prep completion alert should explain natural proof corrections");
     assert(prepCompletionText.includes("Nothing submitted: I did not click the final Upwork submit button."), "Prep completion alert should explicitly say nothing was submitted.");
     assert(prepCompletionText.includes("• *Final submit:* untouched — nothing submitted"), "Prep completion alert should include final-submit checklist item.");
+    assert(prepCompletionText.includes("open the Apply link in remote Chrome/VNC"), "Prep completion alert should tell the reviewer how to reopen the proposal safely.");
     assert(prepCompletionText.includes("manually click *Send for 4 Connects*"), "Prep completion alert should preserve final submit safety");
     assert(!prepCompletionText.includes("Fields filled:"), "Prep completion alert should not include internal field inventory");
     assert(!prepCompletionText.includes("Auto-attach assets:"), "Prep completion alert should not include exhaustive proof inventory");
@@ -1502,7 +1558,7 @@ async function runTests(): Promise<void> {
       jobTitle: beautyJob.title,
       actionType: "prepare_application_review",
       sourceUrl: beautyJob.url,
-      applyUrl: `${beautyJob.url}/apply`,
+      applyUrl: beautyApplyUrl,
       intendedAction: "Open Upwork apply page, prepare fields for human review, and stop before submit.",
       state: "field_preparation_incomplete",
       stopBeforeSubmit: true,
@@ -1613,6 +1669,7 @@ async function runTests(): Promise<void> {
     assert(kimiQaHandoffText.startsWith("Kimi QA:"), "QA handoff should use Kimi copy when the provider is available and safe.");
     assert(kimiQaRequests.some((request) => request.messages?.[1]?.content?.includes("\"path\":\"qa_handoff\"")), "Kimi QA handoff request should use the qa_handoff path.");
     assert(kimiQaRequests.some((request) => JSON.stringify(request).includes("Operating constitution from soul.md")), "Kimi QA handoff request should include soul.md context.");
+    assert(kimiQaHandoffText.includes("*Apply link:*"), "Kimi QA handoff must preserve the apply link.");
     assert(kimiQaHandoffText.includes("*Proof files:*"), "Kimi QA handoff must preserve proof file status wording.");
     assert(kimiQaHandoffText.includes("*Portfolio highlights:*"), "Kimi QA handoff must preserve portfolio status wording.");
     assert(kimiQaHandoffText.includes("• *Final submit:* untouched — nothing submitted"), "Kimi QA handoff must preserve final-submit untouched.");

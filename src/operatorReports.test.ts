@@ -7,7 +7,9 @@ import {
   answerMonthlyOperatorQuestion,
   buildFridayOperatorHandoff,
   buildMonthlyOperatorReview,
+  buildOperatorStatusReport,
   buildScheduledFridayOperatorHandoff,
+  classifyOperatorBlocker,
   shouldSendFridayHandoff,
   type OperatorReportSnapshot,
 } from "./operatorReports";
@@ -115,6 +117,10 @@ assert(emptyReport.includes("Leads found: 0"), "Missing lead data should be show
 assert(emptyReport.includes("Unavailable: no source-backed leads"), "Missing source data should be labeled unavailable");
 assert(emptyReport.includes("Unavailable: no submitted proof"), "Missing proof data should be labeled unavailable");
 
+assert.equal(classifyOperatorBlocker({ lastError: "Login required before opening apply page" }), "auth");
+assert.equal(classifyOperatorBlocker({ lastError: "stopBeforeSubmit safety guard blocked final submit" }), "safety_guard");
+assert.equal(classifyOperatorBlocker({ lastError: "Selector not found for cover letter field" }), "page_structure");
+
 {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "operator-reports-"));
   process.env.DB_PATH = path.join(tempDir, "jobs.db");
@@ -154,8 +160,16 @@ assert(emptyReport.includes("Unavailable: no submitted proof"), "Missing proof d
       INSERT INTO application_assets (job_id, source, source_file_id, original_name, proof_type, attach_policy, created_at)
       VALUES ('job-1', 'slack_file', 'F123', 'Fly Boutique retention proof', 'case_study', 'attach', '2026-06-10T12:30:00.000Z');
 
-      INSERT INTO browser_actions (job_id, action_type, status, updated_at)
-      VALUES ('job-3', 'prepare_application_review', 'paused', '2026-06-11T16:00:00.000Z');
+      INSERT INTO browser_actions (job_id, action_type, status, last_error, updated_at)
+      VALUES
+        ('job-3', 'prepare_application_review', 'paused', 'Login required before opening apply page', '2026-06-11T16:00:00.000Z'),
+        ('job-2', 'open_apply_page', 'pending', NULL, '2026-06-11T16:30:00.000Z');
+
+      INSERT INTO slack_queue (payload, attempts)
+      VALUES ('{"text":"queued operator notice"}', 2);
+
+      INSERT INTO worker_heartbeats (worker, status, last_run_at, last_success_at, run_count, success_count, error_count, last_error, metadata, updated_at)
+      VALUES ('lead-engine', 'error', '2026-06-12T08:45:00.000Z', '2026-06-12T07:45:00.000Z', 4, 3, 1, 'RSS source timeout', '{}', '2026-06-12T08:45:00.000Z');
 
       INSERT INTO sales_learning_memories (type, subject, hypothesis, confidence, evidence_count, status, updated_at)
       VALUES ('proof_preference', 'Fly Boutique', 'Use Fly Boutique proof for retention-heavy Klaviyo work.', 'high', 4, 'active', '2026-06-11T17:00:00.000Z');
@@ -179,6 +193,25 @@ assert(emptyReport.includes("Unavailable: no submitted proof"), "Missing proof d
     assert.equal(dbSnapshot.blockedItems[0]?.label, "Low-fit admin role", "DB snapshot should surface paused browser work");
     assert.equal(dbSnapshot.lessons[0]?.label, "proof_preference: Fly Boutique", "DB snapshot should surface DB-backed lessons");
     assert.equal(dbSnapshot.steveActionItems[0]?.label, "Email QA role", "DB snapshot should surface Steve-needed review actions");
+    assert(dbSnapshot.operatorStatus, "DB snapshot should include compact operator status data");
+    assert.equal(dbSnapshot.operatorStatus.slackQueue.count, 1, "Operator status should summarize Slack queue health");
+    assert.equal(dbSnapshot.operatorStatus.slackQueue.maxAttempts, 2, "Operator status should include Slack queue retry pressure");
+    assert(dbSnapshot.operatorStatus.browserActionStatuses.some((row) => row.status === "pending" && row.count === 1), "Operator status should count pending browser actions");
+    assert(dbSnapshot.operatorStatus.browserActionStatuses.some((row) => row.status === "paused" && row.count === 1), "Operator status should count paused browser actions");
+    assert.equal(dbSnapshot.operatorStatus.blockersByCategory[0]?.category, "auth", "Operator status should classify blocker reason from browser error text");
+    assert(dbSnapshot.operatorStatus.pendingBrowserActions[0]?.detail?.includes("job-2"), "Operator status should list pending browser work");
+    assert(dbSnapshot.operatorStatus.pausedBrowserActions[0]?.evidence.includes("category=auth"), "Operator status should annotate paused actions with blocker category");
+    assert(dbSnapshot.operatorStatus.recentOutcomes[0]?.label.includes("replied"), "Operator status should list recent outcome events");
+    assert(dbSnapshot.operatorStatus.lastRunState[0]?.detail?.includes("RSS source timeout"), "Operator status should expose last worker run state");
+
+    const statusReport = buildOperatorStatusReport(dbSnapshot.operatorStatus);
+    assert(statusReport.includes("Slack queue: 1 queued; max_attempts=2"), "Status report should render queue health compactly");
+    assert(statusReport.includes("Browser actions:"), "Status report should render browser status counts");
+    assert(statusReport.includes("auth: 1"), "Status report should render blocker taxonomy counts");
+    assert(statusReport.includes("Final submit remains manual"), "Status report should preserve manual-submit safety boundary");
+
+    const fridayWithStatus = buildFridayOperatorHandoff(dbSnapshot);
+    assert(fridayWithStatus.includes("Operator status"), "Friday handoff should include DB-backed operator status when present");
   } finally {
     fixtureDb.close();
     closeDb();

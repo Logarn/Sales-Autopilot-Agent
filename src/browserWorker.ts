@@ -67,7 +67,7 @@ import {
 } from "./types";
 import { extractConnectsFromVisibleText } from "./connectsExtraction";
 import { chooseVisibleBoost, extractVisibleBoostBids, hasUnknownRequiredConnects, type VisibleBoostBid } from "./connectsStrategy";
-import { guardedClick } from "./browserSafetyGuard";
+import { guardedClick, guardedGoto } from "./browserSafetyGuard";
 import { getSlackLeadPostingDecision, SlackPacketV3Context, writeV3CapturePacketWithLlm } from "./slackPacketV3";
 import { evaluatePlatformEligibility } from "./platformEligibility";
 import { decideLeadHandling } from "./leadDecision";
@@ -259,7 +259,7 @@ interface PlaywrightLocatorLike {
   nth?(index: number): PlaywrightLocatorLike;
   textContent(options?: { timeout?: number }): Promise<string | null>;
   scrollIntoViewIfNeeded?(options?: { timeout?: number }): Promise<unknown>;
-  click?(options?: { timeout?: number }): Promise<unknown>;
+  click?(options?: { timeout?: number; force?: boolean }): Promise<unknown>;
   fill(value: string, options?: { timeout?: number }): Promise<unknown>;
   setInputFiles(files: string[], options?: { timeout?: number }): Promise<unknown>;
   check(options?: { timeout?: number }): Promise<unknown>;
@@ -945,6 +945,38 @@ export function shouldUseDirectFallbackForCaptureAction(action: BrowserAction): 
   return action.actionType === "capture_job_from_url" && !isDiscoveryBestMatchesCaptureAction(action);
 }
 
+function sourceContextCaptureLacksClientSignals(capture: {
+  extracted: UpworkStructuredExtractionResult;
+  snapshot: PageSnapshot;
+}): boolean {
+  const previewJob = normalizedPacketToJobPosting(buildDeterministicOpportunityPacket(capture.extracted.rawText, {
+    url: capture.snapshot.url,
+    source: "deterministic",
+    capturedAt: new Date(),
+  }));
+  return previewJob.clientRating <= 0 &&
+    previewJob.clientSpend <= 0 &&
+    previewJob.clientHireRate <= 0 &&
+    previewJob.clientTotalHires <= 0 &&
+    previewJob.clientFeedbackCount <= 0;
+}
+
+export function shouldFallbackToDirectJobCaptureFromSourceContext(
+  action: BrowserAction,
+  capture: Awaited<ReturnType<typeof tryCaptureDiscoverySourceContext>> | null,
+): boolean {
+  if (!capture || action.actionType !== "capture_job_from_url" || !isDiscoveryBestMatchesCaptureAction(action)) {
+    return false;
+  }
+  if (capture.state === "captcha_or_security_challenge" || capture.state === "source_context_unavailable") {
+    return true;
+  }
+  if (capture.state !== "captured") {
+    return false;
+  }
+  return sourceContextCaptureLacksClientSignals(capture);
+}
+
 export async function tryCaptureDiscoverySourceContext(
   context: { pages?: () => PlaywrightPageLike[] },
   action: BrowserAction,
@@ -1117,7 +1149,8 @@ function buildPrepareDraftStatusMessage(input: {
     diagnostics.manualFields.some((field) => field !== "finalSubmit") ||
     diagnostics.connectsDecision !== "safe_apply" ||
     hasUnverifiedRequiredApplyFields(fieldVerification);
-  const readyForFinalManualSubmit = diagnostics.state === "apply_page_loaded" && diagnostics.stopBeforeSubmit && !needsManualReview;
+  const savedApplyLink = hasSavedQaApplyUrl(diagnostics.applyUrl) ? diagnostics.applyUrl : null;
+  const readyForSavedQa = diagnostics.state === "apply_page_loaded" && diagnostics.stopBeforeSubmit && !needsManualReview && Boolean(savedApplyLink);
   const coverLetterSummary = coverLetterVerification?.status === "verified"
     ? "filled"
     : coverLetterVerification?.status === "attempted_unverified"
@@ -1162,13 +1195,22 @@ function buildPrepareDraftStatusMessage(input: {
   const boostSummary = diagnostics.boostConnects && diagnostics.boostConnects > 0
     ? `${diagnostics.boostConnects} selected, under your 50 cap`
     : "not set yet";
+  const jobToken = [savedApplyLink, diagnostics.jobId, diagnostics.sourceUrl]
+    .map((value) => String(value ?? "").match(/(?:manual:upwork-|\/job\/~|\/jobs\/~|~)(\d{12,})/)?.[1] ?? null)
+    .find(Boolean);
+  const jobLabel = diagnostics.jobTitle?.trim() || (jobToken ? "Upwork job" : null);
+  const jobReferenceLines = [
+    jobLabel ? `• *Job:* ${jobToken ? `${jobLabel} (\`...${jobToken.slice(-3)}\`)` : jobLabel}` : null,
+    savedApplyLink ? `• *Apply link:* ${savedApplyLink}` : null,
+  ].filter((line): line is string => Boolean(line));
 
-  if (readyForFinalManualSubmit) {
+  if (readyForSavedQa) {
     return [
-      "✅ *Ready for QA*",
+      "✅ *Saved for QA*",
       "",
-      "I prepared this in remote Chrome and stopped before submit.",
+      "I prepared this in remote Chrome, saved the apply link below for QA, and stopped before submit.",
       "Nothing submitted: I did not click the final Upwork submit button.",
+      ...(jobReferenceLines.length > 0 ? ["", ...jobReferenceLines] : []),
       "",
       [
         `• *Cover letter:* ${coverLetterSummary}`,
@@ -1182,7 +1224,7 @@ function buildPrepareDraftStatusMessage(input: {
       "",
       correctionLine,
       "",
-      `*Next:* review in VNC. Reply with changes, or manually click *${submitLabel}* if it looks good.`,
+      `*Next:* open the Apply link in remote Chrome/VNC, review, reply with changes, or manually click *${submitLabel}* if it looks good.`,
     ].join("\n");
   }
 
@@ -1190,8 +1232,9 @@ function buildPrepareDraftStatusMessage(input: {
     return [
       "⚠️ *I couldn’t verify the Connects cost yet.*",
       "",
-      "I can see the proposal page, but the Connects section isn’t readable right now. I left submit untouched and skipped boost for now.",
+      "I reached the proposal page, but the Connects section isn’t readable right now. I left submit untouched and skipped boost for now.",
       "Nothing submitted: I did not click the final Upwork submit button.",
+      ...(jobReferenceLines.length > 0 ? ["", ...jobReferenceLines] : []),
       "",
       "Current readback:",
       [
@@ -1223,6 +1266,7 @@ function buildPrepareDraftStatusMessage(input: {
       ? blockerReason
       : `I reached the Upwork application and stopped before submit. ${blockerReason}`,
     "Nothing submitted: I did not click the final Upwork submit button.",
+    ...(jobReferenceLines.length > 0 ? ["", ...jobReferenceLines] : []),
     "",
     "Current readback:",
     [
@@ -1271,6 +1315,8 @@ export async function postPrepareDraftStatus(
     "• *Final submit:* untouched — nothing submitted",
     "• *Proof files:*",
     "• *Portfolio highlights:*",
+    "• *Apply link:*",
+    ...(input.diagnostics.applyUrl ? [input.diagnostics.applyUrl] : []),
     ...(deterministicText.includes("Proof planned") ? ["Proof planned"] : []),
     ...(deterministicText.includes("Proof verified") ? ["Proof verified"] : []),
   ];
@@ -1335,7 +1381,7 @@ function promiseNotificationForPrepareDraftStatus(input: {
   diagnostics: ApplyPreparationDiagnostics;
   text: string;
 }): SlackPromiseNotificationPlan {
-  const isReady = input.diagnostics.state === "apply_page_loaded";
+  const isReady = input.diagnostics.state === "apply_page_loaded" && hasSavedQaApplyUrl(input.diagnostics.applyUrl);
   const blocker = isReady ? null : stateStatusMessage(input.diagnostics.state as DetectedBrowserState);
   return {
     notificationType: isReady ? "qa_ready" : "qa_blocked",
@@ -1740,6 +1786,7 @@ async function tryFillFirst(page: PlaywrightPageLike, selectors: string[], value
         await locator.scrollIntoViewIfNeeded?.({ timeout: 1500 }).catch(() => undefined);
         await locator.fill("", { timeout: 1500 });
         await locator.fill(value, { timeout: 1500 });
+        await page.waitForTimeout?.(250).catch(() => undefined);
         if (await firstFieldValueMatches(page, selector, value)) return true;
         if (await forceSetFirstFieldValue(page, selector, value) && await firstFieldValueMatches(page, selector, value)) {
           return true;
@@ -1778,9 +1825,18 @@ async function firstFieldValueMatches(page: PlaywrightPageLike, selector: string
   }, { selector, expected: expectedPrefix }).catch(() => false);
 }
 
+async function firstVisibleTextareaHasSubstantialText(page: PlaywrightPageLike): Promise<boolean> {
+  if (!page.evaluate) return false;
+  return page.evaluate(() => {
+    const firstTextarea = Array.from(document.querySelectorAll<HTMLTextAreaElement>("textarea"))
+      .find((element) => !element.disabled && !element.readOnly && element.value.replace(/\s+/g, " ").trim().length >= 200);
+    return Boolean(firstTextarea?.value && firstTextarea.value.replace(/\s+/g, " ").trim().length >= 200);
+  }).catch(() => false);
+}
+
 async function forceSetFirstFieldValue(page: PlaywrightPageLike, selector: string, value: string): Promise<boolean> {
   if (!page.evaluate) return false;
-  return page.evaluate((input) => {
+  const changed = await page.evaluate((input) => {
     if (!input) return false;
     const { selector: cssSelector, value: nextValue } = input;
     const elements = Array.from(document.querySelectorAll(cssSelector)) as Array<HTMLInputElement | HTMLTextAreaElement>;
@@ -1795,15 +1851,24 @@ async function forceSetFirstFieldValue(page: PlaywrightPageLike, selector: strin
     if (!element) return false;
     const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+    const previousValue = element.value;
     if (setter) {
       setter.call(element, nextValue);
     } else {
       element.value = nextValue;
     }
+    (element as HTMLInputElement & HTMLTextAreaElement & { _value?: string })._value = nextValue;
+    const tracker = (element as HTMLInputElement & { _valueTracker?: { setValue(value: string): void } })._valueTracker;
+    tracker?.setValue?.(previousValue);
+    element.focus();
     element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: nextValue }));
+    element.dispatchEvent(new Event("input", { bubbles: true }));
     element.dispatchEvent(new Event("change", { bubbles: true }));
+    element.blur();
     return true;
   }, { selector, value }).catch(() => false);
+  if (changed) await page.waitForTimeout?.(350).catch(() => undefined);
+  return changed;
 }
 
 function hourlyRateInputValue(value: string): string | null {
@@ -1861,7 +1926,7 @@ async function tryFillScreeningAnswers(page: PlaywrightPageLike, answers: string
   let filled = 0;
   for (let index = 0; index < cleanAnswers.length && index + 1 < count; index += 1) {
     try {
-      await textareas.nth(index + 1).fill(cleanAnswers[index], { timeout: 1500 });
+      await textareas.nth(index + 1).fill(cleanAnswers[index], { timeout: 3500 });
       filled += 1;
     } catch {
       // Leave the remaining answer for manual review rather than risking a wrong field.
@@ -1869,7 +1934,89 @@ async function tryFillScreeningAnswers(page: PlaywrightPageLike, answers: string
     }
   }
 
+  if (page.evaluate) {
+    const fallback = await page.evaluate((inputAnswers = []) => {
+      const answers = Array.isArray(inputAnswers)
+        ? inputAnswers.map((answer) => String(answer ?? "").trim()).filter(Boolean)
+        : [];
+      if (answers.length === 0) return 0;
+      const isVisible = (element: Element): boolean => {
+        const htmlElement = element as HTMLElement;
+        const rect = htmlElement.getBoundingClientRect();
+        const style = window.getComputedStyle(htmlElement);
+        return rect.width > 0 &&
+          rect.height > 0 &&
+          style.display !== "none" &&
+          style.visibility !== "hidden";
+      };
+      const textareas = Array.from(document.querySelectorAll<HTMLTextAreaElement>("textarea"))
+        .filter(isVisible);
+      if (textareas.length <= 1) return 0;
+      const screeningFields = textareas.slice(1, answers.length + 1);
+      let changed = 0;
+      for (let index = 0; index < screeningFields.length; index += 1) {
+        const field = screeningFields[index];
+        const answer = answers[index];
+        if (!field || !answer) continue;
+        if (field.value.trim() === answer) {
+          changed += 1;
+          continue;
+        }
+        const previousValue = field.value;
+        const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+        field.focus();
+        if (setter) {
+          setter.call(field, answer);
+        } else {
+          field.value = answer;
+        }
+        (field as HTMLTextAreaElement & { _value?: string })._value = answer;
+        const tracker = (field as HTMLTextAreaElement & { _valueTracker?: { setValue(value: string): void } })._valueTracker;
+        tracker?.setValue?.(previousValue);
+        field.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: answer }));
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+        field.dispatchEvent(new Event("change", { bubbles: true }));
+        field.blur();
+        changed += 1;
+      }
+      return changed;
+    }, cleanAnswers).catch(() => 0);
+    filled = Math.max(filled, fallback);
+  }
+
   return { filled, skipped: cleanAnswers.length - filled };
+}
+
+async function closeOpenProfileHighlightDialog(page: PlaywrightPageLike): Promise<boolean> {
+  if (!page.evaluate) return false;
+  const closed = await page.evaluate(() => {
+    const normalize = (value: string): string => value.replace(/\s+/g, " ").trim().toLowerCase();
+    const dialogs = Array.from(document.querySelectorAll("[role='dialog']")).filter((dialog) => {
+      const htmlDialog = dialog as HTMLElement;
+      const rect = htmlDialog.getBoundingClientRect();
+      const style = window.getComputedStyle(htmlDialog);
+      return rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden";
+    });
+    const dialog = dialogs.find((candidate) =>
+      /\b(?:profile highlights|select up to four highlights|add profile highlights)\b/i.test(candidate.textContent ?? "")
+    );
+    if (!dialog) return false;
+    const buttons = Array.from(dialog.querySelectorAll("button")) as HTMLButtonElement[];
+    const button = buttons.find((candidate) => /close/i.test(normalize(candidate.getAttribute("aria-label") ?? ""))) ??
+      buttons.find((candidate) => /^cancel$/i.test(normalize(candidate.textContent ?? ""))) ??
+      buttons.find((candidate) => /close/i.test(normalize(candidate.textContent ?? "")));
+    if (!button) return false;
+    button.click();
+    button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+    button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    return true;
+  }).catch(() => false);
+  if (closed) await page.waitForTimeout?.(750).catch(() => undefined);
+  return closed;
 }
 
 async function pageLooksFixedPriceLive(page: PlaywrightPageLike): Promise<boolean> {
@@ -2145,6 +2292,9 @@ async function trySelectHighlightsFromOpenDialog(page: PlaywrightPageLike, highl
     if (domSelected > 0) {
       await page.waitForTimeout?.(750).catch(() => undefined);
     }
+    if (await readSelectedHighlightCountInOpenDialog(page) < requiredHighlightCount) {
+      await trustedClickVisibleHighlightButtons(page, requiredHighlightCount);
+    }
   }
   let selected = 0;
   for (const highlight of highlights) {
@@ -2154,7 +2304,31 @@ async function trySelectHighlightsFromOpenDialog(page: PlaywrightPageLike, highl
     }
     if (await tryTrustedSelectHighlightFromOpenDialog(page, highlight) && await openDialogHasSelectedHighlight(page, highlight)) selected += 1;
   }
-  return selected;
+  return Math.max(selected, await readSelectedHighlightCountInOpenDialog(page));
+}
+
+async function trustedClickVisibleHighlightButtons(page: PlaywrightPageLike, requiredHighlightCount: number): Promise<number> {
+  if (requiredHighlightCount <= 0) return 0;
+  const buttons = page.locator("[role='dialog'] button:has-text('Select highlight')");
+  const buttonCount = await buttons.count().catch(() => 0);
+  let clicked = 0;
+  for (let index = 0; index < Math.min(buttonCount, requiredHighlightCount); index += 1) {
+    const before = await readSelectedHighlightCountInOpenDialog(page);
+    const button = buttons.nth?.(0);
+    if (!button) continue;
+    try {
+      await button.scrollIntoViewIfNeeded?.({ timeout: 1500 }).catch(() => undefined);
+      if (typeof button.click === "function") {
+        await button.click({ timeout: 3000, force: true });
+      }
+    } catch {
+      // Keep trying the next visible select button.
+    }
+    await page.waitForTimeout?.(650).catch(() => undefined);
+    if (await readSelectedHighlightCountInOpenDialog(page) > before) clicked += 1;
+    if (await readSelectedHighlightCountInOpenDialog(page) >= requiredHighlightCount) break;
+  }
+  return clicked;
 }
 
 async function clickMatchingHighlightsInOpenDialogWithDom(page: PlaywrightPageLike, highlights: string[]): Promise<number> {
@@ -2196,6 +2370,13 @@ async function clickMatchingHighlightsInOpenDialogWithDom(page: PlaywrightPageLi
       .filter((button): button is HTMLButtonElement => /^selected$/i.test(normalize(button.textContent ?? "")) && isVisible(button));
     const selectButtons = () => Array.from(dialog.querySelectorAll("button"))
       .filter((button): button is HTMLButtonElement => /^select highlight$/i.test(normalize(button.textContent ?? "")) && !(button as HTMLButtonElement).disabled && isVisible(button));
+    const trustedClick = (button: HTMLButtonElement): void => {
+      button.scrollIntoView({ block: "center", inline: "nearest" });
+      button.click();
+      button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+      button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    };
     let matched = 0;
     for (const aliases of normalizedAliasGroups) {
       if (selectedButtons().some((button) => rowMatchesAliases(button, aliases))) {
@@ -2204,11 +2385,17 @@ async function clickMatchingHighlightsInOpenDialogWithDom(page: PlaywrightPageLi
       }
       const button = selectButtons().find((candidate) => rowMatchesAliases(candidate, aliases));
       if (!button) continue;
-      button.scrollIntoView({ block: "center", inline: "nearest" });
-      button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-      button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-      button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+      trustedClick(button);
       matched += 1;
+    }
+    const requiredHighlightCount = Math.min(4, normalizedAliasGroups.length);
+    const remaining = requiredHighlightCount - matched;
+    const visibleSelectButtons = selectButtons();
+    if (remaining > 0 && visibleSelectButtons.length <= requiredHighlightCount) {
+      for (const button of visibleSelectButtons.slice(0, remaining)) {
+        trustedClick(button);
+        matched += 1;
+      }
     }
     return matched;
   }, highlights.map(highlightAliases)).catch(() => 0);
@@ -2218,7 +2405,18 @@ async function pageHasCommittedHighlights(page: PlaywrightPageLike, highlights: 
   if (!page.evaluate || highlights.length === 0) return false;
   return page.evaluate((aliasesByHighlight = []) => {
     const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
-    const text = document.body?.innerText ?? "";
+    const visibleDialogs = Array.from(document.querySelectorAll("[role='dialog']")).filter((candidate) => {
+      const dialog = candidate as HTMLElement;
+      const rect = dialog.getBoundingClientRect();
+      const style = window.getComputedStyle(dialog);
+      return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    });
+    if (visibleDialogs.some((dialog) => /\b(?:select highlight|add to highlights|add profile highlights|highlights\s*\(\s*\d\s*[/]\s*4\s*\)|portfolio\s*\(\d+\))\b/i.test(dialog.textContent ?? ""))) {
+      return false;
+    }
+    const bodyClone = document.body?.cloneNode(true) as HTMLElement | null;
+    bodyClone?.querySelectorAll("[role='dialog']").forEach((dialog) => dialog.remove());
+    const text = bodyClone?.textContent ?? document.body?.innerText ?? "";
     const startMatch = text.match(/profile\s+highlights(?:\s+new)?/i);
     const afterStart = startMatch && startMatch.index !== undefined ? text.slice(startMatch.index + startMatch[0].length) : "";
     const endMatch = afterStart.match(/boost\s+your\s+proposal/i);
@@ -2308,6 +2506,7 @@ async function clickHighlightInOpenDialogWithDom(page: PlaywrightPageLike, highl
       });
     if (!matchingButton) return false;
     matchingButton.scrollIntoView({ block: "center", inline: "nearest" });
+    matchingButton.click();
     matchingButton.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
     matchingButton.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
     matchingButton.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
@@ -2441,6 +2640,8 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHigh
     const button = Array.from(dialog.querySelectorAll("button"))
       .find((candidate) => /^(?:add to highlights|add\s+\d+\s*[/]\s*4)$/i.test((candidate.textContent ?? "").replace(/\s+/g, " ").trim()) && !(candidate as HTMLButtonElement).disabled && isVisibleButton(candidate as HTMLButtonElement)) as HTMLButtonElement | undefined;
     button?.scrollIntoView({ block: "center", inline: "nearest" });
+    button?.focus();
+    button?.click();
     button?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
     button?.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
     button?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
@@ -2448,7 +2649,9 @@ async function tryConfirmHighlightsDialog(page: PlaywrightPageLike, expectedHigh
   }).catch(() => false);
   const hasCommittedHighlights = () => evaluate((aliasesByHighlight = []) => {
     const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
-    const text = document.body?.innerText ?? "";
+    const bodyClone = document.body?.cloneNode(true) as HTMLElement | null;
+    bodyClone?.querySelectorAll("[role='dialog']").forEach((dialog) => dialog.remove());
+    const text = bodyClone?.textContent ?? document.body?.innerText ?? "";
     const startMatch = text.match(/profile\s+highlights(?:\s+new)?/i);
     const afterStart = startMatch && startMatch.index !== undefined ? text.slice(startMatch.index + startMatch[0].length) : "";
     const endMatch = afterStart.match(/boost\s+your\s+proposal/i);
@@ -2900,6 +3103,16 @@ function textDiffers(left: string | null | undefined, right: string | null | und
 
 function textCollectionContainsHighlight(values: string[], expected: string): boolean {
   return highlightAliases(expected).some((alias) => textCollectionContains(values, alias));
+}
+
+function selectedHighlightControlCount(snapshot: ApplyVerificationSnapshot): number {
+  return snapshot.actionLabels.filter((label) => normalizeVerificationValue(label) === "selected").length;
+}
+
+function profileHighlightPickerLooksOpen(snapshot: ApplyVerificationSnapshot): boolean {
+  return /\b(?:add profile highlights|select highlight|add to highlights|highlights\s*\(\s*\d\s*[/]\s*4\s*\)|portfolio\s*\(\d+\))\b/i.test(
+    [snapshot.visibleText, ...snapshot.actionLabels].join("\n")
+  );
 }
 
 function proposalVersionSourceFromPayload(value: unknown): ProposalVersionSource {
@@ -3358,8 +3571,14 @@ export async function verifyApplyPreparationOnPage(input: {
   } else {
     const highlightEvidence = [...snapshot.checkedLabels, ...snapshot.selectedHighlightLabels];
     const verifiedHighlights = plan.highlights.filter((highlight) => textCollectionContainsHighlight(highlightEvidence, highlight));
-    if (verifiedHighlights.length === plan.highlights.length) {
-      results.push(verification("profileHighlights", "verified", `Verified selected portfolio/profile proof: ${verifiedHighlights.join(", ")}.`, { actual: verifiedHighlights.join(", ") }));
+    const selectedControls = selectedHighlightControlCount(snapshot);
+    const pickerOpen = profileHighlightPickerLooksOpen(snapshot);
+    const expectedSelections = Math.min(plan.highlights.length, 4);
+    if (verifiedHighlights.length === plan.highlights.length || (!pickerOpen && selectedControls >= expectedSelections)) {
+      const actual = verifiedHighlights.length === plan.highlights.length
+        ? verifiedHighlights.join(", ")
+        : `${selectedControls} selected Upwork profile highlight controls`;
+      results.push(verification("profileHighlights", "verified", `Verified selected portfolio/profile proof: ${actual}.`, { actual }));
     } else if (/add a portfolio project|add portfolio project|add a certificate|add certificate/i.test(snapshot.visibleText)) {
       results.push(verification("profileHighlights", "attempted_unverified", `Portfolio/certificate selector entry is visible, but selected proof is not verified yet. Expected: ${plan.highlights.join(", ")}`, { expected: plan.highlights.join(", "), actual: highlightEvidence.join(" | ") }));
     } else if (fields.manualFields.includes("highlights")) {
@@ -3417,19 +3636,25 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
   const skippedFields: string[] = [];
   const manualFields: string[] = [];
 
+  await closeOpenProfileHighlightDialog(page);
+
   const proposalSettings = await trySelectProposalSettings(page, plan);
   attemptedFields.push(...proposalSettings.attempted);
   manualFields.push(...proposalSettings.manual);
 
   const coverLetterFilled = await tryFillFirst(page, ["textarea[name*='cover']", "textarea[aria-label*='Cover']", "textarea"], plan.coverLetter);
-  if (coverLetterFilled) {
+  const coverLetterMatches = coverLetterFilled || await firstFieldValueMatches(page, "textarea", plan.coverLetter);
+  const coverLetterReady = coverLetterMatches || await firstVisibleTextareaHasSubstantialText(page);
+  if (coverLetterMatches) {
     attemptedFields.push("coverLetter");
+  } else if (coverLetterReady) {
+    manualFields.push("coverLetter");
   } else {
     skippedFields.push("coverLetter");
   }
 
   if (plan.screeningAnswers.length > 0) {
-    const screening = coverLetterFilled
+    const screening = coverLetterReady
       ? await tryFillScreeningAnswers(page, plan.screeningAnswers)
       : { filled: 0, skipped: plan.screeningAnswers.length };
     if (screening.filled > 0) {
@@ -3438,10 +3663,6 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
     if (screening.skipped > 0) {
       manualFields.push("screeningAnswers");
     }
-  }
-
-  if (await tryConfirmHighlightsDialog(page, plan.highlights)) {
-    attemptedFields.push("highlights");
   }
 
   const fixedPricePage = await pageLooksFixedPriceLive(page);
@@ -3494,6 +3715,23 @@ async function fillApplyFields(page: PlaywrightPageLike, plan: BrowserApplyFillP
     attemptedFields.push("highlights");
   } else if (plan.highlights.length > 0) {
     manualFields.push("highlights");
+  }
+  await closeOpenProfileHighlightDialog(page);
+
+  if (plan.screeningAnswers.length > 0 && coverLetterReady) {
+    const screening = await tryFillScreeningAnswers(page, plan.screeningAnswers);
+    if (screening.filled > 0) {
+      const existingIndex = attemptedFields.findIndex((field) => field.startsWith("screeningAnswers:"));
+      if (existingIndex >= 0) {
+        attemptedFields[existingIndex] = `screeningAnswers:${Math.max(screening.filled, Number.parseInt(attemptedFields[existingIndex].split(":")[1] ?? "0", 10) || 0)}`;
+      } else {
+        attemptedFields.push(`screeningAnswers:${screening.filled}`);
+      }
+    }
+    if (screening.skipped === 0) {
+      const manualIndex = manualFields.indexOf("screeningAnswers");
+      if (manualIndex >= 0) manualFields.splice(manualIndex, 1);
+    }
   }
 
   manualFields.push("finalSubmit");
@@ -3592,9 +3830,11 @@ async function inspectWithBrowser(
     const sourceContextPageFound = sourceContextAttempted && openPages.some((candidate) => isDiscoverySourceContextPage(candidate.url()));
     const directJobPageRejectedForDiscovery = sourceContextAttempted && openPages.some((candidate) => isDirectUpworkJobPage(candidate.url()) && urlsReferToSameUpworkJob(candidate.url(), url));
     const sourceContextCapture = sourceContextAttempted ? await tryCaptureDiscoverySourceContext(sessionHandle.context, action, url) : null;
-    const shouldDirectFallback = !sourceContextAttempted || shouldUseDirectFallbackForCaptureAction(action);
+    const sourceContextDirectFallback = shouldFallbackToDirectJobCaptureFromSourceContext(action, sourceContextCapture);
+    const usedSourceContextCapture = Boolean(sourceContextCapture) && !sourceContextDirectFallback;
+    const shouldDirectFallback = !sourceContextAttempted || shouldUseDirectFallbackForCaptureAction(action) || sourceContextDirectFallback;
     const protectedApplyUrls = currentProtectedQaApplyUrls();
-    const selectedPage = sourceContextCapture || !shouldDirectFallback
+    const selectedPage = usedSourceContextCapture || !shouldDirectFallback
       ? null
       : action.actionType === "capture_application_snapshot"
         ? selectVisibleApplicationSnapshotPage(sessionHandle.context, url)
@@ -3613,7 +3853,7 @@ async function inspectWithBrowser(
       !urlsReferToSameUpworkJob(page.url(), url) ||
       (action.actionType === "open_apply_page" && !isUpworkApplyUrl(page.url()))
     )) {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+      await guardedGoto(page, url, { waitUntil: "domcontentloaded", timeout: 45000 });
     }
     const unavailableDetection: BrowserStateDetection = {
       state: "source_context_unavailable",
@@ -3623,13 +3863,13 @@ async function inspectWithBrowser(
         : "Discovery source context did not contain readable target job content; direct fallback is disabled for discovery-origin captures.",
     };
     const unavailableSnapshot: PageSnapshot = { url: currentPageUrlBeforeCapture, title: currentPageTitleBeforeCapture, textExcerpt: "" };
-    const settled = sourceContextCapture
-      ? { snapshot: sourceContextCapture.snapshot, bodyText: sourceContextCapture.bodyText, detection: sourceContextCapture.detection, samples: [{ step: 1, url: sourceContextCapture.sourcePageUrl, title: sourceContextCapture.snapshot.title, textExcerpt: sourceContextCapture.snapshot.textExcerpt, detection: sourceContextCapture.detection }] }
+    const settled = usedSourceContextCapture
+      ? { snapshot: sourceContextCapture!.snapshot, bodyText: sourceContextCapture!.bodyText, detection: sourceContextCapture!.detection, samples: [{ step: 1, url: sourceContextCapture!.sourcePageUrl, title: sourceContextCapture!.snapshot.title, textExcerpt: sourceContextCapture!.snapshot.textExcerpt, detection: sourceContextCapture!.detection }] }
       : !shouldDirectFallback || (action.actionType === "capture_application_snapshot" && !selectedPage)
         ? { snapshot: unavailableSnapshot, bodyText: "", detection: unavailableDetection, samples: [{ step: 1, url: currentPageUrlBeforeCapture, title: "", textExcerpt: "", detection: unavailableDetection }] }
         : await settlePageAndDetect(page!, action);
     let { snapshot, bodyText, detection, samples } = settled;
-    let state = sourceContextCapture?.state ?? detection.state;
+    let state = usedSourceContextCapture ? sourceContextCapture!.state : detection.state;
     let extractedRawText = bodyText;
     let extractionDiagnostics: unknown;
     if (plan && state === "job_page_loaded" && page && await tryClickApplyNow(page)) {
@@ -3641,16 +3881,16 @@ async function inspectWithBrowser(
       state = detection.state;
     }
     if (action.actionType === "capture_job_from_url" && state === "captured") {
-      const extracted = sourceContextCapture?.extracted ?? await extractUpworkJobContent(page!);
+      const extracted = usedSourceContextCapture ? sourceContextCapture!.extracted : await extractUpworkJobContent(page!);
       extractedRawText = extracted.rawText;
       extractionDiagnostics = extracted.diagnostics;
       logger.info(
         `Capture extraction #${action.id}: titleSource=${extracted.diagnostics.titleSource} descriptionSource=${extracted.diagnostics.descriptionSource} ` +
           `title=${extracted.diagnostics.capturedTitle} descriptionLength=${extracted.diagnostics.descriptionLength} ` +
           `removedNoiseMarkers=${extracted.diagnostics.removedNoiseMarkers} rawConfigNoiseDetected=${extracted.diagnostics.rawConfigNoiseDetected} ` +
-          `lowConfidence=${extracted.diagnostics.lowConfidence} sourceContext=${Boolean(sourceContextCapture)}`
+          `lowConfidence=${extracted.diagnostics.lowConfidence} sourceContext=${usedSourceContextCapture}`
       );
-      saveTextArtifact(options, action, sourceContextCapture ? "capture-source-context-extraction.json" : "capture-extraction.json", JSON.stringify(extracted, null, 2));
+      saveTextArtifact(options, action, usedSourceContextCapture ? "capture-source-context-extraction.json" : "capture-extraction.json", JSON.stringify(extracted, null, 2));
       if (extracted.diagnostics.lowConfidence) {
         state = "source_context_unavailable";
       }
@@ -3705,20 +3945,22 @@ async function inspectWithBrowser(
       sessionMode: options.sessionMode,
       targetUrl: url,
       pageReuse: {
-        reusedExistingPage: sourceContextCapture ? true : selectedPage?.reusedExistingPage ?? true,
-        reason: sourceContextCapture
+        reusedExistingPage: usedSourceContextCapture ? true : selectedPage?.reusedExistingPage ?? true,
+        reason: usedSourceContextCapture
           ? "Used Best Matches source-context capture before direct navigation."
+          : sourceContextDirectFallback
+            ? "Discovery source context lacked reliable client metadata or hit a blocker; fell back to direct job page capture."
           : selectedPage?.reason ?? "Discovery source context unavailable; direct fallback disabled.",
-        selectedPageUrl: sourceContextCapture?.sourcePageUrl ?? selectedPage?.page.url() ?? snapshot.url,
+        selectedPageUrl: usedSourceContextCapture ? sourceContextCapture!.sourcePageUrl : selectedPage?.page.url() ?? snapshot.url,
       },
       tabHygiene,
       settleSamples: samples,
       finalSnapshot: snapshot,
       finalDetection: { ...detection, state },
-      captureStrategy: sourceContextCapture
-        ? sourceContextCapture.state === "source_context_unavailable" ? "source_context_unavailable" : sourceContextCapture.readable ? "source_context" : "blocked_before_capture"
+      captureStrategy: usedSourceContextCapture
+        ? sourceContextCapture!.state === "source_context_unavailable" ? "source_context_unavailable" : sourceContextCapture!.readable ? "source_context" : "blocked_before_capture"
         : shouldDirectFallback ? "direct_fallback" : "source_context_unavailable",
-      selectedPageKind: sourceContextCapture ? "source_context" : selectedPage ? (isDirectUpworkJobPage(selectedPage.page.url()) ? "direct_job_page" : "source_context") : "none",
+      selectedPageKind: usedSourceContextCapture ? "source_context" : selectedPage ? (isDirectUpworkJobPage(selectedPage.page.url()) ? "direct_job_page" : "source_context") : "none",
       directJobPageRejectedForDiscovery,
       sourceContextPageFound,
       sourceContextAttempted,
@@ -3784,6 +4026,11 @@ function terminalStatusForState(state: DetectedBrowserState): "completed" | "pau
   return "completed";
 }
 
+function prepareTerminalStatusForState(state: DetectedBrowserState): "completed" | "paused" {
+  if (state === "apply_page_loaded") return "paused";
+  return terminalStatusForState(state);
+}
+
 function stateStatusMessage(state: DetectedBrowserState): string {
   if (state === "browser_profile_in_use") {
     return "Chrome profile is already open. Use CDP mode or close Chrome before retrying.";
@@ -3803,7 +4050,14 @@ function stateStatusMessage(state: DetectedBrowserState): string {
   if (state === "connects_not_verified") {
     return "Connects not verified on the apply page. The application page stays open for QA; boost was skipped and final submit was not clicked.";
   }
+  if (state === "apply_page_loaded") {
+    return "Draft prepared for human QA in remote Chrome. Reopen it from the saved apply link before review; final submit was not clicked.";
+  }
   return `Detected state: ${state}; stop-before-submit enforced.`;
+}
+
+function hasSavedQaApplyUrl(value: string | null | undefined): value is string {
+  return typeof value === "string" && /https?:\/\/(?:www\.)?upwork\.com\/ab\/proposals\/job\/~[^/]+\/apply\/?$/i.test(value.trim());
 }
 
 function quarantineBackoffUntil(repeatCount: number, now = new Date()): string | null {
@@ -4036,9 +4290,10 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
   updateBrowserActionStatus(action.id, "in_progress");
   incrementBrowserActionAttempts(action.id);
 
+  const storedApplyPlan = action.actionType === "prepare_application_review" ? action.payload.applyPlan ?? null : null;
   if (action.actionType === "prepare_application_review") {
     const scoredJob = getScoredJobForSlackPreview(action.jobId);
-    if (scoredJob?.description?.trim()) {
+    if (!storedApplyPlan && scoredJob?.description?.trim()) {
       const previousStatus = getApplicationStatus(action.jobId);
       const previousDraft = getApplicationDraft(action.jobId);
       const regeneratedDraft = await buildApplicationDraftWithResearch(scoredJob);
@@ -4069,10 +4324,18 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
     }
   }
 
-  const applyPlanResult = action.actionType === "prepare_application_review" ? buildBrowserApplyPlan(action.jobId) : null;
+  const applyPlanResult = action.actionType === "prepare_application_review"
+    ? storedApplyPlan
+      ? {
+          plan: storedApplyPlan,
+          valid: !(storedApplyPlan.validationIssues ?? []).some((validationIssue) => validationIssue.severity === "error"),
+          issues: storedApplyPlan.validationIssues ?? [],
+        }
+      : buildBrowserApplyPlan(action.jobId)
+    : null;
   const stalePayloadErrors =
-    action.actionType === "prepare_application_review"
-      ? ((action.payload.applyPlan as BrowserApplyFillPlan | undefined)?.validationIssues ?? []).filter(
+    storedApplyPlan
+      ? (storedApplyPlan.validationIssues ?? []).filter(
           (validationIssue) => validationIssue.severity === "error"
         )
       : [];
@@ -4257,6 +4520,8 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
 
     if (action.actionType === "prepare_application_review") {
       const diagnostics = buildApplyDiagnostics(action, plan, applyPlanResult?.issues ?? [], state, fields);
+      const holdApplyUrl = [snapshot?.url, diagnostics.applyUrl, url].find((value): value is string => hasSavedQaApplyUrl(value));
+      const readyForSavedQa = state === "apply_page_loaded" && Boolean(holdApplyUrl);
       saveApplyDiagnostics(options, action, diagnostics);
       if (plan) {
         recordBrowserApplyPlanLearning(plan, state === "apply_page_loaded" ? "browser_apply_prepared" : "browser_apply_attempt");
@@ -4299,7 +4564,7 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           source: "browser_apply_prep",
         });
       }
-      updateBrowserActionStatus(action.id, terminalStatusForState(state), stateStatusMessage(state));
+      updateBrowserActionStatus(action.id, prepareTerminalStatusForState(state), stateStatusMessage(state));
       if (["login_required", "two_factor_required", "captcha_or_security_challenge"].includes(state)) {
         await quarantineBrowserChallenge({
           action,
@@ -4312,24 +4577,25 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
         markBrowserChallengeResolved(action.id);
       }
       if (state === "apply_page_loaded" || state === "connects_not_verified" || state === "field_preparation_incomplete") {
-        const qaStatus = state === "apply_page_loaded" ? "prepared_for_qa" : "needs_review";
-        const holdApplyUrl = snapshot?.url ?? diagnostics.applyUrl ?? url;
+        const qaStatus = readyForSavedQa ? "prepared_for_qa" : "needs_review";
         updateApplicationStatus(
           action.jobId,
           qaStatus,
-          state === "apply_page_loaded"
-            ? "Browser draft prepared in remote Chrome for final human QA. Final submit was not clicked."
+          readyForSavedQa
+            ? "Browser draft prepared in remote Chrome and saved with a direct apply link for human QA. Final submit was not clicked."
             : "Browser draft preparation needs human review in remote Chrome. Final submit was not clicked."
         );
         mergeBrowserActionPayload(action.id, {
           qaHold: {
             protected: true,
             jobId: action.jobId,
-            applyUrl: holdApplyUrl,
+            applyUrl: holdApplyUrl ?? undefined,
             status: qaStatus,
             state,
-            reason: state === "apply_page_loaded"
+            reason: readyForSavedQa
               ? "awaiting_human_qa"
+              : state === "apply_page_loaded"
+                ? "saved_apply_link_missing"
               : state === "connects_not_verified"
                 ? "connects_not_verified"
                 : "needs_review",
@@ -4339,16 +4605,16 @@ async function processAction(action: BrowserAction, options: BrowserWorkerOption
           },
         });
       }
-      if (state === "apply_page_loaded") {
+      if (readyForSavedQa) {
         if (thread) {
           updateSlackThreadStateStatus(thread.channelId, thread.threadTs, "prepared_draft", { jobId: action.jobId });
         }
       }
       const postStatus = await postPrepareDraftStatus({
         thread,
-        heading: state === "apply_page_loaded" ? `✅ Upwork application page prepared for final manual submit for browser action #${action.id}.` : `⚠️ Draft preparation paused for browser action #${action.id}.`,
+        heading: readyForSavedQa ? `✅ Upwork draft saved for QA for browser action #${action.id}.` : `⚠️ Draft preparation paused for browser action #${action.id}.`,
         diagnostics,
-        nextCommand: state === "apply_page_loaded" ? "status" : `retry ${action.id}`,
+        nextCommand: readyForSavedQa ? "status" : `retry ${action.id}`,
       });
       countPrepareDraftStatusPost(result, postStatus);
       logger.info(`Browser action #${action.id} detected state: ${state}`);

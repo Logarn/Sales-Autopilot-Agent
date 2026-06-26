@@ -2,15 +2,16 @@ import assert from "node:assert/strict";
 import { buildApplicationDraft, buildApplicationDraftWithResearch } from "./agent";
 import { scoreJob } from "./filter";
 import {
-  rewriteProposalCoverLetterWithKimi,
+  composeProposalCoverLetterWithKimi,
   type ProposalCoverLetterClient,
+  type ProposalCoverLetterComposeInput,
 } from "./proposalCoverLetterComposer";
 import type { JobPosting } from "./types";
 import type { LlmJsonRequest, LlmJsonResult } from "./llm/provider";
 
 function job(partial: Partial<JobPosting> = {}): JobPosting {
   return {
-    id: "proposal-kimi-cover-letter",
+    id: "proposal-composer-test",
     title: "Shopify Klaviyo retention flow audit for skincare brand",
     url: "https://www.upwork.com/jobs/~123456789012345678",
     description: [
@@ -41,7 +42,13 @@ class FakeProposalProvider implements ProposalCoverLetterClient {
   requests: LlmJsonRequest[] = [];
   private index = 0;
 
-  constructor(private readonly payload: Record<string, unknown> | Array<Record<string, unknown>>, private readonly available = true) {}
+  constructor(
+    private readonly payload:
+      | Record<string, unknown>
+      | Array<Record<string, unknown>>
+      | ((request: LlmJsonRequest, index: number) => Record<string, unknown> | Promise<Record<string, unknown>>),
+    private readonly available = true,
+  ) {}
 
   isAvailable(): boolean {
     return this.available;
@@ -49,232 +56,255 @@ class FakeProposalProvider implements ProposalCoverLetterClient {
 
   async completeJson<T>(request: LlmJsonRequest): Promise<LlmJsonResult<T>> {
     this.requests.push(request);
-    const payload = Array.isArray(this.payload)
-      ? this.payload[Math.min(this.index++, this.payload.length - 1)]
-      : this.payload;
+    const payload = typeof this.payload === "function"
+      ? await this.payload(request, this.index++)
+      : Array.isArray(this.payload)
+        ? this.payload[Math.min(this.index++, this.payload.length - 1)]
+        : this.payload;
     return { ok: true, data: payload as T };
   }
 }
 
-const scored = scoreJob(job());
-const deterministicDraft = buildApplicationDraft(scored);
-const conversionProposal = [
-  "Steve here - how is your day going?",
-  "",
-  "Your buyers need the skincare routine to feel easy after the first order, and the Shopify/Klaviyo flows you named are where that trust either compounds or leaks. I would start with a 3-5 day flow audit focused on welcome, abandoned cart, post-purchase, and win-back logic.",
-  "",
-  "Done = the two biggest repeat-purchase leaks are ranked, one high-leverage sequence is rewritten in founder voice, and the test plan is tied to lifting email revenue instead of vanity opens.",
-  "",
-  "For proof, I would use one matched artifact: the Truly Beauty case study - a zero-party data engine helped lift revenue per subscriber 2.5x within two months.",
-  "",
-  "I can keep the first scope async-friendly and start with the flow logic before touching a wider calendar. Would you prefer a quick call or an async first-pass audit outline?",
-].join("\n");
+const disabledBrandResearchProvider = {
+  name: "disabled-brand-research",
+  isAvailable: () => false,
+  search: async () => {
+    throw new Error("brand research should not be called in this test");
+  },
+};
+
+function buildComposeInput(scoredJob: ReturnType<typeof scoreJob>): ProposalCoverLetterComposeInput {
+  const fallbackDraft = buildApplicationDraft(scoredJob);
+  return {
+    job: scoredJob,
+    jobUnderstanding: fallbackDraft.jobUnderstanding!,
+    brandResearchStatus: fallbackDraft.brandResearchStatus!,
+    copyStrategy: fallbackDraft.copyStrategy!,
+    brandFactPack: fallbackDraft.brandFactPack!,
+    proofStrategy: fallbackDraft.proofStrategy!,
+    selectedPortfolioItems: fallbackDraft.selectedPortfolioItems,
+    fallbackProposalText: fallbackDraft.proposalText,
+    fallbackScreeningAnswers: fallbackDraft.structuredProposal?.clientRequestAnswers ?? [],
+    suggestedBid: fallbackDraft.suggestedBid,
+    suggestedConnects: fallbackDraft.suggestedConnects,
+  };
+}
+
+function firstSentence(text: string): string {
+  return text.replace(/\s+/g, " ").trim().match(/^[^.!?]+[.!?]?/)?.[0] ?? "";
+}
+
+function proofParagraphCount(text: string): number {
+  return text
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .filter((paragraph) => /\b(?:proof|artifact|case study)\b/i.test(paragraph))
+    .length;
+}
+
+function assertProblemLedProposal(text: string, expectedSignals: string[]): void {
+  const lower = text.toLowerCase();
+  const opener = firstSentence(text).toLowerCase();
+  const signalMatches = expectedSignals.filter((signal) => lower.includes(signal.toLowerCase()));
+
+  assert(!/^(?:steve here|hey there|hi there|hello there|hope you(?:'re| are) well|how is your day going)/i.test(opener), `Primary LLM proposal should not use a fixed opener pattern:\n${text}`);
+  assert(signalMatches.length >= 2, `Proposal should reference concrete job context. Expected at least two signals from ${expectedSignals.join(", ")}:\n${text}`);
+  assert(!/\b(?:dear hiring manager|perfect fit|tailored to your needs|proven track record|passionate about)\b/i.test(text), `Proposal should avoid generic Upwork filler:\n${text}`);
+  assert(!/\b(?:Relevant proof|Approach|Credentials|Screening answers)\s*:/i.test(text), `Proposal should not leak internal scaffold labels:\n${text}`);
+  assert(proofParagraphCount(text) === 1, `Proposal should carry exactly one proof paragraph:\n${text}`);
+  assert(/\b(?:3-5 day|3 to 5 day|three to five day|first slice|first milestone|done\s*=)\b/i.test(text), `Proposal should include a clear first milestone:\n${text}`);
+  assert(/[?]$/.test(text.trim()) && /\b(?:outline|call|review|audit|walk)\b/i.test(text.trim()), `Proposal should end with a clean CTA:\n${text}`);
+}
 
 async function run(): Promise<void> {
-  const provider = new FakeProposalProvider({ proposalText: conversionProposal, rationale: "uses retention OS" });
-  const rewrite = await rewriteProposalCoverLetterWithKimi({
-    job: scored,
-    deterministicDraft,
-    copyStrategy: deterministicDraft.copyStrategy,
-    brandFactPack: deterministicDraft.brandFactPack,
-    proofStrategy: deterministicDraft.proofStrategy,
-    selectedPortfolioItems: deterministicDraft.selectedPortfolioItems,
-  }, provider);
+  const scored = scoreJob(job());
+  const composeInput = buildComposeInput(scored);
 
-  assert.equal(rewrite.usedLlm, true, JSON.stringify(rewrite, null, 2));
-  assert.match(rewrite.proposalText, /^Steve here - how is your day going\?/);
-  assert.match(rewrite.proposalText, /\bDone\s*=/);
-  assert.match(rewrite.proposalText, /2\.5x within two months/);
-  assert.match(rewrite.proposalText, /quick call or an async first-pass audit outline\?$/);
-  assert.equal(provider.requests.length, 1);
-  assert((provider.requests[0]?.timeoutMs ?? 0) >= 75_000, "Proposal copy Kimi request should use the longer proposal-copy timeout.");
-  assert.equal(provider.requests[0]?.plainTextFallbackKey, "proposalText", "Proposal copy should accept long non-JSON Kimi text as proposalText.");
-  const prompt = provider.requests.flatMap((request) => request.messages.map((message) => message.content)).join("\n");
-  assert.match(prompt, /Operating constitution from soul\.md/i, "Proposal copy prompt should include soul.md.");
-  assert.match(prompt, /Upwork Proposal Operating System for Retention Marketing/i, "Prompt should include the retention copy OS.");
-  assert.match(prompt, /Cold Outbound Handbook logic/i, "Prompt should include the Cold Outbound Handbook layer.");
-  assert.match(prompt, /Pain sniff first/i, "Prompt should require pain sniffing.");
-  assert.match(prompt, /profit center/i, "Prompt should frame Steve as a profit center, not a CV.");
-  assert.match(prompt, /Claim -> Warrant -> Evidence -> Impact/i, "Prompt should strengthen the proposal argument before writing.");
-  assert.match(prompt, /exactly one proof artifact/i, "Prompt should enforce one proof artifact.");
-  assert.match(prompt, /Steve here - how is your day going\?/i, "Prompt should preserve Steve's voice opener.");
-  assert.doesNotMatch(prompt, /"proposalText"\s*:\s*"\.\.\."/i, "Prompt should not teach Kimi to return a placeholder proposalText.");
-  assert.match(prompt, /full finished cover letter/i, "Prompt should ask for the full finished cover letter.");
-  assert.match(prompt, /Do not include private reasoning/i, "Prompt should block Kimi reasoning inside proposalText.");
-  assert.match(prompt, /requestedToolsToMention/i, "Prompt should expose requested tool terms to Kimi.");
-
-  const researchedDraft = await buildApplicationDraftWithResearch(scored, { proposalCopyProvider: new FakeProposalProvider({ proposalText: conversionProposal }) });
-  assert.equal(researchedDraft.proposalText, conversionProposal);
-  assert.equal(researchedDraft.structuredProposal?.browserFillNotes.approvedText, conversionProposal);
-  assert(researchedDraft.skillUseTrace?.invocationOrder.some((item: string) => item === "cover_letter_drafting:proposal-copy-kimi-conversion-os"), "Async draft should record the Kimi conversion cover-letter pass.");
-  assert.equal(researchedDraft.draftQualityGate?.ready, true);
-
-  const brandDesignJob = scoreJob(job({
-    id: "proposal-kimi-brand-design",
-    title: "Established Shopify Store Seeking Ecommerce Partner - Branding & Logo Design",
-    description: [
-      "Need branding, logo design, website modernization, conversion optimization, and a sharper Shopify store experience.",
-      "The store is already doing meaningful revenue, but the brand identity and buying path need to feel more credible.",
-      "Please include relevant proof and the first thing you would improve.",
-    ].join(" "),
-    category: "Ecommerce Design",
-    skills: ["Shopify", "Brand Design", "Conversion Optimization"],
-  }));
-  const brandDesignDraft = buildApplicationDraft(brandDesignJob);
-  const brandDesignProposal = [
-    "Steve here - how is your day going?",
-    "",
-    "Your Shopify store already has traction, but the branding/logo brief says the first leak is trust and product-path clarity, not another generic ecommerce checklist. I would start with a 3-5 day brand/conversion diagnostic that can recover trust and conversion leakage across the homepage, PDP path, logo/identity fit, and offer hierarchy.",
-    "",
-    "Done = the identity risks, buying-path friction, and first design direction are mapped clearly enough to approve before a full redesign expands.",
-    "",
-    "For proof, I would use one matched artifact: Design Case Studies - premium DTC email design and campaign/flow visual systems proof.",
-    "",
-    "I can keep the first pass async-friendly and decision-focused before bigger design execution. Would you prefer a quick call or an async brand/conversion outline?",
-  ].join("\n");
-  const brandProvider = new FakeProposalProvider({ proposalText: brandDesignProposal, rationale: "uses brand design lane" });
-  const brandRewrite = await rewriteProposalCoverLetterWithKimi({
-    job: brandDesignJob,
-    deterministicDraft: brandDesignDraft,
-    copyStrategy: brandDesignDraft.copyStrategy,
-    brandFactPack: brandDesignDraft.brandFactPack,
-    proofStrategy: brandDesignDraft.proofStrategy,
-    selectedPortfolioItems: brandDesignDraft.selectedPortfolioItems,
-  }, brandProvider);
-  assert.equal(brandRewrite.usedLlm, true, JSON.stringify(brandRewrite, null, 2));
-  assert.match(brandRewrite.proposalText, /Design Case Studies/);
-  assert.doesNotMatch(brandRewrite.proposalText, /Hangaritas|win[-\s]?back|replenishment|email revenue/i);
-  const brandPrompt = brandProvider.requests.flatMap((request) => request.messages.map((message) => message.content)).join("\n");
-  assert.match(brandPrompt, /Lane: ecommerce brand\/logo\/conversion design/i, "Brand design prompt should include lane-specific guidance.");
-  assert.match(brandPrompt, /Do not use Hangaritas/i, "Brand design prompt should explicitly block retention proof drift.");
-
-  const aliasRewrite = await rewriteProposalCoverLetterWithKimi({
-    job: brandDesignJob,
-    deterministicDraft: brandDesignDraft,
-    copyStrategy: brandDesignDraft.copyStrategy,
-    brandFactPack: brandDesignDraft.brandFactPack,
-    proofStrategy: brandDesignDraft.proofStrategy,
-  }, new FakeProposalProvider({ proposal_text: brandDesignProposal, rationale: "kimi used snake_case" }));
-  assert.equal(aliasRewrite.usedLlm, true, "Proposal composer should accept Kimi proposal_text JSON alias.");
-  assert.equal(aliasRewrite.proposalText, brandDesignProposal);
-
-  const proposalAliasRewrite = await rewriteProposalCoverLetterWithKimi({
-    job: brandDesignJob,
-    deterministicDraft: brandDesignDraft,
-    copyStrategy: brandDesignDraft.copyStrategy,
-    brandFactPack: brandDesignDraft.brandFactPack,
-    proofStrategy: brandDesignDraft.proofStrategy,
-  }, new FakeProposalProvider({ proposal: brandDesignProposal, rationale: "kimi used generic proposal key" }));
-  assert.equal(proposalAliasRewrite.usedLlm, true, "Proposal composer should accept Kimi proposal JSON alias.");
-  assert.equal(proposalAliasRewrite.proposalText, brandDesignProposal);
-
-  const nestedAliasRewrite = await rewriteProposalCoverLetterWithKimi({
-    job: brandDesignJob,
-    deterministicDraft: brandDesignDraft,
-    copyStrategy: brandDesignDraft.copyStrategy,
-    brandFactPack: brandDesignDraft.brandFactPack,
-    proofStrategy: brandDesignDraft.proofStrategy,
-  }, new FakeProposalProvider({
-    result: {
-      content: {
-        cover_letter_text: brandDesignProposal,
+  const multiCandidateProvider = new FakeProposalProvider({
+    candidates: [
+      {
+        angleId: "revenue-leak-diagnosis",
+        angleLabel: "Revenue leak diagnosis",
+        openerShape: "revenue-leak",
+        proposalText: [
+          "Hey there,",
+          "",
+          "I am excited to apply for your Klaviyo role.",
+          "",
+          "I can help with Shopify, retention, and email marketing.",
+        ].join("\n"),
       },
-    },
-    rationale: "kimi nested the cover letter under result.content",
-  }));
-  assert.equal(nestedAliasRewrite.usedLlm, true, "Proposal composer should accept nested Kimi cover-letter content.");
-  assert.equal(nestedAliasRewrite.proposalText, brandDesignProposal);
+      {
+        angleId: "customer-moment-breakdown",
+        angleLabel: "Customer moment breakdown",
+        openerShape: "customer-moment",
+        proposalText: [
+          "The repeat-purchase leak here is that buyers are probably reaching the welcome, abandoned cart, post-purchase, and win-back sequence before this Shopify skincare brand has earned enough trust to make the second order feel easy. In Klaviyo, those moments are where email revenue either compounds or disappears after the first purchase.",
+          "",
+          "In a 3-5 day first slice, I would audit those four flows, rank the two biggest leaks, and rewrite the first sequence in founder voice so the customer path feels easier to buy through. Done = one priority flow is rebuilt, the next test is defined, and the revenue hypothesis is clear.",
+          "",
+          "For proof, I would use the Truly Beauty case study, where zero-party-data segmentation helped lift revenue per subscriber 2.5x within two months.",
+          "",
+          "I can keep the first pass async-friendly inside the current account so you can judge the logic before expanding scope. Would you rather see the first audit outline here, or do a quick call?",
+        ].join("\n"),
+      },
+      {
+        angleId: "segmentation-cadence-miss",
+        angleLabel: "Segmentation and cadence miss",
+        openerShape: "segmentation-cadence",
+        proposalText: [
+          "Your campaigns may simply need better segmentation.",
+          "",
+          "I have a proven track record and can tailor a solution to your needs.",
+        ].join("\n"),
+      },
+    ],
+  });
 
-  const verboseKimiRewrite = await rewriteProposalCoverLetterWithKimi({
-    job: brandDesignJob,
-    deterministicDraft: brandDesignDraft,
-    copyStrategy: brandDesignDraft.copyStrategy,
-    brandFactPack: brandDesignDraft.brandFactPack,
-    proofStrategy: brandDesignDraft.proofStrategy,
-  }, new FakeProposalProvider({
-    proposalText: [
-      "The user wants me to write an Upwork cover letter. I need to follow the operating system and avoid generic copy.",
-      "",
-      brandDesignProposal,
-      "",
-      "Rationale: this uses the brand design lane.",
-    ].join("\n"),
-  }));
-  assert.equal(verboseKimiRewrite.usedLlm, true, "Proposal composer should strip Kimi preamble/rationale from a usable cover letter.");
-  assert.equal(verboseKimiRewrite.proposalText, brandDesignProposal);
+  const composed = await composeProposalCoverLetterWithKimi(composeInput, multiCandidateProvider);
+  assert.equal(composed.usedLlm, true, JSON.stringify(composed, null, 2));
+  assert.equal(composed.generationTrace.mode, "llm_primary");
+  assert.equal(composed.generationTrace.candidateCount, 3);
+  assert.equal(composed.generationTrace.selectedAngleId, "customer-moment-breakdown");
+  assert.equal(composed.generationTrace.selectedOpenerShape, "customer-moment");
+  assertProblemLedProposal(composed.proposalText, ["shopify", "klaviyo", "welcome", "abandoned cart", "post-purchase", "win-back"]);
+
+  const composePrompt = multiCandidateProvider.requests
+    .flatMap((request) => request.messages.map((message) => message.content))
+    .join("\n");
+  assert.match(composePrompt, /Generate one proposal candidate for each supplied angle/i);
+  assert.match(composePrompt, /Never start with fixed patterns like `Steve here`/i);
+  assert.doesNotMatch(composePrompt, /Default to `Steve here`/i);
+  assert.match(composePrompt, /Do not fill a template/i);
+
+  const researchedDraft = await buildApplicationDraftWithResearch(scored, {
+    brandResearchProvider: disabledBrandResearchProvider,
+    proposalCopyProvider: new FakeProposalProvider({
+      candidates: [
+      {
+        angleId: "customer-moment-breakdown",
+        angleLabel: "Customer moment breakdown",
+        openerShape: "customer-moment",
+        proposalText: [
+          "The weakness in this brief is that the buyer may be reaching the welcome, abandoned cart, post-purchase, and win-back path before the brand has made the second order feel certain enough to take. That is a lifecycle problem before it is a tooling problem, even when Shopify and Klaviyo are the stack.",
+            "",
+            "My first 3-5 day move would be to map those four moments, identify the two biggest retention leaks, and rebuild the highest-leverage sequence first. Done = one sequence is rewritten, the highest-priority test is defined, and the next retention fix is obvious.",
+            "",
+            "For proof, I would use the Truly Beauty case study, where zero-party-data segmentation helped lift revenue per subscriber 2.5x within two months.",
+            "",
+            "I can keep the first pass async-friendly and grounded in the current account instead of widening scope too early. Would you rather see the first audit outline here, or do a quick call?",
+          ].join("\n"),
+        },
+      ],
+    }),
+  });
+  assert.equal(researchedDraft.proposalGenerationTrace?.mode, "llm_primary");
+  assert.equal(researchedDraft.proposalGenerationTrace?.selectedOpenerShape, "customer-moment");
+  assert.equal(researchedDraft.structuredProposal?.browserFillNotes.approvedText, researchedDraft.proposalText);
+  assert(researchedDraft.skillUseTrace?.invocationOrder.includes("cover_letter_strategy:job_reader"));
+  assert(researchedDraft.skillUseTrace?.invocationOrder.includes("cover_letter_strategy:problem_interpreter"));
+  assert(researchedDraft.skillUseTrace?.invocationOrder.some((item: string) => item.startsWith("cover_letter_strategy:angle_generator:")));
+  assert(researchedDraft.skillUseTrace?.invocationOrder.includes("cover_letter_drafting:proposal-writer-llm-primary"));
+  assert(researchedDraft.skillUseTrace?.invocationOrder.includes("cover_letter_critic:copy-os"));
+  assert.equal(researchedDraft.draftQualityGate?.ready, true);
+  assertProblemLedProposal(researchedDraft.proposalText, ["shopify", "klaviyo", "welcome", "abandoned cart", "post-purchase", "win-back"]);
+
+  const deterministicFallbackDraft = buildApplicationDraft(scored);
+  assert.equal(deterministicFallbackDraft.proposalGenerationTrace?.mode, "deterministic_fallback");
+  assert.equal(deterministicFallbackDraft.proposalGenerationTrace?.provider, "fallback");
 
   const repairProvider = new FakeProposalProvider([
     {
-      proposalText: [
-        "The user wants me to write an Upwork cover letter. I will reason through all rules first.",
-        "This output is intentionally long and not a usable cover letter because it does not begin with Steve's opener.",
-        "It should be rejected and repaired by the second Kimi pass.",
-      ].join(" "),
+      candidates: [
+        {
+          angleId: "revenue-leak-diagnosis",
+          angleLabel: "Revenue leak diagnosis",
+          openerShape: "revenue-leak",
+          proposalText: "Hi there, I am excited to apply for your job. I have extensive experience.",
+        },
+      ],
     },
-    { proposalText: brandDesignProposal },
+      {
+        proposalText: [
+        "The commercial leak in this brief is that repeat purchase is being asked to happen before the welcome, abandoned cart, post-purchase, and win-back path earns enough buyer trust to feel natural. Inside Klaviyo for a Shopify skincare brand, that is usually where email revenue flattens.",
+        "",
+        "My first 3-5 day move would be to audit those four lifecycle moments, rebuild the highest-leverage sequence, and show where the next retention win should come from. Done = the priority sequence is rewritten, the measurement plan is clear, and the next fix is queued.",
+        "",
+        "For proof, I would use the Truly Beauty case study, where zero-party-data segmentation helped lift revenue per subscriber 2.5x within two months.",
+        "",
+        "I can keep the first pass async-friendly and specific to the existing customer path. Would you rather see the first audit outline here, or do a quick call?",
+      ].join("\n"),
+    },
   ]);
-  const repairedRewrite = await rewriteProposalCoverLetterWithKimi({
-    job: brandDesignJob,
-    deterministicDraft: brandDesignDraft,
-    copyStrategy: brandDesignDraft.copyStrategy,
-    brandFactPack: brandDesignDraft.brandFactPack,
-    proofStrategy: brandDesignDraft.proofStrategy,
-  }, repairProvider);
-  assert.equal(repairedRewrite.usedLlm, true, "Proposal composer should make one repair pass after invalid Kimi reasoning output.");
-  assert.equal(repairedRewrite.proposalText, brandDesignProposal);
+  const repaired = await composeProposalCoverLetterWithKimi(composeInput, repairProvider);
+  assert.equal(repaired.usedLlm, true, JSON.stringify(repaired, null, 2));
+  assert.equal(repaired.generationTrace.repairAttempted, true);
   assert.equal(repairProvider.requests.length, 2);
+  assertProblemLedProposal(repaired.proposalText, ["shopify", "klaviyo", "welcome", "abandoned cart", "post-purchase", "win-back"]);
 
-  const wrongDesignProof = await rewriteProposalCoverLetterWithKimi({
-    job: brandDesignJob,
-    deterministicDraft: brandDesignDraft,
-    copyStrategy: brandDesignDraft.copyStrategy,
-    brandFactPack: brandDesignDraft.brandFactPack,
-    proofStrategy: brandDesignDraft.proofStrategy,
-  }, new FakeProposalProvider({
-    proposalText: brandDesignProposal.replace(
-      "Design Case Studies - premium DTC email design and campaign/flow visual systems proof",
-      "Hangaritas screenshot - £21,681.29 attributed email revenue, up 173% vs previous period",
-    ),
-  }));
-  assert.equal(wrongDesignProof.usedLlm, false, "Brand design rewrite should reject Hangaritas/Klaviyo proof drift.");
-  assert.match(wrongDesignProof.reason ?? "", /wrong retention proof/i);
-
-  const formulaicBridge = await rewriteProposalCoverLetterWithKimi({
-    job: scored,
-    deterministicDraft,
-    copyStrategy: deterministicDraft.copyStrategy,
-    brandFactPack: deterministicDraft.brandFactPack,
-    proofStrategy: deterministicDraft.proofStrategy,
-  }, new FakeProposalProvider({
-    proposalText: conversionProposal.replace(
-      "Your buyers need the skincare routine to feel easy after the first order, and the Shopify/Klaviyo flows you named are where that trust either compounds or leaks.",
-      "The customer problem is weak lifecycle revenue and Shopify/Klaviyo flow leakage.",
-    ),
-  }));
-  assert.equal(formulaicBridge.usedLlm, false, "Formulaic customer-problem bridge should be rejected.");
-  assert.match(formulaicBridge.reason ?? "", /formulaic customer-problem bridge/i);
-
-  const badProvider = new FakeProposalProvider({ proposalText: "Hi, I am excited to apply. I can help." });
-  const fallback = await rewriteProposalCoverLetterWithKimi({
-    job: scored,
-    deterministicDraft,
-    copyStrategy: deterministicDraft.copyStrategy,
-    brandFactPack: deterministicDraft.brandFactPack,
-    proofStrategy: deterministicDraft.proofStrategy,
-  }, badProvider);
-  assert.equal(fallback.usedLlm, false);
-  assert.equal(fallback.proposalText, deterministicDraft.proposalText);
-  assert.match(fallback.reason ?? "", /word count|missing|generic|proof/i);
-
-  const unavailable = await rewriteProposalCoverLetterWithKimi({
-    job: scored,
-    deterministicDraft,
-    copyStrategy: deterministicDraft.copyStrategy,
-    brandFactPack: deterministicDraft.brandFactPack,
-    proofStrategy: deterministicDraft.proofStrategy,
-  }, new FakeProposalProvider({}, false));
+  const unavailable = await composeProposalCoverLetterWithKimi(composeInput, new FakeProposalProvider({}, false));
   assert.equal(unavailable.usedLlm, false);
-  assert.match(unavailable.reason ?? "", /unavailable/);
+  assert.equal(unavailable.generationTrace.mode, "deterministic_fallback");
+  assert.match(unavailable.reason ?? "", /unavailable/i);
+  assert.equal(unavailable.proposalText, deterministicFallbackDraft.proposalText);
+
+  const hardFail = await composeProposalCoverLetterWithKimi(composeInput, new FakeProposalProvider([
+    {
+      candidates: [
+        {
+          angleId: "customer-moment-breakdown",
+          angleLabel: "Customer moment breakdown",
+          openerShape: "customer-moment",
+          proposalText: "Hope you're well. I can help with email marketing.",
+        },
+      ],
+    },
+    {
+      proposalText: "Dear Hiring Manager, I am the perfect fit for this opportunity.",
+    },
+  ]));
+  assert.equal(hardFail.usedLlm, false);
+  assert.equal(hardFail.generationTrace.mode, "deterministic_fallback");
+  assert.equal(hardFail.generationTrace.repairAttempted, true);
+  assert.match(hardFail.reason ?? "", /repair blocked/i);
+
+  const requiredPrefixJob = scoreJob(job({
+    id: "proposal-required-prefix",
+    title: "Email design system for a multi-brand agency",
+    description: [
+      "Need Figma email design support for Shopify campaigns and Klaviyo templates.",
+      "The work is high-volume, mobile-first, and needs better hierarchy, CTA clarity, and reusable modules.",
+      "To show you've read this post in full, start your response with the phrase \"Design Guru\" followed by three of the largest brands you've designed for.",
+    ].join(" "),
+    category: "Email Design",
+    skills: ["Figma", "Email Design", "Shopify", "Klaviyo"],
+  }));
+  const requiredPrefixInput = buildComposeInput(requiredPrefixJob);
+  const requiredPrefixCompose = await composeProposalCoverLetterWithKimi(requiredPrefixInput, new FakeProposalProvider({
+    candidates: [
+      {
+        angleId: "hierarchy-first-read",
+        angleLabel: "Hierarchy-first read",
+        openerShape: "hierarchy-first",
+        proposalText: [
+          "Design Guru - Truly Beauty, The Fly Boutique, Dr Rachael",
+          "",
+          "The bottleneck in this brief is that a mobile reader has to decide too quickly, and the Figma + Shopify + Klaviyo template stack is not making hierarchy or CTA clarity do enough work across multiple brands. If reusable modules stay muddy, production speed slows down and can reduce conversion.",
+          "",
+          "My first 3-5 day move would be to audit one live template family, fix the first hierarchy and CTA issues, and define the reusable module decisions the team can scale. Done = one template path is cleaner, the design system rules are clearer, and the next rollout is easier to approve.",
+          "",
+          "For proof, I would use Design Case Studies, where premium DTC email systems lifted click-through rate 38% by making the offer and CTA easier to read on mobile.",
+          "",
+          "I can keep the first pass async-friendly and tightly scoped to one template family before widening the system. Would you rather see the first outline here, or do a quick call?",
+        ].join("\n"),
+      },
+    ],
+  }));
+  assert.equal(requiredPrefixCompose.usedLlm, true);
+  assert(requiredPrefixCompose.proposalText.startsWith("Design Guru - Truly Beauty, The Fly Boutique, Dr Rachael"));
+  assert(!/^Design Guru[\s\S]*Steve here/i.test(requiredPrefixCompose.proposalText));
+  assertProblemLedProposal(requiredPrefixCompose.proposalText, ["figma", "shopify", "klaviyo", "mobile", "hierarchy", "cta"]);
 
   console.log("proposal cover letter composer tests passed");
 }

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 function assert(condition: boolean, message: string): void {
@@ -25,12 +25,21 @@ function cleanupDatabase(path: string): void {
   }
 }
 
+function ensureProofAsset(root: string, relativePath: string): void {
+  const fullPath = resolve(root, relativePath);
+  mkdirSync(dirname(fullPath), { recursive: true });
+  if (!existsSync(fullPath)) {
+    writeFileSync(fullPath, "test proof asset\n");
+  }
+}
+
 async function runTests(): Promise<void> {
   const tempDb = resolve(process.cwd(), "data/.tmp-batch-apply-workspace/jobs.db");
   cleanupDatabase(tempDb);
   mkdirSync(dirname(tempDb), { recursive: true });
   process.env.DB_PATH = tempDb;
-  process.env.PROOF_ASSET_ROOT = resolve(process.cwd(), "data/.tmp-batch-apply-workspace/proof-assets");
+  const proofAssetRoot = resolve(process.cwd(), "data/.tmp-batch-apply-workspace/proof-assets");
+  process.env.PROOF_ASSET_ROOT = proofAssetRoot;
   process.env.BROWSER_QA_MAX_PROTECTED_TABS = "10";
   process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
   process.env.SLACK_ALLOWED_USER_IDS = "U_ALLOWED";
@@ -110,6 +119,31 @@ async function runTests(): Promise<void> {
         sourceQuery: "manual",
       });
       job.applicationDraft = buildApplicationDraft(job);
+      for (const item of job.applicationDraft.selectedPortfolioItems) {
+        ensureProofAsset(proofAssetRoot, item.filePath);
+      }
+      for (const path of job.applicationDraft.proofStrategy?.selectedAttachmentPaths ?? []) {
+        ensureProofAsset(proofAssetRoot, path);
+      }
+      if (i === 1) {
+        job.applicationDraft = {
+          ...job.applicationDraft,
+          draftQualityGate: {
+            ...job.applicationDraft.draftQualityGate,
+            ready: false,
+            issues: [
+              ...(job.applicationDraft.draftQualityGate?.issues ?? []),
+              { severity: "critical", code: "legacy_overlay_noise", message: "Legacy noisy capture requires regeneration." },
+            ],
+          },
+          skillUseTrace: job.applicationDraft.skillUseTrace
+            ? {
+                ...job.applicationDraft.skillUseTrace,
+                browserFillAllowed: false,
+              }
+            : job.applicationDraft.skillUseTrace,
+        };
+      }
       markJobSeen(job, false);
       upsertSlackThreadState({
         channelId: "CBATCH",
@@ -129,6 +163,7 @@ async function runTests(): Promise<void> {
       client: { chat: { postMessage: async (payload: { text: string }) => { replies.push(payload.text); } } },
     });
     assert(replies.some((reply) => reply.includes("Batch workspace started") && reply.includes("10/10")), "Batch command should start a 10-item workspace.");
+    assert(replies.some((reply) => reply.includes("1 skipped")), "Batch command should report skipped invalid candidates.");
     assert(replies.join("\n").includes("Final submit remains manual"), "Batch start reply must preserve manual final submit.");
 
     const view = getBatchApplyWorkspaceView();
@@ -138,8 +173,9 @@ async function runTests(): Promise<void> {
     assert(listBatchApplyWorkspaceItems(view.id!).length === 10, "Workspace table should persist 10 items.");
     const batchActions = listBrowserActions(null, 1000).filter((action) => action.actionType === "prepare_application_review");
     assert(batchActions.length === 10, "Batch start should queue exactly 10 prepare actions.");
+    assert(!batchActions.some((action) => action.jobId === "batch-job-01"), "Invalid browser-fill drafts should be skipped instead of being queued.");
     for (const action of batchActions) {
-      updateBrowserActionStatus(action.id, "completed", "Prepared for QA.");
+      updateBrowserActionStatus(action.id, "paused", "Draft prepared for human QA in remote Chrome. Reopen it from the saved apply link before review; final submit was not clicked.");
       updateApplicationStatus(action.jobId, "prepared_for_qa", "Test protected QA hold.");
       mergeBrowserActionPayload(action.id, {
         qaHold: {
@@ -153,7 +189,7 @@ async function runTests(): Promise<void> {
       });
     }
 
-    const eleventh = queuePrepareDraftFromSlackThread({ channelId: "CBATCH", threadTs: "100.11" });
+    const eleventh = queuePrepareDraftFromSlackThread({ channelId: "CBATCH", threadTs: "100.12" });
     assert(!eleventh.ok && eleventh.text.includes("10 applications waiting for QA"), "Protected tab cap should stop the eleventh prep.");
 
     const firstAction = listBrowserActions(null, 1000).find((action) => action.jobId === view.items[0]?.jobId && action.actionType === "prepare_application_review");

@@ -71,7 +71,16 @@ assert.equal(decideLeadHandling(mkJob({ score: 88 }), intel({ primaryPlatform: "
 assert.equal(decideLeadHandling(mkJob({ score: 72 }), intel({ primaryPlatform: "Omnisend", platformsMentioned: ["Omnisend"] })).decision, "post_to_slack");
 assert.equal(decideLeadHandling(mkJob({ score: 90 }), intel({ primaryPlatform: "HubSpot", platformsMentioned: ["HubSpot"] })).decision, "skip");
 assert.equal(decideLeadHandling(mkJob({ score: 90 }), intel({ primaryPlatform: "Brevo", platformsMentioned: ["Brevo"] })).shouldPostToSlack, false);
-assert.equal(decideLeadHandling(mkJob({ score: 70, title: "DTC email retention strategist", description: "Need lifecycle email and sms retention" }), intel({ primaryPlatform: "unknown", platformsMentioned: [] })).decision, "manual_review");
+assert.equal(decideLeadHandling(mkJob({
+  score: 78,
+  title: "DTC email retention strategist",
+  description: "Need lifecycle email and sms retention",
+  scoreBreakdown: {
+    ...mkJob().scoreBreakdown!,
+    clientQualityScore: { score: 88, reasons: [], risks: [] },
+    finalScore: 78,
+  },
+}), intel({ primaryPlatform: "unknown", platformsMentioned: [] })).decision, "manual_review");
 assert.equal(decideLeadHandling(mkJob({ score: 45 }), intel({ primaryPlatform: "Klaviyo", platformsMentioned: ["Klaviyo"] })).decision, "skip");
 assert.equal(decideLeadHandling(mkJob({ score: 74, budget: "$120", description: "Need Klaviyo campaign help for a Shopify skincare brand." }), intel({ primaryPlatform: "Klaviyo", platformsMentioned: ["Klaviyo"] })).decision, "skip");
 assert.equal(decideLeadHandling(mkJob({ score: 76, description: "Need email marketing help." }), intel({ primaryPlatform: "Klaviyo", platformsMentioned: ["Klaviyo"], taskType: "unknown", clientGoal: "unknown", ecommerceVertical: "unknown", businessType: "unknown" })).decision, "skip");
@@ -105,8 +114,8 @@ const missingClientData = decideLeadHandling(mkJob({
   clientFeedbackCount: 0,
   scoreBreakdown: weakClientBreakdown,
 }), intel({ primaryPlatform: "Klaviyo", platformsMentioned: ["Klaviyo"] }));
-assert.equal(missingClientData.decision, "manual_review");
-assert.equal(missingClientData.shouldPostToSlack, true);
+assert.equal(missingClientData.decision, "skip");
+assert.equal(missingClientData.shouldPostToSlack, false);
 assert.equal(missingClientData.shouldAutoPrepare, false);
 assert(missingClientData.watchOuts.includes("No client spend recorded"));
 
@@ -117,11 +126,70 @@ const reviewClient = decideLeadHandling(mkJob({
   clientFeedbackCount: 0,
   scoreBreakdown: { ...weakClientBreakdown, clientQualityScore: { score: 46, reasons: [], risks: [] }, finalScore: 89 },
 }), intel({ primaryPlatform: "Klaviyo", platformsMentioned: ["Klaviyo"] }));
-assert.equal(reviewClient.decision, "manual_review");
-assert.equal(reviewClient.shouldAutoPrepare, false);
+assert.equal(reviewClient.decision, "post_to_slack");
+assert.equal(reviewClient.shouldAutoPrepare, true);
 assert(reviewClient.watchOuts.includes("No client feedback history"));
+
+const borderlineClient = decideLeadHandling(mkJob({
+  score: 90,
+  scoreBreakdown: { ...mkJob().scoreBreakdown!, clientQualityScore: { score: 69, reasons: [], risks: [] }, finalScore: 90 },
+}), intel({ primaryPlatform: "Klaviyo", platformsMentioned: ["Klaviyo"] }));
+assert.equal(borderlineClient.decision, "post_to_slack");
+
+const sparseClientButLowScore = decideLeadHandling(mkJob({
+  score: 78,
+  clientSpend: 0,
+  clientTotalHires: 0,
+  clientFeedbackCount: 0,
+  scoreBreakdown: { ...weakClientBreakdown, clientQualityScore: { score: 50, reasons: [], risks: [] }, finalScore: 78 },
+}), intel({ primaryPlatform: "Klaviyo", platformsMentioned: ["Klaviyo"] }));
+assert.equal(sparseClientButLowScore.decision, "skip");
+assert.equal(sparseClientButLowScore.internalSkipReason, "weak_client_quality");
+
+const croOnly = decideLeadHandling(mkJob({
+  title: "Shopify CRO specialist",
+  description: "Need conversion rate optimization, landing page testing, funnel work, and homepage UX fixes for our store.",
+  skills: ["Shopify", "Conversion Rate Optimization", "Landing Pages"],
+  score: 91,
+  scoreBreakdown: { ...mkJob().scoreBreakdown!, clientQualityScore: { score: 84, reasons: [], risks: [] }, finalScore: 91 },
+}), intel({
+  primaryPlatform: "Klaviyo",
+  platformsMentioned: ["Klaviyo", "Shopify"],
+  taskType: "CRO and landing page optimization",
+  clientGoal: "Improve onsite conversion rate",
+}));
+assert.equal(croOnly.decision, "skip");
+assert.equal(croOnly.internalSkipReason, "out_of_scope");
+
+const shopifyDevelopment = decideLeadHandling(mkJob({
+  title: "Shopify developer for theme customization",
+  description: "Need Shopify theme customization, Liquid fixes, and storefront updates.",
+  skills: ["Shopify", "Liquid", "Theme Customization"],
+  score: 93,
+  scoreBreakdown: { ...mkJob().scoreBreakdown!, clientQualityScore: { score: 86, reasons: [], risks: [] }, finalScore: 93 },
+}), intel({
+  primaryPlatform: "Klaviyo",
+  platformsMentioned: ["Klaviyo", "Shopify"],
+  taskType: "Shopify theme development",
+  clientGoal: "Improve storefront UX",
+}));
+assert.equal(shopifyDevelopment.decision, "skip");
+assert.equal(shopifyDevelopment.internalSkipReason, "out_of_scope");
 
 const ineligible = decideLeadHandling(mkJob({ score: 90 }), intel({ primaryPlatform: "Customer.io", platformsMentioned: ["Customer.io"] }));
 assert.equal(ineligible.shouldAutoPrepare, false);
+
+const hardProfileGate = decideLeadHandling(mkJob({
+  description: "Need Klaviyo help. To apply, you must have earned over $10,000 on Upwork already.",
+}), intel({ primaryPlatform: "Klaviyo", platformsMentioned: ["Klaviyo"] }));
+assert.equal(hardProfileGate.decision, "skip");
+assert.equal(hardProfileGate.internalSkipReason, "freelancer_profile_requirement");
+assert(hardProfileGate.watchOuts.some((item) => item.includes("earned on Upwork")));
+
+const nearProfileGate = decideLeadHandling(mkJob({
+  description: "Need lifecycle email support. Please only apply if you have earned at least $600 on Upwork.",
+}), intel({ primaryPlatform: "Klaviyo", platformsMentioned: ["Klaviyo"] }));
+assert.equal(nearProfileGate.decision, "manual_review");
+assert.equal(nearProfileGate.shouldAutoPrepare, false);
 
 console.log("lead decision tests passed");

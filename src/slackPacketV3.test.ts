@@ -27,7 +27,7 @@ function createScoredJob(overrides: Partial<ScoredJob> = {}): ScoredJob {
     negativeKeywords: [],
     scoreBreakdown: {
       fitScore: { score: 70, reasons: ["Matches retention/email work"], risks: [] },
-      clientQualityScore: { score: 48, reasons: [], risks: ["Client has weak spend history"] },
+      clientQualityScore: { score: 78, reasons: ["Good client history"], risks: ["Client spend is not yet top tier"] },
       opportunityScore: { score: 66, reasons: ["Clear email scope"], risks: ["Budget looks low"] },
       redFlagScore: { score: 90, reasons: ["No serious red flags"], risks: [] },
       connectsRiskScore: { score: 70, reasons: ["Connects budget is reasonable"], risks: [] },

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
+import { stripCaptureNoise } from "./browserCapture";
 import { DB_PATH, TIMEZONE } from "./config";
 import { areNearDuplicateJobs, buildJobFingerprint } from "./dedupe";
 import { shadowWriteMemoriMemory } from "./memoriAdapter";
@@ -30,13 +31,20 @@ import {
   ProposalVersionConfidence,
   ProposalVersionSnapshot,
   ProposalVersionSource,
+  ScoreComponent,
   ScoredJob,
   ScreeningCoverageItem,
   ScreeningCoverageStatus,
   SkillUseTrace,
   StructuredProposalDraft,
 } from "./types";
-import type { OperatorReportSnapshot } from "./operatorReports";
+import {
+  classifyOperatorBlocker,
+  type OperatorBlockerCategory,
+  type OperatorBlockerCategorySummary,
+  type OperatorReportSnapshot,
+  type OperatorStatusCount,
+} from "./operatorReports";
 import { workflowStateFromSlackThreadStatus, type SlackWorkflowPromiseSnapshot, type SlackWorkflowStateName } from "./slackWorkflowContext";
 
 interface SeenStats {
@@ -66,6 +74,8 @@ interface SeenFingerprintRow {
   client_rating: number | null;
   client_spend: number | null;
   client_hire_rate: number | null;
+  client_total_hires: number | null;
+  client_feedback_count: number | null;
   skills: string | null;
   experience_level: string | null;
   connects_cost: number | null;
@@ -98,6 +108,8 @@ interface SlackPreviewJobRow {
   client_rating: number | null;
   client_spend: number | null;
   client_hire_rate: number | null;
+  client_total_hires: number | null;
+  client_feedback_count: number | null;
   skills: string | null;
   experience_level: string | null;
   connects_cost: number | null;
@@ -640,6 +652,76 @@ export interface SlackWorkflowNotification {
   postStatus: SlackWorkflowNotificationStatus;
   createdAt: string;
   updatedAt: string;
+}
+
+export type PendingHumanRequestStatus = "pending" | "resolved" | "expired" | "cancelled";
+export type PendingHumanRequestConfidence = "high" | "medium" | "low" | "unknown";
+export type PendingHumanRequestType =
+  | "screening_answer"
+  | "bid_rate"
+  | "connects"
+  | "proof"
+  | "draft_revision"
+  | "browser_manual_attention"
+  | "qa_review"
+  | "other";
+
+interface PendingHumanRequestRow {
+  id: number;
+  request_key: string;
+  job_id: string | null;
+  channel_id: string | null;
+  thread_ts: string | null;
+  request_type: PendingHumanRequestType;
+  question_text: string;
+  risk: string | null;
+  confidence: PendingHumanRequestConfidence | null;
+  status: PendingHumanRequestStatus;
+  resolution_text: string | null;
+  expires_at: string | null;
+  resolved_at: string | null;
+  cancelled_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PendingHumanRequest {
+  id: number;
+  requestKey: string;
+  jobId: string | null;
+  channelId: string | null;
+  threadTs: string | null;
+  requestType: PendingHumanRequestType;
+  questionText: string;
+  risk: string | null;
+  confidence: PendingHumanRequestConfidence | null;
+  status: PendingHumanRequestStatus;
+  resolutionText: string | null;
+  expiresAt: string | null;
+  resolvedAt: string | null;
+  cancelledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreatePendingHumanRequestInput {
+  requestKey?: string;
+  jobId?: string | null;
+  channelId?: string | null;
+  threadTs?: string | null;
+  requestType: PendingHumanRequestType;
+  questionText: string;
+  risk?: string | null;
+  confidence?: PendingHumanRequestConfidence | null;
+  expiresAt?: string | null;
+}
+
+export interface ListPendingHumanRequestsInput {
+  status?: PendingHumanRequestStatus | null;
+  jobId?: string | null;
+  channelId?: string | null;
+  threadTs?: string | null;
+  limit?: number;
 }
 
 export type SlackBehaviorMemoryType =
@@ -1415,6 +1497,25 @@ interface ApplicationProposalVersionRow {
   created_at: string;
 }
 
+export interface HistoricalProposalCalibrationCandidateRow {
+  proposal_version_id: number;
+  job_id: string;
+  status: ApplicationStatus;
+  title: string | null;
+  description: string | null;
+  skills: string | null;
+  source_query: string | null;
+  version_number: number;
+  source: ProposalVersionSource;
+  label: string;
+  proposal_text: string;
+  confidence: ProposalVersionConfidence | null;
+  is_fallback: number | null;
+  note: string | null;
+  proposal_created_at: string;
+  application_updated_at: string;
+}
+
 interface ApplicationScreeningCoverageRow {
   job_id: string;
   question_index: number;
@@ -1472,6 +1573,8 @@ CREATE TABLE IF NOT EXISTS seen_jobs (
   client_rating REAL,
   client_spend REAL,
   client_hire_rate REAL,
+  client_total_hires INTEGER,
+  client_feedback_count INTEGER,
   skills TEXT,
   experience_level TEXT,
   connects_cost INTEGER,
@@ -1559,6 +1662,28 @@ CREATE TABLE IF NOT EXISTS slack_workflow_notifications (
   UNIQUE(channel_id, thread_ts, notification_type, state_key)
 );
 CREATE INDEX IF NOT EXISTS idx_slack_workflow_notifications_thread ON slack_workflow_notifications(channel_id, thread_ts, updated_at);
+
+CREATE TABLE IF NOT EXISTS pending_human_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_key TEXT NOT NULL UNIQUE,
+  job_id TEXT,
+  channel_id TEXT,
+  thread_ts TEXT,
+  request_type TEXT NOT NULL,
+  question_text TEXT NOT NULL,
+  risk TEXT,
+  confidence TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  resolution_text TEXT,
+  expires_at TEXT,
+  resolved_at TEXT,
+  cancelled_at TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_pending_human_requests_status ON pending_human_requests(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_pending_human_requests_thread ON pending_human_requests(channel_id, thread_ts, status);
+CREATE INDEX IF NOT EXISTS idx_pending_human_requests_job ON pending_human_requests(job_id, status);
 
 CREATE TABLE IF NOT EXISTS slack_behavior_memory (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2056,6 +2181,8 @@ ensureSeenJobsColumn("client_country", "TEXT");
 ensureSeenJobsColumn("client_rating", "REAL");
 ensureSeenJobsColumn("client_spend", "REAL");
 ensureSeenJobsColumn("client_hire_rate", "REAL");
+ensureSeenJobsColumn("client_total_hires", "INTEGER");
+ensureSeenJobsColumn("client_feedback_count", "INTEGER");
 ensureSeenJobsColumn("skills", "TEXT");
 ensureSeenJobsColumn("experience_level", "TEXT");
 ensureSeenJobsColumn("connects_cost", "INTEGER");
@@ -2066,6 +2193,26 @@ ensureSeenJobsColumn("competition_level", "TEXT");
 function ensureApplicationsColumn(name: string, definition: string): void {
   ensureTableColumn("applications", name, definition);
 }
+
+function ensurePendingHumanRequestsColumn(name: string, definition: string): void {
+  ensureTableColumn("pending_human_requests", name, definition);
+}
+
+ensurePendingHumanRequestsColumn("request_key", "TEXT");
+ensurePendingHumanRequestsColumn("job_id", "TEXT");
+ensurePendingHumanRequestsColumn("channel_id", "TEXT");
+ensurePendingHumanRequestsColumn("thread_ts", "TEXT");
+ensurePendingHumanRequestsColumn("request_type", "TEXT NOT NULL DEFAULT 'other'");
+ensurePendingHumanRequestsColumn("question_text", "TEXT NOT NULL DEFAULT 'Human input requested.'");
+ensurePendingHumanRequestsColumn("risk", "TEXT");
+ensurePendingHumanRequestsColumn("confidence", "TEXT");
+ensurePendingHumanRequestsColumn("status", "TEXT NOT NULL DEFAULT 'pending'");
+ensurePendingHumanRequestsColumn("resolution_text", "TEXT");
+ensurePendingHumanRequestsColumn("expires_at", "TEXT");
+ensurePendingHumanRequestsColumn("resolved_at", "TEXT");
+ensurePendingHumanRequestsColumn("cancelled_at", "TEXT");
+ensurePendingHumanRequestsColumn("created_at", "TEXT DEFAULT (datetime('now'))");
+ensurePendingHumanRequestsColumn("updated_at", "TEXT DEFAULT (datetime('now'))");
 
 ensureApplicationsColumn("actual_required_connects", "INTEGER");
 ensureApplicationsColumn("actual_boost_connects", "INTEGER");
@@ -2120,6 +2267,8 @@ const upsertSeenStmt = db.prepare(
     client_rating,
     client_spend,
     client_hire_rate,
+    client_total_hires,
+    client_feedback_count,
     skills,
     experience_level,
     connects_cost,
@@ -2130,7 +2279,7 @@ const upsertSeenStmt = db.prepare(
     fingerprint,
     notified
   )
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
    ON CONFLICT(id) DO UPDATE SET
      title = excluded.title,
      url = excluded.url,
@@ -2142,6 +2291,8 @@ const upsertSeenStmt = db.prepare(
      client_rating = excluded.client_rating,
      client_spend = excluded.client_spend,
      client_hire_rate = excluded.client_hire_rate,
+     client_total_hires = excluded.client_total_hires,
+     client_feedback_count = excluded.client_feedback_count,
      skills = excluded.skills,
      experience_level = excluded.experience_level,
      connects_cost = excluded.connects_cost,
@@ -2158,7 +2309,7 @@ const seenFingerprintStmt = db.prepare<[string], SeenRow>(
 );
 const recentSeenFingerprintsStmt = db.prepare<[], SeenFingerprintRow>(
   `SELECT id, title, url, description, posted_at, budget, client_country, client_rating, client_spend,
-          client_hire_rate, skills, experience_level, connects_cost, proposal_count, competition_level, fingerprint
+          client_hire_rate, client_total_hires, client_feedback_count, skills, experience_level, connects_cost, proposal_count, competition_level, fingerprint
    FROM seen_jobs
    WHERE fingerprint IS NOT NULL
    ORDER BY seen_at DESC
@@ -2352,6 +2503,64 @@ const listSlackWorkflowNotificationsStmt = db.prepare<[string, string, number], 
    WHERE channel_id = ? AND thread_ts = ?
    ORDER BY updated_at DESC
    LIMIT ?`
+);
+const insertPendingHumanRequestStmt = db.prepare(
+  `INSERT OR IGNORE INTO pending_human_requests (
+    request_key,
+    job_id,
+    channel_id,
+    thread_ts,
+    request_type,
+    question_text,
+    risk,
+    confidence,
+    status,
+    expires_at,
+    updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, datetime('now'))`
+);
+const getPendingHumanRequestByKeyStmt = db.prepare<[string], PendingHumanRequestRow>(
+  `SELECT id, request_key, job_id, channel_id, thread_ts, request_type, question_text, risk, confidence,
+          status, resolution_text, expires_at, resolved_at, cancelled_at, created_at, updated_at
+   FROM pending_human_requests
+   WHERE request_key = ?
+   LIMIT 1`
+);
+const listPendingHumanRequestsStmt = db.prepare<[
+  PendingHumanRequestStatus | null,
+  PendingHumanRequestStatus | null,
+  string | null,
+  string | null,
+  string | null,
+  string | null,
+  string | null,
+  string | null,
+  number
+], PendingHumanRequestRow>(
+  `SELECT id, request_key, job_id, channel_id, thread_ts, request_type, question_text, risk, confidence,
+          status, resolution_text, expires_at, resolved_at, cancelled_at, created_at, updated_at
+   FROM pending_human_requests
+   WHERE (? IS NULL OR status = ?)
+     AND (? IS NULL OR job_id = ?)
+     AND (? IS NULL OR channel_id = ?)
+     AND (? IS NULL OR thread_ts = ?)
+   ORDER BY updated_at DESC, id DESC
+   LIMIT ?`
+);
+const updatePendingHumanRequestResolvedStmt = db.prepare(
+  `UPDATE pending_human_requests
+   SET status = 'resolved', resolution_text = ?, resolved_at = COALESCE(resolved_at, datetime('now')), updated_at = datetime('now')
+   WHERE request_key = ? AND status = 'pending'`
+);
+const updatePendingHumanRequestCancelledStmt = db.prepare(
+  `UPDATE pending_human_requests
+   SET status = 'cancelled', resolution_text = COALESCE(?, resolution_text), cancelled_at = COALESCE(cancelled_at, datetime('now')), updated_at = datetime('now')
+   WHERE request_key = ? AND status = 'pending'`
+);
+const updatePendingHumanRequestExpiredStmt = db.prepare(
+  `UPDATE pending_human_requests
+   SET status = 'expired', updated_at = datetime('now')
+   WHERE request_key = ? AND status = 'pending'`
 );
 const upsertSlackBehaviorMemoryStmt = db.prepare(
   `INSERT INTO slack_behavior_memory (
@@ -3257,6 +3466,27 @@ function rowToSlackWorkflowNotification(row: SlackWorkflowNotificationRow): Slac
   };
 }
 
+function rowToPendingHumanRequest(row: PendingHumanRequestRow): PendingHumanRequest {
+  return {
+    id: row.id,
+    requestKey: row.request_key,
+    jobId: row.job_id,
+    channelId: row.channel_id,
+    threadTs: row.thread_ts,
+    requestType: row.request_type,
+    questionText: row.question_text,
+    risk: row.risk,
+    confidence: row.confidence,
+    status: row.status,
+    resolutionText: row.resolution_text,
+    expiresAt: row.expires_at,
+    resolvedAt: row.resolved_at,
+    cancelledAt: row.cancelled_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function rowToSalesLearningEvent(row: SalesLearningEventRow): SalesLearningEvent {
   return {
     id: row.id,
@@ -3657,6 +3887,33 @@ const latestProposalVersionBySourceStmt = db.prepare<[string, ProposalVersionSou
    ORDER BY version_number DESC, id DESC
    LIMIT 1`
 );
+const listHistoricalProposalCalibrationCandidatesStmt = db.prepare<[string | null, string | null, number], HistoricalProposalCalibrationCandidateRow>(
+  `SELECT
+          v.id AS proposal_version_id,
+          v.job_id,
+          a.status,
+          s.title,
+          s.description,
+          s.skills,
+          s.source_query,
+          v.version_number,
+          v.source,
+          v.label,
+          v.proposal_text,
+          v.confidence,
+          v.is_fallback,
+          v.note,
+          v.created_at AS proposal_created_at,
+          a.updated_at AS application_updated_at
+   FROM application_proposal_versions v
+   JOIN applications a ON a.job_id = v.job_id
+   LEFT JOIN seen_jobs s ON s.id = v.job_id
+   WHERE TRIM(COALESCE(v.proposal_text, '')) <> ''
+     AND a.status IN ('approved', 'applied', 'submitted', 'replied', 'interview', 'hired', 'rejected', 'lost')
+     AND (? IS NULL OR v.job_id <> ?)
+   ORDER BY a.updated_at DESC, v.created_at DESC, v.id DESC
+   LIMIT ?`
+);
 const upsertScreeningCoverageStmt = db.prepare(
   `INSERT INTO application_screening_coverage (
     job_id,
@@ -3739,7 +3996,7 @@ const outcomeLearningRowsStmt = db.prepare<[], OutcomeLearningRow>(
 );
 const slackPreviewJobStmt = db.prepare<[string], SlackPreviewJobRow>(
   `SELECT s.id, s.title, s.url, s.description, s.score, s.match_level, s.budget, s.client_country,
-          s.client_rating, s.client_spend, s.client_hire_rate, s.skills, s.experience_level,
+          s.client_rating, s.client_spend, s.client_hire_rate, s.client_total_hires, s.client_feedback_count, s.skills, s.experience_level,
           s.connects_cost, s.proposal_count, s.competition_level, s.posted_at, a.status, a.fit_score, a.fit_reasons, a.red_flags,
           a.suggested_bid, a.suggested_connects, a.suggested_boost_connects, a.connects_warnings,
           a.selected_portfolio_items, a.proposal_text, a.structured_proposal, a.generated_at, a.job_intelligence, a.connects_strategy,
@@ -3809,15 +4066,15 @@ function rowToJobPosting(row: SeenFingerprintRow): JobPosting {
     id: row.id,
     title: row.title,
     url: row.url,
-    description: row.description ?? "",
+    description: stripCaptureNoise(row.description ?? "").cleaned,
     postedAt: row.posted_at ?? "",
     budget: row.budget ?? "",
     clientCountry: row.client_country ?? "",
     clientRating: row.client_rating ?? 0,
     clientSpend: row.client_spend ?? 0,
     clientHireRate: row.client_hire_rate ?? 0,
-    clientTotalHires: 0,
-    clientFeedbackCount: 0,
+    clientTotalHires: row.client_total_hires ?? 0,
+    clientFeedbackCount: row.client_feedback_count ?? 0,
     category: "",
     experienceLevel: row.experience_level ?? "",
     connectsCost: row.connects_cost ?? 0,
@@ -3843,6 +4100,8 @@ export function markJobSeen(job: ScoredJob, notified: boolean): void {
     job.clientRating,
     job.clientSpend,
     job.clientHireRate,
+    job.clientTotalHires,
+    job.clientFeedbackCount,
     JSON.stringify(job.skills),
     job.experienceLevel,
     job.connectsCost,
@@ -4259,6 +4518,15 @@ export function listProposalVersions(jobId: string): ProposalVersionSnapshot[] {
   return listProposalVersionsStmt.all(jobId).map(rowToProposalVersion);
 }
 
+export function listHistoricalProposalCalibrationCandidates(options: {
+  excludeJobId?: string | null;
+  limit?: number;
+} = {}): HistoricalProposalCalibrationCandidateRow[] {
+  const excludeJobId = options.excludeJobId?.trim() || null;
+  const limit = Math.max(1, Math.min(250, Math.round(options.limit ?? 120)));
+  return listHistoricalProposalCalibrationCandidatesStmt.all(excludeJobId, excludeJobId, limit);
+}
+
 export function getLatestProposalVersion(jobId: string, source?: ProposalVersionSource): ProposalVersionSnapshot | null {
   const row = source ? latestProposalVersionBySourceStmt.get(jobId, source) : latestProposalVersionStmt.get(jobId);
   return row ? rowToProposalVersion(row) : null;
@@ -4397,15 +4665,139 @@ function parseJsonObject<T>(value: string | null | undefined): T | undefined {
   }
 }
 
+function clampScore(value: number, min = 0, max = 100): number {
+  return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+function previewBudgetMax(value: string | null | undefined): number | null {
+  const values = value?.match(/\d+(?:,\d{3})*(?:\.\d+)?/g)?.map((item) => Number(item.replace(/,/g, ""))) ?? [];
+  if (values.length === 0) return null;
+  return Math.max(...values);
+}
+
+function previewClientQualityScore(row: SlackPreviewJobRow): ScoreComponent {
+  const reasons: string[] = [];
+  const risks: string[] = [];
+  let score = 45;
+
+  if ((row.client_rating ?? 0) >= 4.8 && (row.client_feedback_count ?? 0) >= 5) {
+    score += 25;
+    reasons.push(`Strong client rating (${row.client_rating?.toFixed(1)})`);
+  } else if ((row.client_rating ?? 0) >= 4.5) {
+    score += 15;
+    reasons.push(`Good client rating (${row.client_rating?.toFixed(1)})`);
+  } else if ((row.client_rating ?? 0) > 0 && (row.client_rating ?? 0) < 4.2) {
+    score -= 18;
+    risks.push(`Low client rating (${row.client_rating?.toFixed(1)})`);
+  } else if ((row.client_feedback_count ?? 0) === 0) {
+    score -= 5;
+    risks.push("No client feedback yet");
+  }
+
+  if ((row.client_spend ?? 0) >= 10000) {
+    score += 20;
+    reasons.push(`Proven spend: $${Math.round(row.client_spend ?? 0).toLocaleString("en-US")}`);
+  } else if ((row.client_spend ?? 0) >= 1000) {
+    score += 10;
+    reasons.push(`Some spend history: $${Math.round(row.client_spend ?? 0).toLocaleString("en-US")}`);
+  } else if ((row.client_spend ?? 0) === 0) {
+    score -= 8;
+    risks.push("No recorded client spend");
+  }
+
+  if ((row.client_hire_rate ?? 0) >= 70) {
+    score += 10;
+    reasons.push(`High hire rate (${Math.round(row.client_hire_rate ?? 0)}%)`);
+  } else if ((row.client_hire_rate ?? 0) > 0 && (row.client_hire_rate ?? 0) < 35) {
+    score -= 12;
+    risks.push(`Low hire rate (${Math.round(row.client_hire_rate ?? 0)}%)`);
+  }
+
+  if ((row.client_total_hires ?? 0) >= 10) {
+    score += 5;
+    reasons.push(`${row.client_total_hires} prior hires`);
+  }
+
+  return {
+    score: clampScore(score),
+    reasons,
+    risks,
+  };
+}
+
+function previewOpportunityScore(row: SlackPreviewJobRow): ScoreComponent {
+  const reasons: string[] = [];
+  const risks: string[] = [];
+  let score = 50;
+  const budget = row.budget ?? "";
+  const budgetMax = previewBudgetMax(budget);
+  const hourlyBudget = /\/\s*hr|hourly|per hour/i.test(budget);
+
+  if (budgetMax !== null) {
+    if (hourlyBudget && budgetMax >= 50) {
+      score += 14;
+      reasons.push(`Strong hourly budget signal (${budget})`);
+    } else if (hourlyBudget && budgetMax >= 35) {
+      score += 8;
+      reasons.push(`Solid hourly budget signal (${budget})`);
+    } else if (budgetMax >= 3000) {
+      score += 20;
+      reasons.push(`High budget signal (${budget})`);
+    } else if (budgetMax >= 1000) {
+      score += 12;
+      reasons.push(`Solid budget signal (${budget})`);
+    } else if (budgetMax > 0 && budgetMax < 300) {
+      score -= 12;
+      risks.push(`Low budget signal (${budget})`);
+    }
+  }
+
+  const experienceLevel = (row.experience_level ?? "").toLowerCase();
+  if (experienceLevel.includes("expert")) {
+    score += 10;
+    reasons.push("Expert experience level requested");
+  } else if (experienceLevel.includes("entry")) {
+    score -= 10;
+    risks.push("Entry-level opportunity");
+  }
+
+  return {
+    score: clampScore(score),
+    reasons,
+    risks,
+  };
+}
+
+function previewConnectsRiskScore(row: SlackPreviewJobRow, connectsWarnings: string[]): ScoreComponent {
+  const risks = [...connectsWarnings];
+  let score = 85;
+  if ((row.connects_cost ?? 0) <= 0) {
+    score -= 18;
+    risks.push("Required Connects are unknown from stored preview data.");
+  } else if ((row.connects_cost ?? 0) > 20) {
+    score -= 18;
+    risks.push(`High Connects cost (${row.connects_cost})`);
+  }
+  return {
+    score: clampScore(score),
+    reasons: score >= 80 ? ["Connects cost is within the normal range"] : [],
+    risks,
+  };
+}
+
 export function getScoredJobForSlackPreview(jobId: string): ScoredJob | null {
   const row = slackPreviewJobStmt.get(jobId);
   if (!row) {
     return null;
   }
+  const sanitizedDescription = stripCaptureNoise(row.description ?? "").cleaned;
 
   const fitReasons = parseJsonStringArray(row.fit_reasons);
   const redFlags = parseJsonStringArray(row.red_flags);
   const connectsWarnings = parseJsonStringArray(row.connects_warnings);
+  const clientQualityScore = previewClientQualityScore(row);
+  const opportunityScore = previewOpportunityScore(row);
+  const connectsRiskScore = previewConnectsRiskScore(row, connectsWarnings);
   const applicationDraft: ApplicationDraft | undefined = row.proposal_text
     ? {
         jobId: row.id,
@@ -4451,15 +4843,15 @@ export function getScoredJobForSlackPreview(jobId: string): ScoredJob | null {
     id: row.id,
     title: row.title,
     url: row.url,
-    description: row.description ?? "",
+    description: sanitizedDescription,
     postedAt: row.posted_at ?? new Date().toISOString(),
     budget: row.budget ?? "",
     clientCountry: row.client_country ?? "",
     clientRating: row.client_rating ?? 0,
     clientSpend: row.client_spend ?? 0,
     clientHireRate: row.client_hire_rate ?? 0,
-    clientTotalHires: 0,
-    clientFeedbackCount: 0,
+    clientTotalHires: row.client_total_hires ?? 0,
+    clientFeedbackCount: row.client_feedback_count ?? 0,
     category: "stored",
     experienceLevel: row.experience_level ?? "",
     connectsCost: row.connects_cost ?? 0,
@@ -4475,10 +4867,10 @@ export function getScoredJobForSlackPreview(jobId: string): ScoredJob | null {
     negativeKeywords: [],
     scoreBreakdown: {
       fitScore: { score: row.fit_score ?? row.score ?? 0, reasons: fitReasons, risks: redFlags },
-      clientQualityScore: { score: 0, reasons: [], risks: [] },
-      opportunityScore: { score: 0, reasons: [], risks: [] },
+      clientQualityScore,
+      opportunityScore,
       redFlagScore: { score: redFlags.length ? 50 : 100, reasons: [], risks: redFlags },
-      connectsRiskScore: { score: 0, reasons: [], risks: connectsWarnings },
+      connectsRiskScore,
       finalScore: row.score ?? row.fit_score ?? 0,
       reasons: fitReasons,
       risks: redFlags,
@@ -4604,6 +4996,29 @@ function compactOperatorReportText(value: string | null | undefined, limit = 180
 
 function metric(value: number, evidence: string): { value: number; evidence: string } {
   return { value, evidence };
+}
+
+function operatorStatusCount(status: string, count: number, evidence: string): OperatorStatusCount {
+  return { status, count, evidence };
+}
+
+function addBlockerCategory(
+  summaries: Map<OperatorBlockerCategory, OperatorBlockerCategorySummary>,
+  category: OperatorBlockerCategory,
+  example: string
+): void {
+  const existing = summaries.get(category);
+  if (existing) {
+    existing.count += 1;
+    if (existing.examples.length < 3) existing.examples.push(example);
+    return;
+  }
+  summaries.set(category, {
+    category,
+    count: 1,
+    evidence: "browser_actions.status/last_error classified locally",
+    examples: [example],
+  });
 }
 
 function countBetween(sql: string, startIso: string, endIso: string): number {
@@ -4769,6 +5184,94 @@ export function getOperatorReportDbSnapshot(input: OperatorReportPeriodInput): O
       };
     });
 
+  const slackQueue = getSlackQueueStats();
+  const applicationStatuses = db
+    .prepare<[], { status: string; count: number }>(
+      `SELECT status, COUNT(*) as count
+       FROM applications
+       GROUP BY status
+       ORDER BY count DESC, status ASC`
+    )
+    .all()
+    .map((row) => operatorStatusCount(row.status, row.count, "applications.status"));
+  const browserActionStatuses = db
+    .prepare<[], { status: string; count: number }>(
+      `SELECT status, COUNT(*) as count
+       FROM browser_actions
+       GROUP BY status
+       ORDER BY count DESC, status ASC`
+    )
+    .all()
+    .map((row) => operatorStatusCount(row.status, row.count, "browser_actions.status"));
+  const browserBlockerRows = db
+    .prepare<[], { id: number; job_id: string; title: string | null; action_type: string; status: string; last_error: string | null }>(
+      `SELECT ba.id, ba.job_id, s.title, ba.action_type, ba.status, ba.last_error
+       FROM browser_actions ba
+       LEFT JOIN seen_jobs s ON s.id = ba.job_id
+       WHERE ba.status IN ('paused', 'failed')
+       ORDER BY datetime(ba.updated_at) DESC, ba.id DESC
+       LIMIT 25`
+    )
+    .all();
+  const blockerCategories = new Map<OperatorBlockerCategory, OperatorBlockerCategorySummary>();
+  for (const row of browserBlockerRows) {
+    const category = classifyOperatorBlocker({
+      status: row.status,
+      actionType: row.action_type,
+      lastError: row.last_error,
+    });
+    const example = `#${row.id} ${row.title ?? row.job_id}${row.last_error ? ` - ${compactOperatorReportText(row.last_error, 80)}` : ""}`;
+    addBlockerCategory(blockerCategories, category, example);
+  }
+  const browserQueueRows = db
+    .prepare<[], { id: number; job_id: string; title: string | null; action_type: string; status: string; updated_at: string; last_error: string | null }>(
+      `SELECT ba.id, ba.job_id, s.title, ba.action_type, ba.status, ba.updated_at, ba.last_error
+       FROM browser_actions ba
+       LEFT JOIN seen_jobs s ON s.id = ba.job_id
+       WHERE ba.status IN ('pending', 'paused')
+       ORDER BY CASE ba.status WHEN 'paused' THEN 0 ELSE 1 END, datetime(ba.updated_at) DESC, ba.id DESC
+       LIMIT 12`
+    )
+    .all();
+  const pendingBrowserActions = browserQueueRows
+    .filter((row) => row.status === "pending")
+    .slice(0, 6)
+    .map((row) => ({
+      label: `#${row.id} ${row.action_type}`,
+      evidence: "browser_actions.status=pending",
+      detail: `job_id=${row.job_id}; title=${row.title ?? "unknown"}; updated_at=${row.updated_at}`,
+    }));
+  const pausedBrowserActions = browserQueueRows
+    .filter((row) => row.status === "paused")
+    .slice(0, 6)
+    .map((row) => ({
+      label: `#${row.id} ${row.action_type}`,
+      evidence: `browser_actions.status=paused; category=${classifyOperatorBlocker({ status: row.status, actionType: row.action_type, lastError: row.last_error })}`,
+      detail: `job_id=${row.job_id}; title=${row.title ?? "unknown"}; updated_at=${row.updated_at}${row.last_error ? `; error=${compactOperatorReportText(row.last_error, 100)}` : ""}`,
+    }));
+  const recentOutcomes = db
+    .prepare<[string, string], { job_id: string; title: string | null; to_status: string; note: string | null; created_at: string }>(
+      `SELECT ae.job_id, s.title, ae.to_status, ae.note, ae.created_at
+       FROM application_events ae
+       LEFT JOIN seen_jobs s ON s.id = ae.job_id
+       WHERE ae.to_status IN ('applied', 'submitted', 'replied', 'interview', 'hired', 'lost')
+         AND datetime(ae.created_at) >= datetime(?)
+         AND datetime(ae.created_at) < datetime(?)
+       ORDER BY datetime(ae.created_at) DESC, ae.id DESC
+       LIMIT 6`
+    )
+    .all(startIso, endIso)
+    .map((row) => ({
+      label: `${row.title ?? row.job_id} -> ${row.to_status}`,
+      evidence: "application_events.to_status",
+      detail: `job_id=${row.job_id}; created_at=${row.created_at}${row.note ? `; note=${compactOperatorReportText(row.note, 100)}` : ""}`,
+    }));
+  const lastRunState = listHeartbeats().map((row) => ({
+    label: `${row.worker}: ${row.status}`,
+    evidence: "worker_heartbeats.status/last_run_at",
+    detail: `last_run=${row.lastRunAt}; last_success=${row.lastSuccessAt ?? "never"}; runs=${row.runCount}; errors=${row.errorCount}${row.lastError ? `; last_error=${compactOperatorReportText(row.lastError, 100)}` : ""}`,
+  }));
+
   return {
     generatedAt,
     period: {
@@ -4802,6 +5305,20 @@ export function getOperatorReportDbSnapshot(input: OperatorReportPeriodInput): O
     blockedItems,
     lessons,
     steveActionItems,
+    operatorStatus: {
+      slackQueue: {
+        count: slackQueue.count,
+        maxAttempts: slackQueue.maxAttempts,
+        evidence: "slack_queue count/max(attempts)",
+      },
+      applicationStatuses,
+      browserActionStatuses,
+      blockersByCategory: Array.from(blockerCategories.values()).sort((a, b) => b.count - a.count || a.category.localeCompare(b.category)),
+      pendingBrowserActions,
+      pausedBrowserActions,
+      recentOutcomes,
+      lastRunState,
+    },
   };
 }
 
@@ -5332,6 +5849,83 @@ export function listSlackWorkflowNotifications(channelId: string, threadTs: stri
   return listSlackWorkflowNotificationsStmt
     .all(channelId, threadTs, Math.max(1, limit))
     .map(rowToSlackWorkflowNotification);
+}
+
+function cleanPendingHumanRequestText(value: string | null | undefined, fallback: string): string {
+  const cleaned = (value ?? "").replace(/\s+/g, " ").trim();
+  return cleaned || fallback;
+}
+
+function buildPendingHumanRequestKey(input: CreatePendingHumanRequestInput, questionText: string): string {
+  const explicit = cleanPendingHumanRequestText(input.requestKey, "");
+  if (explicit) return explicit.slice(0, 180);
+  const source = [
+    input.channelId ?? "",
+    input.threadTs ?? "",
+    input.jobId ?? "",
+    input.requestType,
+    questionText,
+  ].join("|");
+  return `phr_${createHash("sha256").update(source).digest("hex").slice(0, 24)}`;
+}
+
+export function createPendingHumanRequest(input: CreatePendingHumanRequestInput): PendingHumanRequest {
+  const questionText = cleanPendingHumanRequestText(input.questionText, "Human input requested.");
+  const requestKey = buildPendingHumanRequestKey(input, questionText);
+  insertPendingHumanRequestStmt.run(
+    requestKey,
+    input.jobId ?? null,
+    input.channelId ?? null,
+    input.threadTs ?? null,
+    input.requestType,
+    questionText,
+    cleanPendingHumanRequestText(input.risk, "") || null,
+    input.confidence ?? null,
+    input.expiresAt ?? null
+  );
+  const row = getPendingHumanRequestByKeyStmt.get(requestKey);
+  if (!row) throw new Error(`Failed to persist pending human request: ${requestKey}`);
+  return rowToPendingHumanRequest(row);
+}
+
+export function getPendingHumanRequestByKey(requestKey: string): PendingHumanRequest | null {
+  const cleanedKey = cleanPendingHumanRequestText(requestKey, "");
+  if (!cleanedKey) return null;
+  const row = getPendingHumanRequestByKeyStmt.get(cleanedKey);
+  return row ? rowToPendingHumanRequest(row) : null;
+}
+
+export function listPendingHumanRequests(input: ListPendingHumanRequestsInput = {}): PendingHumanRequest[] {
+  const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 50)));
+  const status = input.status ?? null;
+  const jobId = input.jobId ?? null;
+  const channelId = input.channelId ?? null;
+  const threadTs = input.threadTs ?? null;
+  return listPendingHumanRequestsStmt
+    .all(status, status, jobId, jobId, channelId, channelId, threadTs, threadTs, limit)
+    .map(rowToPendingHumanRequest);
+}
+
+export function resolvePendingHumanRequest(requestKey: string, resolutionText: string): PendingHumanRequest | null {
+  const cleanedKey = cleanPendingHumanRequestText(requestKey, "");
+  const cleanedResolution = cleanPendingHumanRequestText(resolutionText, "Resolved.");
+  if (!cleanedKey) return null;
+  updatePendingHumanRequestResolvedStmt.run(cleanedResolution, cleanedKey);
+  return getPendingHumanRequestByKey(cleanedKey);
+}
+
+export function cancelPendingHumanRequest(requestKey: string, reason?: string | null): PendingHumanRequest | null {
+  const cleanedKey = cleanPendingHumanRequestText(requestKey, "");
+  if (!cleanedKey) return null;
+  updatePendingHumanRequestCancelledStmt.run(cleanPendingHumanRequestText(reason, "") || null, cleanedKey);
+  return getPendingHumanRequestByKey(cleanedKey);
+}
+
+export function expirePendingHumanRequest(requestKey: string): PendingHumanRequest | null {
+  const cleanedKey = cleanPendingHumanRequestText(requestKey, "");
+  if (!cleanedKey) return null;
+  updatePendingHumanRequestExpiredStmt.run(cleanedKey);
+  return getPendingHumanRequestByKey(cleanedKey);
 }
 
 export function upsertSlackBehaviorMemory(input: UpsertSlackBehaviorMemoryInput): SlackBehaviorMemory {

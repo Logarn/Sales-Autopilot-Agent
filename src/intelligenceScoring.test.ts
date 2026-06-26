@@ -131,4 +131,31 @@ assert.equal(decideLeadHandling(unknownStrongDtc, intel({
   needsManualReview: true,
 })).decision, "manual_review", "Unknown platform with strong DTC lifecycle/email context should become manual review");
 
+const unknownWeakClient = scoreJob(
+  job({
+    title: "DTC lifecycle email retention strategist",
+    description: "Need lifecycle email and SMS retention flows for a Shopify supplement brand, platform not selected yet.",
+    clientSpend: 0,
+    clientHireRate: 15,
+    clientTotalHires: 0,
+    clientFeedbackCount: 0,
+  }),
+  intel({
+    primaryPlatform: "unknown",
+    platformsMentioned: [],
+    platformPreferenceTier: "unknown",
+    platformCategory: "unknown",
+    platformFitReason: "Platform not stated.",
+    needsManualReview: true,
+  }),
+);
+assert.equal(decideLeadHandling(unknownWeakClient, intel({
+  primaryPlatform: "unknown",
+  platformsMentioned: [],
+  platformPreferenceTier: "unknown",
+  platformCategory: "unknown",
+  platformFitReason: "Platform not stated.",
+  needsManualReview: true,
+})).decision, "skip", "Unknown-platform leads should be rejected when client quality is weak");
+
 console.log("intelligence scoring tests passed");

@@ -6,57 +6,143 @@ import {
   type LlmJsonResult,
 } from "./llm/provider";
 import { buildSoulPromptContext, buildSoulPromptSection } from "./soul";
+import type { ProposalMemoryCalibrationContext } from "./proposalMemoryCalibration";
 import {
-  ApplicationDraft,
   BrandFactPack,
+  BrandResearchStatus,
   CopyStrategy,
   JobPosting,
+  JobUnderstanding,
   PortfolioItem,
   ProofStrategy,
+  ProposalCandidateTrace,
+  ProposalGenerationTrace,
 } from "./types";
+import { evaluateDraftQualityGate } from "./skills/proposalCopywritingSkill";
 
 export interface ProposalCoverLetterClient {
   isAvailable(): boolean;
   completeJson<T>(request: LlmJsonRequest): Promise<LlmJsonResult<T>>;
 }
 
-export interface ProposalCoverLetterRewriteInput {
+export interface ProposalCoverLetterComposeInput {
   job: JobPosting;
-  deterministicDraft: ApplicationDraft;
-  copyStrategy?: CopyStrategy | null;
+  jobUnderstanding: JobUnderstanding;
+  brandResearchStatus: BrandResearchStatus;
+  copyStrategy: CopyStrategy;
   brandFactPack?: BrandFactPack | null;
   proofStrategy?: ProofStrategy | null;
   selectedPortfolioItems?: PortfolioItem[];
+  fallbackProposalText: string | (() => string);
+  fallbackScreeningAnswers?: string[];
+  suggestedBid?: string;
+  suggestedConnects?: number;
+  proposalMemoryCalibration?: ProposalMemoryCalibrationContext;
 }
 
-export interface ProposalCoverLetterRewriteResult {
+export interface ProposalCoverLetterComposeResult {
   proposalText: string;
   usedLlm: boolean;
   provider: "kimi" | "fallback";
   reason?: string;
+  generationTrace: ProposalGenerationTrace;
 }
 
-interface ProposalCoverLetterPayload {
+interface ProposalAnglePlan {
+  id: string;
+  label: string;
+  openerShape: string;
+  commercialFocus: string;
+  firstDiagnosticStep: string;
+  proofFit: string;
+  instructions: string;
+}
+
+interface ProposalComposePayload {
+  candidates?: unknown;
+  selectedAngleId?: unknown;
+  selected_angle_id?: unknown;
   proposalText?: unknown;
   proposal_text?: unknown;
   proposal?: unknown;
-  proposalDraft?: unknown;
-  proposal_draft?: unknown;
-  proposalBody?: unknown;
-  proposal_body?: unknown;
+  content?: unknown;
+  body?: unknown;
+  text?: unknown;
+}
+
+interface ProposalCandidatePayload {
+  angleId?: unknown;
+  angle_id?: unknown;
+  angleLabel?: unknown;
+  angle_label?: unknown;
+  openerShape?: unknown;
+  opener_shape?: unknown;
+  proposalText?: unknown;
+  proposal_text?: unknown;
+  proposal?: unknown;
   coverLetter?: unknown;
   cover_letter?: unknown;
-  coverLetterText?: unknown;
-  cover_letter_text?: unknown;
-  letter?: unknown;
-  content?: unknown;
   text?: unknown;
   body?: unknown;
+  content?: unknown;
   rationale?: unknown;
+  reason?: unknown;
+}
+
+interface ParsedCandidate {
+  angleId: string;
+  angleLabel: string;
+  openerShape: string;
+  proposalText: string;
+  rationale: string;
+}
+
+interface EvaluatedCandidate {
+  plan: ProposalAnglePlan;
+  proposalText: string;
+  rationale: string;
+  score: number;
+  valid: boolean;
+  issues: string[];
 }
 
 function defaultProvider(): ProposalCoverLetterClient {
   return new OpenAiCompatibleProvider(getProposalCopyProviderConfig());
+}
+
+function wordCount(text: string): number {
+  return text.trim().match(/\b[\w'-]+\b/g)?.length ?? 0;
+}
+
+function sourceText(job: JobPosting): string {
+  return `${job.title}\n${job.description}\n${job.skills.join(" ")}\n${job.category}`;
+}
+
+function unique(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const cleaned = value?.replace(/\s+/g, " ").trim();
+    if (!cleaned) continue;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(cleaned);
+  }
+  return out;
+}
+
+function firstString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function firstParagraph(text: string): string {
+  return text.split(/\n{2,}/).map((part) => part.trim()).find(Boolean) ?? "";
+}
+
+function firstSentence(text: string): string {
+  const sentence = text.replace(/\s+/g, " ").trim().match(/^[^.!?]+[.!?]?/);
+  return sentence?.[0]?.trim() ?? "";
 }
 
 function compactJob(job: JobPosting): Record<string, unknown> {
@@ -71,8 +157,35 @@ function compactJob(job: JobPosting): Record<string, unknown> {
     clientCountry: job.clientCountry,
     clientSpend: job.clientSpend,
     clientHireRate: job.clientHireRate,
+    clientTotalHires: job.clientTotalHires,
+    clientFeedbackCount: job.clientFeedbackCount,
     connectsCost: job.connectsCost,
     connects: job.connects ?? null,
+  };
+}
+
+function compactJobUnderstanding(jobUnderstanding: JobUnderstanding): Record<string, unknown> {
+  return {
+    actualJobRequest: jobUnderstanding.actualJobRequest,
+    clientBusiness: jobUnderstanding.clientBusiness,
+    customerType: jobUnderstanding.customerType,
+    commercialPain: jobUnderstanding.commercialPain,
+    emotionalPain: jobUnderstanding.emotionalPain,
+    likelyLifecycleOrConversionLeak: jobUnderstanding.likelyLifecycleOrConversionLeak,
+    desiredOutcome: jobUnderstanding.desiredOutcome,
+    requestedTools: jobUnderstanding.requestedTools,
+    requestedDeliverables: jobUnderstanding.requestedDeliverables,
+    unknowns: jobUnderstanding.unknowns,
+  };
+}
+
+function compactBrandResearchStatus(status: BrandResearchStatus): Record<string, unknown> {
+  return {
+    attempted: status.attempted,
+    status: status.status,
+    evidence: status.evidence,
+    claims: status.claims,
+    unknowns: status.unknowns,
   };
 }
 
@@ -89,6 +202,8 @@ function compactBrandFactPack(pack?: BrandFactPack | null): Record<string, unkno
     emotionalPainOrDesire: pack.emotionalPainOrDesire,
     likelyLifecycleLeak: pack.likelyLifecycleLeak,
     likelyConversionLeak: pack.likelyConversionLeak,
+    customerEducationGaps: pack.customerEducationGaps,
+    objectionsOrTrustGaps: pack.objectionsOrTrustGaps,
     languageOrHooks: pack.languageOrHooks,
     proofAngle: pack.proofAngle,
     confidence: pack.confidence,
@@ -99,159 +214,267 @@ function compactBrandFactPack(pack?: BrandFactPack | null): Record<string, unkno
   };
 }
 
+function compactProofStrategy(strategy?: ProofStrategy | null): Record<string, unknown> | null {
+  if (!strategy) return null;
+  return {
+    selectedProofNames: strategy.selectedProofNames,
+    selectedAttachmentPaths: strategy.selectedAttachmentPaths,
+    selectedPortfolioHighlights: strategy.selectedPortfolioHighlights,
+    proofVerificationState: strategy.proofVerificationState,
+    summary: strategy.summary,
+    warnings: strategy.warnings,
+  };
+}
+
 function extractRequiredOpeningPrefix(job: JobPosting): string {
   const text = `${job.title}\n${job.description}`;
-  const phrase = [
+  const match = [
     /start (?:your|the) (?:response|proposal|application|cover letter)\s+with (?:the )?phrase\s+["“]([^"”]{2,80})["”]/i,
     /begin (?:your|the) (?:response|proposal|application|cover letter)\s+with (?:the )?phrase\s+["“]([^"”]{2,80})["”]/i,
   ]
     .map((pattern) => text.match(pattern)?.[1]?.trim())
     .find(Boolean);
-  if (!phrase) return "";
-  if (/followed by three of the largest brands/i.test(text)) {
-    return `${phrase} - Truly Beauty, The Fly Boutique, Dr Rachael`;
+  return match?.replace(/[.!?]+$/g, "") ?? "";
+}
+
+function isBrandDesignScope(job: JobPosting, copyStrategy?: CopyStrategy | null): boolean {
+  const category = copyStrategy?.category ?? "";
+  const lane = copyStrategy?.retention_lane ?? "";
+  const text = sourceText(job).toLowerCase();
+  if (category === "brand_design" || lane === "brand_conversion_design") return true;
+  return /\b(?:branding|brand identity|logo design|logo|visual identity|brand refresh|brand system|rebrand)\b/i.test(text);
+}
+
+function isEmailDesignScope(job: JobPosting, copyStrategy?: CopyStrategy | null): boolean {
+  const category = copyStrategy?.category ?? "";
+  const lane = copyStrategy?.retention_lane ?? "";
+  if (category === "email_design" || lane === "email_template_clarity") return true;
+  const text = sourceText(job).toLowerCase();
+  return /\b(?:email design|template design|email template|figma|design system)\b/i.test(text);
+}
+
+function requestedToolTerms(job: JobPosting, copyStrategy: CopyStrategy): string[] {
+  const text = sourceText(job).toLowerCase();
+  const requested = new Set((copyStrategy.requested_tools ?? []).map((tool) => tool.toLowerCase()));
+  return [
+    "klaviyo",
+    "mailchimp",
+    "omnisend",
+    "brevo",
+    "shopify",
+    "figma",
+    "attentive",
+    "postscript",
+    "deliverability",
+    "segmentation",
+  ].filter((term) => text.includes(term) || requested.has(term));
+}
+
+function laneGuidance(input: ProposalCoverLetterComposeInput): string {
+  if (isBrandDesignScope(input.job, input.copyStrategy)) {
+    return [
+      "Lane: ecommerce brand/logo/conversion design.",
+      "Lead with trust, identity clarity, offer hierarchy, buying-path friction, and what makes the store easier to buy from.",
+      "Do not force Klaviyo or lifecycle language into a primary branding/logo/design brief unless the job actually asks for it.",
+      "Proof should stay in the design/conversion lane when that is the real scope.",
+    ].join("\n");
   }
-  return phrase.replace(/[.!?]+$/g, "");
-}
-
-function wordCount(text: string): number {
-  return text.trim().match(/\b[\w'-]+\b/g)?.length ?? 0;
-}
-
-function hasHumanOpening(text: string, job: JobPosting): boolean {
-  const requiredPrefix = extractRequiredOpeningPrefix(job);
-  if (requiredPrefix) {
-    return text.toLowerCase().startsWith(requiredPrefix.toLowerCase()) && /\bsteve here\b/i.test(text.slice(0, 260)) && /\bhow is your day going\?/i.test(text.slice(0, 260));
+  if (isEmailDesignScope(input.job, input.copyStrategy)) {
+    return [
+      "Lane: email design/template clarity.",
+      "Lead with hierarchy, mobile readability, offer clarity, CTA visibility, and the conversion cost of muddy layouts.",
+      "Do not drift into generic lifecycle audit copy unless the brief is explicitly strategic.",
+    ].join("\n");
   }
-  return /^steve here\b/i.test(text) && /\bhow is your day going\?/i.test(text.slice(0, 160));
+  return [
+    "Lane: retention/lifecycle/CRM strategy.",
+    "Lead with the commercial leak in the current lifecycle, customer moment, segmentation, cadence, or deliverability setup.",
+    "Use Klaviyo/Shopify/tool language only after the buyer problem is clear.",
+  ].join("\n");
 }
 
-function proofBlockCount(text: string): number {
-  return text
-    .split(/\n{2,}/)
-    .filter((paragraph) => /\b(?:case study|artifact|proof|screenshot|loom|portfolio)\b/i.test(paragraph))
-    .length;
+function proofArtifactHint(input: ProposalCoverLetterComposeInput): string {
+  const fromProofStrategy = input.proofStrategy?.selectedPortfolioHighlights?.[0]
+    ?? input.proofStrategy?.selectedProofNames?.[0]
+    ?? "";
+  if (fromProofStrategy) return fromProofStrategy;
+  return input.selectedPortfolioItems?.[0]?.name ?? input.copyStrategy.proof_angle ?? "the closest matched proof artifact";
 }
 
-function hasMicroMilestone(text: string): boolean {
-  return /\bDone\s*=/i.test(text) &&
-    /\b(?:3\s*[-–]\s*5|3|4|5|three|four|five)\s*[-–]?\s*(?:day|days)\b/i.test(text);
+function addAngle(target: ProposalAnglePlan[], angle: ProposalAnglePlan): void {
+  if (target.some((item) => item.id === angle.id || item.openerShape === angle.openerShape)) return;
+  target.push(angle);
 }
 
-function hasMetric(text: string): boolean {
-  return /(?:\b\d+(?:\.\d+)?\s*%|\$\s?\d|\b\d+\s*x\b|\bfrom\s+[^.\n]{1,40}\s+to\s+[^.\n]{1,60})/i.test(text);
-}
+function buildAnglePlans(input: ProposalCoverLetterComposeInput): ProposalAnglePlan[] {
+  const plans: ProposalAnglePlan[] = [];
+  const proofHint = proofArtifactHint(input);
+  const lifecycleGap = input.copyStrategy.likely_lifecycle_gap || input.jobUnderstanding.likelyLifecycleOrConversionLeak;
+  const commercialPain = input.copyStrategy.client_commercial_pain || input.jobUnderstanding.commercialPain;
+  const desiredOutcome = input.jobUnderstanding.desiredOutcome || input.copyStrategy.money_leak;
+  const customerMoment = input.copyStrategy.repeat_purchase_or_conversion_moment || input.copyStrategy.buying_moment;
+  const deliverables = sourceText(input.job).toLowerCase();
 
-function jobSource(job: JobPosting): string {
-  return `${job.title}\n${job.description}\n${job.skills.join(" ")}\n${job.category}`;
-}
-
-function isBrandDesignScope(job: JobPosting): boolean {
-  const text = jobSource(job).toLowerCase();
-  return /\b(?:branding|brand identity|logo design|logo|visual identity|brand refresh|brand system|brand design|rebrand)\b/.test(text) &&
-    /\b(?:design|branding|logo|identity|visual|creative|ecommerce|shopify|store|website)\b/.test(text);
-}
-
-function hasDesignPortfolioProof(text: string): boolean {
-  return /\b(?:design case studies|premium dtc email design|ARMRA|Thrive Market|Ritual|visual systems proof|brand identity|logo)\b/i.test(text);
-}
-
-function hasWrongRetentionProofForDesign(text: string): boolean {
-  return /\b(?:Hangaritas|Klaviyo screenshot|win[-\s]?back|post[-\s]?purchase|replenishment|lifecycle flow|retention revenue|email revenue)\b/i.test(text);
-}
-
-function hasChoiceCta(text: string): boolean {
-  const tail = text.trim().slice(-280);
-  return /\?$/.test(tail) && /\b(?:or|prefer|rather|option a|option b|call|async|outline|plan|audit)\b/i.test(tail);
-}
-
-function hasOutboundSalesArgument(text: string): boolean {
-  return /\b(?:make|save|lift|increase|recover|protect|reduce|unlock|turn)\b[^.\n]{0,90}\b(?:money|revenue|conversion|conversions|repeat purchase|retention|engagement|trust|time|friction|leak|leaks|pipeline|profit|profitability|roi)\b/i.test(text) ||
-    /\b(?:money|revenue|conversion|conversions|repeat purchase|retention|engagement|trust|time|friction|leak|leaks|pipeline|profit|profitability|roi)\b[^.\n]{0,90}\b(?:make|save|lift|increase|recover|protect|reduce|unlock|turn|compound)\b/i.test(text);
-}
-
-function hasUnsafeClaim(text: string): boolean {
-  return /\b(?:submitted|final submit|click submit|bypass|captcha|2fa|security check|guarantee(?:d)?)\b/i.test(text);
-}
-
-function hasScaffoldLabel(text: string): boolean {
-  return /\b(?:Relevant proof|Approach|Credentials|Relevant examples|To answer the application notes directly):/i.test(text);
-}
-
-function sanitizeProposalText(text: string, job: JobPosting): string {
-  let cleaned = text
-    .replace(/^```(?:text|markdown)?\s*/i, "")
-    .replace(/```$/i, "")
-    .replace(/\r\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
-  const requiredPrefix = extractRequiredOpeningPrefix(job);
-  if (!requiredPrefix) {
-    const openerMatch = cleaned.match(/\bSteve here\s*-\s*how is your day going\?/i);
-    if (openerMatch?.index && openerMatch.index > 0) {
-      cleaned = cleaned.slice(openerMatch.index).trim();
-    }
+  if (isBrandDesignScope(input.job, input.copyStrategy)) {
+    addAngle(plans, {
+      id: "trust-gap-diagnosis",
+      label: "Trust gap diagnosis",
+      openerShape: "trust-gap",
+      commercialFocus: "the store or identity is asking buyers to trust too much before the design earns it",
+      firstDiagnosticStep: "map the trust breaks across the first buying path and rank which visual decisions are costing conversion first",
+      proofFit: proofHint,
+      instructions: "Open from trust erosion, not design résumé language.",
+    });
+    addAngle(plans, {
+      id: "buying-path-friction",
+      label: "Buying path friction",
+      openerShape: "buying-path",
+      commercialFocus: "buyers may be getting lost between landing, product evaluation, and action",
+      firstDiagnosticStep: "review homepage to PDP/cart friction and show the first layout or hierarchy fixes that reduce hesitation",
+      proofFit: proofHint,
+      instructions: "Open from buying-path friction and what it does to conversion.",
+    });
+    addAngle(plans, {
+      id: "offer-hierarchy-breakdown",
+      label: "Offer hierarchy breakdown",
+      openerShape: "offer-hierarchy",
+      commercialFocus: "the offer and product story may not be landing fast enough for cold traffic",
+      firstDiagnosticStep: "audit the current offer hierarchy and define the first visual/message stack that should become easier to scan",
+      proofFit: proofHint,
+      instructions: "Open from offer clarity and what the buyer cannot understand quickly enough.",
+    });
+    addAngle(plans, {
+      id: "identity-decision-bottleneck",
+      label: "Identity decision bottleneck",
+      openerShape: "identity-bottleneck",
+      commercialFocus: "the client may need sharper identity decisions before execution volume matters",
+      firstDiagnosticStep: "pin down the identity decisions blocking consistent execution before expanding scope",
+      proofFit: proofHint,
+      instructions: "Open from the cost of unclear identity decisions.",
+    });
+    return plans.slice(0, 4);
   }
-  cleaned = cleaned
-    .split(/\n\s*(?:Rationale|Why this works|Explanation|Notes)\s*:/i)[0]
-    .replace(/(^|\n\n)\s*Proof\s*:\s*/i, "$1For proof, I would use one matched artifact: ")
-    .trim();
-  if (requiredPrefix && !cleaned.toLowerCase().startsWith(requiredPrefix.toLowerCase())) {
-    cleaned = `${requiredPrefix}\n\n${cleaned}`;
+
+  if (isEmailDesignScope(input.job, input.copyStrategy)) {
+    addAngle(plans, {
+      id: "hierarchy-first-read",
+      label: "Hierarchy-first read",
+      openerShape: "hierarchy-first",
+      commercialFocus: "the template may be burying the offer, CTA, or product path before the reader decides to click",
+      firstDiagnosticStep: "review the current template hierarchy and fix the first mobile-read problem before building wider sets",
+      proofFit: proofHint,
+      instructions: "Open from the reading path and why the current design could be leaking clicks.",
+    });
+    addAngle(plans, {
+      id: "mobile-reader-dropoff",
+      label: "Mobile reader dropoff",
+      openerShape: "mobile-dropoff",
+      commercialFocus: "mobile readers may be losing the offer before the CTA becomes obvious",
+      firstDiagnosticStep: "audit the mobile reading path and show the first CTA/hierarchy changes worth testing",
+      proofFit: proofHint,
+      instructions: "Open from mobile reading friction, not from generic design taste.",
+    });
+    addAngle(plans, {
+      id: "template-system-bottleneck",
+      label: "Template system bottleneck",
+      openerShape: "system-bottleneck",
+      commercialFocus: "the team may not have a reusable system that keeps offers clear without slowing production",
+      firstDiagnosticStep: "define the first reusable template decisions that improve speed without flattening conversion logic",
+      proofFit: proofHint,
+      instructions: "Open from design-system drag on output and performance.",
+    });
+    addAngle(plans, {
+      id: "offer-clarity-path",
+      label: "Offer clarity path",
+      openerShape: "offer-clarity",
+      commercialFocus: "the design may not be helping the reader understand the offer quickly enough",
+      firstDiagnosticStep: "identify the first offer-clarity fix that changes what the reader sees and clicks first",
+      proofFit: proofHint,
+      instructions: "Open from offer clarity and buying momentum.",
+    });
+    return plans.slice(0, 4);
   }
-  return ensureCustomerLogicBeforeTools(cleaned.trim(), job);
+
+  addAngle(plans, {
+    id: "revenue-leak-diagnosis",
+    label: "Revenue leak diagnosis",
+    openerShape: "revenue-leak",
+    commercialFocus: commercialPain || "revenue is likely leaking between first purchase and repeat purchase",
+    firstDiagnosticStep: `diagnose the first leak inside ${lifecycleGap || "the lifecycle"} and show what gets fixed first`,
+    proofFit: proofHint,
+    instructions: "Open from the revenue leak, not from credentials.",
+  });
+
+  addAngle(plans, {
+    id: "customer-moment-breakdown",
+    label: "Customer moment breakdown",
+    openerShape: "customer-moment",
+    commercialFocus: customerMoment || "the buyer moment is probably underbuilt or mistimed",
+    firstDiagnosticStep: `map the customer moment around ${customerMoment || desiredOutcome || "repeat purchase"} and identify the first message/flow change that builds confidence`,
+    proofFit: proofHint,
+    instructions: "Open from the buyer moment and why it breaks revenue or trust.",
+  });
+
+  if (/\bsegmentation|segment|list|subscriber|campaign|calendar|newsletter\b/i.test(deliverables)) {
+    addAngle(plans, {
+      id: "segmentation-cadence-miss",
+      label: "Segmentation and cadence miss",
+      openerShape: "segmentation-cadence",
+      commercialFocus: "campaigns or list strategy may be sending too broadly or at the wrong rhythm",
+      firstDiagnosticStep: "review the current segments and cadence and identify the first send logic that is creating noise instead of response",
+      proofFit: proofHint,
+      instructions: "Open from targeting or cadence inefficiency.",
+    });
+  }
+
+  if (/\bdeliverability|sender|spam|inbox|reputation|hygiene\b/i.test(deliverables)) {
+    addAngle(plans, {
+      id: "deliverability-risk",
+      label: "Deliverability risk",
+      openerShape: "deliverability-risk",
+      commercialFocus: "sender health may be undermining performance before the copy or flow logic can do its job",
+      firstDiagnosticStep: "check sender health, segment quality, and the first deliverability fixes before expanding sends",
+      proofFit: proofHint,
+      instructions: "Open from risk to inbox placement and what that means for revenue.",
+    });
+  }
+
+  if (/\bshopify|post-purchase|win-?back|welcome|replenishment|repeat purchase|ltv\b/i.test(deliverables)) {
+    addAngle(plans, {
+      id: "ltv-journey-gap",
+      label: "LTV journey gap",
+      openerShape: "ltv-journey",
+      commercialFocus: "the Shopify journey may not be carrying buyers cleanly into the next purchase window",
+      firstDiagnosticStep: "trace the first-purchase to repeat-purchase path and pick the first underbuilt lifecycle slice worth repairing",
+      proofFit: proofHint,
+      instructions: "Open from LTV and post-purchase path leakage.",
+    });
+  }
+
+  return plans.slice(0, 5);
 }
 
-function firstIndexOfAny(text: string, patterns: RegExp[]): number {
-  return patterns
-    .map((pattern) => text.search(pattern))
-    .filter((index) => index >= 0)
-    .sort((a, b) => a - b)[0] ?? -1;
+function proposalTextKeys(): string[] {
+  return [
+    "proposalText",
+    "proposal_text",
+    "proposal",
+    "proposalDraft",
+    "proposal_draft",
+    "proposalBody",
+    "proposal_body",
+    "coverLetter",
+    "cover_letter",
+    "coverLetterText",
+    "cover_letter_text",
+    "letter",
+    "content",
+    "text",
+    "body",
+    "message",
+    "output",
+  ];
 }
-
-function ensureCustomerLogicBeforeTools(text: string, job: JobPosting): string {
-  const lower = text.toLowerCase();
-  const toolIndex = firstIndexOfAny(lower, [/\bklaviyo\b/, /\bmailchimp\b/, /\bomnisend\b/, /\bbrevo\b/, /\bfigma\b/, /\bflows?\b/, /\bautomations?\b/, /\bcrm\b/, /\btemplates?\b/]);
-  const customerIndex = firstIndexOfAny(lower, [/\bcustomer\b/, /\bbuyer\b/, /\bshopper\b/, /\boffer\b/, /\btrust\b/, /\broutine\b/, /\bhierarchy\b/]);
-  if (toolIndex < 0 || (customerIndex >= 0 && customerIndex < toolIndex)) return text;
-  const source = jobSource(job).toLowerCase();
-  const platforms = ["klaviyo", "mailchimp", "omnisend", "brevo"].filter((tool) => source.includes(tool));
-  const platformPhrase = platforms.length ? ` before the ${platforms.join(", ")} execution` : " before platform execution";
-  const bridge = `The buyer moment is the useful signal here: engagement and conversion are leaking across ecommerce moments${platformPhrase}.`;
-  return text.replace(/(Steve here\s*-\s*how is your day going\?)(\s*)/i, `$1 ${bridge} `).trim();
-}
-
-const proposalTextKeys = [
-  "proposalText",
-  "proposal_text",
-  "proposal",
-  "proposalDraft",
-  "proposal_draft",
-  "proposalBody",
-  "proposal_body",
-  "coverLetter",
-  "cover_letter",
-  "coverLetterText",
-  "cover_letter_text",
-  "letter",
-  "content",
-  "text",
-  "body",
-  "message",
-  "output",
-];
-
-const nonProposalTextKeys = new Set([
-  "rationale",
-  "reason",
-  "score",
-  "scores",
-  "issues",
-  "riskFlags",
-  "risk_flags",
-  "metadata",
-]);
 
 function extractNestedProposalText(value: unknown, depth = 0): string {
   if (typeof value === "string") return value;
@@ -260,252 +483,400 @@ function extractNestedProposalText(value: unknown, depth = 0): string {
     const nested = value
       .map((item) => extractNestedProposalText(item, depth + 1))
       .filter(Boolean);
-    return nested.find((item) => wordCount(item) >= 80) ?? nested[0] ?? "";
+    return nested.find((item) => wordCount(item) >= 60) ?? nested[0] ?? "";
   }
   if (typeof value !== "object") return "";
-
   const record = value as Record<string, unknown>;
-  for (const key of proposalTextKeys) {
+  for (const key of proposalTextKeys()) {
     const nested = extractNestedProposalText(record[key], depth + 1);
     if (nested) return nested;
   }
-
-  for (const [key, nestedValue] of Object.entries(record)) {
-    if (nonProposalTextKeys.has(key)) continue;
+  for (const nestedValue of Object.values(record)) {
     const nested = extractNestedProposalText(nestedValue, depth + 1);
-    if (wordCount(nested) >= 80) return nested;
+    if (wordCount(nested) >= 60) return nested;
   }
   return "";
 }
 
-function extractProposalText(payload: ProposalCoverLetterPayload | undefined): string {
-  const value = payload?.proposalText ??
-    payload?.proposal_text ??
-    payload?.proposal ??
-    payload?.proposalDraft ??
-    payload?.proposal_draft ??
-    payload?.proposalBody ??
-    payload?.proposal_body ??
-    payload?.coverLetter ??
-    payload?.cover_letter ??
-    payload?.coverLetterText ??
-    payload?.cover_letter_text ??
-    payload?.letter ??
-    payload?.content ??
-    payload?.text ??
-    payload?.body;
-  if (typeof value === "string") return value;
-  return extractNestedProposalText(value) || extractNestedProposalText(payload);
-}
-
-function validateRewrite(text: string, input: ProposalCoverLetterRewriteInput): string | null {
-  if (!text.trim()) return "empty proposal";
-  const words = wordCount(text);
-  const brandDesignScope = isBrandDesignScope(input.job) || input.deterministicDraft.copyStrategy?.category === "brand_design";
-  if (words < 120 || words > 240) return `proposal word count ${words} outside safe LLM band`;
-  if (!hasHumanOpening(text, input.job)) return "missing Steve/soul human opener";
-  if (!hasMicroMilestone(text)) return "missing 3-5 day Done = milestone";
-  if (!hasMetric(text) && !(brandDesignScope && hasDesignPortfolioProof(text))) return "missing proof metric";
-  if (!hasChoiceCta(text)) return "missing choice-based CTA";
-  if (proofBlockCount(text) !== 1) return "proof count is not exactly one";
-  if (!/For proof, I would use one matched artifact:/i.test(text)) return "proof paragraph missing exact one-artifact phrase";
-  if (!hasOutboundSalesArgument(text)) return "missing outbound sales argument";
-  if (/\bThe customer problem is\b/i.test(text)) return "formulaic customer-problem bridge";
-  if (brandDesignScope && hasWrongRetentionProofForDesign(text)) return "wrong retention proof for brand/design scope";
-  if (hasUnsafeClaim(text)) return "unsafe submit/security/guarantee claim";
-  if (hasScaffoldLabel(text)) return "internal scaffold label";
-  if (/\b(?:I am excited to apply|Dear Hiring Manager|tailored to your needs|leverage my expertise|proven track record)\b/i.test(text)) {
-    return "generic AI proposal language";
+function extractProposalText(payload: ProposalCandidatePayload | ProposalComposePayload | undefined): string {
+  if (!payload) return "";
+  for (const key of proposalTextKeys()) {
+    const nested = extractNestedProposalText((payload as Record<string, unknown>)[key]);
+    if (nested) return nested;
   }
-  const missingTools = requestedToolTerms(input)
-    .filter((tool) => !text.toLowerCase().includes(tool));
-  if (missingTools.length > 0) return `missing requested tool specificity: ${missingTools.join(", ")}`;
-  return null;
+  return extractNestedProposalText(payload);
 }
 
-function requestedToolTerms(input: ProposalCoverLetterRewriteInput): string[] {
-  const brandDesignScope = isBrandDesignScope(input.job) || input.deterministicDraft.copyStrategy?.category === "brand_design";
-  const text = `${input.job.title}\n${input.job.description}\n${input.job.skills.join(" ")}`.toLowerCase();
-  return ["klaviyo", "mailchimp", "omnisend", "shopify", "figma", "brevo"]
-    .filter((tool) => text.includes(tool))
-    .filter((tool) => !(brandDesignScope && /^(klaviyo|mailchimp|omnisend|brevo)$/i.test(tool)));
+function sanitizeProposalText(text: string): string {
+  return text
+    .replace(/^```(?:json|text|markdown)?\s*/i, "")
+    .replace(/```$/i, "")
+    .split(/\n\s*(?:Rationale|Why this works|Explanation|Notes|Critique)\s*:/i)[0]
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
-function laneGuidance(input: ProposalCoverLetterRewriteInput): string {
-  const strategy = input.copyStrategy ?? input.deterministicDraft.copyStrategy ?? null;
-  const category = strategy?.category ?? "";
-  const lane = (strategy as { retention_lane?: string } | null)?.retention_lane ?? "";
-  if (category === "brand_design" || lane === "brand_conversion_design" || isBrandDesignScope(input.job)) {
-    return [
-      "Lane: ecommerce brand/logo/conversion design.",
-      "Use the same conversion-led Upwork OS, but do not force retention/Klaviyo language just because the store is on Shopify.",
-      "Lead with brand trust, logo/identity clarity, offer hierarchy, product/category path, conversion friction, and the first visual decision the client should make.",
-      "Use Design Case Studies as the proof when selected. Do not use Hangaritas, Klaviyo screenshot, win-back, replenishment, lifecycle, or email revenue proof for this lane.",
-      "A design portfolio proof may be concrete without a revenue metric; do not invent metrics.",
-    ].join("\n");
+function findAnglePlan(angles: ProposalAnglePlan[], candidate: ParsedCandidate): ProposalAnglePlan {
+  return angles.find((angle) => angle.id === candidate.angleId)
+    ?? angles.find((angle) => angle.label.toLowerCase() === candidate.angleLabel.toLowerCase())
+    ?? angles.find((angle) => angle.openerShape.toLowerCase() === candidate.openerShape.toLowerCase())
+    ?? angles[0]!;
+}
+
+function extractCandidates(payload: ProposalComposePayload | undefined, angles: ProposalAnglePlan[]): ParsedCandidate[] {
+  const rawArray = Array.isArray(payload?.candidates) ? payload?.candidates : null;
+  if (rawArray && rawArray.length > 0) {
+    return rawArray
+      .map((item, index) => {
+        const record = (item ?? {}) as ProposalCandidatePayload;
+        const fallbackPlan = angles[index] ?? angles[0]!;
+        const proposalText = sanitizeProposalText(extractProposalText(record));
+        if (!proposalText) return null;
+        return {
+          angleId: firstString(record.angleId) || firstString(record.angle_id) || fallbackPlan.id,
+          angleLabel: firstString(record.angleLabel) || firstString(record.angle_label) || fallbackPlan.label,
+          openerShape: firstString(record.openerShape) || firstString(record.opener_shape) || fallbackPlan.openerShape,
+          proposalText,
+          rationale: firstString(record.rationale) || firstString(record.reason),
+        };
+      })
+      .filter((item): item is ParsedCandidate => Boolean(item));
   }
-  if (category === "email_design" || lane === "email_template_clarity") {
-    return [
-      "Lane: email design/template clarity.",
-      "Use the conversion-led design variant: offer hierarchy, mobile clarity, product path, CTA visibility, and one design proof.",
-      "Do not turn the proposal into a generic retention audit unless the primary job asks for lifecycle strategy.",
-    ].join("\n");
-  }
-  return [
-    "Lane: Shopify/Klaviyo or ecommerce retention/lifecycle.",
-    "Use the Upwork Proposal Operating System for Retention Marketing on Shopify and Klaviyo exactly: diagnosis, one 3-5 day Done = milestone, one matched proof, logistics, choice CTA.",
-  ].join("\n");
+
+  const singleProposal = sanitizeProposalText(extractProposalText(payload));
+  if (!singleProposal) return [];
+  const fallbackPlan = angles[0]!;
+  return [{
+    angleId: firstString(payload?.selectedAngleId) || firstString(payload?.selected_angle_id) || fallbackPlan.id,
+    angleLabel: fallbackPlan.label,
+    openerShape: fallbackPlan.openerShape,
+    proposalText: singleProposal,
+    rationale: "",
+  }];
 }
 
-export async function rewriteProposalCoverLetterWithKimi(
-  input: ProposalCoverLetterRewriteInput,
-  provider: ProposalCoverLetterClient = defaultProvider(),
-): Promise<ProposalCoverLetterRewriteResult> {
-  const fallback = (reason: string): ProposalCoverLetterRewriteResult => ({
-    proposalText: input.deterministicDraft.proposalText,
+function hasFixedSurfaceOpener(text: string, requiredPrefix: string): boolean {
+  if (requiredPrefix) return false;
+  return /^(?:steve here|hey there|hi there|hello there|hope you(?:'re| are) well|hope your week is going well|how is your day going)/i.test(text.trim());
+}
+
+function evaluateCandidate(
+  candidate: ParsedCandidate,
+  plan: ProposalAnglePlan,
+  input: ProposalCoverLetterComposeInput,
+  requestedTools: string[],
+  requiredPrefix: string,
+): EvaluatedCandidate {
+  const text = sanitizeProposalText(candidate.proposalText);
+  const customIssues: string[] = [];
+  if (requiredPrefix && !text.toLowerCase().startsWith(requiredPrefix.toLowerCase())) {
+    customIssues.push("required opening prefix missing");
+  }
+  if (hasFixedSurfaceOpener(text, requiredPrefix)) {
+    customIssues.push("fixed opener pattern");
+  }
+  if (/\b(?:hey there|how is your day going|hope you(?:'re| are) well)\b/i.test(text)) {
+    customIssues.push("faux casual opener");
+  }
+  if (/\b(?:dear hiring manager|i am excited to apply|perfect fit|proven track record|tailored to your needs)\b/i.test(text)) {
+    customIssues.push("generic upwork filler");
+  }
+  const concreteToolTerms = requestedTools.filter((tool) =>
+    /^(?:klaviyo|mailchimp|omnisend|brevo|shopify|figma|attentive|postscript)$/i.test(tool),
+  );
+  if (concreteToolTerms.some((tool) => !text.toLowerCase().includes(tool.toLowerCase()))) {
+    customIssues.push(`missing requested tool specificity: ${concreteToolTerms.filter((tool) => !text.toLowerCase().includes(tool.toLowerCase())).join(", ")}`);
+  }
+
+  const gate = evaluateDraftQualityGate({
+    proposalText: text,
+    job: input.job,
+    copyStrategy: input.copyStrategy,
+    brandFactPack: input.brandFactPack,
+    skillLoaded: true,
+    fullJobDescriptionRead: input.job.description.trim().length > 0 &&
+      input.jobUnderstanding.fullJobDescription === input.job.description,
+    copyStrategyCreated: Boolean(input.copyStrategy.one_sentence_sales_argument),
+    finalSubmitManual: true,
+    proofVerificationState: input.proofStrategy?.proofVerificationState ?? input.copyStrategy.proof_verification_state,
+    screeningAnswers: input.fallbackScreeningAnswers,
+    soulLoaded: true,
+  });
+
+  const issues = [
+    ...customIssues,
+    ...gate.issues.map((issue) => issue.code),
+  ];
+  const criticalCount = gate.issues.filter((issue) => issue.severity === "critical").length;
+  const score = Math.max(0, (gate.scorecard?.score ?? 0) - customIssues.length * 12 - criticalCount * 4);
+
+  return {
+    plan,
+    proposalText: text,
+    rationale: candidate.rationale,
+    score,
+    valid: customIssues.length === 0 && gate.ready,
+    issues: unique(issues),
+  };
+}
+
+function toTrace(candidates: EvaluatedCandidate[], selectedAngleId?: string): ProposalCandidateTrace[] {
+  return candidates.map((candidate) => ({
+    angleId: candidate.plan.id,
+    angleLabel: candidate.plan.label,
+    openerShape: candidate.plan.openerShape,
+    score: candidate.score,
+    valid: candidate.valid,
+    issues: candidate.issues,
+    selected: candidate.plan.id === selectedAngleId,
+  }));
+}
+
+function resolveFallbackProposalText(value: string | (() => string)): string {
+  return typeof value === "function" ? value() : value;
+}
+
+function fallbackResult(
+  input: ProposalCoverLetterComposeInput,
+  reason: string,
+  candidates: ProposalCandidateTrace[] = [],
+  repairAttempted = false,
+): ProposalCoverLetterComposeResult {
+  return {
+    proposalText: resolveFallbackProposalText(input.fallbackProposalText),
     usedLlm: false,
     provider: "fallback",
     reason,
-  });
+    generationTrace: {
+      mode: "deterministic_fallback",
+      provider: "fallback",
+      candidateCount: candidates.length,
+      repairAttempted,
+      fallbackReason: reason,
+      candidates,
+    },
+  };
+}
 
-  if (!provider.isAvailable()) {
-    return fallback("proposal copy LLM unavailable");
-  }
-
-  const proofStrategy = input.proofStrategy ?? input.deterministicDraft.proofStrategy ?? null;
-  const selectedPortfolioItems = input.selectedPortfolioItems ?? input.deterministicDraft.selectedPortfolioItems ?? [];
-  const requiredOpeningPrefix = extractRequiredOpeningPrefix(input.job);
-  const toolsToMention = requestedToolTerms(input);
-  const response = await provider.completeJson<ProposalCoverLetterPayload>({
+function buildComposeRequest(input: ProposalCoverLetterComposeInput, angles: ProposalAnglePlan[], requestedTools: string[], requiredPrefix: string): LlmJsonRequest {
+  return {
     temperature: PROPOSAL_COPY_TEMPERATURE,
-    maxTokens: 1300,
+    maxTokens: 2400,
     timeoutMs: PROPOSAL_COPY_REQUEST_TIMEOUT_MS,
     plainTextFallbackKey: "proposalText",
     messages: [
       {
         role: "system",
         content: [
-          "You write Upwork cover letters for Steve Logarn, a conversion-led ecommerce operator across retention/lifecycle, Shopify/Klaviyo, and brand/design clarity work.",
-          "This is not a classic cover letter. Write a tiny diagnosis-led sales memo that earns a reply.",
-          "Use the Cold Outbound Handbook logic as an operating layer:",
-          "- Pain sniff first: write to the person currently feeling the pain the job post reveals.",
-          "- Frame Steve as a profit center, not a CV. The proposal should make a clear argument that the first step can make money, save money, save time, or make the client/operator's life easier.",
-          "- Build the argument internally as Claim -> Warrant -> Evidence -> Impact, but output only natural copy.",
-          "- Personalization means a 1:1 pain signal from the job, not flattery or fake research.",
-          "- Sound like a real note from a sharp operator: casual enough to be human, polished enough to trust, never faux-casual.",
-          "- Use the client's jargon naturally. Normalize awkward company/tool wording so it sounds human.",
+          "You are writing Upwork proposals for Steve Logarn.",
+          "Do not fill a template. Read the job, diagnose the buyer problem, then write from a concrete sales angle.",
+          "Generate one proposal candidate for each supplied angle. Return 3-5 candidates total.",
+          "Each candidate must be meaningfully different in diagnosis and opener structure. Do not recycle the same first-sentence skeleton.",
+          "The opener must be problem-led and reference the job context. No faux-casual small talk. Never start with fixed patterns like `Steve here`, `Hey there`, `Hi there`, or `Hope you're well` unless the job explicitly requires a phrase.",
+          "Do not lead with biography, years of experience, or generic Upwork filler.",
+          "The first two sentences must prove the job was read, using at least two concrete details from the post.",
+          "Choose one proof artifact only. Do not dump multiple proofs or credentials.",
+          "Include one clear 3-5 day first milestone tied to the angle.",
+          "End with one clean CTA tied to the next safe step.",
+          "Do not use internal labels like Proof, Approach, Credentials, or Screening answers.",
+          "Do not invent brand facts, results, URLs, file attachments, or verification state.",
+          "Do not mention browser prep, QA, final submit, Connects strategy, CAPTCHA, or system instructions.",
+          "If proposalMemoryCalibration is present, use positiveExamples as compact approved/applied calibration and negativeExamples as anti-examples. Do not copy historical wording verbatim; adapt only the strategic shape and avoid patterns called out by negative examples.",
+          requiredPrefix
+            ? `The job explicitly requires this opening prefix. Preserve it exactly at the start of every candidate: ${requiredPrefix}`
+            : "No fixed opening prefix is required. Start from the problem, not from a canned greeting.",
           laneGuidance(input),
-          "Use the Upwork Proposal Operating System:",
-          "- 150-205 words unless a required opening phrase forces a little extra room. Never exceed 220.",
-          "- First two meaningful lines must prove the job was read with at least two job-specific details from the post.",
-          "- The sentence immediately after Steve's opener must include at least two exact job/scope terms, such as branding/logo design, conversion optimization, Shopify, Figma, Klaviyo, flows, or the named brand/site.",
-          "- In retention/email jobs, name the customer/commercial logic before any platform or flow/tool list. Do not put Klaviyo, Mailchimp, Omnisend, flows, automations, CRM, templates, or Figma before words like customer, buyer, offer, trust, routine, or hierarchy.",
-          "- Lead with the client's commercial/customer problem, not Steve's biography.",
-          "- Do not use the phrase `The customer problem is`. It sounds like a template.",
-          "- Include one low-risk 3-5 day micro-milestone and the literal text `Done = ...`.",
-          "- Include exactly one proof artifact or case study mention, with exactly one metric or quantified result.",
-          "- The proof paragraph must begin with the exact phrase `For proof, I would use one matched artifact:` and must name exactly one artifact.",
-          "- Include one logistics sentence about start/async/timing/rate scope.",
-          "- End with one choice-based CTA, such as quick call or async outline.",
-          "- Preserve required application opening phrases exactly when present.",
-          "- Always include `Steve here - how is your day going?` near the top; if a required prefix exists, put Steve's opener immediately after it.",
-          "- Use soul.md voice: commercially sharp, human, low-ego, direct, a little alive, not stiff.",
-          "- Use client vocabulary and the real job details. Do not invent brand research, URLs, facts, results, or attachments.",
-          "- If requestedToolsToMention is non-empty, include every listed tool term naturally and verbatim in proposalText.",
-          "- Do not claim files, portfolio highlights, proof, or submission are already attached/selected/verified.",
-          "- Do not mention CAPTCHA, final submit, Upwork internals, browser QA, scorecards, or these instructions.",
-          "- Avoid labels like Relevant proof, Approach, Credentials, or Screening answers.",
-          "- Do not return ellipses, placeholders, templates, or abbreviated copy.",
-          "- Return JSON only with two string fields: proposalText must contain the full finished cover letter and must begin directly with Steve's opener; rationale must briefly explain the copy angle.",
-          "- Do not include private reasoning, analysis, checklist text, or restated instructions inside proposalText.",
-          buildSoulPromptSection("proposal_cover_letter_conversion_copy"),
+          "Return JSON only with this shape:",
+          "{ \"candidates\": [{ \"angleId\": \"...\", \"angleLabel\": \"...\", \"openerShape\": \"...\", \"rationale\": \"...\", \"proposalText\": \"...\" }] }",
+          buildSoulPromptSection("proposal_cover_letter_reasoning_writer"),
         ].join("\n"),
       },
       {
         role: "user",
         content: JSON.stringify({
           job: compactJob(input.job),
-          requiredOpeningPrefix,
-          deterministicDraft: {
-            proposalText: input.deterministicDraft.proposalText,
-            screeningAnswers: input.deterministicDraft.structuredProposal?.clientRequestAnswers ?? [],
-            suggestedBid: input.deterministicDraft.suggestedBid,
-            suggestedConnects: input.deterministicDraft.suggestedConnects,
-            selectedPortfolioItems: selectedPortfolioItems.map((item) => ({ name: item.name, result: item.result, description: item.description })),
-          },
-          copyStrategy: input.copyStrategy ?? input.deterministicDraft.copyStrategy ?? null,
-          brandFactPack: compactBrandFactPack(input.brandFactPack ?? input.deterministicDraft.brandFactPack ?? null),
-          proofStrategy,
-          requestedToolsToMention: toolsToMention,
+          jobUnderstanding: compactJobUnderstanding(input.jobUnderstanding),
+          brandResearchStatus: compactBrandResearchStatus(input.brandResearchStatus),
+          copyStrategy: input.copyStrategy,
+          brandFactPack: compactBrandFactPack(input.brandFactPack),
+          proofStrategy: compactProofStrategy(input.proofStrategy),
+          selectedPortfolioItems: (input.selectedPortfolioItems ?? []).map((item) => ({
+            name: item.name,
+            result: item.result,
+            description: item.description,
+          })),
+          requestedToolsToMention: requestedTools,
+          angles,
+          suggestedBid: input.suggestedBid ?? null,
+          suggestedConnects: input.suggestedConnects ?? null,
+          proposalMemoryCalibration: input.proposalMemoryCalibration ?? null,
           guardrails: {
             oneProofOnly: true,
             finalSubmitManual: true,
-            proofVerificationState: proofStrategy?.proofVerificationState ?? "unavailable",
-            browserFillWillHappenLater: true,
+            proofVerificationState: input.proofStrategy?.proofVerificationState ?? input.copyStrategy.proof_verification_state,
           },
-          soul: buildSoulPromptContext("proposal_cover_letter_conversion_copy"),
+          soul: buildSoulPromptContext("proposal_cover_letter_reasoning_writer"),
         }),
       },
     ],
-  });
-
-  if (!response.ok) {
-    return fallback(response.error ?? response.skippedReason ?? "proposal copy rewrite failed");
-  }
-  const raw = extractProposalText(response.data);
-  const proposalText = sanitizeProposalText(raw, input.job);
-  const validationError = validateRewrite(proposalText, input);
-  if (validationError) {
-    const repair = await provider.completeJson<ProposalCoverLetterPayload>({
-      temperature: PROPOSAL_COPY_TEMPERATURE,
-      maxTokens: 900,
-      timeoutMs: PROPOSAL_COPY_REQUEST_TIMEOUT_MS,
-      plainTextFallbackKey: "proposalText",
-      messages: [
-        {
-          role: "system",
-          content: [
-            "You output only the final Upwork cover letter for Steve Logarn.",
-            "No analysis, no checklist, no explanation, no rationale, no markdown fence.",
-            "Return JSON only. The proposalText string must begin directly with: Steve here - how is your day going?",
-            "Keep it 150-205 words when possible and never over 220. Include one 3-5 day `Done = ...` milestone, one proof, logistics, and a choice-based CTA.",
-            "Use cold outbound logic: one 1:1 pain signal, one profit-center claim, evidence, impact, then a low-friction ask.",
-            "The sentence after Steve's opener must include at least two exact job/scope terms. The proof paragraph must begin: For proof, I would use one matched artifact:",
-            "For retention/email jobs, customer/commercial logic must appear before any platform, flow, automation, CRM, template, or Figma reference.",
-            "Do not use the phrase `The customer problem is`.",
-          ].join("\n"),
-        },
-        {
-          role: "user",
-          content: JSON.stringify({
-            invalidReason: validationError,
-            job: compactJob(input.job),
-            laneGuidance: laneGuidance(input),
-            sourceDraftToRewrite: input.deterministicDraft.proposalText,
-            selectedProof: proofStrategy?.summary ?? "",
-            selectedPortfolioItems: selectedPortfolioItems.map((item) => item.name),
-            requestedToolsToMention: toolsToMention,
-          }),
-        },
-      ],
-    });
-    if (repair.ok) {
-      const repairedText = sanitizeProposalText(extractProposalText(repair.data), input.job);
-      const repairValidationError = validateRewrite(repairedText, input);
-      if (!repairValidationError) {
-        return {
-          proposalText: repairedText,
-          usedLlm: true,
-          provider: "kimi",
-        };
-      }
-      return fallback(`${validationError}; repair: ${repairValidationError}`);
-    }
-    return fallback(`${validationError}; repair: ${repair.error ?? repair.skippedReason ?? "proposal copy repair failed"}`);
-  }
-  return {
-    proposalText,
-    usedLlm: true,
-    provider: "kimi",
   };
 }
+
+function buildRepairRequest(
+  input: ProposalCoverLetterComposeInput,
+  selected: EvaluatedCandidate,
+  requestedTools: string[],
+  requiredPrefix: string,
+): LlmJsonRequest {
+  return {
+    temperature: Math.max(0.2, Math.min(PROPOSAL_COPY_TEMPERATURE, 0.7)),
+    maxTokens: 1100,
+    timeoutMs: PROPOSAL_COPY_REQUEST_TIMEOUT_MS,
+    plainTextFallbackKey: "proposalText",
+    messages: [
+      {
+        role: "system",
+        content: [
+          "Rewrite one Upwork proposal candidate so it passes quality review.",
+          "Keep the same underlying angle, but fix the blocked issues.",
+          "The opener must stay problem-led and specific to the job. No faux-casual small talk and no fixed canned opener patterns.",
+          "Keep exactly one proof artifact, one 3-5 day milestone, and one clean CTA.",
+          "Do not add internal labels or generic Upwork filler.",
+          requiredPrefix
+            ? `Preserve this required opening prefix exactly: ${requiredPrefix}`
+            : "No fixed opening prefix is required.",
+          "Return JSON only with { \"proposalText\": \"...\" }.",
+          buildSoulPromptSection("proposal_cover_letter_rewriter"),
+        ].join("\n"),
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          job: compactJob(input.job),
+          jobUnderstanding: compactJobUnderstanding(input.jobUnderstanding),
+          copyStrategy: input.copyStrategy,
+          angle: selected.plan,
+          selectedProposal: selected.proposalText,
+          blockedIssues: selected.issues,
+          requestedToolsToMention: requestedTools,
+          proofStrategy: compactProofStrategy(input.proofStrategy),
+          brandFactPack: compactBrandFactPack(input.brandFactPack),
+          proposalMemoryCalibration: input.proposalMemoryCalibration ?? null,
+          soul: buildSoulPromptContext("proposal_cover_letter_rewriter"),
+        }),
+      },
+    ],
+  };
+}
+
+function chooseBestCandidate(candidates: EvaluatedCandidate[]): EvaluatedCandidate | null {
+  if (candidates.length === 0) return null;
+  return [...candidates].sort((left, right) => {
+    if (left.valid !== right.valid) return left.valid ? -1 : 1;
+    if (left.score !== right.score) return right.score - left.score;
+    return right.proposalText.length - left.proposalText.length;
+  })[0] ?? null;
+}
+
+export async function composeProposalCoverLetterWithKimi(
+  input: ProposalCoverLetterComposeInput,
+  provider: ProposalCoverLetterClient = defaultProvider(),
+): Promise<ProposalCoverLetterComposeResult> {
+  const angles = buildAnglePlans(input);
+  const requestedTools = requestedToolTerms(input.job, input.copyStrategy);
+  const requiredPrefix = extractRequiredOpeningPrefix(input.job);
+
+  if (!provider.isAvailable()) {
+    return fallbackResult(input, "proposal copy LLM unavailable");
+  }
+
+  const response = await provider.completeJson<ProposalComposePayload>(
+    buildComposeRequest(input, angles, requestedTools, requiredPrefix),
+  );
+  if (!response.ok) {
+    return fallbackResult(input, response.error ?? response.skippedReason ?? "proposal composition failed");
+  }
+
+  const parsedCandidates = extractCandidates(response.data, angles);
+  if (parsedCandidates.length === 0) {
+    return fallbackResult(input, "proposal composition returned no usable candidates");
+  }
+
+  const evaluated = parsedCandidates.map((candidate) => {
+    const plan = findAnglePlan(angles, candidate);
+    return evaluateCandidate(candidate, plan, input, requestedTools, requiredPrefix);
+  });
+  const bestInitial = chooseBestCandidate(evaluated);
+  if (!bestInitial) {
+    return fallbackResult(input, "proposal composition produced no scored candidates");
+  }
+
+  if (bestInitial.valid) {
+    const traces = toTrace(evaluated, bestInitial.plan.id);
+    return {
+      proposalText: bestInitial.proposalText,
+      usedLlm: true,
+      provider: "kimi",
+      generationTrace: {
+        mode: "llm_primary",
+        provider: "kimi",
+        candidateCount: evaluated.length,
+        selectedAngleId: bestInitial.plan.id,
+        selectedAngleLabel: bestInitial.plan.label,
+        selectedOpenerShape: bestInitial.plan.openerShape,
+        repairAttempted: false,
+        candidates: traces,
+      },
+    };
+  }
+
+  const repair = await provider.completeJson<ProposalCandidatePayload>(
+    buildRepairRequest(input, bestInitial, requestedTools, requiredPrefix),
+  );
+  if (!repair.ok) {
+    return fallbackResult(
+      input,
+      `${repair.error ?? repair.skippedReason ?? "proposal repair failed"} after ${bestInitial.issues.join(", ")}`,
+      toTrace(evaluated),
+      true,
+    );
+  }
+
+  const repairedCandidate: ParsedCandidate = {
+    angleId: bestInitial.plan.id,
+    angleLabel: bestInitial.plan.label,
+    openerShape: bestInitial.plan.openerShape,
+    proposalText: sanitizeProposalText(extractProposalText(repair.data)),
+    rationale: firstString(repair.data?.rationale) || firstString(repair.data?.reason),
+  };
+  const repairedEvaluation = evaluateCandidate(repairedCandidate, bestInitial.plan, input, requestedTools, requiredPrefix);
+  const finalCandidates = evaluated.map((candidate) => candidate.plan.id === bestInitial.plan.id ? repairedEvaluation : candidate);
+  if (!repairedEvaluation.valid) {
+    return fallbackResult(
+      input,
+      `proposal repair blocked by ${repairedEvaluation.issues.join(", ")}`,
+      toTrace(finalCandidates),
+      true,
+    );
+  }
+
+  return {
+    proposalText: repairedEvaluation.proposalText,
+    usedLlm: true,
+    provider: "kimi",
+    generationTrace: {
+      mode: "llm_primary",
+      provider: "kimi",
+      candidateCount: finalCandidates.length,
+      selectedAngleId: repairedEvaluation.plan.id,
+      selectedAngleLabel: repairedEvaluation.plan.label,
+      selectedOpenerShape: repairedEvaluation.plan.openerShape,
+      repairAttempted: true,
+      candidates: toTrace(finalCandidates, repairedEvaluation.plan.id),
+    },
+  };
+}
+
+export const rewriteProposalCoverLetterWithKimi = composeProposalCoverLetterWithKimi;

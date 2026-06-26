@@ -119,13 +119,52 @@ const visibleReady = analyzeApplyPageSnapshot(snapshot({
 assert.equal(visibleReady.pageKind, "apply");
 assert.equal(visibleReady.ready, true);
 assert.equal(visibleReady.connects.value, 8, "visible required Connects should be recorded");
+assert.match(visibleReady.connects.sourceText ?? "", /Required for proposal: 8 Connects/i, "required Connects should carry source text evidence");
 assert.equal(visibleReady.boost.visible, true, "visible boost table should be recorded");
+assert.match(visibleReady.boost.sourceText ?? "", /Boost your proposal|#1 bid 30 Connects/i, "boost visibility should carry source text evidence");
 assert.equal(visibleReady.boost.state, "visible_table_only", "boost table visibility must not imply a selected boost");
 assert.equal(visibleReady.coverLetter.state, "visible_filled");
+assert.equal(visibleReady.coverLetter.sourceLocation, "field 1", "cover-letter verification should cite the source field");
 assert.equal(visibleReady.screening.answeredCount, 1);
 assert.equal(visibleReady.rate.state, "visible_filled");
 assert.equal(visibleReady.finalSubmit.visible, true, "final submit should be detected without clicking");
 assert.equal(visibleReady.finalSubmit.clicked, false);
+
+const structuredQuestionEvidence = analyzeApplyPageSnapshot(snapshot({
+  visibleText: [
+    "Proposal settings",
+    "This proposal requires 8 Connects",
+    "Application questions",
+    "1. What similar Klaviyo retention work have you done?",
+    "Question 2",
+    "How quickly can you start?",
+    "Cover Letter",
+    "Boost your proposal",
+    "#1 bid 22 Connects",
+    "Send for 8 Connects",
+  ].join("\n"),
+  fieldValues: [
+    { kind: "textarea", inputType: null, label: "Cover Letter", id: "cover", name: null, ariaLabel: "Cover Letter", placeholder: null, dataTest: null, value: filledPlan.coverLetter, visible: true },
+    { kind: "textarea", inputType: null, label: "Question 1", id: "q1", name: "question-1", ariaLabel: "Question 1 answer", placeholder: null, dataTest: null, value: "I have rebuilt lifecycle flows and retention measurement for ecommerce brands.", visible: true },
+    { kind: "textarea", inputType: null, label: "Question 2", id: "q2", name: "question-2", ariaLabel: "Question 2 answer", placeholder: null, dataTest: null, value: "I can start this week after a quick audit.", visible: true },
+  ],
+  actionLabels: ["Send for 8 Connects"],
+}), plan({
+  screeningAnswers: [
+    "I have rebuilt lifecycle flows and retention measurement for ecommerce brands.",
+    "I can start this week after a quick audit.",
+  ],
+}));
+assert.equal(structuredQuestionEvidence.screening.questionCount, 2, "visible application questions should be counted from source text");
+assert.deepEqual(structuredQuestionEvidence.screening.questions.map((question) => question.questionText), [
+  "What similar Klaviyo retention work have you done?",
+  "How quickly can you start?",
+]);
+assert.equal(structuredQuestionEvidence.screening.questions[0]?.answerState, "visible_filled", "question evidence should reflect filled answer state when fields align");
+assert.match(structuredQuestionEvidence.screening.sourceText ?? "", /Klaviyo retention work/i, "screening analysis should retain question source text");
+assert.match(structuredQuestionEvidence.screening.sourceLocation ?? "", /line 4/i, "screening analysis should retain question source location");
+assert.equal(structuredQuestionEvidence.connects.sourceLocation, "line 2", "connects evidence should retain the visible line number");
+assert.match(structuredQuestionEvidence.boost.sourceText ?? "", /#1 bid 22 Connects/i, "boost evidence should retain visible bid options");
 
 const currentUpworkPlan = plan({
   rate: "$35/hr",
@@ -298,6 +337,26 @@ const truncatedLifelySelected = analyzeApplyPageSnapshot(snapshot({
   actionLabels: ["Send for 8 Connects"],
 }), plan({ highlights: ["How Lifely Transformed Their Retention Marketing"] }));
 assert.equal(truncatedLifelySelected.portfolioHighlights.state, "visible_filled", "Upwork-truncated selected Lifely portfolio title should verify from selected-highlight evidence.");
+
+const selectedButtonsOnlyHighlights = analyzeApplyPageSnapshot(snapshot({
+  visibleText: "Required for proposal: 8 Connects\nProfile highlights\nBoost your proposal\nSend for 8 Connects",
+  fieldValues: [
+    { kind: "textarea", inputType: null, label: "Cover letter", id: null, name: null, ariaLabel: null, placeholder: null, dataTest: null, value: filledPlan.coverLetter },
+    { kind: "input", inputType: "text", label: "Hourly rate", id: null, name: null, ariaLabel: "Hourly rate", placeholder: null, dataTest: null, value: "80" },
+  ],
+  actionLabels: ["Selected", "Selected", "Selected", "Selected", "Send for 8 Connects"],
+}), plan({ highlights: ["The Fly Boutique", "Steve's Design Case Studies", "From $250k to $1.2 Million In 12 Months / Truly Beauty", "How Lifely Transformed Their Retention Marketing"] }));
+assert.equal(selectedButtonsOnlyHighlights.portfolioHighlights.state, "visible_filled", "Four Upwork Selected controls should verify four planned profile highlights even when names are hidden.");
+
+const uncommittedSelectedButtons = analyzeApplyPageSnapshot(snapshot({
+  visibleText: "Required for proposal: 8 Connects\nProfile highlights\nAdd profile highlights\nHighlights (4/4)\nBoost your proposal\nSend for 8 Connects",
+  fieldValues: [
+    { kind: "textarea", inputType: null, label: "Cover letter", id: null, name: null, ariaLabel: null, placeholder: null, dataTest: null, value: filledPlan.coverLetter },
+    { kind: "input", inputType: "text", label: "Hourly rate", id: null, name: null, ariaLabel: "Hourly rate", placeholder: null, dataTest: null, value: "80" },
+  ],
+  actionLabels: ["Selected", "Selected", "Selected", "Selected", "Select highlight", "Add to highlights", "Send for 8 Connects"],
+}), plan({ highlights: ["The Fly Boutique", "Steve's Design Case Studies", "From $250k to $1.2 Million In 12 Months / Truly Beauty", "How Lifely Transformed Their Retention Marketing"] }));
+assert.equal(uncommittedSelectedButtons.portfolioHighlights.state, "visible_requires_input", "Selected controls inside an open picker must not verify until Add to highlights commits them.");
 
 const unsetBoostWithAmbientConnects = analyzeApplyPageSnapshot(snapshot({
   visibleText: "Required for proposal: 9 Connects\nBoost your proposal\n#4 bid 25 Connects\nSend for 9 Connects",
