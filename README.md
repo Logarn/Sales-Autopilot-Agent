@@ -1,4 +1,4 @@
-# Upwork Sales Operator
+# Sales Operator
 
 A Slack-first tool for finding better Upwork leads, preparing stronger applications, and keeping the final submit button in human hands.
 
